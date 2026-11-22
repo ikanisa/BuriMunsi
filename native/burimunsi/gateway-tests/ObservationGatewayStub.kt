@@ -34,3 +34,5 @@ internal object ObservationReceivingSim {
  fun classify(context:Context,owner:ObservationOwner,subscription:Int?):ObservationLegacyOwnership.Decision =
   if(subscription==3)ObservationLegacyOwnership.Decision.UNOWNED else ObservationLegacyOwnership.Decision.HOLD
 }
+
+internal object ObservationBackground { fun onProcessStart(context:android.content.Context) {} }

@@ -1424,6 +1424,17 @@ fun main(args:Array<String>) {
   check(ObservationSyncDiagnostics.notificationState("authorization_required")==ObservationSyncDiagnostics.NotificationState.UNCONFIRMED)
   check(ObservationSyncDiagnostics.notificationState("unknown-private-detail")==ObservationSyncDiagnostics.NotificationState.UNCONFIRMED)
  }
+ test("idle enabled receiver yields to initial access while a running receiver stays eligible") {
+  val startup=ContinuousForegroundStartup()
+  val idleStarts=AtomicBoolean(false)
+  val active=CountDownLatch(1)
+  startup.changed(true,awaitingInitialAccess=true,serviceRunning=false){idleStarts.set(true)}
+  startup.changed(true,awaitingInitialAccess=true,serviceRunning=true){current->check(current());active.countDown()}
+  check(active.await(5,TimeUnit.SECONDS)&&!idleStarts.get())
+  val resumed=CountDownLatch(1)
+  startup.changed(true){current->check(current());resumed.countDown()}
+  check(resumed.await(5,TimeUnit.SECONDS))
+ }
  test("foreground startup runs off the caller and drops a start after leaving the foreground") {
   val startup=ContinuousForegroundStartup()
   val main=Thread.currentThread()

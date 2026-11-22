@@ -60,7 +60,7 @@ internal object BuriContinuousSupervisor {
     fun invalidateProof()=state.invalidate()
     fun isCurrent(value:BuriContinuousSyncService):Boolean=service===value
     fun channel(context:Context):String=context.getString(R.string.burimunsi_sync_channel_id)
-    fun foregroundChanged(context:Context,resumed:Boolean){
+    fun foregroundChanged(context:Context,resumed:Boolean,awaitingInitialAccess:Boolean=false){
         visible=resumed
         if(resumed){
             // A visible task is an Android start opportunity, not an authorization grant.
@@ -68,7 +68,9 @@ internal object BuriContinuousSupervisor {
             service?.refreshDisplayedHealth()
         }
         val app = context.applicationContext
-        foregroundStartup.changed(resumed) { current -> requestStart(app, current = { visible && current() }) }
+        // An idle cold launch already has a live profile/Home request. The validated
+        // UI starts the receiver after that read. Active service and receipt wakes stay independent.
+        foregroundStartup.changed(resumed,awaitingInitialAccess,service!=null) { current -> requestStart(app, current = { visible && current() }) }
     }
     fun recover(context:Context,bootOrReplacement:Boolean=false){
         if(BuildConfig.IS_QUALIFICATION||!BuildConfig.IS_GATEWAY)return
