@@ -66,7 +66,7 @@ BEGIN
     RAISE EXCEPTION 'synthetic_phone_admin_signin_failed';
   END IF;
   PERFORM private.burimunsi_browser_pin_set_context(group_id,peer_cookie,origin);
-  peer:=private.burimunsi_browser_pin_context();
+  peer:=private.burimunsi_browser_pin_session(group_id,peer_cookie,origin);
   peer_principal:=peer->>'principalId';
   IF peer->>'operatorRole' IS DISTINCT FROM 'admin' OR peer->>'collectionId' IS DISTINCT FROM group_id
     OR (peer->'permissions' ?& ARRAY['sms.read','system_health.read']) IS NOT TRUE THEN
@@ -118,6 +118,7 @@ BEGIN
   PERFORM private.burimunsi_browser_pin_set_context(group_id,staff_cookie,origin);
   FOREACH lane IN ARRAY all_lanes LOOP PERFORM pg_temp.assert_sms_hidden(lane,group_id); END LOOP;
 
+  PERFORM set_config('burimunsi.browser_pin_cookie','',true);
   PERFORM private.burimunsi_browser_pin_set_context(group_id,owner_cookie,origin);
   PERFORM private.burimunsi_browser_team_write(group_id,gen_random_uuid(),
     jsonb_build_object('action','access','id',peer_id,'expectedVersion',1,'active',false),NULL);
