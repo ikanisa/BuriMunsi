@@ -113,7 +113,7 @@ function freshRead(f,{scope='actual-group',enabled=true,actorScope=scope,pinCurr
  return {handler,actorReloads};
 }
 
-test('fresh standalone session and Home renew and reload the actor in one fenced snapshot',async()=>{
+test('expired standalone Home renews separately and revalidates in a fresh read-only snapshot',async()=>{
  const f=fixture(),login=await f.login(),before=f.state.transactions,{handler,actorReloads}=freshRead(f);
  f.state.time=login.expiresAt+1;f.state.calls=[];
  f.state.readQuery=(text,args)=>{
@@ -127,11 +127,11 @@ test('fresh standalone session and Home renew and reload the actor in one fenced
  const payload=await res.json();
  assert.equal(payload.data.home.groupBalanceRwf,1000);assert.equal(payload.binding.actorId,id(2));
  assert.ok(payload.data.expiresAt>f.state.time);assert.deepEqual(actorReloads,[[...f.state.sessions.values()][0].id]);
- assert.equal(f.state.transactions-before,1);
- assert.equal(f.state.calls[0].text,'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ WRITE');
- assert.ok(f.state.calls.find(({text})=>text.includes('pg_advisory_xact_lock')));
- assert.equal(f.state.calls.filter(({text})=>text===PIN_RENEW_SQL).length,1);
- assert.equal(f.state.calls.some(({text})=>text===PIN_SET_CONTEXT_SQL),false);
+ assert.equal(f.state.transactions-before,3);
+ const boundaries=f.state.calls.map(({text})=>text).filter(text=>text.startsWith('SET TRANSACTION')||text===PIN_SET_CONTEXT_SQL||text===PIN_RENEW_SQL);
+ const readOnly='SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY';
+ assert.deepEqual(boundaries,[readOnly,PIN_SET_CONTEXT_SQL,PIN_RENEW_SQL,readOnly,PIN_SET_CONTEXT_SQL]);
+ assert.ok(f.state.calls.some(({text})=>text.includes('pg_advisory_xact_lock')));
  assert.equal(hasPhonePinContext(f.db),false);
 });
 
