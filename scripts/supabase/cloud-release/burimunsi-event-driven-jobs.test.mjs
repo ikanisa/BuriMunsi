@@ -61,7 +61,7 @@ test('committed SMS wakes the signed worker, rollback cancels the wake, and idle
   await db.query(base.replace('f70925051147096cfb72869b401fdb69c976b68034c87e8c3e98ee8b5f350ed0',cleanup)
     .replace('09ecc11aca46af15d7f981b5d5c7c7d3775be6fc245c8ff73f48f61269e37671',manifest));
   await db.query(await load('supabase/migrations/20261117135049_collect_sms_schedule_one_minute.sql'));
-  await db.query(await load('supabase/migrations/20261122181300_burimunsi_event_driven_jobs.sql'));
+  await db.query(await load('supabase/migrations/20261122191300_burimunsi_event_driven_jobs.sql'));
   assert.equal((await db.query('SELECT schedule FROM cron.job')).rows[0].schedule,'1 second');
   const digests=(await db.query("SELECT proname,encode(sha256(convert_to(prosrc,'UTF8')),'hex') digest FROM pg_proc WHERE pronamespace='collect_ops'::regnamespace AND proname IN ('dispatch_jobs','activate_jobs','tick_jobs') ORDER BY 1")).rows;
   t.diagnostic('Installed routine digests '+JSON.stringify(digests));

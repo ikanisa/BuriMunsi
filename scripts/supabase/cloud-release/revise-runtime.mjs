@@ -214,8 +214,8 @@ async function requireUpgradeReceipt(c,prior,sourceSha,readback,current){
     r.deployment_readback_sha256!==readback.sha256)throw Error('fenced_revision_upgrade_evidence_changed');
 }
 
-// One qualified revision can include the six related gateway, receiver and operator migrations.
-export const MAX_REVISION_MIGRATIONS=6;
+// A receiver release can include its phone-account and performance predecessors.
+export const MAX_REVISION_MIGRATIONS=7;
 
 export async function reviseRuntime({label,testEvidence,migrations=[],resumeFencedRevision=null,expectedBefore=null,expectedFunctions=null,
  requireChangedBundles=false,expectedSecretPreimages=null,acceptAncillaryRequalification=false},{

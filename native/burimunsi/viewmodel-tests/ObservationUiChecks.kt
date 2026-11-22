@@ -2,6 +2,7 @@ package rw.ikanisa.burimunsi.observationuitests
 
 import android.app.Application
 import androidx.compose.runtime.snapshots.Snapshot
+import androidx.lifecycle.onFixtureMain
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -48,13 +49,14 @@ fun main()=runBlocking {
     Fixture.observationRows=listOf(ObservationListRow(source,"synthetic-group","2026-11-09T00:00:00Z"))
     GatewayFixture.snapshot=GatewayStatus(false,false,null,0,null,null,null,"authorization_required",observationMode=true)
     val model=BuriViewModel(Application());idle(model)
-    model.navigate(Route.SMS);idle(model)
+    // Android dispatches these clicks on the same main thread that publishes inbox previews.
+    model.onFixtureMain { navigate(Route.SMS) };idle(model)
     check(model.state.route==Route.SMS&&model.state.messages==null&&model.state.observations?.items?.single()?.source==source)
-    model.openSms(source);idle(model)
+    model.onFixtureMain { openSms(source) };idle(model)
     check(model.state.rawSource==source&&model.state.raw?.transactionId==null&&model.state.observationHints==hints&&Fixture.observationRevealReads==1&&Fixture.rawReads==0)
-    model.closeSheet();model.openSms(SmsSourceRef.Canonical("s-1"));idle(model)
+    model.onFixtureMain { closeSheet();openSms(SmsSourceRef.Canonical("s-1")) };idle(model)
     check(Fixture.rawReads==1&&Fixture.observationRevealReads==1&&model.state.rawSource is SmsSourceRef.Canonical)
-    model.onBackground();check(model.state.raw==null&&model.state.observationHints==null&&model.state.sheet==null)
+    model.onFixtureMain { onBackground() };check(model.state.raw==null&&model.state.observationHints==null&&model.state.sheet==null)
     model.viewModelScope.cancel()
     println("PASS unpaired Admin sees typed observations and uses the separate audited reveal; matching IDs do not select the canonical endpoint")
     val app=Application();GatewayFixture.queueSession=ObservationSessionOwner(ObservationOwner("synthetic-group","operator"),1)

@@ -9,11 +9,12 @@ import {startOwnedPg17} from '../current-pg-transfer/test-support/owned-pg17.mjs
 import {handleAdmin} from '../../../supabase/functions/_shared/domain/admin_bridge.js';
 import {compileSql} from '../../../supabase/functions/_shared/postgres-compatibility-sql.js';
 
-const release=await readFile(new URL('../../../supabase/migrations/20261122181400_burimunsi_admin_realtime.sql',import.meta.url),'utf8');
+const release=await readFile(new URL('../../../supabase/migrations/20261122191400_burimunsi_admin_realtime.sql',import.meta.url),'utf8');
 const predecessor=await readFile(new URL('../../../supabase/migrations/20261022200028_collect_private_member_realtime.sql',import.meta.url),'utf8');
-function memberFunction(name){
- const start=predecessor.indexOf('CREATE FUNCTION private.'+name+'(');
- assert.ok(start>=0);const tail=predecessor.slice(start),end=tail.match(/\$(?:fn|meta)\$;/);
+const phoneAccounts=await readFile(new URL('../../../supabase/migrations/20261122190000_burimunsi_phone_operator_accounts.sql',import.meta.url),'utf8');
+function privateFunction(name,source){
+ const start=source.indexOf('CREATE FUNCTION private.'+name+'(');
+ assert.ok(start>=0);const tail=source.slice(start),end=tail.match(/\$(?:fn|meta)\$;/);
  assert.ok(end);return tail.slice(0,end.index+end[0].length);
 }
 const sid=randomUUID(),pub=randomUUID(),native=randomUUID(),auth=randomUUID();
@@ -86,11 +87,16 @@ test('private Realtime authorizes just the current group and session and never d
  CREATE FUNCTION private.request_claims() RETURNS jsonb LANGUAGE sql STABLE AS $$SELECT coalesce(nullif(current_setting('fixture.claims',true),''),'{}')::jsonb$$;
  CREATE TABLE app.admin_account_guards(id text PRIMARY KEY,passed bigint NOT NULL CHECK(passed=1));
  CREATE TABLE app.auth_mfa_factors(id text,user_id text,status text);CREATE FUNCTION app.unixepoch() RETURNS bigint LANGUAGE sql AS $$SELECT extract(epoch FROM now())::bigint$$;
- CREATE FUNCTION private.collect_owner_is(text,text,text) RETURNS boolean LANGUAGE sql AS $$SELECT false$$;
+ ALTER TABLE app.admin_users ADD COLUMN burimunsi_phone_only boolean NOT NULL DEFAULT false;
+ ALTER TABLE private.burimunsi_operator_approvals ADD COLUMN identity_source text NOT NULL DEFAULT 'phone';
+ ALTER TABLE private.burimunsi_accounts ADD COLUMN name text, ADD COLUMN pin_hash jsonb;
+ CREATE FUNCTION private.collect_owner_is(web_id text,principal text,email text) RETURNS boolean LANGUAGE sql AS $$
+  SELECT EXISTS(SELECT 1 FROM private.collect_owner_identity WHERE singleton AND admin_user_id=web_id AND principal_user_id=principal AND owner_email=email)$$;
  CREATE FUNCTION private.burimunsi_browser_pin_is_fresh(bigint) RETURNS boolean LANGUAGE sql AS $$SELECT false$$;
  CREATE FUNCTION private.burimunsi_browser_pin_session(p_group text,p_cookie text,p_origin text) RETURNS jsonb LANGUAGE sql SECURITY DEFINER AS $$
   SELECT f.value||jsonb_build_object('permissions',ARRAY(SELECT permission FROM app.admin_grants WHERE user_id=b.principal_id),
-    'authVersion',c.auth_version,'proofId',b.public_id,'verifiedAt',b.issued_at,'phone','+250780000001','name','Synthetic','email',u.email)
+    'authVersion',c.auth_version,'proofId',b.public_id,'verifiedAt',b.issued_at,'phone','+250780000001','name','Synthetic','email',u.email,
+    'operatorRole','admin','storageRole',u.role,'accountId',b.account_id)
    FROM private.fixture_actor f JOIN private.burimunsi_browser_pin_sessions b ON b.session_id=f.value->>'sessionId'
    JOIN app.auth_sessions s ON s.id=b.session_id AND s.revoked_at IS NULL
    JOIN app.admin_sessions c ON c.token_hash=b.cookie_hash JOIN app.admin_users u ON u.id=c.user_id
@@ -111,6 +117,8 @@ test('private Realtime authorizes just the current group and session and never d
  CREATE FUNCTION private.burimunsi_pin_root_snapshot(g text,p text,ph text,ro text,caps text[]) RETURNS jsonb LANGUAGE sql SECURITY DEFINER AS $$
   SELECT jsonb_build_object('kind','shared_approval','adminId',o.admin_user_id) FROM private.burimunsi_operator_approvals o
   WHERE o.collection_id=g AND o.principal_user_id=p AND o.phone=ph AND o.role=ro AND o.active AND caps<@o.capabilities$$;
+ CREATE FUNCTION private.burimunsi_pin_authority_snapshot(g text,p text,ph text,ro text,caps text[]) RETURNS jsonb LANGUAGE sql AS $$
+  SELECT private.burimunsi_pin_root_snapshot(g,p,ph,ro,caps)$$;
  CREATE TABLE private.burimunsi_unresolved_observations(collection_id text);
  CREATE TABLE private.burimunsi_sms_source_scopes(collection_id text);CREATE TABLE private.burimunsi_transaction_scopes(collection_id text);
  CREATE TABLE private.burimunsi_auto_sms_jobs(collection_id text,state text);
@@ -139,7 +147,8 @@ test('private Realtime authorizes just the current group and session and never d
  GRANT INSERT,DELETE ON app.admin_account_guards TO collect_runtime;
  `);
  for(const name of ['_collect_member_realtime_metadata','_collect_member_realtime_metadata_sha','collect_member_realtime_join',
-  'collect_member_realtime_configure','collect_member_realtime_publish'])await q(memberFunction(name));
+  'collect_member_realtime_configure','collect_member_realtime_publish'])await q(privateFunction(name,predecessor));
+ await q(privateFunction('burimunsi_browser_operator',phoneAccounts));
  await q("CREATE POLICY fixture_member ON realtime.messages FOR SELECT TO authenticated USING (topic=(SELECT realtime.topic()) AND extension='broadcast' AND private.collect_member_realtime_join((SELECT realtime.topic())))");
  const memberPin=await one('SELECT private._collect_member_realtime_metadata_sha() value');
  await q("INSERT INTO private.member_realtime_control VALUES(true,true,$1,repeat('a',64),0)",[memberPin]);
@@ -200,6 +209,16 @@ test('private Realtime authorizes just the current group and session and never d
  assert.equal(await count(),1);await publicAnon();await topic(cap.topic);
  const [broadcast]=(await select()).rows;assert.match(broadcast.payload.id,/^[0-9a-f-]{36}$/);
  assert.deepEqual(broadcast,{topic:cap.topic,event:'operations_changed',payload:{changed:true,id:broadcast.payload.id},private:true});
+ await t.test('an authorized phone Admin can subscribe and a demotion closes cached read access',async()=>{
+  await operator();await q("UPDATE app.admin_users SET role='admin',burimunsi_phone_only=true");
+  await runtime('http_admin');assert.equal((await issue(group)).topic,cap.topic);
+  await publicAnon();await topic(cap.topic);assert.equal((await select()).rowCount,1);
+  await operator();await q("SELECT set_config('burimunsi.collection_id',$1,false)",[group]);
+  assert.equal((await q("UPDATE private.burimunsi_accounts SET role='staff'")).rowCount,1);
+  await publicAnon();await topic(cap.topic);assert.equal((await select()).rowCount,0);
+  await operator();await q("UPDATE private.burimunsi_accounts SET role='admin'");await q("UPDATE app.admin_users SET role='owner',burimunsi_phone_only=false");
+  await publicAnon();await topic(cap.topic);
+ });
  await assert.rejects(()=>q("INSERT INTO realtime.messages VALUES($1,'broadcast','operations_changed','{}',true)",[cap.topic]),{code:'42501'});
  await assert.rejects(()=>q("SELECT realtime.send('{}','operations_changed',$1,true)",[cap.topic]),{code:'42501'});
  assert.equal((await q('UPDATE realtime.messages SET payload=payload WHERE topic=$1',[cap.topic])).rowCount,0);

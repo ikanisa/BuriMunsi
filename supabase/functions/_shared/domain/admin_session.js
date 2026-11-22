@@ -100,7 +100,7 @@ export async function adminCanonicalActor(request,env,account,permission=null) {
    permissions:new Set(account.permissions),
    user:{id:account.principal_id,email:account.email,phone:proof.phone,
     user_metadata:{full_name:proof.name},
-    app_metadata:{provider:'burimunsi_phone_passcode',roles:['admin'],permissions:[...account.permissions]}},
+    app_metadata:{provider:'burimunsi_phone_passcode',roles:[proof.operatorRole],permissions:[...account.permissions]}},
   };
   env.AUTH_ACTOR=actor;
   return bindAdminEmailActor(actor,account);
