@@ -86,9 +86,14 @@ BEGIN
     'private.burimunsi_auto_sms_jobs'::regclass,'private.burimunsi_payment_sms_deliveries'::regclass) THEN
     RAISE EXCEPTION 'invalid_sms_wake_source'; END IF;
   IF TG_NAME='burimunsi_wake_payer_retry' THEN
-    IF NEW.body_sha256 IS NULL OR NEW.state NOT IN('sending','accepted','unknown') OR NEW.inspect_count>=12
-      OR NEW.provider_state IN('delivered','failed','cancelled','expired','delivery_unconfirmed') THEN RETURN NULL; END IF;
-    due:=greatest(NEW.next_inspect_at,NEW.lease_until);
+    IF NEW.state='sending' AND NEW.body_sha256 IS NULL AND NEW.last_claimed_phase='send' AND NEW.lease_until IS NOT NULL THEN
+      -- The database claim can outlive its worker before a carrier request is armed.
+      due:=NEW.lease_until;
+    ELSE
+      IF NEW.body_sha256 IS NULL OR NEW.state NOT IN('sending','accepted','unknown') OR NEW.inspect_count>=12
+        OR NEW.provider_state IN('delivered','failed','cancelled','expired','delivery_unconfirmed') THEN RETURN NULL; END IF;
+      due:=greatest(NEW.next_inspect_at,NEW.lease_until);
+    END IF;
   ELSIF TG_NAME='burimunsi_wake_native_retry' THEN
     SELECT min(to_timestamp(at_ms/1000.0)) INTO due FROM unnest(ARRAY[NEW.next_attempt_at,NEW.posting_next_attempt_at]) at_ms
       WHERE at_ms>extract(epoch FROM clock_timestamp())*1000;

@@ -50,7 +50,7 @@ test('committed SMS wakes the signed worker, rollback cancels the wake, and idle
     CREATE TABLE private.burimunsi_payment_sms_obligations(disposition text);
     CREATE TABLE collect_sms.messages(kind text,state text);
     CREATE TABLE private.burimunsi_auto_sms_jobs(state text,phase text,next_attempt_at bigint,posting_next_attempt_at bigint);
-    CREATE TABLE private.burimunsi_payment_sms_deliveries(body_sha256 text,state text,inspect_count int,provider_state text,next_inspect_at timestamptz,lease_until timestamptz);
+    CREATE TABLE private.burimunsi_payment_sms_deliveries(body_sha256 text,state text,inspect_count int,provider_state text,next_inspect_at timestamptz,lease_until timestamptz,last_claimed_phase text);
     GRANT INSERT ON private.burimunsi_unresolved_observations TO collect_runtime;`);
   await db.query(await load('supabase/jobs/test-fixture.sql'));
   await db.query('ALTER TABLE cron.job_run_details ADD COLUMN status text, ADD COLUMN start_time timestamptz');
@@ -104,8 +104,10 @@ test('committed SMS wakes the signed worker, rollback cancels the wake, and idle
   const drain=await result('SELECT collect_ops.tick_jobs() v');assert.equal(drain.state,'awaiting');assert.deepEqual(await counts(),{q:2,wakes:0});
   await db.query("UPDATE collect_ops.jobs_dispatches SET state='confirmed' WHERE id=$1",[drain.dispatch_id]);
   assert.equal((await result('SELECT collect_ops.tick_jobs() v')).state,'idle');
-  await db.query("INSERT INTO private.burimunsi_payment_sms_deliveries VALUES(repeat('a',64),'accepted',1,'accepted',now()+interval '5 seconds',NULL)");
+  await db.query("INSERT INTO private.burimunsi_payment_sms_deliveries VALUES(repeat('a',64),'accepted',1,'accepted',now()+interval '5 seconds',NULL,NULL)");
   assert.equal((await result('SELECT collect_ops.tick_jobs() v')).state,'idle');
   assert.equal((await independent.query('SELECT count(*)::int n FROM private.burimunsi_sms_wakes WHERE wake_class=1 AND due_at>now()')).rows[0].n,1);
+  await db.query("INSERT INTO private.burimunsi_payment_sms_deliveries VALUES(NULL,'sending',0,NULL,NULL,now()+interval '2 seconds','send')");
+  assert.equal((await independent.query('SELECT count(*)::int n FROM private.burimunsi_sms_wakes WHERE wake_class=1 AND due_at>now()')).rows[0].n,2);
   await assert.rejects(db.query("SELECT collect_ops.dispatch_jobs('signal',$1)",[randomUUID()]),{code:'42501'});
 });
