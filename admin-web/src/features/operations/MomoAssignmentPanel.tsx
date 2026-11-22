@@ -55,7 +55,7 @@ export function MomoAssignmentPanel({detail, enabled = false, onUpdated}: {detai
     }).catch(() => {if (live && context.isCurrent()) setReferenceState({scope, paymentId: saved.paymentId, reference: null});});
     return () => {live = false; controller.abort();};
   }, [saved, context, allowed, identity, scope]);
-  if (!identity || !model || !principalId || !allowed) return null;
+  if (!identity || !model || !principalId || !allowed || detail.transaction.native_group_id != null) return null;
   if (loadedScope !== scope) return <LoadingState label="Checking assignment recovery" />;
   const pending = pendingState && pendingState.kind !== 'ready' ? pendingState : null, ready = pendingState?.kind === 'ready' ? pendingState : null;
   if (!enabled && !pending && !message && !saved) return null;

@@ -13,19 +13,60 @@ const timestamp = z.iso.datetime({offset: true}).refine((value) => {
   const calendar = new Date(0); calendar.setUTCFullYear(year, month - 1, day); calendar.setUTCHours(hour, minute, second, 0);
   return year >= 1 && calendar.getUTCFullYear() === year && calendar.getUTCMonth() === month - 1 && calendar.getUTCDate() === day && hour <= 23 && minute <= 59 && second <= 59;
 });
-export const momoStatuses = ['needs_attention', 'needs_allocation', 'awaiting_review', 'credited', 'needs_review', 'reversed'] as const;
+export const momoStatuses = ['needs_attention', 'needs_allocation', 'awaiting_review', 'credited', 'needs_review', 'reversed', 'recorded'] as const;
 export type MomoStatus = '' | typeof momoStatuses[number];
-const transaction = z.object({
-  id: uuid, receiving_account_id: uuid, provider_transaction_id: text, recipient_name: text, public_code: text,
-  payer_name: nullableText, payer_last3: z.string().regex(/^[0-9]{3}$/).nullish().transform((value) => value ?? null),
+const amount = nonNegative.min(1);
+const lastThree = z.string().regex(/^[0-9]{3}$/);
+const financialAssertions = {provider_confirmation: z.literal(false), settlement_status: z.literal('not_asserted')};
+const commonTransaction = {
+  id: uuid, payer_name: nullableText, payer_last3: lastThree.nullish().transform((value) => value ?? null),
   member_name: nullableText, group_name: nullableText, payment_id: nullableId, beneficiary_member_id: nullableId, group_id: nullableId,
-  amount_minor: nonNegative.min(1), credited_amount_minor: nonNegative, version: nonNegative.min(1),
-  created_at: timestamp, transaction_at: timestamp.nullish().transform((value) => value ?? null), currency: z.literal('RWF'),
-  status: z.enum(['needs_allocation', 'awaiting_review', 'credited', 'needs_review', 'reversed']), has_conflict: z.union([z.literal(0), z.literal(1)]),
+  credited_amount_minor: nonNegative, version: nonNegative.min(1), created_at: timestamp,
+  transaction_at: timestamp.nullish().transform((value) => value ?? null), has_conflict: z.union([z.literal(0), z.literal(1)]),
+};
+const managedTransaction = z.object({
+  ...commonTransaction,
+  native_group_id: z.null().optional(), receipt_facts: z.object({kind: z.literal('validated_momo_extraction')}).optional(),
+  receiving_account_id: uuid, provider_transaction_id: text, recipient_name: text, public_code: text,
+  amount_minor: amount, currency: z.literal('RWF'),
+  status: z.enum(['needs_allocation', 'awaiting_review', 'credited', 'needs_review', 'reversed']),
   event_kind: z.enum(['incoming_receipt', 'reversal']).optional(), allocation_state: z.enum(['unallocated', 'linked', 'needs_review']).optional(),
   provider_confirmation: z.literal(false).optional(), settlement_status: z.literal('not_asserted').optional(),
-}).superRefine((value, ctx) => {
-  if (value.credited_amount_minor > value.amount_minor || value.status === 'credited' && (!value.payment_id || !value.credited_amount_minor) || value.status === 'awaiting_review' && !value.payment_id || (value.provider_confirmation === undefined) !== (value.settlement_status === undefined)) ctx.addIssue({code: 'custom', message: 'Invalid transaction relationships.'});
+});
+const nativeGroup = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/);
+const nativeFields = {
+  provider_transaction_id: text.max(160).regex(/^\S+$/).nullable(),
+  amount_minor: amount.nullable(), currency: z.literal('RWF').nullable(), currency_scale: z.literal(0).nullable(),
+  event_kind: z.enum(['incoming_receipt', 'outgoing', 'reversal', 'failed', 'pending', 'other', 'unknown']),
+  transaction_at: timestamp.nullable(), payer_name: text.nullable(), payer_last3: lastThree.nullable(),
+};
+const nativeTransaction = z.object({
+  ...commonTransaction, ...nativeFields, ...financialAssertions,
+  native_group_id: nativeGroup, group_id: nativeGroup, parse_attempt_id: uuid,
+  receiving_account_id: z.null(), public_code: z.null(), recipient_name: z.null(),
+  status: z.enum(['recorded', 'credited', 'reversed']),
+  allocation_state: z.enum(['unallocated', 'linked', 'needs_review', 'not_applicable']),
+  receiving_context: z.object({
+    basis: z.literal('unestablished'), account_id: z.null(), identifier_raw: z.null(),
+    identifier_kind: z.null(), recipient_name: z.null(),
+  }),
+  receipt_facts: z.object({
+    ...nativeFields, ...financialAssertions, contract_version: z.literal(1), kind: z.literal('automatic_momo_extraction'),
+    transaction_id: uuid, parse_attempt_id: uuid, capture_id: uuid, source_body_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    parser_version: text, profile_version: text, parsed_at: timestamp,
+  }),
+}).refine(row => {
+  const facts = row.receipt_facts;
+  return row.group_id === row.native_group_id && facts.transaction_id === row.id && facts.parse_attempt_id === row.parse_attempt_id &&
+    facts.amount_minor === row.amount_minor && facts.currency === row.currency && facts.currency_scale === row.currency_scale &&
+    (row.currency === null) === (row.currency_scale === null) &&
+    facts.provider_transaction_id === row.provider_transaction_id && facts.event_kind === row.event_kind &&
+    facts.transaction_at === row.transaction_at && facts.payer_name === row.payer_name && facts.payer_last3 === row.payer_last3;
+}, 'Inconsistent native receipt evidence.');
+const transaction = z.union([managedTransaction, nativeTransaction]).superRefine((value, ctx) => {
+  if (value.credited_amount_minor > (value.amount_minor ?? 0) || value.credited_amount_minor > 0 && value.currency !== 'RWF' ||
+      value.status === 'credited' && (!value.payment_id || !value.credited_amount_minor) || value.status === 'awaiting_review' && !value.payment_id ||
+      (value.provider_confirmation === undefined) !== (value.settlement_status === undefined)) ctx.addIssue({code: 'custom', message: 'Invalid transaction relationships.'});
 });
 export type MomoTransaction = z.infer<typeof transaction>;
 export interface MomoFilters {search: string; status: MomoStatus; account: string; group: string; from: string; to: string;}
@@ -50,6 +91,13 @@ export type MomoDetail = z.infer<typeof detail>;
 export function parseMomoDetail(value: unknown, id: string): MomoDetail {
   const data = detail.parse(value);
   if (data.transaction.id !== id || data.conflicting_attempt_ids && new Set(data.conflicting_attempt_ids).size !== data.conflicting_attempt_ids.length) fail();
+  if (data.transaction.native_group_id != null) {
+    const facts = data.transaction.receipt_facts;
+    const original = data.sources.find(row => row.attempt_id === facts.parse_attempt_id);
+    // The API returns the latest 100 sources. Only a complete history must contain the original.
+    if (original ? original.raw_sms_id !== facts.capture_id || original.relation !== 'accepted' ||
+        original.outcome !== 'accepted' || original.parser_version !== facts.parser_version : data.sources.length < 100) fail();
+  }
   return data;
 }
 export const sourceStatuses = ['needs_review', 'source_unresolved', 'retry', 'completed'] as const;

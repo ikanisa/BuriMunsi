@@ -38,7 +38,7 @@ export function MomoConflictReviewPanel({detail, enabled = false, onUpdated}: {d
     restoreMomoConflict(context).then(apply, () => {timer = setTimeout(() => {if (live) void restoreMomoConflict(context).then(apply, failed);}, 100);});
     return () => {live = false; if (timer) clearTimeout(timer);};
   }, [allowed, context, scope]);
-  if (!identity || !model || !principalId || !allowed) return null;
+  if (!identity || !model || !principalId || !allowed || detail.transaction.native_group_id != null) return null;
   if (loadedScope !== scope) return <LoadingState label="Checking conflict review recovery" />;
   const pending = pendingState && pendingState.kind !== 'ready' ? pendingState : null, ready = pendingState?.kind === 'ready' ? pendingState : null;
   if (!pending && !message && !saved && (!enabled || detail.transaction.has_conflict !== 1)) return null;

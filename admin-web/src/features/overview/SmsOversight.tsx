@@ -63,7 +63,10 @@ export function SmsOversight({request, permissions, authorityKey}: {request: Adm
             <h3>BuriMunsi SMS processing</h3>
             {sample.native ? <>
               <QueueCounts labels={nativeLabels} counts={sample.native.counts} />
-              <p>Oldest pending work at check: {formatAge(sample.native.oldestPendingSeconds)}. Internal credits measure ledger postings. Provider settlement is recorded separately.</p>
+              <p>{sample.native.oldestPendingSeconds === null
+                ? 'No age was recorded for pending, retrying or unmatched items at this check.'
+                : `At this check, the oldest pending, retrying or unmatched item was ${formatAge(sample.native.oldestPendingSeconds)} old.`}
+                {' '}Internal credits measure ledger postings. Provider settlement is recorded separately.</p>
             </> : <p role="status">BuriMunsi queue measurements are unavailable.</p>}
           </section>
           {(sample.operations || sample.payer) && <section aria-label="BuriMunsi payer receipts" className="overview-oversight-section">

@@ -1,5 +1,6 @@
-import {useCallback, useEffect, useRef, useState} from 'react';
+import {useCallback, useContext, useEffect, useRef, useState} from 'react';
 import {AdminRequestError} from '../../api/client';
+import {InteractionSuspendedContext} from '../../ui/useFocusScope';
 import {useVisibleOperationsRefresh} from './useVisibleOperationsRefresh';
 
 export type OperationReadState<T> =
@@ -13,6 +14,7 @@ export function useOperationRead<T>(
   load: () => Promise<T>,
   {pollMs, collectionId, invalidResponse = 'The workspace response could not be verified.'}: {pollMs?: number; collectionId?: string; invalidResponse?: string} = {},
 ) {
+  const suspended = useContext(InteractionSuspendedContext);
   const [result, setResult] = useState<(OperationReadState<T> & {scope: string}) | null>(null);
   const [attempt, setAttempt] = useState(0);
   const flight = useRef<{key: string; promise: Promise<T>} | null>(null);
@@ -20,7 +22,7 @@ export function useOperationRead<T>(
   const attemptKey = `${key}:${attempt}`;
 
   useEffect(() => {
-    if (!enabled) {flight.current = null; pending.current = null; return;}
+    if (!enabled || suspended) {flight.current = null; pending.current = null; return;}
     let read = flight.current;
     if (!read || read.key !== attemptKey) {
       read = {key: attemptKey, promise: load()};
@@ -46,7 +48,7 @@ export function useOperationRead<T>(
       }
     });
     return () => {active = false;};
-  }, [attemptKey, enabled, invalidResponse, key, load]);
+  }, [attemptKey, enabled, invalidResponse, key, load, suspended]);
 
   const retry = useCallback(() => {
     if (!pollMs || !flight.current) setAttempt(value => value + 1);
@@ -56,7 +58,7 @@ export function useOperationRead<T>(
     if (invalidated && flight.current) pending.current = flight.current.key;
     else retry();
   }, [retry]);
-  useVisibleOperationsRefresh(enabled, pollMs, refresh, collectionId);
+  useVisibleOperationsRefresh(enabled && !suspended, pollMs, refresh, collectionId);
 
   const sameScope = pollMs !== undefined && result?.scope === key && result.status === 'success';
   return {result: enabled && (result?.key === attemptKey || sameScope) ? result : null, retry};

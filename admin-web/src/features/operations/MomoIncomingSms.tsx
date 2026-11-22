@@ -2,6 +2,7 @@
 import {useCallback, useState, type FormEvent} from 'react';
 import {Link} from 'react-router';
 import {useSession} from '../../session/SessionProvider';
+import {canDisplaySessionRecords} from '../../session/sessionContext';
 import {Button, Card, StatusBadge} from '../../ui';
 import {parseSmsPage, type Page, type SmsReceipt} from './contracts';
 import {formatStatus, formatTime} from './OperationsRecords';
@@ -26,7 +27,7 @@ function UploadedSms() {
     if (page.rows.some((row) => row.source_kind !== 'capture')) throw new Error('Source mismatch.');
     return page;
   }, [offset, search, request]);
-  const {result, retry} = useOperationRead(`${session.epoch}:capture:${search}:${offset}`, session.status === 'authenticated' && !!session.user?.permissions.includes('sms.read'), load, {...momoReadOptions, pollMs: 15000});
+  const {result, retry} = useOperationRead(`${session.epoch}:capture:${search}:${offset}`, canDisplaySessionRecords(session) && !!session.user?.permissions.includes('sms.read'), load, {...momoReadOptions, pollMs: 15000});
   const submit = (event: FormEvent) => {event.preventDefault(); if (input.length <= 200 && !/[\x00-\x1f\x7f]/.test(input)) {setSearch(input.trim()); setOffset(0);}};
   return <Card className="operations-records"><div className="operations-toolbar"><h2>Incoming SMS</h2><form className="operations-search" onSubmit={submit}><label className="admin-sr-only" htmlFor="momo-sms-search">Search incoming SMS</label><input id="momo-sms-search" className="admin-input" value={input} maxLength={200} onChange={(event) => setInput(event.target.value)} placeholder="User name, member ID or receipt ID" /><Button type="submit">Search</Button></form><Button onClick={retry}>Refresh</Button></div>
     <p className="operations-note">Updates automatically while this page is visible. An upload does not confirm payment or settlement.</p>

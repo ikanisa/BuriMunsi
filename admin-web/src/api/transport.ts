@@ -1,4 +1,4 @@
-import {AdminRequestError, type JsonObject} from './contracts';
+import {AdminTransportError, type JsonObject} from './contracts';
 import {boundedResponseBody} from './responses';
 
 interface RequestLimits {
@@ -28,14 +28,18 @@ export async function fetchAdminResponse(fetchImpl: typeof fetch, target: string
       const message = limits.mutation
         ? 'The result is unknown. Check the original request before continuing.'
         : 'The workspace could not be reached. Check your session before trying again.';
-      throw new AdminRequestError(message, {outcomeUnknown: true});
+      throw new AdminTransportError(message);
     }
 
     let raw: string | undefined;
     if (response.status === 401 && !limits.readUnauthorizedBody) abort();
     else {
       try { raw = await boundedResponseBody(response, limits.maxResponseBytes); }
-      catch { abort(); }
+      catch (failure) {
+        abort();
+        // Preserve HTTP denial and version handling even if their error body was lost.
+        if (response.status === 200 && failure instanceof AdminTransportError) throw failure;
+      }
     }
     return {response, raw};
   } finally {

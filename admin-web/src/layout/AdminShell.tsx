@@ -20,7 +20,7 @@ export interface AdminShellProps {
 const compactNavigation = '(max-width: 720px)';
 
 export function AdminShell({ navigation, currentPath, identity, onSignOut, toolbar, status, children }: AdminShellProps) {
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuRequested, setMenuOpen] = useState(false);
   const [search, setSearch] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
   const menuTrigger = useRef<HTMLElement>(null);
@@ -33,7 +33,7 @@ export function AdminShell({ navigation, currentPath, identity, onSignOut, toolb
     menuTrigger.current = trigger;
     setMenuOpen(true);
   }
-  useFocusScope(menuOpen, sidebarRef, closeMenu, menuTrigger);
+  const menuOpen = useFocusScope(menuRequested, sidebarRef, closeMenu, menuTrigger);
   const pathname = currentPath.split('?')[0];
   const selected = useMemo(() => findCurrentSection(navigation, pathname), [navigation, pathname]);
   const groups = useMemo(() => {
@@ -51,7 +51,7 @@ export function AdminShell({ navigation, currentPath, identity, onSignOut, toolb
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
-      if (!event.defaultPrevented && !hasActiveFocusScope() && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+      if (!event.defaultPrevented && !hasActiveFocusScope() && !searchRef.current?.closest('[inert]') && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         searchRef.current?.focus();
       }

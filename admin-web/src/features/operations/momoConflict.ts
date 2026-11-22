@@ -50,6 +50,7 @@ function verifyAttempt(attempt: PendingAttempt, context: MomoConflictContext) {
 
 /** Require source rows for the complete bounded set, not only the server's ID list. */
 export function momoConflictSources(detail: MomoDetail) {
+  if (detail.transaction.native_group_id != null) fail('Native receipts use their collection review workflow.');
   const ids = detail.conflicting_attempt_ids;
   if (!ids || ids.length < 1 || ids.length > 100 || ids.some((value) => !UUID.test(value)) || new Set(ids).size !== ids.length) fail('The complete conflict set could not be verified.');
   const accepted = detail.sources.filter((source) => source.relation === 'accepted' && source.outcome === 'accepted');
