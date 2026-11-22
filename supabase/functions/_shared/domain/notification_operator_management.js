@@ -1,4 +1,4 @@
-import {requireFreshAdminEmail} from './admin_email_policy.js';
+import {activePhoneOperator,requireFreshAdminEmail} from './admin_email_policy.js';
 import {ApiError,json,readJson,uuid,integer,id,digest,stableJson,now} from './core.js';
 import {adminAccountSession,adminCanonicalActor,accountDatabase,validateAdminOrigin} from './admin_accounts.js';
 import {preliminaryCurrentOwner} from './admin_owner_precheck.js';
@@ -11,7 +11,7 @@ const options={permission:'assisted_sms.manage',minimumAssurance:2,freshSeconds:
 async function owner(request,base,permission='assisted_sms.manage'){
  base={...base,DB:base.DB.withSession?base.DB.withSession('first-primary'):base.DB};
  validateAdminOrigin(request,base);const account=await adminAccountSession(request,base);
- if(!await preliminaryCurrentOwner(base,account))throw new ApiError(403,'owner_required','Only the main administrator can configure receipt SMS.');
+ if(!await preliminaryCurrentOwner(base,account))throw new ApiError(403,activePhoneOperator(account)?'admin_required':'owner_required','An administrator with receipt SMS access can configure this service.');
  if(!account.permissions.includes(permission))throw new ApiError(403,'permission_required','Receipt SMS configuration is unavailable.');
  requireFreshAdminEmail(account);
  const env=accountDatabase(base,account,permission,{owner:true,mfa:true,fresh:true}),actor=await adminCanonicalActor(request,env,account,permission);return {env,actor,account};
@@ -21,7 +21,7 @@ const managementFields=(body,allowed)=>assertReceiptSmsFields(body,allowed,'Requ
 function failure(error){
  if(error instanceof ApiError)return error;
  if(/recent_email_(?:verification|sign_in)_required/.test(String(error?.message??error)))return new ApiError(403,'recent_email_sign_in_required','Verify your current Admin email before continuing.');const text=String(error?.message??error);
- if(/admin_account_authority|admin_account_guards|session_changed|permission_denied|mfa_required/.test(text))return new ApiError(403,'sms_authority_changed','Your account access changed. Sign in and verify again.');
+ if(/admin_account_authority|admin_account_guards|session_changed|permission_denied|mfa_required/.test(text))return new ApiError(403,'sms_authority_changed','Your account access changed. Sign in again.');
  if(/admin_bridge_state|sms_policy_revision|UNIQUE constraint/.test(text))return new ApiError(409,'sms_policy_changed','The collection or policy changed. Refresh before continuing.');
  return new ApiError(503,'sms_configuration_unknown','The result could not be confirmed. Check its original request before repeating it.');
 }

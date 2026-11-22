@@ -66,7 +66,7 @@ describe('canonical person creation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Review person' }));
     expect(screen.getByRole('alert')).toHaveTextContent('Direct members need'); expect(request).not.toHaveBeenCalled();
     fireEvent.change(screen.getByLabelText('MoMo number'), { target: { value: direct.momo_number } });
-    expect(screen.queryByLabelText('Email')).not.toBeInTheDocument(); expect(screen.queryByLabelText('WhatsApp login number')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Email')).not.toBeInTheDocument(); expect(screen.queryByLabelText('Mobile number')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Review person' })); fireEvent.click(screen.getByRole('button', { name: 'Confirm person' }));
     expect(await screen.findByText('The person was recorded.')).toBeInTheDocument();
   });

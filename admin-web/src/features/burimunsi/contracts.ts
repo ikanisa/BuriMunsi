@@ -30,7 +30,7 @@ function capabilities(value: unknown, r: 'admin' | 'staff'): string[] {
   if (!validOperatorCapabilities(r, value)) invalid();
   return [...value];
 }
-function shared(value: Row, roleField = 'role'): BuriSharedOperator {return {adminId: operatorId(value.adminId), principalId: operatorId(value.principalId), email: string(value.email), displayName: string(value.displayName, 120), role: sharedRole(value[roleField])};}
+function shared(value: Row, roleField = 'role'): BuriSharedOperator {return {adminId: operatorId(value.adminId), principalId: operatorId(value.principalId), email: value.email === null ? '' : string(value.email), displayName: string(value.displayName, 120), role: sharedRole(value[roleField])};}
 
 export function parseBuriScopes(input: unknown): BuriScope[] {
   const value = obj(input); exact(value, ['contractVersion', 'collections', 'accounts', 'scopes', 'installations']); if (value.contractVersion !== 1) invalid();

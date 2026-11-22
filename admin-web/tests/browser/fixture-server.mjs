@@ -1,8 +1,9 @@
-// Local, read-only synthetic browser fixture. Never use for a deployed Admin.
+// Loopback browser fixture. Account changes use in-memory records only in explicit sign-in mode.
 import {createServer} from 'node:http';
 import {promises as fs} from 'node:fs';
 import path from 'node:path';
 import {versionedStatic} from '../../../deploy/platform-admin/src/static-recovery.js';
+import {createPhoneAccountFixture, fixtureAdminId} from './phone-account-fixture.mjs';
 
 const root = path.resolve(process.argv[2] ?? '');
 if (!process.argv[2] || !(await fs.stat(root)).isDirectory()) throw new Error('Provide a candidate directory.');
@@ -23,12 +24,6 @@ const overview = {contract_version: 2, model: 'canonical_evidence_ledger', count
   measured_at: '2026-11-16T12:00:00.000Z', counts, amounts, contribution_basis: 'reconciled_evidence_entries',
   collected_basis: 'retained_received_evidence', reconciliations_available: true,
   metrics: Object.entries(labels).map(([key, label]) => ({key, label, status: 'measured', value: String(counts[key] ?? amounts[key])}))};
-const user = {id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', email: 'fixture@example.test', role: 'owner',
-  sessionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', principalId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-  authMethod: 'phone_passcode', phone: '+250780000001', displayName: 'Fixture owner',
-  financialModel: 'canonical_evidence_ledger', assuranceLevel: 1, mfaAt: null,
-  permissions: ['overview.read', 'collections.read', 'users.read', 'receivers.read', 'payments.read', 'ledger.read',
-    'reconciliations.read', 'sms.read', 'gateway.read', 'email.read', 'account.manage', 'admin_users.read']};
 // Synthetic captures for reviewing the SMS layout; these never represent real
 // messages, extracted facts, confirmed payments or provider settlement.
 const smsCaptures = [
@@ -37,7 +32,7 @@ const smsCaptures = [
   ['33333333-3333-4333-8333-333333333333', '345678', 'Demo member C', 'received', '2026-11-15T17:45:00+02:00'],
 ].map(([id, public_id, display_name, status, received_at_device]) => {
   const received_at = Date.parse(received_at_device) / 1000;
-  return {source_kind: 'capture', id, user_id: user.id, payee_id: null, source_sha256: 'a'.repeat(64), status, version: 1,
+  return {source_kind: 'capture', id, user_id: fixtureAdminId, payee_id: null, source_sha256: 'a'.repeat(64), status, version: 1,
     received_at, created_at: received_at, public_id, display_name, transaction_id: null, evidence_level: 'client_received',
     source_fact_id: null, parser_version: null, extraction_status: 'not_extracted', source_body_sha256: null, source_payload_sha256: null,
     parsed_at: null, payer_name: null, payer_phone: null, payer_masked_phone: null, payer_last3: null, payee_momo_number: null,
@@ -46,11 +41,6 @@ const smsCaptures = [
     duplicate_reference_count: 0, conflicting_reference_count: 0, provider_confirmation: false, settlement_status: 'not_asserted',
     timezone_known: false, payer_last3_known: false, source_content_reveal_required: true, received_at_device};
 });
-const useCookieSignIn = process.env.COLLECT_FIXTURE_SIGN_IN === '1';
-const csrfToken = 'c'.repeat(64);
-const cookieKey = 'collect_fixture_session';
-const sessionCookie = `${cookieKey}=signed-in`;
-let passcodeVerifiedAt = null;
 const mime = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.ttf': 'font/ttf', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8'};
 function json(response, status, body, extraHeaders = {}) {
@@ -64,9 +54,9 @@ async function readFixtureBody(request) {
   try {return JSON.parse(Buffer.concat(chunks).toString('utf8'));} catch {return null;}
 }
 
-function signedInFixture(lifetime) {
-  return {user: {...user, passcodeVerifiedAt}, expiresAt: new Date(Date.now() + lifetime).toISOString(), csrfToken, ownerEmail: null};
-}
+const phoneAccounts = createPhoneAccountFixture({cookieSignIn: process.env.COLLECT_FIXTURE_SIGN_IN === '1',
+  lifetime: process.env.COLLECT_FIXTURE_LONG_EXPIRY === '1' ? 40 * 24 * 60 * 60 * 1000 : 2 * 60 * 60 * 1000,
+  json, readBody: readFixtureBody});
 
 createServer(async (request, response) => {
   const url = new URL(request.url ?? '/', origin);
@@ -78,33 +68,12 @@ createServer(async (request, response) => {
     return response.end(await recovery.text());
   }
   if (url.pathname.startsWith('/api/')) {
-    const signedIn = !useCookieSignIn || request.headers.cookie?.split(';').some(cookie => cookie.trim() === sessionCookie);
-    if (useCookieSignIn && request.method === 'POST' && url.pathname === '/api/admin/auth/phone-passcode') {
-      const payload = await readFixtureBody(request);
-      if (!payload || Object.keys(payload).sort().join(',') !== 'phone,pin' ||
-          payload.phone !== user.phone || payload.pin !== '0123') return json(response, 401, {error: {code: 'invalid_credentials'}});
-      passcodeVerifiedAt = new Date().toISOString();
-      return json(response, 200, signedInFixture(2 * 60 * 60 * 1000),
-        {'Set-Cookie': `${sessionCookie}; Path=/; HttpOnly; SameSite=Strict`});
-    }
-    if (request.method === 'POST' && url.pathname === '/api/admin/auth/passcode/verify') {
-      const payload = await readFixtureBody(request);
-      if (!signedIn || request.headers['x-collect-csrf'] !== csrfToken || !payload ||
-          Object.keys(payload).join(',') !== 'pin' || payload.pin !== '0123') return json(response, 401, {error: {code: 'invalid_credentials'}});
-      passcodeVerifiedAt = new Date().toISOString();
-      return json(response, 200, {contractVersion: 1, sessionId: user.sessionId, passcodeVerifiedAt});
-    }
-    if (useCookieSignIn && request.method === 'POST' && url.pathname === '/api/admin/auth/logout') {
-      if (!signedIn || request.headers['x-collect-csrf'] !== csrfToken) return json(response, 401, {error: {code: 'fixture_unauthorized'}});
-      return json(response, 200, {ok: true}, {'Set-Cookie': `${cookieKey}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict`});
+    const session = phoneAccounts.current(request);
+    if (url.pathname.startsWith('/api/admin/auth/') || /^\/api\/admin\/team(?:\/|$)/.test(url.pathname)) {
+      return phoneAccounts.handle(request, response, url.pathname.slice('/api/admin/'.length), session);
     }
     if (request.method !== 'GET') return json(response, 405, {error: {code: 'fixture_read_only'}});
-    if (url.pathname === '/api/admin/auth/session') {
-      if (!signedIn) return json(response, 200, {user: null, expiresAt: null, csrfToken: null, ownerEmail: null});
-      const lifetime = process.env.COLLECT_FIXTURE_LONG_EXPIRY === '1' ? 40 * 24 * 60 * 60 * 1000 : 2 * 60 * 60 * 1000;
-      return json(response, 200, signedInFixture(lifetime));
-    }
-    if (!signedIn) return json(response, 401, {error: {code: 'fixture_unauthorized'}});
+    if (!session) return json(response, 401, {error: {code: 'fixture_unauthorized'}});
     if (url.pathname === '/api/admin/core/overview') return json(response, 200, overview);
     if (url.pathname === '/api/admin/sms/receipts') {
       const offset = Number(url.searchParams.get('offset') ?? 0), limit = Number(url.searchParams.get('limit') ?? 25);
@@ -121,7 +90,7 @@ createServer(async (request, response) => {
       if (!row) return json(response, 404, {error: {code: 'fixture_not_found'}});
       const offset = Number(url.searchParams.get('offset') ?? 0);
       if (!Number.isSafeInteger(offset) || offset < 0) return json(response, 400, {error: {code: 'invalid_fixture'}});
-      return json(response, 200, {resource_type: 'sms_receipts', resource: row, current_actor_id: user.id, can_extract: false,
+      return json(response, 200, {resource_type: 'sms_receipts', resource: row, current_actor_id: fixtureAdminId, can_extract: false,
         related: {duplicate_references: {rows: [], total: 0, limit: 25, offset, next_offset: null}}});
     }
     if (/^\/api\/admin\/core\/(?:groups|users|members|payees|transactions|ledgers)$/.test(url.pathname) || url.pathname === '/api/admin/operations/requests') {

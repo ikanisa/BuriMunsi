@@ -42,7 +42,7 @@ export function NativeRevocationPanel({context, directory, onResolved}: {context
     <p>Check an original request before making another change.</p>
     {message && <p role="status">{message}</p>}
     {pending?.kind === 'owned' || pending?.kind === 'unbound' ? <p>Original request reference: <code>{pending.requestKey}</code>{pending.kind === 'unbound' && ' — its original review details are unavailable; keep the reference.'}</p> : null}
-    {pending?.kind === 'foreign' && <p>The original owner session must check this request.</p>}
+    {pending?.kind === 'foreign' && <p>The original Admin session must check this request.</p>}
     {pending?.kind === 'external' && <p>Use the original request shown for this group.</p>}
     <Button type="button" disabled={busy} onClick={check}>Check native revocation request</Button>
     {missing && context.enabled && pending?.kind === 'owned' && <><p>Cancel the original request only if it should no longer be applied. A late original request will then be blocked.</p><Button type="button" disabled={busy} onClick={cancel}>Cancel original request</Button></>}

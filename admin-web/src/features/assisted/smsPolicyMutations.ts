@@ -1,11 +1,13 @@
 import type {AdminRequest, JsonObject} from '../../api/client';
+import type {AdminUser} from '../../session/sessionResponses';
 import {clearPending, listPending, readPending, retainPending, type PendingAttempt, type PendingIdentity} from '../core/pendingAttempt';
 import type {SmsDecisionDetail, SmsPolicyState} from './smsControlContracts';
-import {MANAGEMENT_FAMILY as FAMILY, MANAGEMENT_PERMISSION as PERMISSION, MANAGEMENT_UUID as UUID, managementIdentity as identity, managementStorage as storage, parseManagementPending, withManagementLock} from './smsControlRecovery';
+import {MANAGEMENT_FAMILY as FAMILY, MANAGEMENT_PERMISSION as PERMISSION, MANAGEMENT_UUID as UUID, hasSmsManagementAuthority, managementIdentity as identity, managementStorage as storage, parseManagementPending, withManagementLock} from './smsControlRecovery';
 
 const originals = new WeakSet<object>(), checked = new WeakSet<object>();
 
 export interface SmsPolicyContext {
+  scopedActor?: AdminUser;
   allowPolicyChanges: boolean;
   /** Separate qualification gate: policy enablement remains disabled by default. */
   allowPolicyEnabling?: boolean;
@@ -30,7 +32,7 @@ export class SmsPolicyOutcomeUnknown extends Error {
 
 function authority(context: SmsPolicyContext, mutation = false) {
   const actor = context.identity;
-  if ((mutation && (context.allowPolicyChanges !== true || context.mutationCurrent?.() === false)) || actor.role !== 'owner' || actor.email !== 'info@ikanisa.com' || !actor.permissions.includes(PERMISSION) || !actor.permissions.includes('assisted_sms.manage') || !UUID.test(actor.id) || !UUID.test(actor.sessionId) || !UUID.test(actor.principalId) || !context.isCurrent()) throw new Error('Reopen SMS controls with the current verified owner sign-in.');
+  if ((mutation && (context.allowPolicyChanges !== true || context.mutationCurrent?.() === false)) || !hasSmsManagementAuthority(actor, context.scopedActor) || !actor.permissions.includes(PERMISSION) || !actor.permissions.includes('assisted_sms.manage') || !UUID.test(actor.id) || !UUID.test(actor.sessionId) || !UUID.test(actor.principalId) || !context.isCurrent()) throw new Error(context.scopedActor ? 'Reopen SMS controls with your current Admin session.' : 'Reopen SMS controls with the current verified owner sign-in.');
 }
 function enableAllowed(context: SmsPolicyContext): boolean {return context.allowPolicyEnabling === true && context.enablementCurrent?.() !== false;}
 function guarded<T>(context: SmsPolicyContext, mutation: boolean, work: () => Promise<T>): Promise<T> {
@@ -39,7 +41,7 @@ function guarded<T>(context: SmsPolicyContext, mutation: boolean, work: () => Pr
 }
 async function verify(context: SmsPolicyContext, mutation = false) {
   authority(context, mutation);
-  if (!(await context.verifyFresh())) throw new Error('Verify your current owner sign-in before continuing.');
+  if (!(await context.verifyFresh())) throw new Error(context.scopedActor ? 'Your Admin session changed. Sign in again.' : 'Verify your current owner sign-in before continuing.');
   authority(context, mutation);
 }
 async function exact(context: SmsPolicyContext, saved: PendingAttempt) {

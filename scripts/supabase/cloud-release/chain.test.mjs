@@ -16,8 +16,8 @@ const sha=x=>createHash('sha256').update(x).digest('hex');
 const fail=code=>{throw Error(code);};
 const flags=process.argv.slice(2),managedLifecycle=flags.includes('--managed-lifecycle'),textSubjects=flags.includes('--text-subjects');
 const scopedWriters=flags.includes('--scoped-writers'),release=flags.includes('--writer-journal-release');
-const forward=flags.includes('--forward-migration-release');
-if(flags.some(x=>!['--managed-lifecycle','--text-subjects','--scoped-writers','--writer-journal-release','--forward-migration-release'].includes(x))||new Set(flags).size!==flags.length||(textSubjects&&!managedLifecycle)||((scopedWriters||release||forward)&&!textSubjects)||([scopedWriters,release,forward].filter(Boolean).length>1))fail('invalid_mode');
+const forward=flags.includes('--forward-migration-release'),phoneOperators=flags.includes('--phone-operators');
+if(flags.some(x=>!['--managed-lifecycle','--text-subjects','--scoped-writers','--writer-journal-release','--forward-migration-release','--phone-operators'].includes(x))||new Set(flags).size!==flags.length||(textSubjects&&!managedLifecycle)||((scopedWriters||release||forward||phoneOperators)&&!textSubjects)||([scopedWriters,release,forward,phoneOperators].filter(Boolean).length>1))fail('invalid_mode');
 const work=JSON.parse(await readFile(root+'/supabase/managed-migration-history/source-migrations.lock.json','utf8')).migrations;
 const deployed=await retainedLock();
 if(work.length!==58||deployed.length!==62||work.slice(0,52).some((x,i)=>x.name!==deployed[i].name||x.sha256!==deployed[i].sha256))fail('source_chain_changed');
@@ -30,7 +30,7 @@ const variants={
  '20261113130700_storage_iceberg_retention_inspection.sql':['../../../supabase/migrations/20261117071117_storage_iceberg_cloud_catalog.sql','3ef135d93a0272260e8b12d1a2dcb690bb7a650b178fc12f98acd38ac176290d'],
  '20261114110200_storage_iceberg_retention_census.sql':['../../../supabase/migrations/20261117071123_storage_iceberg_cloud_census.sql','043c3eda476542c8f8e9f85ce985f789ef1fd4c0bc9f21fc3f87a76b3fef06e9']};
 let replayFailed=false;
-await withOwnedArchiveFixture(async({owner,admin,watcher,database})=>{
+await withOwnedArchiveFixture(async({owner,admin,watcher,database,fixtureRoot})=>{
  const baseline='dfc7a4fafb696f73d207251c9f35cb892528eecd1929552fa575996874adc3e3',source='a'.repeat(64);
  await owner.query("ALTER TABLE auth.users ADD COLUMN email_confirmed_at timestamptz; ALTER TABLE auth.users ADD COLUMN is_anonymous boolean NOT NULL DEFAULT false");
  let storage=await readFile(root+'/scripts/supabase/testing/synthetic-iceberg-storage.sql','utf8');
@@ -157,6 +157,11 @@ await withOwnedArchiveFixture(async({owner,admin,watcher,database})=>{
   finally{await admin.query('SET ROLE supabase_storage_admin; CREATE INDEX bucket_lifecycle_states_due_idx ON storage.bucket_lifecycle_states USING btree (next_run_at, bucket_id) WHERE (next_run_at IS NOT NULL); RESET ROLE');}
   await owner.query('SELECT private._retention_manifest_schema_v2()');negativeChecks.push('post_install_storage_drift');
  }
+ if(phoneOperators){
+  const {verifyPhoneOperatorAccounts}=await import('./phone-operator.fixture.mjs');
+  console.log(JSON.stringify(await verifyPhoneOperatorAccounts({owner,database,fixtureRoot})));
+  return;
+ }
  if(forward){
   const {verifyForwardMigrationRelease}=await import('./forward-migration.fixture.mjs');
   console.log(JSON.stringify(await verifyForwardMigrationRelease({owner,admin,database})));
@@ -170,5 +175,5 @@ await withOwnedArchiveFixture(async({owner,admin,watcher,database})=>{
  const cohort=scopedWriters?await verifyWriterJournalSource({owner,admin,watcher}):null;
  const writerJournalChecks=cohort?.checks,plannedManagedHistory=cohort?.plan.migrations.at(-1).expected_history;
  console.log(JSON.stringify({status:managedLifecycle?'synthetic_managed_chain_complete':'synthetic_partial_chain_complete',applied:done.length,forwardMigrations:(textSubjects?1:0)+(cohort?.plan.migrations.length??0),total:union.length,skipped,observations,negativeChecks,retentionFunctionHashes:hashes,writerJournalChecks,journalPostingEvidence:cohort?.postingSubjectEvidence,fixtureCohortHistory:cohort?.fixtureHistory,plannedManagedHistory,productionDispatch:false}));
-},(release||forward) && process.platform==='linux' ? writerJournalLinuxPg : undefined);
+},(release||forward||phoneOperators) && process.platform==='linux' ? writerJournalLinuxPg : undefined);
 if(replayFailed)process.exitCode=1;

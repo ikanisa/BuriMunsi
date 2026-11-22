@@ -82,7 +82,7 @@ describe('legacy person creation page', () => {
     render(<UserCreatePage {...access} request={request} identity={identity} allowMutations verifyFresh={async () => false} />);
     await user.type(await screen.findByLabelText('Recorded full name'), 'Direct Member');
     await user.selectOptions(screen.getByLabelText('Member type'), 'direct');
-    expect(screen.queryByLabelText('WhatsApp login number')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Mobile number')).not.toBeInTheDocument();
     await user.type(screen.getByLabelText('Email'), 'direct@example.test');
     await user.type(screen.getByLabelText('Reason for creation'), 'Record direct member details');
     await user.click(screen.getByRole('button', {name: 'Review person'}));
