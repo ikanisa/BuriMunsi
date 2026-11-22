@@ -47,7 +47,7 @@ export async function startPayerFixture(t,{
     INSERT INTO cron.job VALUES(1,true);
     CREATE TABLE collect_ops.jobs_config(singleton boolean,enabled boolean,cron_job_id integer DEFAULT 1);
     CREATE TABLE collect_ops.jobs_dispatches(kind text,state text,observed_at timestamptz,response_sha256 text,id integer GENERATED ALWAYS AS IDENTITY);
-    CREATE TABLE collect_sms.messages(message_id text PRIMARY KEY,application_id text,kind text,idempotency_key text,state text);
+    CREATE TABLE collect_sms.messages(message_id text PRIMARY KEY,application_id text,kind text,idempotency_key text,state text,text text NOT NULL DEFAULT 'synthetic retained receipt');
     ALTER TABLE collect_sms.messages ENABLE ROW LEVEL SECURITY;
     ALTER TABLE collect_sms.messages FORCE ROW LEVEL SECURITY;
     CREATE TABLE collect_sms.devices(last_seen_at text,ready bigint,revoked_at text,allowed_kinds text);

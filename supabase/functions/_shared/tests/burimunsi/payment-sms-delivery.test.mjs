@@ -83,7 +83,8 @@ test('renders the retained Kinyarwanda v2 wording and Kigali midnight with the o
 test('reserves and arms the exact receipt before the one POST', async () => {
   const { result, operations } = await run();
   assert.deepEqual(operations.map(([k]) => k), ['claim', 'prepare', 'post', 'finish']);
-  assert.deepEqual(operations[0][1], [group, available.BURIMUNSI_PAYMENT_SMS_ENABLED_AT, scope, 1]);
+  assert.deepEqual(operations[0][1].slice(0,4), [group, available.BURIMUNSI_PAYMENT_SMS_ENABLED_AT, scope, 1]);
+  assert.match(operations[0][1][4], /^[a-f0-9-]{36}$/);
   assert.equal(operations[1][1][3], sha(text));
   assert.deepEqual(operations[2][1], { messageId: row.message_id, to, notAfter: row.not_after, text });
   assert.deepEqual(operations[3][1].slice(3), ['accepted', 'delivered', 'c'.repeat(64)]);

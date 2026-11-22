@@ -52,7 +52,15 @@ test('one canonical payment allows one armed body and GET-only reconciliation', 
 
 test('private jobs-only receipt selection rejects masked, unrelated, historical, reversed and pre-activation payments', async (t) => {
   const f = await fixture(t);
-  await f.record(20, { payer: '******001' });
+  // The verified member controls this recipient number; neither that challenge
+  // nor matching last digits proves the wallet used to pay this transaction.
+  await f.db.exec(`CREATE OR REPLACE FUNCTION private.managed_phone_binding(text,text,text) RETURNS boolean LANGUAGE sql
+    AS $$SELECT $2='verified-member-contact' AND $3='+250788000001'$$`);
+  await f.db.query("INSERT INTO app.assisted_sms_authorizations VALUES($1,$2,encode(sha256(convert_to($3,'UTF8')),'hex'),1,1,'verified-member-contact')",[group,member,phone]);
+  assert.equal((await f.db.query("SELECT private.managed_phone_binding($1,'verified-member-contact',$2) AS verified",[member,phone])).rows[0].verified,true);
+  const masked=await f.record(20, { payer: '******001' });
+  assert.equal((await f.db.query('SELECT disposition FROM private.burimunsi_payment_sms_obligations WHERE payment_id=$1',[masked.pay])).rows[0].disposition,'unverified_destination');
+  await f.db.exec('DELETE FROM app.assisted_sms_authorizations');
   await f.record(25, { payer: '+250788000099' });
   await f.record(30, { mode: 'historical' });
   await f.record(35, { age: 120_000 });
@@ -296,4 +304,52 @@ test('non-bypass definer reads only exact payer gateway hints under authenticate
     await tx.exec('SET LOCAL ROLE collect_runtime');
     return tx.exec('SELECT message_id FROM collect_sms.messages');
   }),/permission denied/);
+});
+
+
+test('a lost claim commit reply resumes the exact unarmed payment and never submits a second message',async t=>{
+  const f=await fixture(t,{enabledAgo:3600000});
+  const native=await f.record(80);
+  const worker=await openFixturePayerWorker({client:f.client,collectionId:group,enabledAt:f.enabledAt,applicationId:app,lostClaimReply:true});
+  try{
+    assert.deepEqual(await worker.drain(),{status:'complete',processed:1,outcome:'unknown'});
+    const {rows:[entry]}=await f.db.query('SELECT * FROM private.burimunsi_payment_sms_deliveries WHERE payment_id=$1',[native.pay]);
+    assert.ok(entry.claim_request_id);assert.ok(entry.claim_admission_id);assert.equal(worker.submitted.message_id,entry.message_id);
+    assert.deepEqual(worker.requests,['POST']);
+    await worker.carrierDelivered();
+    assert.deepEqual(await worker.drain(),{status:'complete',processed:1,outcome:'accepted',gateway_state:'delivered'});
+    assert.deepEqual(worker.requests,['POST','GET']);
+    assert.equal((await f.db.query('SELECT count(*) FROM private.burimunsi_payment_sms_deliveries')).rows[0].count,'1');
+  }finally{await worker.complete();}
+});
+
+test('after a worker dies, only the proved unarmed lease can rotate its deadline, under current authority and the same identity',async t=>{
+  const f=await fixture(t,{enabledAgo:3600000});
+  const expire=async r=>f.db.query("UPDATE private.burimunsi_payment_sms_deliveries SET lease_until=now()-interval '1 second' WHERE attempt_id=$1",[r.attempt_id]);
+  await f.record(90);const [original]=await f.claim();
+  await assert.rejects(f.db.query("UPDATE private.burimunsi_payment_sms_deliveries SET not_after=now()+interval '1 hour' WHERE attempt_id=$1",
+    [original.attempt_id]),/payment_sms_identity_changed/);
+  // Simulate the persisted time fields from a seven-minute worker outage.
+  await f.db.exec('ALTER TABLE private.burimunsi_payment_sms_deliveries DISABLE TRIGGER burimunsi_payment_sms_immutable');
+  await f.db.query("UPDATE private.burimunsi_payment_sms_deliveries SET lease_until=now()-interval '6 minutes',not_after=now()-interval '2 minutes' WHERE attempt_id=$1",[original.attempt_id]);
+  await f.db.exec('ALTER TABLE private.burimunsi_payment_sms_deliveries ENABLE ALWAYS TRIGGER burimunsi_payment_sms_immutable');
+  assert.deepEqual(await f.readiness(),{contract_version:1,eligible_count:1,unresolved_count:0});
+  const [renewed]=await f.claim();
+  assert.deepEqual([renewed.phase,renewed.attempt_id,renewed.message_id,renewed.idempotency_key,renewed.destination],
+    ['send',original.attempt_id,original.message_id,original.idempotency_key,original.destination]);
+  assert.notEqual(original.claim_token,renewed.claim_token);assert.ok(Date.parse(renewed.not_after)>Date.now()+295000);
+  assert.equal(await f.prepare(original),'held');assert.equal(await f.prepare(renewed),'prepared');
+  await expire(renewed);await f.db.query("UPDATE private.burimunsi_payment_sms_deliveries SET next_inspect_at=now() WHERE attempt_id=$1",[renewed.attempt_id]);
+  const [read]=await f.claim();assert.equal(read.phase,'inspect');assert.equal(read.message_id,original.message_id);
+  assert.equal(await f.finish(read,'accepted','delivered'),true);
+  await f.record(100);const [changed]=await f.claim();await expire(changed);
+  await f.db.query('INSERT INTO app.notification_preferences VALUES($1,0)',[member]);
+  assert.deepEqual(await f.claim(),[]);assert.equal((await f.db.query('SELECT state FROM private.burimunsi_payment_sms_deliveries WHERE attempt_id=$1',[changed.attempt_id])).rows[0].state,'suppressed');
+  await f.db.query('DELETE FROM app.notification_preferences');await f.record(110);const [legacy]=await f.claim();
+  await f.db.query('UPDATE private.burimunsi_payment_sms_deliveries SET last_claimed_phase=NULL WHERE attempt_id=$1',[legacy.attempt_id]);
+  await expire(legacy);assert.deepEqual(await f.claim(),[]);
+  await f.record(120);const [conflict]=await f.claim();await expire(conflict);
+  await f.db.query("INSERT INTO collect_sms.messages(message_id,application_id,kind,idempotency_key,state) VALUES($1,$2,'receipt',$3,'accepted')",
+    [conflict.message_id,app,conflict.idempotency_key]);
+  assert.deepEqual(await f.claim(),[]);const [inspection]=await f.claim();assert.equal(inspection.phase,'inspect');assert.equal(inspection.message_id,conflict.message_id);
 });

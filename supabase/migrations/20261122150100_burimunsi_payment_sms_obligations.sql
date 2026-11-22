@@ -223,7 +223,44 @@ ALTER TABLE app.contribution_posting_snapshots ENABLE ALWAYS TRIGGER burimunsi_r
 
 ALTER TABLE private.burimunsi_payment_sms_deliveries ADD COLUMN last_claimed_at timestamptz,
   ADD COLUMN last_claimed_phase text CHECK(last_claimed_phase IN ('send','inspect')),
-  ADD COLUMN gateway_hint_state text, ADD COLUMN gateway_hint_at timestamptz;
+  ADD COLUMN gateway_hint_state text, ADD COLUMN gateway_hint_at timestamptz,
+  ADD COLUMN claim_request_id uuid, ADD COLUMN claim_admission_id uuid;
+CREATE UNIQUE INDEX burimunsi_payer_active_request ON private.burimunsi_payment_sms_deliveries(claim_request_id) WHERE claim_request_id IS NOT NULL;
+
+-- A body commitment is the exclusive irreversible authority to contact the gateway.
+-- Only new, expired, still-unarmed send leases may be reclaimed. Prior attempts
+-- keep their original rules, and an armed attempt is forever GET-only.
+CREATE FUNCTION private._burimunsi_payer_unarmed(d private.burimunsi_payment_sms_deliveries,p_now timestamptz)
+RETURNS boolean LANGUAGE sql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $fn$
+ SELECT coalesce(d.state='sending' AND d.claim_phase='send' AND d.last_claimed_phase='send' AND d.claim_token IS NOT NULL
+  AND d.lease_until<=p_now AND d.body_sha256 IS NULL AND d.provider_state IS NULL AND d.evidence_sha256 IS NULL
+  AND d.inspect_count=0 AND d.gateway_hint_state IS NULL,false)
+$fn$;
+REVOKE ALL ON FUNCTION private._burimunsi_payer_unarmed(private.burimunsi_payment_sms_deliveries,timestamptz)
+ FROM PUBLIC,anon,authenticated,service_role,collect_importer,collect_runtime;
+
+CREATE OR REPLACE FUNCTION private._burimunsi_payment_sms_immutable() RETURNS trigger
+ LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $fn$
+BEGIN
+ IF TG_OP='DELETE' THEN RAISE EXCEPTION 'payment_sms_retained' USING ERRCODE='42501';END IF;
+ IF ROW(OLD.attempt_id,OLD.collection_id,OLD.payment_id,OLD.ledger_entry_id,OLD.event_id,OLD.recipient_user_id,
+   OLD.destination_sha256,OLD.authorization_revision,OLD.amount_rwf,OLD.member_balance_rwf,OLD.group_name,
+   OLD.posted_at,OLD.enabled_at,OLD.application_id,OLD.message_id,OLD.idempotency_key)
+  IS DISTINCT FROM
+  ROW(NEW.attempt_id,NEW.collection_id,NEW.payment_id,NEW.ledger_entry_id,NEW.event_id,NEW.recipient_user_id,
+   NEW.destination_sha256,NEW.authorization_revision,NEW.amount_rwf,NEW.member_balance_rwf,NEW.group_name,
+   NEW.posted_at,NEW.enabled_at,NEW.application_id,NEW.message_id,NEW.idempotency_key)
+  OR (OLD.not_after IS DISTINCT FROM NEW.not_after AND NOT coalesce((
+    private._burimunsi_payer_unarmed(OLD,clock_timestamp()) AND NEW.state='sending' AND NEW.body_sha256 IS NULL
+    AND NEW.claim_phase='send' AND NEW.last_claimed_phase='send' AND NEW.claim_token IS NOT NULL AND NEW.claim_token<>OLD.claim_token
+    AND NEW.last_claimed_at>=OLD.lease_until AND NEW.not_after=NEW.last_claimed_at+interval '5 minutes'
+    AND NEW.lease_until=NEW.last_claimed_at+interval '45 seconds' AND NEW.not_after>clock_timestamp()
+    AND NEW.not_after<=clock_timestamp()+interval '5 minutes'),false))
+  OR (OLD.body_sha256 IS NOT NULL AND OLD.body_sha256 IS DISTINCT FROM NEW.body_sha256)
+  OR (OLD.claim_phase IS DISTINCT FROM 'send' AND NEW.claim_phase='send') THEN
+  RAISE EXCEPTION 'payment_sms_identity_changed' USING ERRCODE='42501';END IF;
+ RETURN NEW;
+END;$fn$;
 -- A gateway state only accelerates the existing original-ID GET. It cannot
 -- mark the payer receipt sent or delivered. The HTTPS adapter verifies that
 -- evidence against the full immutable attempt, destination digest and parts.
@@ -239,7 +276,9 @@ CREATE OR REPLACE FUNCTION private.burimunsi_claim_payment_sms(
 ) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $$
 DECLARE
   due private.burimunsi_payment_sms_obligations%ROWTYPE; entry private.burimunsi_payment_sms_deliveries%ROWTYPE;
-  last_phase text; status_id uuid; hint_state text; source record; k text; at timestamptz;
+  last_phase text; status_id uuid; hint_state text; recorded_body text; source record; k text; at timestamptz;
+  request_id uuid:=nullif(current_setting('burimunsi.payer_claim_request',true),'')::uuid;
+  admission uuid:=nullif(current_setting('collect.fence_admission_id',true),'')::uuid;
 BEGIN
   PERFORM private.burimunsi_auto_jobs_guard();
   IF p_collection_id IS NULL OR p_collection_id !~ '^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$'
@@ -254,9 +293,10 @@ BEGIN
   at:=clock_timestamp();
   IF p_enabled_at>at THEN RETURN '[]'::jsonb; END IF;
   UPDATE private.burimunsi_payment_sms_deliveries SET state='suppressed',claim_token=NULL,claim_phase=NULL,lease_until=NULL
-  WHERE attempt_id IN(SELECT attempt_id FROM private.burimunsi_payment_sms_deliveries
+  WHERE attempt_id IN(SELECT attempt_id FROM private.burimunsi_payment_sms_deliveries d
     WHERE collection_id=p_collection_id AND application_id=p_application_id AND state='sending'
-      AND body_sha256 IS NULL AND lease_until<=at ORDER BY lease_until,attempt_id LIMIT 10);
+      AND body_sha256 IS NULL AND lease_until<=at AND NOT private._burimunsi_payer_unarmed(d,at)
+    ORDER BY lease_until,attempt_id LIMIT 10);
 
   SELECT d.attempt_id,m.state INTO status_id,hint_state FROM private.burimunsi_payment_sms_deliveries d
   LEFT JOIN collect_sms.messages m ON m.message_id=d.message_id AND m.application_id=d.application_id
@@ -279,9 +319,10 @@ BEGIN
   -- across process restarts. Inspections use only the original gateway ID.
   IF status_id IS NULL OR last_phase='inspect' THEN
     FOR due IN SELECT o.* FROM private.burimunsi_payment_sms_obligations o
-      WHERE o.collection_id=p_collection_id AND o.disposition='eligible'
-        AND NOT EXISTS(SELECT FROM private.burimunsi_payment_sms_deliveries d WHERE d.payment_id=o.payment_id)
-      ORDER BY o.posted_at,o.ledger_entry_id LIMIT 32 FOR UPDATE SKIP LOCKED LOOP
+      LEFT JOIN private.burimunsi_payment_sms_deliveries d ON d.payment_id=o.payment_id
+      WHERE o.collection_id=p_collection_id AND o.disposition='eligible' AND (d.payment_id IS NULL OR
+        d.collection_id=p_collection_id AND d.application_id=p_application_id AND private._burimunsi_payer_unarmed(d,at))
+      ORDER BY o.posted_at,o.ledger_entry_id LIMIT 32 FOR UPDATE OF o SKIP LOCKED LOOP
       SELECT * INTO source FROM private._burimunsi_payment_sms_sources(p_collection_id,p_enabled_at,at,due.payment_id);
       IF NOT FOUND OR source.posted_at IS DISTINCT FROM due.posted_at
         OR private._burimunsi_sms_authority_digest(to_jsonb(source)) IS DISTINCT FROM due.authorization_sha256 THEN
@@ -292,16 +333,43 @@ BEGIN
             THEN 'before_activation'
           WHEN EXISTS(SELECT FROM app.ledger_entries WHERE reverses_entry_id=due.ledger_entry_id) THEN 'reversed'
           ELSE 'authority_changed' END WHERE payment_id=due.payment_id;
+        UPDATE private.burimunsi_payment_sms_deliveries d SET state='suppressed',claim_token=NULL,claim_phase=NULL,lease_until=NULL
+          WHERE d.payment_id=due.payment_id AND private._burimunsi_payer_unarmed(d,at);
         CONTINUE;
+      END IF;
+      SELECT * INTO entry FROM private.burimunsi_payment_sms_deliveries WHERE payment_id=due.payment_id FOR UPDATE;
+      IF FOUND THEN
+        IF NOT private._burimunsi_payer_unarmed(entry,at) THEN CONTINUE; END IF;
+        IF ROW(entry.collection_id,entry.application_id,entry.ledger_entry_id,entry.event_id,entry.recipient_user_id,entry.destination_sha256,
+          entry.authorization_revision,entry.amount_rwf,entry.member_balance_rwf,entry.group_name,entry.posted_at)
+          IS DISTINCT FROM ROW(p_collection_id,p_application_id,source.ledger_entry_id,source.event_id,source.recipient_user_id,source.destination_sha256,
+          source.authorization_revision,source.amount_rwf,source.member_balance_rwf,source.group_name,source.posted_at) THEN
+          UPDATE private.burimunsi_payment_sms_deliveries SET state='unknown',claim_token=NULL,claim_phase=NULL,lease_until=NULL
+            WHERE attempt_id=entry.attempt_id;
+          CONTINUE;
+        END IF;
+        -- Even contradictory gateway evidence on an unarmed lease rules out POST.
+        -- Preserve its body commitment for comparison by the original-ID GET.
+        SELECT encode(sha256(convert_to(m.text,'UTF8')),'hex') INTO recorded_body FROM collect_sms.messages m
+          WHERE m.message_id=entry.message_id AND m.application_id=entry.application_id AND m.kind='receipt' AND m.idempotency_key=entry.idempotency_key;
+        IF FOUND THEN
+          UPDATE private.burimunsi_payment_sms_deliveries SET state='unknown',body_sha256=recorded_body,claim_token=NULL,
+            claim_phase=NULL,lease_until=NULL,next_inspect_at=at WHERE attempt_id=entry.attempt_id;
+          CONTINUE;
+        END IF;
+        UPDATE private.burimunsi_payment_sms_deliveries SET claim_token=gen_random_uuid(),last_claimed_at=at,
+          lease_until=at+interval '45 seconds',next_inspect_at=at+interval '45 seconds', not_after=at+interval '5 minutes',
+          claim_request_id=request_id,claim_admission_id=admission WHERE attempt_id=entry.attempt_id RETURNING * INTO entry;
+        RETURN jsonb_build_array(private._burimunsi_payment_sms_claim_json(entry,source.destination));
       END IF;
       k:='buri-receipt:'||source.ledger_entry_id;
       INSERT INTO private.burimunsi_payment_sms_deliveries(collection_id,payment_id,ledger_entry_id,event_id,recipient_user_id,
         destination_sha256,authorization_revision,amount_rwf,member_balance_rwf,group_name,posted_at,enabled_at,
-        application_id,message_id,idempotency_key,not_after,claim_token,claim_phase,lease_until,next_inspect_at,last_claimed_at,last_claimed_phase)
+        application_id,message_id,idempotency_key,not_after,claim_token,claim_phase,lease_until,next_inspect_at,last_claimed_at,last_claimed_phase,claim_request_id,claim_admission_id)
       VALUES(p_collection_id,source.payment_id,source.ledger_entry_id,source.event_id,source.recipient_user_id,source.destination_sha256,
         source.authorization_revision,source.amount_rwf,source.member_balance_rwf,source.group_name,source.posted_at,p_enabled_at,
         p_application_id,p_application_id||':'||k,k,at+interval '5 minutes',gen_random_uuid(),'send',
-        at+interval '45 seconds',at+interval '45 seconds',at,'send') RETURNING * INTO entry;
+        at+interval '45 seconds',at+interval '45 seconds',at,'send',request_id,admission) RETURNING * INTO entry;
       RETURN jsonb_build_array(private._burimunsi_payment_sms_claim_json(entry,source.destination));
     END LOOP;
   END IF;
@@ -311,9 +379,51 @@ BEGIN
     gateway_hint_at=CASE WHEN hint_state IS NOT NULL AND hint_state IS DISTINCT FROM d.gateway_hint_state THEN at ELSE d.gateway_hint_at END,
     gateway_hint_state=coalesce(hint_state,d.gateway_hint_state),
     inspect_count=CASE WHEN hint_state IS NOT NULL AND hint_state IS DISTINCT FROM d.gateway_hint_state THEN 1 ELSE least(12,d.inspect_count+1) END,
-    last_claimed_at=at,last_claimed_phase='inspect' WHERE d.attempt_id=status_id RETURNING * INTO entry;
+    last_claimed_at=at,last_claimed_phase='inspect',claim_request_id=request_id,claim_admission_id=admission WHERE d.attempt_id=status_id RETURNING * INTO entry;
   RETURN jsonb_build_array(private._burimunsi_payment_sms_claim_json(entry,NULL));
 END;$$;
+-- Recover an ambiguous database response without issuing another claim or POST.
+-- Both the opaque request and the original active fenced admission must match.
+CREATE FUNCTION private.burimunsi_resume_payment_sms(p_group text,p_enabled timestamptz,p_app text,p_request uuid)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $fn$
+DECLARE d private.burimunsi_payment_sms_deliveries%ROWTYPE; s record; at timestamptz; admission uuid;
+BEGIN
+ PERFORM private.burimunsi_auto_jobs_guard();
+ admission:=nullif(current_setting('collect.fence_admission_id',true),'')::uuid;
+ IF p_request IS NULL OR admission IS NULL THEN RAISE EXCEPTION 'payment_sms_resume_admission_required' USING ERRCODE='42501'; END IF;
+ PERFORM set_config('burimunsi.payment_sms_frame','1',true);
+ PERFORM set_config('burimunsi.native_receipt_frame','1',true);
+ PERFORM set_config('burimunsi.collection_id',p_group,true);
+ PERFORM pg_advisory_xact_lock(734636924058501::bigint);
+ at:=clock_timestamp();
+ SELECT * INTO d FROM private.burimunsi_payment_sms_deliveries WHERE claim_request_id=p_request AND claim_admission_id=admission
+   AND collection_id=p_group AND application_id=p_app AND claim_token IS NOT NULL AND lease_until>at FOR SHARE;
+ IF NOT FOUND THEN RETURN '[]'::jsonb; END IF;
+ IF d.claim_phase='inspect' AND d.body_sha256 IS NOT NULL THEN RETURN jsonb_build_array(private._burimunsi_payment_sms_claim_json(d,NULL)); END IF;
+ IF d.claim_phase<>'send' OR d.body_sha256 IS NOT NULL OR d.state<>'sending' OR d.not_after<=at OR d.provider_state IS NOT NULL
+  OR d.evidence_sha256 IS NOT NULL OR EXISTS(SELECT FROM collect_sms.messages m WHERE m.message_id=d.message_id AND m.application_id=d.application_id
+    AND m.kind='receipt' AND m.idempotency_key=d.idempotency_key) THEN RETURN '[]'::jsonb; END IF;
+ SELECT * INTO s FROM private._burimunsi_payment_sms_sources(p_group,p_enabled,at,d.payment_id);
+ IF NOT FOUND OR ROW(d.event_id,d.ledger_entry_id,d.recipient_user_id,d.destination_sha256,d.authorization_revision,d.amount_rwf,d.member_balance_rwf,d.group_name,d.posted_at)
+    IS DISTINCT FROM ROW(s.event_id,s.ledger_entry_id,s.recipient_user_id,s.destination_sha256,s.authorization_revision,s.amount_rwf,s.member_balance_rwf,s.group_name,s.posted_at)
+ THEN RETURN '[]'::jsonb; END IF;
+ RETURN jsonb_build_array(private._burimunsi_payment_sms_claim_json(d,s.destination));
+END;$fn$;
+
+CREATE FUNCTION private.burimunsi_claim_payment_sms_v2(p_group text,p_enabled timestamptz,p_app text,p_limit integer,p_request uuid)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $fn$
+DECLARE prior text:=current_setting('burimunsi.payer_claim_request',true); result jsonb;
+BEGIN
+ IF p_request IS NULL THEN RAISE EXCEPTION 'payment_sms_request_required' USING ERRCODE='22023'; END IF;
+ PERFORM set_config('burimunsi.payer_claim_request',p_request::text,true);
+ result:=private.burimunsi_claim_payment_sms(p_group,p_enabled,p_app,p_limit);
+ PERFORM set_config('burimunsi.payer_claim_request',coalesce(prior,''),true);
+ RETURN result;
+END;$fn$;
+REVOKE ALL ON FUNCTION private.burimunsi_resume_payment_sms(text,timestamptz,text,uuid),private.burimunsi_claim_payment_sms_v2(text,timestamptz,text,integer,uuid)
+ FROM PUBLIC,anon,authenticated,service_role,collect_importer,collect_runtime;
+GRANT EXECUTE ON FUNCTION private.burimunsi_resume_payment_sms(text,timestamptz,text,uuid),private.burimunsi_claim_payment_sms_v2(text,timestamptz,text,integer,uuid) TO collect_runtime;
+
 -- With no durable gateway hint, spread the bounded original-ID inspections
 -- across longer outages. Each newly observed gateway state wakes another GET.
 DO $inspect_backoff$
@@ -339,9 +449,10 @@ BEGIN
     CROSS JOIN LATERAL private._burimunsi_payment_sms_sources(p_collection_id,p_enabled_at,at,o.payment_id) s
     WHERE o.collection_id=p_collection_id AND o.disposition='eligible'
       AND o.posted_at=s.posted_at AND o.authorization_sha256=private._burimunsi_sms_authority_digest(to_jsonb(s))
-      AND NOT EXISTS(SELECT FROM private.burimunsi_payment_sms_deliveries d WHERE d.payment_id=o.payment_id)),
+      AND NOT EXISTS(SELECT FROM private.burimunsi_payment_sms_deliveries d WHERE d.payment_id=o.payment_id
+        AND NOT (d.collection_id=p_collection_id AND d.application_id=p_application_id AND private._burimunsi_payer_unarmed(d,at)))),
     'unresolved_count',(SELECT count(*) FROM private.burimunsi_payment_sms_deliveries d WHERE d.collection_id=p_collection_id
-      AND d.application_id=p_application_id AND (d.state IN ('sending','unknown') OR d.state='accepted'
+      AND d.application_id=p_application_id AND NOT private._burimunsi_payer_unarmed(d,at) AND (d.state IN ('sending','unknown') OR d.state='accepted'
         AND d.provider_state IN ('accepted','assigned','phone_accepted','queued','handoff_started','sent','partial','outcome_unknown'))));
 END;$$;
 
@@ -360,7 +471,7 @@ LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $$
       WHEN o.disposition='prior_posting' AND o.posted_at+interval '5 minutes'<=statement_timestamp() THEN 'expired'
       WHEN o.disposition='eligible' THEN 'pending' ELSE 'suppressed' END
       WHEN d.state='suppressed' THEN 'suppressed'
-      WHEN d.state='sending' AND d.body_sha256 IS NULL AND d.lease_until>statement_timestamp() THEN 'pending'
+      WHEN d.state='sending' AND d.body_sha256 IS NULL AND (d.lease_until>statement_timestamp() OR private._burimunsi_payer_unarmed(d,statement_timestamp())) THEN 'pending'
       WHEN d.body_sha256 IS NULL OR d.evidence_sha256 IS NULL THEN 'unknown'
       WHEN d.provider_state IN ('accepted','assigned','phone_accepted','queued','handoff_started') THEN 'gateway_accepted'
       WHEN d.provider_state IN ('sent','delivered','expired') THEN d.provider_state
