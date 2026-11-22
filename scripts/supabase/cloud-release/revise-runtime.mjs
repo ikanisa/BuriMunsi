@@ -232,7 +232,7 @@ export async function reviseRuntime({label,testEvidence,migrations=[],resumeFenc
  const prior=resumeFencedRevision===null?null:readRecord('revision-'+resumeFencedRevision+'-intent.json');
  if(resumeFencedRevision!==null&&!prior)throw Error('revision_record_invalid');
  if(refreshAncillaryAfterSourceSecret!==null&&(typeof refreshAncillaryAfterSourceSecret!=='function'||prior||
-    expectedBefore===null||expectedFunctions===null||entries.length!==0))
+    expectedBefore===null||expectedFunctions===null))
   throw Error('initial_ancillary_refresh_not_allowed');
  let registration=readRegistration();
  if(refreshAncillaryAfterSourceSecret!==null&&!registration?.entries?.length)
