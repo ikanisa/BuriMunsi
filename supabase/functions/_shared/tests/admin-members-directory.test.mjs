@@ -130,7 +130,7 @@ test('Admin lookups use the live read scope and filter only the applicable direc
     },
     async adminReadBatch(context, authority, statements) {
       reads.push({context, authority, statements});
-      return [{results: [{total: 0}]}, {results: []}];
+      return [{results: [{page_total: 0, id: null}]}];
     },
   }};
   const groupId = uuid(6);
@@ -146,6 +146,7 @@ test('Admin lookups use the live read scope and filter only the applicable direc
     const result = await operatingRead(new Request(url), env, account, ['lookups'], url);
     assert.deepEqual([result.kind, result.group_id, result.total, result.rows], [kind, group, 0, []]);
     const {context, authority, statements} = reads.at(-1);
+    assert.equal(statements.length, 1);
     assert.deepEqual(context.args, [account.id, account.token_hash, account.origin, account.public_id]);
     assert.deepEqual(authority.args.slice(11, 13), [permission, permission]);
     assert.match(authority.sql, /FOR SHARE OF g,c/);

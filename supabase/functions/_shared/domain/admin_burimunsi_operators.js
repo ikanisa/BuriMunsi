@@ -1,6 +1,6 @@
 import {ApiError,json,readJson,uuid} from './core.js';
 import {adminAccountSession} from './admin_accounts.js';
-import {adminEmailArguments} from './admin_email_policy.js';
+import {adminEmailArguments,adminPasscodeProof} from './admin_email_policy.js';
 import {requireBuriMunsiOwner} from './admin_burimunsi_authority.js';
 import {PostgresNativeAuthority} from './burimunsi/postgres-authority.js';
 import {validOperatorCapabilities} from './burimunsi/operator-access.mjs';
@@ -61,11 +61,14 @@ export async function adminBuriMunsiOperators(request,env){
  if(request.method==='GET'){
   const requestId=recovery?uuid(recovery[1]):null;
   try{
-   // The shared owner helper locks/revalidates its BFF tuple; this is an ordinary
-   // guarded transaction, with no business mutation during directory reads.
-   const row=await authority.write(async sql=>(await sql.unsafe(
-    negotiatesApproval?DIRECTORY_SQL+APPROVAL_GUARD_SQL:DIRECTORY_SQL,
-    [...actor,group,requestId]))[0]);
+   const directory=async sql=>(await sql.unsafe(
+    negotiatesApproval?DIRECTORY_SQL+APPROVAL_GUARD_SQL:DIRECTORY_SQL,[...actor,group,requestId]))[0];
+   const row=adminPasscodeProof(account)&&typeof env.DB.withLockedReadSnapshot==='function'
+    ? await env.DB.withLockedReadSnapshot(async sql=>{
+      await sql.unsafe("SELECT set_config('burimunsi.collection_id',$1,true)",[group]);
+      return directory(sql);
+    })
+    : await authority.write(directory);
    const value=row?.result;
    if(!value||value.contractVersion!==1)throw Error('Invalid BuriMunsi operator directory');
    if(requestId){

@@ -11,14 +11,14 @@ import {useOperationRead} from './useOperationRead';
 
 export function MomoIncomingSms() {
   const session = useSession(), request = session.request, [input, setInput] = useState(''), [search, setSearch] = useState(''), [offset, setOffset] = useState(0);
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal: AbortSignal) => {
     const query = new URLSearchParams({source_kind: 'capture', limit: '25', offset: String(offset)});
     if (search) query.set('search', search);
-    const page = parseSmsPage(await request(`sms/receipts?${query}`), offset);
+    const page = parseSmsPage(await request(`sms/receipts?${query}`, {signal}), offset);
     if (page.rows.some((row) => row.source_kind !== 'capture')) throw new Error('Source mismatch.');
     return page;
   }, [offset, search, request]);
-  const {result, retry} = useOperationRead(`${session.epoch}:capture:${search}:${offset}`, canDisplaySessionRecords(session) && !!session.user?.permissions.includes('sms.read'), load, {...momoReadOptions, pollMs: 15000});
+  const {result, retry} = useOperationRead(`${session.epoch}:capture:${search}:${offset}`, canDisplaySessionRecords(session) && !!session.user?.permissions.includes('sms.read'), load, {...momoReadOptions, pollMs: 30_000});
   const submit = (event: FormEvent) => {event.preventDefault(); if (input.length <= 200 && !/[\x00-\x1f\x7f]/.test(input)) {setSearch(input.trim()); setOffset(0);}};
   return <Card className="operations-records"><div className="operations-toolbar"><h2>Incoming SMS</h2><form className="operations-search" onSubmit={submit}><label className="admin-sr-only" htmlFor="momo-sms-search">Search incoming SMS</label><input id="momo-sms-search" className="admin-input" value={input} maxLength={200} onChange={(event) => setInput(event.target.value)} placeholder="User name, member ID or receipt ID" /><Button type="submit">Search</Button></form><Button onClick={retry}>Refresh</Button></div>
     <p className="operations-note">Updates automatically while this page is visible. An upload does not confirm payment or settlement.</p>

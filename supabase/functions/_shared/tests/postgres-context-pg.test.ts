@@ -59,12 +59,12 @@ async function verifyWarmControl(sql:postgres.Sql,url:URL){
   await lease.release();
   assert.equal(await lockAvailable(),true);
 
-  const checked=sqlFenceBackend(sql,control,{beforeRegister:async (tx:postgres.TransactionSql)=>{
+  const checked=sqlFenceBackend(sql,control,async (tx:postgres.TransactionSql)=>{
    const [context]=await tx.unsafe("SELECT current_user AS role, current_setting('collect.edge_verified') AS verified");
    assert.deepEqual({...context},{role:'collect_runtime',verified:'true'});
    await tx.unsafe('INSERT INTO app.synthetic_unfenced VALUES(91)');
    throw Error('synthetic_pre_register_rejected');
-  }});
+  });
   await assert.rejects(checked.register(firstId,source,'http_collect'),/synthetic_pre_register_rejected/);
   assert.equal((await sql`SELECT EXISTS(SELECT 1 FROM app.synthetic_unfenced WHERE id=91) AS escaped`)[0].escaped,false);
  }finally{

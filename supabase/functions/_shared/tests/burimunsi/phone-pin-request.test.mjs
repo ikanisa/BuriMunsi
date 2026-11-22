@@ -3,7 +3,7 @@
 // qualification fixtures. These checks open no provider or network connection.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createPhonePinRequestGate,hasPhonePinContext,applyPhonePinContext,claimPhonePinReadSnapshot,phonePinReadIdentity,PIN_CONTEXT_SQL,PIN_SET_CONTEXT_SQL,PIN_RENEW_SQL,PIN_LOGOUT_SQL,RETIREMENT_OUTCOME_SQL} from '../../domain/burimunsi/phone-pin-request.js';
+import {createPhonePinRequestGate,hasPhonePinContext,applyPhonePinContext,claimPhonePinReadSnapshot,phonePinReadSelector,PIN_CONTEXT_SQL,PIN_SET_CONTEXT_SQL,PIN_RENEW_SQL,PIN_LOGOUT_SQL,RETIREMENT_OUTCOME_SQL} from '../../domain/burimunsi/phone-pin-request.js';
 import {PostgresNativeAuthority} from '../../domain/burimunsi/postgres-authority.js';
 import {PostgresPhonePinSessions} from '../../domain/burimunsi/postgres-phone-pin-sessions.js';
 import {PostgresNativeAuthStore} from '../../domain/burimunsi/postgres-auth-store.js';
@@ -32,8 +32,8 @@ function fixture(){
   const s=state.sessions.get(token);if(!s||state.revoked||install!==installation||secret!==device||profile!=='internal_receiver'||
    s.created-(state.databaseTime??state.time)>5000)return [];
   return [{collection_id:s.groupId,account_id:s.accountId,principal_user_id:s.principal,native_session_id:s.id,grant_id:id(3),
-   installation_id:installation,profile,role:'admin',capabilities:state.account.capabilities,created_at:s.created,expires_at:s.expires,
-   credential_version:1,grant_version:1,shared_role:'owner'}];
+   installation_id:installation,profile,role:state.account.role,capabilities:state.account.capabilities,created_at:s.created,expires_at:s.expires,
+   credential_version:1,grant_version:1,shared_role:state.account.role==='admin'?'owner':'staff'}];
  };
  const sql={unsafe:async(text,args=[])=>{
   state.calls.push({text,args:[...args]});
@@ -109,7 +109,7 @@ function freshRead(f,{scope='actual-group',enabled=true,actorScope=scope,pinCurr
  if(combined)auth.authenticate=()=>assert.fail('unnecessary bearer transaction');
  const handler=createNativeHandler({auth,records,contributions:{allocate:noop},
   members:{enroll:noop,setActive:noop},gateway:{status:noop,replace:noop},origin,groupId:scope,strictContract:true,
-  networkBucket:noop,readIdentity:request=>phonePinReadIdentity(f.db,request)});
+  networkBucket:noop,readRecordActor:request=>phonePinReadSelector(f.db,request)});
  return {handler,actorReloads};
 }
 
@@ -148,7 +148,7 @@ test('fresh standalone payments keep a read-only snapshot, exact request and sco
  };
  const req=f.request({login:false,token:login.token,path:'/payments',query:'?filter=all&sort=newest&limit=100'});
  const res=await f.invoke(req,()=>{
-  assert.throws(()=>phonePinReadIdentity(f.db,req.clone()),{code:'request_not_admitted'});
+  assert.throws(()=>phonePinReadSelector(f.db,req.clone()),{code:'request_not_admitted'});
   return handler(req);
  },{BURIMUNSI_PRODUCT_MODE:'standalone'});
  assert.equal(res.status,200,await res.clone().text());
@@ -478,3 +478,76 @@ for(const edit of [v=>({...v,installationId:id(88)}),v=>({...v,requestId:id(88)}
  test('limited SQL receipt cannot publish inconsistent or secret-bearing ACK',async()=>{
   const f=retirementFixture();f.state.outcome=edit(f.state.outcome);await assert.rejects(f.invoke(f.retirementRequest()));assert.equal(hasPhonePinContext(f.db),false);
  });
+
+test('a current session shares one read snapshot without a writer; a near expiry session renews once',async()=>{
+ const f=fixture(),login=await f.login();let active=false,reads=0;
+ f.db.withNativeReadSnapshot=async fn=>{active=true;reads++;try{return await fn(f.sql);}finally{active=false;}};
+ f.db.ownsNativeRead=tx=>active&&tx===f.sql;
+ const request=()=>f.request({login:false,path:'/session',token:login.token});
+ const read=async(principal)=>{
+  assert.equal(principal.nativeAccountId,login.profile.id);
+  return new Response('ok');
+ };
+ assert.equal((await f.invoke(request(),read)).status,200);
+ assert.equal(reads,1);assert.equal(f.state.calls.filter(x=>x.text===PIN_RENEW_SQL).length,0);
+ f.state.time=login.expiresAt-30000;
+ assert.equal((await f.invoke(request(),read)).status,200);
+ assert.equal(f.state.calls.filter(x=>x.text===PIN_RENEW_SQL).length,1);
+ f.state.revoked=true;await assert.rejects(f.invoke(request(),read),{code:'session_unavailable'});
+});
+test('login with Home returns the new token even when its optional projection is unavailable',async()=>{
+ const f=fixture();
+ const response=await f.invoke(f.request({query:'?include=home'}),async(principal,env,req)=>{
+  assert.equal(new URL(req.url).search,'?include=home');
+  assert.equal(req.method,'GET');assert.equal(req.headers.get('X-BuriMunsi-Group'),principal.groupId);
+  return new Response('',{status:503});
+ });
+ const data=(await response.json()).data;
+ assert.match(data.token,/^[a-f0-9]{64}$/);assert.equal(data.home,null);
+ assert.equal(f.state.sessions.size,1);
+});
+
+test('fresh Staff login can attach scoped Home and extended read routes keep their original permissions',async()=>{
+ const f=fixture();
+ f.state.account.role='staff';f.state.account.capabilities=['records.read'];
+ f.db.withNativeReadSnapshot=fn=>f.db.transaction(async sql=>{
+  await sql.unsafe('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
+  const response=await fn(sql);await f.db.applicationWork.assert();return response;
+ });
+ const {handler}=freshRead(f);
+ let homeReads=0;
+ f.state.readQuery=(text,args)=>{
+  assert.match(text,/WITH credited AS MATERIALIZED/);assert.equal(args[0],'actual-group');homeReads++;
+  return [{balance:1000,today:1000,members:1,unallocated:0,unallocated_amount:0,id:null}];
+ };
+ const context={BURIMUNSI_PRODUCT_MODE:'standalone'};
+ const response=await f.invoke(f.request({query:'?include=home'}),(_principal,_env,req)=>handler(req),context);
+ assert.equal(response.status,200,await response.clone().text());
+ const {data,binding}=await response.json();
+ assert.equal(data.profile.role,'staff');assert.equal(data.home.groupBalanceRwf,1000);assert.equal(binding.actorId,id(2));
+ assert.equal(f.state.sessions.has(await sha256(data.token)),true);
+ const read=path=>{
+  const req=f.request({login:false,token:data.token,path});
+  return f.invoke(req,()=>handler(req),context);
+ };
+ const before=f.state.transactions;
+ const home=await read('/home');
+ assert.equal(home.status,200,await home.clone().text());
+ assert.equal((await home.json()).data.groupBalanceRwf,1000);
+ assert.equal(f.state.transactions-before,1);
+ assert.equal((await read('/staff')).status,403);
+ assert.equal((await read('/members/suggestions')).status,403);
+ assert.equal(homeReads,2);
+});
+
+test('fresh snapshot rolls back when the original response binding changes after actor verification',async()=>{
+ const f=fixture(),login=await f.login(),{handler}=freshRead(f);
+ const req=f.request({login:false,token:login.token,path:'/session',query:'?include=home'});
+ f.state.readQuery=()=>{
+  req.headers.set('X-BuriMunsi-Generation','8');
+  return [{balance:1000,today:1000,members:1,unallocated:0,unallocated_amount:0,id:null}];
+ };
+ const before=f.state.rollbacks;
+ await assert.rejects(f.invoke(req,()=>handler(req),{BURIMUNSI_PRODUCT_MODE:'standalone'}),{code:'request_not_admitted'});
+ assert.equal(f.state.rollbacks-before,1);assert.equal(hasPhonePinContext(f.db),false);
+});

@@ -54,7 +54,8 @@ export class PostgresDatabase extends PostgresTransactions {
       throw error;
     }
     const changes = result.count ?? result.length;
-    await tx`select pg_catalog.set_config('collect.last_changes',${String(changes)},true)`;
+    // SQLite changes() reports the most recent mutation. A SELECT preserves it.
+    if (result.command !== 'SELECT') await tx`select pg_catalog.set_config('collect.last_changes',${String(changes)},true)`;
     return {success: true, results: Array.from(result), meta: {changes}};
   }
 
@@ -121,7 +122,7 @@ export class PostgresDatabase extends PostgresTransactions {
 
   async adminReadBatch(context, check, statements) {
     return this.withLockedReadSnapshot(async tx => {
-      await this.statement(tx, context);
+      if(!this.hasBrowserPasscodeContext(context))await this.statement(tx, context);
       const authority = await this.statement(tx, check);
       if (authority.results.length !== 1 || authority.results[0].allowed !== true) throw new Error('admin_account_authority');
       return this.#runStatements(statements, statement => this.statement(tx, statement));

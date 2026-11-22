@@ -23,6 +23,13 @@ export class PostgresNativeAuthority {
   }
   async #run(mode,fn) {
     requireThat(typeof fn==='function','collect_adapter_required',503);
+    if(mode==='read' && typeof this.db.withNativeReadSnapshot==='function' && hasPhonePinContext(this.db)) {
+      return this.db.withNativeReadSnapshot(async tx=>{
+        requireThat(this.db.applicationWork===this.work,'request_not_admitted',503);
+        requireThat(await applyPhonePinContext(this.db,tx,this.groupId),'session_unavailable',401);
+        return fn(tx);
+      });
+    }
     await this.assertOwned();
     return this.db.transaction(async tx=>{
       requirePort(tx,['unsafe']);await this.assertOwned();

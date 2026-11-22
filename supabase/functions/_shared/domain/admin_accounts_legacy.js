@@ -132,7 +132,8 @@ export async function guardedOwnerSessionIdentity(env,account){
    FROM admin_users a JOIN admin_principal_links l ON l.admin_user_id=a.id WHERE a.id=? AND l.user_id=?`).bind(account.id,account.principal_id);
   const queryGrants=env.DB.prepare(`SELECT c.permission FROM admin_account_role_capabilities c JOIN admin_grants g ON g.permission=c.permission
    WHERE c.role=? AND g.user_id=? AND c.permission<>'auth.mfa.enroll' ORDER BY c.permission FOR SHARE OF c,g`).bind(account.role,account.principal_id);
-  const result=await accountDatabase(env,account).DB.batch([queryOwner,queryViewer,queryGrants]);
+  const scoped=adminPasscodeProof(account)?accountReadDatabase(env,account,null):accountDatabase(env,account);
+  const result=await scoped.DB.batch([queryOwner,queryViewer,queryGrants]);
   const owner=result?.[0]?.results,viewers=result?.[1]?.results,grants=result?.[2]?.results;
   if(!Array.isArray(owner)||owner.length!==1||!Array.isArray(viewers)||viewers.length!==1||!Array.isArray(grants)||!Array.isArray(account.permissions))return null;
   const viewer=viewers[0],permissions=grants.map(row=>row?.permission);

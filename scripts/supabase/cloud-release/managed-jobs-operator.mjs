@@ -92,6 +92,8 @@ async function inspect(db){
   FROM unnest($1::text[]) x(signature) LEFT JOIN pg_proc p ON p.oid=to_regprocedure(x.signature)`,[Object.keys(GUARDS)])).rows;
  if(guard.length!==Object.keys(GUARDS).length||guard.some(x=>x.owner!=='postgres'||x.prosecdef!==true||x.digest!==GUARDS[x.signature]))throw Error('scheduler_or_history_guard_changed');
  const expected=expectedSchedulerBodies(scheduler.sql);
+ const batchedLedger=(await db.query("SELECT EXISTS(SELECT 1 FROM supabase_migrations.schema_migrations WHERE version='20261122180000') AS installed")).rows[0]?.installed;
+ if(batchedLedger)expected.ops.reconcile_jobs='7178d8d2dad63f00f2503c160280d222da80869f156063419f2b3e21d6ae1554';
  if(scheduleHistory){
   expected.ops.dispatch_jobs='00e49b5d9603cd8564555252cc62b23d667fd9f611c558c46459e4b7580d9f72';
   expected.ops.activate_jobs='18fb407a536fa422aa539a15b161c75af638a295159f020eebc5af1692c188d3';

@@ -17,15 +17,15 @@ function configuredConnection(url,control,env) {
     types: {numeric: {to:1700,from:[1700],serialize:String,parse:value=>{const n=Number(value);if(!/^-?\d+(?:\.0+)?$/.test(value)||!Number.isSafeInteger(n))throw new Error('integer_out_of_range');return n;}},bigint: {to: 20, from: [20], serialize: String, parse: value => {
       const n = Number(value); if (!Number.isSafeInteger(n)) throw new Error('integer_out_of_range'); return n;
     }}}, onnotice: () => {}};
-    pools.set(poolKey,control?leaseOwnedControlPool(()=>postgres(url,options)):postgres(url,options));
+    pools.set(poolKey,control?leaseOwnedControlPool(()=>postgres(url,options),{reuse:true,capacity:4}):postgres(url,options));
   }
   return pools.get(poolKey);
 }
 
-// Eight local slots include idle connections, setup, WORK, cleanup and
-// quarantined pools. Only a confirmed rollback returns a lease to warm idle.
-export function leaseOwnedControlPool(createPool) {
-  const capacity=8,waiting=[],idle=[],owned=new Set();let ending=false;
+// The local bound includes idle connections, setup, WORK, cleanup and
+// quarantined pools. Only a confirmed rollback returns a reusable lease to idle.
+export function leaseOwnedControlPool(createPool,{reuse=false,capacity=8}={}) {
+  const waiting=[],idle=[],owned=new Set();let ending=false;
   const unavailable=()=>new Error('collect_fence_unavailable');
   const hasCapacity=()=>idle.length>0 || owned.size<capacity;
   function pump(){
@@ -54,7 +54,7 @@ export function leaseOwnedControlPool(createPool) {
         if(returned)return;
         returned=true;
         try{tx.release();}catch(error){void retire(entry);throw error;}
-        if(ack===CONTROL_ROLLBACK_ACK&&!ending){idle.push(entry);pump();}
+        if(reuse&&ack===CONTROL_ROLLBACK_ACK&&!ending){idle.push(entry);pump();}
         else void retire(entry);
       };
       return new Proxy(tx,{

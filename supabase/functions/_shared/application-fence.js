@@ -35,12 +35,13 @@ const leaseSetupSql = "SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout=
  runtimeRoleSql + '; SELECT pg_catalog.pg_advisory_xact_lock_shared(7346371,1)';
 async function runtimeRole(tx){await tx.unsafe(runtimeRoleSql);}
 async function result(tx,name,values){const rows=await tx.unsafe('SELECT '+signatures[name]+' AS result',values);need(rows.length===1&&rows[0].result&&typeof rows[0].result==='object');return rows[0].result;}
-export function sqlFenceBackend(businessSql,controlSql,{beforeRegister}={}){
+/** @param {(tx: import('npm:postgres@3.4.7').TransactionSql) => unknown} [verifyAdmission] */
+export function sqlFenceBackend(businessSql,controlSql,verifyAdmission=undefined){
  need(typeof businessSql?.begin==='function'&&typeof controlSql?.reserve==='function');
- need(beforeRegister===undefined||typeof beforeRegister==='function');
+ need(verifyAdmission===undefined||typeof verifyAdmission==='function');
  const rawCall=(name,values)=>businessSql.begin('ISOLATION LEVEL READ COMMITTED',async tx=>{
   await runtimeRole(tx);
-  if(name==='register'&&beforeRegister)await beforeRegister(tx);
+  if(name==='register'&&verifyAdmission)await verifyAdmission(tx);
   return result(tx,name,values);
  });
  const call=(name,values)=>bounded(rawCall(name,values));
@@ -201,6 +202,10 @@ class ApplicationWork{
  }
 }
 
+export function assertWorkOwner(work){
+ if(!contexts.has(work)||!(work instanceof ApplicationWork))return work.assert();
+ work.assertLocal();need(!work.lost);
+}
 export function applicationWork(env){const work=env?.COLLECT_FENCE_WORK;need(contexts.has(work));return work;}
 export function applicationWorkTuple(work){need(contexts.has(work));return work.tuple();}
 function guardedResponse(response,work,label,onUnknown=()=>work.unknown(label)){

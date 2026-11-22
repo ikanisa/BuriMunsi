@@ -75,7 +75,7 @@ export class PostgresNativeAuthStore extends PostgresNativeAuthority {
       requireId(actor.principalUserId);requireRequestId(actor.id);requireRequestId(actor.sessionId);
       requireThat(normalizePhone(actor.phone)===actor.phone&&['admin','staff'].includes(actor.role)&&
         Array.isArray(actor.capabilities)&&r.operator_current===true,'access_denied',403);
-      return {...actor,principalSessionId:actor.sessionId,authMethod:'phone_pin'};
+      return authorize({...actor,principalSessionId:actor.sessionId,authMethod:'phone_pin'},this.groupId,'records.read',{now:this.clock()});
     }
     if(this.sessionBinding){const binding=await this.sessionBinding.assertInTransaction(tx,actor);
       actor.expiresAt=binding.expiresAt;actor.principalSessionId=binding.principalSessionId;

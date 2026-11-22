@@ -1,5 +1,5 @@
 import {ApiError,json,readJson,first,rows,now,id,digest,uuid,integer,text,requirePermission} from './core.js';
-import {accountDatabase} from './admin_accounts.js';
+import {accountDatabase,accountReadDatabase} from './admin_accounts.js';
 import {mutation,retainedResponse} from './mutations.js';
 import {gatewayToken,momoGuard} from './momo_gateway.js';
 import {validateProviderProfile,prepareMomoSourceReview,momoOutcomeUnresolved,MOMO_JOB_CHECKPOINT} from './momo_pipeline.js';
@@ -22,18 +22,20 @@ export async function adminMomoRoute(request,env,account,actor,parts,url){
  const area=parts[0];if(!['accounts','bindings','transactions','sources'].includes(area))fail(404,'not_found','This MoMo view does not exist.');
  const readPermission=['accounts','bindings'].includes(area)?'receivers.read':area==='sources'?'sms.read':'payments.read';requirePermission(actor,readPermission);
  if(request.method==='GET'){
-  const scoped=accountDatabase(env,account,readPermission);
+  const scoped=accountReadDatabase(env,account,readPermission);
   if(area==='accounts'&&parts.length===1)return json(await momoReceivingAccounts(scoped,url));
   if(area==='bindings'&&parts.length===1)return json(await momoGatewayBindings(scoped,url));
   if(area==='transactions'&&parts.length===1)return json(await momoTransactionPage(scoped,url));
   if(area==='transactions'&&parts.length===2&&parts[1]==='payment-checks'){
    requirePermission(actor,'users.read');requirePermission(actor,'collections.read');
-   return json(await momoPaymentChecks(accountDatabase(accountDatabase(scoped,account,'users.read'),account,'collections.read'),url));
+   const payments=accountDatabase(env,account,readPermission);
+   return json(await momoPaymentChecks(accountDatabase(accountDatabase(payments,account,'users.read'),account,'collections.read'),url));
   }
   if(area==='transactions'&&parts.length===3&&parts[2]==='candidates'){
    requirePermission(actor,'users.read');requirePermission(actor,'collections.read');
    const filters=query(url,['limit','offset','search']),transactionId=uuid(parts[1]);
-   const lookup=accountDatabase(accountDatabase(scoped,account,'users.read'),account,'collections.read');
+   const payments=accountDatabase(env,account,readPermission);
+   const lookup=accountDatabase(accountDatabase(payments,account,'users.read'),account,'collections.read');
    return json(await momoTransactionCandidates(lookup,transactionId,filters));
   }
   if(area==='transactions'&&parts.length===2)return json(await momoTransactionDetail(scoped,env,url,parts[1]));

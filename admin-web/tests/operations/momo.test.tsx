@@ -46,13 +46,13 @@ describe('incoming SMS refresh', () => {
     mock.request.mockImplementationOnce(() => new Promise(done => {finish = done;})).mockResolvedValue(emptyPage);
     const view = render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
     try {
-      await act(async () => vi.advanceTimersByTimeAsync(15_000));
-      await act(async () => vi.advanceTimersByTimeAsync(15_000));
+      await act(async () => vi.advanceTimersByTimeAsync(30_000));
+      await act(async () => vi.advanceTimersByTimeAsync(30_000));
       await act(async () => screen.getByRole('button', {name: 'Refresh'}).click());
       expect(mock.request).toHaveBeenCalledTimes(1);
       await act(async () => finish(emptyPage));
       expect(screen.getByText('No matching records')).toBeVisible();
-      await act(async () => vi.advanceTimersByTimeAsync(15_000));
+      await act(async () => vi.advanceTimersByTimeAsync(30_000));
       expect(mock.request).toHaveBeenCalledTimes(2);
     } finally {view.unmount(); vi.useRealTimers();}
   });
@@ -74,12 +74,13 @@ describe('incoming SMS refresh', () => {
       await act(async () => {window.dispatchEvent(new Event('online'));});
       expect(mock.request).toHaveBeenCalledTimes(2);
       await act(async () => {document.dispatchEvent(new Event('visibilitychange'));});
-      expect(mock.request).toHaveBeenCalledTimes(3);
       await act(async () => {window.dispatchEvent(new Event('focus'));});
-      expect(mock.request).toHaveBeenCalledTimes(4);
+      expect(mock.request).toHaveBeenCalledTimes(2);
+      await act(async () => vi.advanceTimersByTimeAsync(30_000));
+      expect(mock.request).toHaveBeenCalledTimes(3);
       await act(async () => screen.getByRole('button', {name: 'Transactions'}).click());
       await act(async () => {window.dispatchEvent(new Event('online')); await vi.advanceTimersByTimeAsync(15_000);});
-      expect(mock.request.mock.calls.filter(([path]) => path.startsWith('sms/receipts?'))).toHaveLength(4);
+      expect(mock.request.mock.calls.filter(([path]) => path.startsWith('sms/receipts?'))).toHaveLength(3);
       expect(mock.request.mock.calls.filter(([path]) => path.startsWith('momo/transactions?'))).toHaveLength(1);
     } finally {view.unmount(); visible.mockRestore(); connected.mockRestore(); vi.useRealTimers();}
   });
@@ -169,7 +170,7 @@ describe('MoMo receipts page', () => {
     expect(dialog.getByText('MoMo TX ID').nextElementSibling).toHaveTextContent('Not recorded');
     expect(dialog.getByText('Receiving account').nextElementSibling).toHaveTextContent('Not recorded');
     expect(dialog.queryByText('Beneficiary assignment')).not.toBeInTheDocument();
-    expect(mock.request).toHaveBeenLastCalledWith(`momo/transactions/${nativeId}`);
+    expect(mock.request).toHaveBeenLastCalledWith(`momo/transactions/${nativeId}`, {signal: expect.any(AbortSignal)});
   });
   it('retries one transient service error on the same authorized list read', async () => {
     const transient = new AdminRequestError('Unavailable', {statusCode: 503, code: 'service_unavailable'});
@@ -177,8 +178,10 @@ describe('MoMo receipts page', () => {
     render(<StrictMode><MemoryRouter><MomoReceiptsPage /></MemoryRouter></StrictMode>);
     expect(await screen.findByRole('button', {name: tx.provider_transaction_id})).toBeVisible();
     expect(mock.request).toHaveBeenCalledTimes(2);
-    const [path] = mock.request.mock.calls[0];
+    const [path, options] = mock.request.mock.calls[0];
+    expect(options).toEqual({signal: expect.any(AbortSignal)});
     expect(mock.request).toHaveBeenLastCalledWith(path, {signal: expect.any(AbortSignal)});
+    expect(mock.request.mock.calls[1][1].signal).toBe(options.signal);
     expect(mock.session.isCurrentAuthority).toHaveBeenCalledWith(mock.session.epoch, mock.session.user.id, mock.session.user.sessionId);
   });
   it.each([
@@ -214,7 +217,7 @@ describe('MoMo receipts page', () => {
       await userEvent.setup().click(screen.getByRole('button', {name: 'Refresh'}));
       expect(await screen.findByRole('button', {name: tx.provider_transaction_id})).toBeVisible();
     }
-    expect(secondSignal?.aborted).toBe(true);
+    await vi.waitFor(() => expect(secondSignal?.aborted).toBe(true));
     expect(mock.request).toHaveBeenCalledTimes(action === 'unmount' ? 2 : 3);
   });
   it('discards an earlier transient failure when a manual refresh has started', async () => {
@@ -255,7 +258,7 @@ describe('MoMo receipts page', () => {
     const dialog = await screen.findByRole('dialog', {name: 'Transaction details'});
     expect(await within(dialog).findByText(smsId)).toBeVisible();
     expect(within(dialog).getByText('Parsing does not confirm provider API settlement.')).toBeVisible();
-    expect(mock.request).toHaveBeenLastCalledWith(`momo/transactions/${id}`);
+    expect(mock.request).toHaveBeenLastCalledWith(`momo/transactions/${id}`, {signal: expect.any(AbortSignal)});
   });
   it('never requests payments without permission or renders invalid data', async () => {
     mock.session.user.permissions = [];
@@ -319,7 +322,7 @@ describe('MoMo receipts page', () => {
     const dialog = await screen.findByRole('dialog', {name: 'Member payment checks'});
     expect(await within(dialog).findByText('Synthetic member')).toBeVisible();
     expect(within(dialog).getByText(/References and notes are unverified/)).toBeVisible();
-    expect(mock.request).toHaveBeenLastCalledWith('momo/transactions/payment-checks?limit=25&offset=0');
+    expect(mock.request).toHaveBeenLastCalledWith('momo/transactions/payment-checks?limit=25&offset=0', {signal: expect.any(AbortSignal)});
     await user.click(within(dialog).getByRole('button', {name: 'Search reference'}));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Search MoMo TX ID or counterparty')).toHaveValue('MOMO-SYNTHETIC-001');

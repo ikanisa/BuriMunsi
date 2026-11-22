@@ -62,7 +62,7 @@ Deno.test('only an acknowledged rollback warms a slot and previous borrowers can
    async reserve(){const serial=++borrowed;return {unsafe(){return serial;},release(){released++;}};},
    async end(){ended++;},
   };
- });
+ },{reuse:true});
  const first=await pool.reserve(),staleQuery=first.unsafe;
  need(first.unsafe()===1);
  first.release(CONTROL_ROLLBACK_ACK);
@@ -75,4 +75,16 @@ Deno.test('only an acknowledged rollback warms a slot and previous borrowers can
  const fresh=await pool.reserve();need(created===2&&fresh.unsafe()===3);
  fresh.release(CONTROL_ROLLBACK_ACK);
  await pool.end();need(ended===2&&released===3);
+});
+
+Deno.test('confirmed release reuses one warm socket while an occupied connection stays private',async()=>{
+ let created=0,ended=0,releases=0;
+ const pool=runtime.leaseOwnedControlPool(()=>{const sequence=++created;return {
+  async reserve(){return {sequence,release(){releases++;}};},async end(){ended++;}
+ };},{reuse:true,capacity:2});
+ const first=await pool.reserve(),other=await pool.reserve();
+ const firstSequence=first.sequence;
+ const queued=pool.reserve();first.release(CONTROL_ROLLBACK_ACK);const next=await queued;
+ need(firstSequence===next.sequence&&other.sequence!==next.sequence&&created===2);
+ next.release(CONTROL_ROLLBACK_ACK);other.release();await pool.end();need(ended===2&&releases===3);
 });

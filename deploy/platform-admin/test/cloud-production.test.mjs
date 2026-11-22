@@ -26,12 +26,12 @@ test('the managed transport fixture forwards an Admin session only to the nomina
   assert.equal(config.assets.run_worker_first, true);
 });
 
-test('guest and logout responses on managed production preserve the prior issuer cookie', async () => {
+test('anonymous session reads stay local and leave the prior issuer cookie alone', async () => {
   const {vars} = JSON.parse(await readFile(new URL('../wrangler.burimunsi.jsonc', import.meta.url)));
   let calls = 0;
   const worker = createAdminWorker({fetchImpl: async request => {
     calls++;
-    assert.equal(request.headers.get('Cookie'), null);
+    assert.equal(request.headers.get('Cookie'), '__Host-collect_admin=new_fixture');
     return Response.json({user: null}, {headers: {
       'Set-Cookie': '__Host-collect_admin=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0',
     }});
@@ -39,13 +39,45 @@ test('guest and logout responses on managed production preserve the prior issuer
   const response = await worker.fetch(new Request(vars.ADMIN_ORIGIN + '/api/admin/auth/session',
     {headers: {Cookie: '__Host-collect_admin=old_fixture; another=private_fixture'}}), vars);
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get('Set-Cookie'),
-    '__Host-burimunsi_admin_rrlduytparvsjfmegalh=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0');
+  assert.deepEqual(await response.json(), {user: null, expiresAt: null, csrfToken: null, ownerEmail: null});
+  assert.equal(response.headers.get('Set-Cookie'), null);
+  assert.equal(response.headers.get('Cache-Control'), 'private, no-store, max-age=0');
+  assert.equal(response.headers.get('Cross-Origin-Resource-Policy'), 'same-origin');
+  assert.equal(response.headers.get('X-Content-Type-Options'), 'nosniff');
+  assert.equal(calls, 0);
+  for (const [headers, status] of [
+    [{Origin: 'https://other.example'}, 403],
+    [{'Sec-Fetch-Site': 'same-site'}, 403],
+    [{'X-Collect-Actor': 'fixture'}, 400],
+    [{Cookie: '__Host-burimunsi_admin_rrlduytparvsjfmegalh=malformed$value'}, 400],
+  ]) {
+    const denied = await worker.fetch(new Request(vars.ADMIN_ORIGIN + '/api/admin/auth/session', {headers}), vars);
+    assert.equal(denied.status, status);
+  }
   for (const method of ['GET', 'POST']) {
     const retired = await worker.fetch(new Request(vars.ADMIN_ORIGIN + '/functions/v1/admin-api/api/admin/auth/session',
       {method, headers: {Origin: vars.ADMIN_ORIGIN, Cookie: '__Host-burimunsi_admin_rrlduytparvsjfmegalh=new_fixture'}}), vars);
     assert.equal(retired.status, 410);
     assert.equal(retired.headers.get('Set-Cookie'), null);
   }
+  assert.equal(calls, 0);
+  const signedIn = await worker.fetch(new Request(vars.ADMIN_ORIGIN + '/api/admin/auth/session',
+    {headers: {Cookie: '__Host-burimunsi_admin_rrlduytparvsjfmegalh=new_fixture'}}), vars);
+  assert.equal(signedIn.status, 200);
+  assert.equal(signedIn.headers.get('Set-Cookie'),
+    '__Host-burimunsi_admin_rrlduytparvsjfmegalh=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0');
   assert.equal(calls, 1);
+});
+
+test('the browser passcode exchange forwards the proof opt-in and requires the issued cookie', async () => {
+  const {vars} = JSON.parse(await readFile(new URL('../wrangler.burimunsi.jsonc', import.meta.url)));
+  const worker = createAdminWorker({fetchImpl: async request => {
+    assert.equal(request.headers.get('X-Collect-Owner-Identity-Version'), '1');
+    return Response.json({sessionContract: 2});
+  }});
+  const response = await worker.fetch(new Request(vars.ADMIN_ORIGIN + '/api/admin/auth/phone-passcode', {
+    method: 'POST', body: '{}', headers: {Origin: vars.ADMIN_ORIGIN, 'X-Collect-Owner-Identity-Version': '1'},
+  }), vars);
+  assert.equal(response.status, 502);
+  assert.deepEqual(await response.json(), {code: 'proxy_outcome_unknown', reason: 'proxy_cookie_invalid'});
 });

@@ -74,8 +74,10 @@ test('automatic native facts require an intact accepted first-source chain',()=>
 test('native Admin projection excludes hidden scopes and leaves the legacy query independent of the migration',()=>{
  const old=momoTransactionSql({});
  const next=momoTransactionSql({BURIMUNSI_NATIVE_AUTO_TRANSACTIONS_ENABLED:'true'});
- assert.doesNotMatch(old,/burimunsi_admin_transaction_visibility/);
- assert.match(next,/burimunsi_admin_transaction_visibility\(t\.id\)/);
+ assert.doesNotMatch(old,/burimunsi_admin_transaction_facts/);
+ assert.match(next,/burimunsi_admin_transaction_facts\(original\.id\)/);
+ assert.match(momoTransactionSql({BURIMUNSI_NATIVE_AUTO_TRANSACTIONS_ENABLED:'true'},{byId:true}),
+  /FROM \(SELECT \* FROM momo_transactions WHERE id=\?\) original/);
  assert.match(next,/scope->>'kind' IN \('managed','visible'\)/);
  assert.match(next,/scope->>'groupId'/);
 });

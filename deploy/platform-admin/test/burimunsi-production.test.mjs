@@ -114,11 +114,14 @@ test('the phone sign-in and passcode verification forms use the dedicated Admin 
     assert.equal(upstream.headers.get('Origin'), BURIMUNSI_ADMIN_ORIGIN);
     if (upstream.method === 'POST') assert.equal(await upstream.text(), '{}');
     forwarded.push([upstream.method, upstream.url]);
-    return Response.json({ok: true});
+    const headers = upstream.url.endsWith('/auth/phone-passcode') ?
+      {'Set-Cookie': '__Host-collect_admin=fixture; Path=/; Secure; HttpOnly; SameSite=Strict'} : {};
+    return Response.json({ok: true}, {headers});
   }});
   for (const [method, path] of routes) {
     const mutation = method === 'POST' ? {headers: {Origin: BURIMUNSI_ADMIN_ORIGIN, 'Content-Type': 'application/json',
-      'X-Collect-Requested-With': 'collect-admin'}, body: '{}'} : {};
+      'X-Collect-Requested-With': 'collect-admin'}, body: '{}'} :
+      {headers: {Cookie: BURIMUNSI_ADMIN_COOKIE + '=fixture'}};
     assert.equal((await worker.fetch(request('/api/admin/' + path, {method, ...mutation}), env)).status, 200);
   }
   assert.deepEqual(forwarded, routes.map(([method, path]) => [method, vars.SUPABASE_URL + '/functions/v1/admin-api/api/admin/' + path]));

@@ -55,7 +55,7 @@ test('a conflicting source changes the managed payment state without requiring a
  assert.equal(row.state,'conflict');
 });
 test('signed ledger projection normalizes member reference without rewriting source evidence',async()=>{
- const f=fixture({total:1,id:'e',collection_id:'g',transaction_id:'p',amount_minor:-10000,source_at:'EXACT SOURCE TIME',ft_id:'90000000001',payer_name:' Exact Payer ',momo_number:'0780000816'});
+ const f=fixture({page_total:1,id:'e',collection_id:'g',transaction_id:'p',amount_minor:-10000,source_at:'EXACT SOURCE TIME',ft_id:'90000000001',payer_name:' Exact Payer ',momo_number:'0780000816'});
  const page=await f.store.withReadSnapshot(tx=>tx.readPage({groupId:'g',kind:'ledger',memberId:'m',limit:40,q:'',filter:'all'}));
  assert.equal(page.items[0].memberPhone,'+250780000816');assert.equal(page.items[0].amountRwf,-10000);assert.equal(page.items[0].payerNameRaw,' Exact Payer ');assert.equal(page.items[0].atRaw,'EXACT SOURCE TIME');
 });

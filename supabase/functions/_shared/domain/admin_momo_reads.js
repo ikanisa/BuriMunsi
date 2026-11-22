@@ -37,12 +37,14 @@ export const MANAGED_MOMO_SOURCE_SQL=`EXISTS(SELECT 1 FROM momo_transaction_sour
 // The native scope lookup is installed by the additive auto-transaction
 // migration. Keep the existing managed query usable until that feature is
 // explicitly enabled on a deployment containing the lookup.
-export function momoTransactionSql(env){
+export function momoTransactionSql(env,{byId=false}={}){
  const native=env?.BURIMUNSI_NATIVE_AUTO_TRANSACTIONS_ENABLED==='true';
+ const source=byId?'(SELECT * FROM momo_transactions WHERE id=?)':'momo_transactions';
  // Enrichment is source-bound and separately retained: immutable first parse
  // rows remain intact. Project the same validated native facts as the app.
- const transactionSource=native?`momo_transactions original
- LEFT JOIN LATERAL (SELECT private.burimunsi_admin_sms_facts(original.id) AS facts) native_facts ON true
+ const transactionSource=native?`${source} original
+ CROSS JOIN LATERAL (SELECT private.burimunsi_admin_transaction_facts(original.id) AS value OFFSET 0) native_context
+ CROSS JOIN LATERAL (SELECT native_context.value->'facts' AS facts, native_context.value->'scope' AS scope) native_facts
  CROSS JOIN LATERAL jsonb_populate_record(NULL::app.momo_transactions,to_jsonb(original) ||
   jsonb_strip_nulls(jsonb_build_object(
    'event_kind',native_facts.facts->'event_kind','amount_minor',native_facts.facts->'amount_minor',
@@ -53,17 +55,16 @@ export function momoTransactionSql(env){
    'transaction_at',native_facts.facts->'transaction_at','transaction_datetime_raw',native_facts.facts->'transaction_datetime_raw',
    'transaction_time_source',native_facts.facts->'transaction_time_source','transaction_timezone',native_facts.facts->'transaction_timezone',
    'provider_transaction_id',native_facts.facts->'provider_transaction_id','original_transaction_id',native_facts.facts->'original_transaction_id'
-  ))) AS t`:'momo_transactions t';
- const nativeGroup=native?"CASE WHEN native_access.scope->>'kind'='visible' THEN native_access.scope->>'groupId' ELSE NULL END":'NULL';
- const nativeJoin=native?'LEFT JOIN LATERAL (SELECT private.burimunsi_admin_transaction_visibility(t.id) AS scope) native_access ON true':'';
- const nativeFilter=native?"WHERE native_access.scope->>'kind' IN ('managed','visible') AND (rf_capture.id IS NULL OR rf_capture.originating_session_id IS NOT NULL OR native_access.scope->>'kind'='visible')":
+  ))) AS t`:`${source} t`;
+ const nativeGroup=native?"CASE WHEN native_facts.scope->>'kind'='visible' THEN native_facts.scope->>'groupId' ELSE NULL END":'NULL';
+ const nativeFilter=native?"WHERE native_facts.scope->>'kind' IN ('managed','visible') AND (rf_capture.id IS NULL OR rf_capture.originating_session_id IS NOT NULL OR native_facts.scope->>'kind'='visible')":
   'WHERE (rf_capture.id IS NULL OR rf_capture.originating_session_id IS NOT NULL)';
  return `SELECT t.*,${receiptFactColumns},a.public_code,a.recipient_name,l.payment_id,l.beneficiary_member_id,${nativeGroup} AS native_group_id,coalesce(p.collection_id,${nativeGroup}) AS group_id,g.title AS group_name,u.full_name AS member_name,
  p.revision AS payment_version,p.intent_id,coalesce((SELECT sum(e.amount_minor) FROM ledger_entries e WHERE e.payment_id=p.id),0) AS credited_amount_minor,
  CASE WHEN p.status='reversed' THEN 'reversed' WHEN p.status IN('reconciled','confirmed') THEN 'credited'
  WHEN ${nativeGroup} IS NOT NULL OR t.event_kind NOT IN ('incoming_receipt','reversal') THEN 'recorded'
  WHEN t.has_conflict=1 OR t.allocation_state='needs_review' THEN 'needs_review' WHEN l.payment_id IS NOT NULL THEN 'awaiting_review' ELSE 'needs_allocation' END AS status
- FROM ${transactionSource} JOIN momo_receiving_accounts a ON a.id=t.receiving_account_id ${receiptFactJoins} ${nativeJoin}
+ FROM ${transactionSource} JOIN momo_receiving_accounts a ON a.id=t.receiving_account_id ${receiptFactJoins}
  LEFT JOIN momo_financial_links l ON l.transaction_id=t.id LEFT JOIN payments p ON p.id=l.payment_id
  LEFT JOIN collections g ON g.id=coalesce(p.collection_id,${nativeGroup}) LEFT JOIN users u ON u.id=l.beneficiary_member_id ${nativeFilter}`;
 }
@@ -95,7 +96,7 @@ export async function momoTransactionDetail(scoped, env, url, rawId) {
  const transactionId = uuid(rawId);
  const db = scoped.DB;
  const [transactions, sources, attempts, reviews] = await db.batch([
-  db.prepare(`SELECT * FROM (${momoTransactionSql(env)}) WHERE id=?`).bind(transactionId),
+  db.prepare(momoTransactionSql(env,{byId:true})).bind(transactionId),
   db.prepare(`SELECT s.raw_sms_id,s.relation,s.created_at,a.id AS attempt_id,a.outcome,a.model_id,a.schema_version,a.parser_version,a.validation_json
    FROM momo_transaction_sources s JOIN momo_parse_attempts a ON a.id=s.parse_attempt_id
    WHERE s.transaction_id=? ORDER BY a.created_at DESC LIMIT 100`).bind(transactionId),
@@ -121,10 +122,13 @@ export async function momoSourcePage(env, url) {
  const values = status ? [status] : [];
  const [count, page] = await env.DB.batch([
   env.DB.prepare(`SELECT count(*) AS total ${jobs}`).bind(...values),
-  env.DB.prepare(`SELECT j.*,s.body_sha256,s.received_at_device,s.created_at AS received_at,
-   (SELECT id FROM momo_parse_attempts a WHERE a.raw_sms_id=j.raw_sms_id ORDER BY attempt_number DESC LIMIT 1) AS latest_attempt_id,
-   (SELECT outcome FROM momo_parse_attempts a WHERE a.raw_sms_id=j.raw_sms_id ORDER BY attempt_number DESC LIMIT 1) AS latest_attempt_outcome
-   ${jobs} ORDER BY j.created_at DESC,j.raw_sms_id LIMIT ? OFFSET ?`).bind(...values, limit, offset),
+  env.DB.prepare(`WITH page AS (
+   SELECT j.*,s.body_sha256,s.received_at_device,s.created_at AS received_at
+   ${jobs} ORDER BY j.created_at DESC,j.raw_sms_id LIMIT ? OFFSET ?
+  ) SELECT page.*,latest.id AS latest_attempt_id,latest.outcome AS latest_attempt_outcome
+   FROM page LEFT JOIN momo_parse_attempts latest ON latest.id=(
+     SELECT a.id FROM momo_parse_attempts a WHERE a.raw_sms_id=page.raw_sms_id ORDER BY a.attempt_number DESC LIMIT 1
+   ) ORDER BY page.created_at DESC,page.raw_sms_id`).bind(...values, limit, offset),
  ]);
  return {rows:page.results, total:count.results[0].total, limit, offset};
 }
@@ -154,12 +158,31 @@ export function momoTransactionPageRow(row,accountScope){
  return accountScope!==null&&row.native_group_id!=null
   ?{...facts,capture_scope_account_id:row.receiving_account_id}:facts;
 }
-export async function momoTransactionPage(env,url){const f=queryMomoFilters(url,['limit','offset','search','status','receiving_account_id','account_scope_id','group_id','from','to']),filter=momoTransactionPredicates(url,f),cte=`WITH records AS (${momoTransactionSql(env)})`;
- const result=await env.DB.batch([env.DB.prepare(`${cte} SELECT count(*) AS total,coalesce(sum(CASE WHEN event_kind='incoming_receipt' THEN amount_minor ELSE 0 END),0) AS received,coalesce(sum(credited_amount_minor),0) AS credited,
- coalesce(sum(CASE WHEN event_kind='incoming_receipt' AND credited_amount_minor=0 AND status!='reversed' THEN amount_minor ELSE 0 END),0) AS unallocated FROM records${filter.where}`).bind(...filter.args),
- env.DB.prepare(`${cte} SELECT * FROM records${filter.where} ORDER BY coalesce(transaction_at,created_at) DESC,id LIMIT ? OFFSET ?`).bind(...filter.args,f.limit,f.offset)]);
- const total=result[0].results[0],scope=url.searchParams.has('account_scope_id')?uuid(url.searchParams.get('account_scope_id'),'account_scope_id'):null;return {contract_version:1,rows:result[1].results.map(row=>momoTransactionPageRow(row,scope)),total:exactMomoMeasurement(total.total),limit:f.limit,offset:f.offset,
- totals:{received_minor:exactMomoMeasurement(total.received),credited_minor:exactMomoMeasurement(total.credited),unallocated_minor:exactMomoMeasurement(total.unallocated)},currency:'RWF',date_basis:'provider_transaction_time',as_of:now()};}
+export async function momoTransactionPage(env,url){
+ const f=queryMomoFilters(url,['limit','offset','search','status','receiving_account_id','account_scope_id','group_id','from','to']);
+ const filter=momoTransactionPredicates(url,f);
+ // Share the guarded receipt projection and filtered rows between totals and
+ // pagination. Even an empty later page carries the complete filtered totals.
+ const [result]=await env.DB.batch([env.DB.prepare(`WITH records AS MATERIALIZED (
+  SELECT * FROM (${momoTransactionSql(env)}) projected${filter.where}
+ ), totals AS (
+  SELECT count(*) AS page_total,
+   coalesce(sum(amount_minor) FILTER (WHERE event_kind='incoming_receipt'),0) AS page_received,
+   coalesce(sum(credited_amount_minor),0) AS page_credited,
+   coalesce(sum(amount_minor) FILTER (WHERE event_kind='incoming_receipt' AND credited_amount_minor=0 AND status!='reversed'),0) AS page_unallocated
+  FROM records
+ ), page AS (
+  SELECT * FROM records ORDER BY coalesce(transaction_at,created_at) DESC,id LIMIT ? OFFSET ?
+ ) SELECT totals.*,page.* FROM totals LEFT JOIN page ON true
+ ORDER BY coalesce(page.transaction_at,page.created_at) DESC,page.id`).bind(...filter.args,f.limit,f.offset)]);
+ const summary=result.results[0];
+ const scope=url.searchParams.has('account_scope_id')?uuid(url.searchParams.get('account_scope_id'),'account_scope_id'):null;
+ const rows=result.results.flatMap(({page_total,page_received,page_credited,page_unallocated,...row})=>
+  row.id===null?[]:[momoTransactionPageRow(row,scope)]);
+ return {contract_version:1,rows,total:exactMomoMeasurement(summary.page_total),limit:f.limit,offset:f.offset,
+  totals:{received_minor:exactMomoMeasurement(summary.page_received),credited_minor:exactMomoMeasurement(summary.page_credited),
+   unallocated_minor:exactMomoMeasurement(summary.page_unallocated)},currency:'RWF',date_basis:'provider_transaction_time',as_of:now()};
+}
 export async function momoPaymentChecks(env,url){
  const f=queryMomoFilters(url,['limit','offset']),cte=`WITH typed AS (
   SELECT r.*,CASE WHEN json_valid(r.message) THEN r.message ELSE '{}' END AS context FROM support_requests r WHERE r.kind='payment_review'

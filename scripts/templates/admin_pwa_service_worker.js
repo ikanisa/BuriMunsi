@@ -39,13 +39,11 @@ self.addEventListener('install', (event) => {
       // cache. Preserve it only after verifying its complete static contents.
       preserveAdmittedCache = await hasAdmittedBuildCache();
       const cache = await caches.open(CACHE_NAME);
-      // Wait for every write before cleanup if any resource fails. Otherwise
-      // an in-flight successful fetch could recreate the rejected cache.
-      const results = await Promise.allSettled(CACHE_URLS.map(async (url) => {
+      const cacheAsset = async (url) => {
         // A static shell must be identical for every operator. Never let an
         // authenticated cookie or a redirect to an account page enter it.
         const request = new Request(url, {
-          cache: 'reload',
+          cache: url.startsWith('./_build/') ? 'default' : 'reload',
           credentials: 'omit',
           redirect: 'error',
         });
@@ -61,9 +59,14 @@ self.addEventListener('install', (event) => {
           throw new Error(`Admin asset bytes differ from this build: ${url}`);
         }
         await cache.put(request, response);
-      }));
-      const failed = results.find((result) => result.status === 'rejected');
-      if (failed) throw failed.reason;
+      };
+      // Leave bandwidth for the open workspace. Wait for the whole batch
+      // before cleanup so a successful request cannot recreate a rejected cache.
+      for (let offset = 0; offset < CACHE_URLS.length; offset += 4) {
+        const results = await Promise.allSettled(CACHE_URLS.slice(offset, offset + 4).map(cacheAsset));
+        const failed = results.find((result) => result.status === 'rejected');
+        if (failed) throw failed.reason;
+      }
       // Use the browser's waiting phase. Open operator tabs keep their entire
       // installed build until every controlled document has been left.
       // Do not activate an update over an unfinished operator action.
