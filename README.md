@@ -30,9 +30,20 @@ node admin-web/tests/browser/smoke.mjs build/admin-web-fixture
 
 `make admin-web-build` requires the approved Supabase publishable key and the public production CAPTCHA configuration. The build command supplies the exact dedicated profile. Keep provider secrets outside this checkout. `make native-build NATIVE_OUTPUT=/absolute/path/to/new-evidence` produces the isolated native test and qualification artifacts. Follow [testing-candidate compilation](native/burimunsi/configuration/testing-candidate.md) for a configured unsigned release build.
 
-## Commissioning
+## Internal access and SMS receiving
 
-Use the scoped release record to bind the exact commit, Admin artifact, both Android variants and the managed Edge source. Qualify the hosted owner, Admin and Staff paths, signing and distribution, one receiving installation, original operation recovery, and an authorized carrier receipt through the canonical ledger. Preserve the SMS pause until the approved source and receiving authority have been checked on the intended handset. [Android authority transition](native/burimunsi/configuration/authority-transition.md) · [Scheduler operation](supabase/jobs/README.md)
+People sign in to the Android app with a phone number and passcode managed by
+BuriMunsi. The Admin adds Staff by phone number. Leaving the passcode field
+blank at creation uses the configured `BURIMUNSI_DEFAULT_STAFF_PIN` secret.
+
+The Admin account has M-Money SMS access. Staff SMS access is off. The receiving
+app uses one active SIM at a time. The Admin selects the receiving SIM in the
+app and can use the existing receiver handoff when changing phones. App access
+comes from the account on any supported handset.
+
+The release record binds the Android artifacts, Admin build and live Edge
+source. Record carrier receipt reconciliation when an authorized transaction
+is completed through the active receiver. [Android authority transition](native/burimunsi/configuration/authority-transition.md) · [Scheduler operation](supabase/jobs/README.md)
 
 The managed runtime revision requires the exact deployment source, the current
 fence epoch and function inventory, and verified preimages for
