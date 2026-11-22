@@ -132,9 +132,8 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
     const owned=async(durable=false)=>{requireActiveNativeRequest(request);requireThat(db.applicationWork===work,'request_not_admitted',503);
       if(durable)await work.assert();else await assertWorkOwner(work);
       requireThat(db.applicationWork===work,'request_not_admitted',503);requireActiveNativeRequest(request);};
-    const transaction=async(write,fn,consistentRead=false)=>db.transaction(async sql=>{
+    const transaction=async(write,fn)=>db.transaction(async sql=>{
       await owned();if(write){
-        if(consistentRead)await sql.unsafe('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ WRITE');
         await db.context(sql);await lockCollectMutation(sql);
       }
       else{await sql.unsafe('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');await db.readContext(sql,{isolation:'repeatable read'});}
@@ -279,28 +278,33 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
       };
       if(combinedRead){
         const needsRenewal=new Error('native_read_needs_renewal');
+        const readSnapshot=allowRenewal=>readOnly(async sql=>{
+          let row;
+          try{row=await setContext(sql,values);}
+          catch(error){if(allowRenewal&&error?.code==='42501')throw needsRenewal;throw error;}
+          if(allowRenewal&&(!row||integer(row.expires_at)<=clock()+60000))throw needsRenewal;
+          return serveRead(sql,readPrincipal(row),values);
+        });
         try{
-          // Bundled Home keeps renewal and the projection in one transaction.
-          // Renewal already installs scoped context and locks current authority.
-          const response=readSession&&includeHome?await transaction(true,async sql=>{
-            const rows=await sql.unsafe(PIN_RENEW_SQL,[...values,requestedGroup,sessionTtlMs]);
-            requireThat(rows.length===1,'session_unavailable',401);
-            return serveRead(sql,readPrincipal(rows[0]),values);
-          },true):await readOnly(async sql=>{
-            let row;
-            try{row=await setContext(sql,values);}
-            catch(error){if(readSession&&error?.code==='42501')throw needsRenewal;throw error;}
-            // The bare session still revalidates without taking a writer lock
-            // when it is healthy. Roll back the probe before guarded renewal.
-            if(readSession&&(!row||integer(row.expires_at)<=clock()+60000))throw needsRenewal;
-            return serveRead(sql,readPrincipal(row),values);
-          });
+          let response;
+          try{response=await readSnapshot(readSession);}
+          catch(error){
+            if(error!==needsRenewal)throw error;
+            // The write fence requires READ COMMITTED. Commit renewal before
+            // reopening a read-only snapshot and revalidating all four proofs.
+            await transaction(true,async sql=>{
+              const rows=await sql.unsafe(PIN_RENEW_SQL,[...values,requestedGroup,sessionTtlMs]);
+              requireThat(rows.length===1,'session_unavailable',401);
+              readPrincipal(rows[0]);
+            });
+            response=await readSnapshot(false);
+          }
           activeReadSnapshot(db);
           return response;
         }catch(error){
           if(error instanceof ReadSnapshotRefusal)return error.response;
           if(error?.code==='42501')throw new BuriError('session_unavailable',401);
-          if(error!==needsRenewal)throw error;
+          throw error;
         }
       }
       let principal;

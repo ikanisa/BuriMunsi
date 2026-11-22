@@ -88,6 +88,7 @@ test('the existing native Admin credentials open an opaque same-origin browser s
   const cookie = response.headers.get('Set-Cookie');
   assert.match(cookie, /^__Host-collect_admin=[0-9a-f]{64}; Path=\/; HttpOnly; SameSite=Strict; Max-Age=1800; Secure$/);
   const browserCookie = cookie.split(';')[0];
+  assert.equal(value.sessionContract, undefined);
   assert.equal(value.user.role, 'admin');
   assert.equal(value.user.accountId,value.adminIdentity.accountId);
   assert.equal(value.adminIdentity.principalId,principal);
@@ -121,6 +122,20 @@ test('the existing native Admin credentials open an opaque same-origin browser s
   assert.equal((await (await handleAdmin(sessionRequest,env)).json()).user,null);
 });
 
+test('a phone Admin receives the contracted scoped session directly when requested', async () => {
+  const {env} = await fixture();
+  const attempt = request('phone-passcode',{body:{phone,pin}});
+  attempt.headers.set('X-Collect-Owner-Identity-Version','1');
+  const login = await handleAdmin(attempt,env);
+  assert.equal(login.status,200);
+  const value = await login.json();
+  assert.equal(value.sessionContract,2);
+  assert.equal(value.user.role,'admin');
+  assert.equal(value.user.accountId,value.adminIdentity.accountId);
+  assert.equal(value.adminIdentity.principalId,principal);
+  assert.match(login.headers.get('Set-Cookie'),/^__Host-collect_admin=/);
+});
+
 test('standalone browser auth refuses unregistered numbers, legacy auth, untrusted origin and exhausted PIN budget', async () => {
   const {env, issued, denyBudget} = await fixture();
   const staff = await handleAdmin(request('phone-passcode',{body:{phone:staffPhone,pin}}),env);
@@ -139,9 +154,12 @@ test('standalone browser auth refuses unregistered numbers, legacy auth, untrust
 
 test('Staff receive their own limited account and can optionally change their passcode',async()=>{
   const {env,changes}=await fixture({role:'staff'});
-  const login=await handleAdmin(request('phone-passcode',{body:{phone:staffPhone,pin}}),env);
+  const attempt=request('phone-passcode',{body:{phone:staffPhone,pin}});
+  attempt.headers.set('X-Collect-Owner-Identity-Version','1');
+  const login=await handleAdmin(attempt,env);
   assert.equal(login.status,200);
   const data=await login.json(),cookie=login.headers.get('set-cookie').split(';')[0];
+  assert.equal(data.sessionContract,2);
   assert.equal(data.user.role,'staff');
   assert.equal(Object.hasOwn(data.user,'email'),false);
   assert.equal(data.adminIdentity,undefined);
