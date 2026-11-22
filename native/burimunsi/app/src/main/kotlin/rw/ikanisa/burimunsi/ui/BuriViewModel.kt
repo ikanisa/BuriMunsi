@@ -638,26 +638,27 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     init {
         work(bypassGate=true,kind=UiOperation.INITIAL_READ){
             operationLabel="Checking access"
-            val (device,source)=try{
+            val setup=try{
                 io{
-                    var installation:DeviceProvisioning?=null
-                    val records=try{
-                        installation=DeviceProvisioning(app,GatewayFactory.installationId(app))
+                    val device=DeviceProvisioning(app,GatewayFactory.installationId(app))
+                    val source=try{
                         Values.apiOrigin(BuildConfig.BURI_API_ORIGIN)
-                        val api=ApiClient.phonePin(BuildConfig.BURI_API_ORIGIN,installation.installationId,
-                            installationProfile,BuildConfig.BURI_API_PATH_PREFIX,BuildConfig.COLLECT_PUBLISHABLE_KEY,installation::registrationToken)
+                        val api=ApiClient.phonePin(BuildConfig.BURI_API_ORIGIN,device.installationId,
+                            installationProfile,BuildConfig.BURI_API_PATH_PREFIX,BuildConfig.COLLECT_PUBLISHABLE_KEY,device::registrationToken)
                         NativeRepository(app,api)
                     }catch(cancelled:CancellationException){throw cancelled}
                     catch(_:Exception){null}
-                    installation to records
+                    device to source
                 }
-            }finally{initialSetupPending=false}
-            install=device
-            if(source==null){
+            }catch(cancelled:CancellationException){throw cancelled}
+            catch(_:Exception){null}
+            finally{initialSetupPending=false}
+            install=setup?.first
+            repository=setup?.second
+            if(repository==null){
                 state=UiState(error="Unable to sign in. Contact admin.",configurationRequired=true,busy=true)
                 return@work
             }
-            repository=source
             observeProcessSession()
             sessionBootstrap.beginInitialRestore()
             if(lifecycleObserved&&foreground&&!resumeQueued)sessionBootstrap.shareInitialForeground()

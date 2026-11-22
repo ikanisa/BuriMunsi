@@ -8,10 +8,6 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import app.cool.mobile.BuildConfig
 import java.io.ByteArrayOutputStream
 import org.junit.Assert.*
@@ -147,14 +143,23 @@ class NativeSandboxContractTest {
         assertEquals(persisted,DeviceProvisioning(context,GatewayFactory.installationId(context)).installationId)
         if(BuildConfig.IS_GATEWAY)assertEquals(supplied,persisted)
         else assertEquals(SecureStore(context,"installation").read(),persisted)
-        // Offline sandbox has no API origin, so model never reads a token or starts HTTP.
-        runBlocking(Dispatchers.Main){
-            val model=BuriViewModel(context.applicationContext as android.app.Application)
-            withTimeout(10_000){while(model.state.starting||model.state.busy)delay(16)}
-            assertTrue(model.state.configurationRequired)
-            assertEquals(persisted,model.installationId)
-            assertEquals(if(BuildConfig.IS_GATEWAY)"internal_receiver" else "staff",model.installationProfile)
-        }
+        // Read the local identity after asynchronous initialization settles in the offline sandbox.
+        val instrumentation=InstrumentationRegistry.getInstrumentation()
+        lateinit var model:BuriViewModel
+        instrumentation.runOnMainSync { model=BuriViewModel(context.applicationContext as android.app.Application) }
+        val deadline=android.os.SystemClock.uptimeMillis()+5_000
+        var setup:Triple<String,String,Boolean>?=null
+        do{
+            instrumentation.runOnMainSync {
+                val state=model.state
+                if(!state.starting&&!state.busy)setup=Triple(model.installationId,model.installationProfile,state.configurationRequired)
+            }
+            if(setup==null)android.os.SystemClock.sleep(10)
+        }while(setup==null&&android.os.SystemClock.uptimeMillis()<deadline)
+        val (installationId,profile,configurationRequired)=checkNotNull(setup){"Local setup did not finish"}
+        assertEquals(persisted,installationId)
+        assertEquals(if(BuildConfig.IS_GATEWAY)"internal_receiver" else "staff",profile)
+        assertTrue(configurationRequired)
     }
     @Test fun localSetupIsEncryptedOutsideBackupAndClearPreservesOtherCustody() {
         val device=DeviceProvisioning(context,GatewayFactory.installationId(context))
