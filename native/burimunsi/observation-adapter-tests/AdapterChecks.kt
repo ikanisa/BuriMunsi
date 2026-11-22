@@ -1312,6 +1312,31 @@ fun main(args:Array<String>) {
    check(diagnostic.coordinator==ObservationSyncDiagnostics.Outcome.UNCONFIRMED&&!diagnostic.queueRead)
   }
  }
+ test("ApiClient transport failures retry promptly and preserve the exact pending receipt") {
+  val e=setup()
+  e.context.contentResolver.rows=listOf(row(5201))
+  val retry=ContinuousSyncRetry()
+  val errors=listOf(
+   rw.ikanisa.burimunsi.data.ApiFailure("connection_unavailable",0) to ObservationSyncDiagnostics.ErrorKind.NETWORK,
+   rw.ikanisa.burimunsi.data.ApiFailure("contract_response_timeout",200) to ObservationSyncDiagnostics.ErrorKind.TIMEOUT,
+   rw.ikanisa.burimunsi.data.ApiFailure("connection_unavailable",0) to ObservationSyncDiagnostics.ErrorKind.NETWORK)
+  val delays=errors.map{(failure,kind)->
+   val result=ObservationSyncCycle.run(e.context,true,restore={throw failure},stopped={false})
+   check(!result.completed&&result.more&&result.problem=="connection_waiting"&&e.repository.requests.isEmpty())
+   val snapshot=checkNotNull(ObservationSyncDiagnostics.snapshot())
+   check(snapshot.error==kind&&snapshot.errorPhase==ObservationSyncDiagnostics.Phase.RESTORE)
+   retry.next(result.completed,result.more,result.progress,result.awaitingParser)
+  }
+  check(delays==listOf(1_000L,2_000L,4_000L))
+  val original=pending(adminA).single().observation
+  val recovered=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
+  check(recovered.completed&&pending(adminA).isEmpty()&&e.repository.requests==listOf(original))
+  for(failure in listOf(rw.ikanisa.burimunsi.data.ApiFailure("invalid_response",0),
+      rw.ikanisa.burimunsi.data.ApiFailure("connection_unavailable",400),
+      rw.ikanisa.burimunsi.data.ApiFailure("contract_response_timeout",400))){
+   check(ObservationSyncDiagnostics.errorKind(failure)==ObservationSyncDiagnostics.ErrorKind.API_OTHER)
+  }
+ }
  test("diagnostic distinguishes restore timeout from elapsed budget and cancellation") {
   val timed=setup()
   val timeout=ObservationSyncCycle.run(timed.context,true,restore={throw java.net.SocketTimeoutException("sensitive-timeout-detail")},stopped={false})
