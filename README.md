@@ -37,9 +37,9 @@ BuriMunsi. The Admin adds Staff by phone number. Leaving the passcode field
 blank at creation uses the configured `BURIMUNSI_DEFAULT_STAFF_PIN` secret.
 
 The Admin account has M-Money SMS access. Staff SMS access is off. The receiving
-app uses one active SIM at a time. The Admin selects the receiving SIM in the
-app and can use the existing receiver handoff when changing phones. App access
-comes from the account on any supported handset.
+app uses one active receiving SIM at a time on the current handset. The Admin
+can use the existing receiver handoff when changing phones. App access comes
+from the account on any supported handset.
 
 The release record binds the Android artifacts, Admin build and live Edge
 source. Record carrier receipt reconciliation when an authorized transaction
