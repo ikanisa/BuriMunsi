@@ -242,6 +242,11 @@ class WireContract(private val product: String, private val version: String,
                 if ((d["totalCount"] as Number).toLong() < items.size || (d["nextCursor"] != null && items.isEmpty())) reject("CONTRACT_PAGE")
             }
             if (d.containsKey("recentPayments")) rows(d["recentPayments"])
+            if (operation == "session") {
+                val included = d.containsKey("home")
+                if (included != (expected["includeHome"] == true)) reject("CONTRACT_CONTEXT")
+                if (included) rows(objectValue(d["home"])["recentPayments"])
+            }
             if (d.containsKey("groupId") && d["groupId"] != b["groupId"]) reject("CONTRACT_IDENTITY")
             if (operation in listOf("payment", "paymentDetailV1", "member", "rawSms") && d["id"] != expected["recordId"]) reject("CONTRACT_IDENTITY")
             if (d.containsKey("profile")) {

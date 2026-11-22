@@ -85,8 +85,9 @@ test('native posted state requires an incoming success, positive amount and cano
  }
 });
 test('strict native Home, member and member-payment responses carry a posted SMS credit',async()=>{
- const {svc,data}=records(),installation='22222222-2222-4222-8222-222222222222',requestId='11111111-1111-4111-8111-111111111111';
- data.actor={...data.actor,sessionId:requestId,installationId:installation};data.rows=[nativePosted];
+ const {svc,data,tx}=records(),installation='22222222-2222-4222-8222-222222222222',requestId='11111111-1111-4111-8111-111111111111';
+ data.actor={...data.actor,sessionId:requestId,installationId:installation,name:'Synthetic operator'};data.rows=[nativePosted];
+ tx.loadBinding=()=>assert.fail('ordinary records attempted a receiver lookup');
  const noop=async()=>({});
  const fn=createNativeHandler({auth:{login:noop,authenticate:async()=>data.actor,logout:noop,changePasscode:noop,manageStaff:noop},
   records:svc,contributions:{allocate:noop},members:{enroll:noop,setActive:noop},gateway:{status:noop,replace:noop},
@@ -94,11 +95,19 @@ test('strict native Home, member and member-payment responses carry a posted SMS
  const get=path=>new Request('https://native.example.test/v1/burimunsi'+path,{headers:{
   'x-burimunsi-installation':installation,'x-burimunsi-contract':'burimunsi.native.v1','x-burimunsi-request':requestId,
   'x-burimunsi-generation':'1',authorization:'Bearer '+'a'.repeat(64)}});
- let response=await fn(get('/home'));assert.equal(response.status,200);assert.equal((await response.json()).data.recentPayments[0].state,'posted');
+ let response=await fn(get('/home'));assert.equal(response.status,200);
+ const home=(await response.json()).data;assert.equal(home.recentPayments[0].state,'posted');
+ const bare=(await (await fn(get('/session'))).json()).data;assert.equal(Object.hasOwn(bare,'home'),false);
+ response=await fn(get('/session?include=home'));assert.equal(response.status,200);
+ assert.deepEqual((await response.json()).data,{...bare,home});
+ assert.equal((await fn(get('/session?include=home&include=home'))).status,400);
  response=await fn(get('/payments?memberId=member-1&limit=40'));assert.equal(response.status,200);
  assert.equal((await response.json()).data.items[0].memberId,'member-1');
  data.detail={id:'member-1',groupId:'group-1',name:'Synthetic Person',phone:'+250780000816',balanceRwf:10000,active:true,version:1};
  response=await fn(get('/members/member-1'));assert.equal(response.status,200);assert.equal((await response.json()).data.balanceRwf,10000);
+ tx.reloadActor=async()=>null;
+ tx.canonicalHome=()=>assert.fail('revoked actor reached bundled Home');
+ assert.equal((await fn(get('/session?include=home'))).status,401);
 });
 for(const state of ['reversed','corrected'])test('native '+state+' remains readable through Home, scoped list and strict payment detail',async()=>{
  const {svc,data,tx}=records(),installation='22222222-2222-4222-8222-222222222222',requestId='11111111-1111-4111-8111-111111111111';

@@ -186,6 +186,11 @@ test('expired device-bound session renews through its exact session revalidation
  const renewal=f.state.calls.find(x=>x.text===PIN_RENEW_SQL);
  assert.deepEqual(renewal.args,[data.token,installation,device,'internal_receiver','actual-group',1800000]);
  assert.ok(f.state.calls.some(x=>x.text.includes('pg_advisory_xact_lock')));
+ await f.invoke(f.request({login:false,token:data.token,path:'/session',query:'?include=home'}),async actor=>{
+  assert.equal(actor.principalSessionId,observed.principalSessionId);
+ });
+ await assert.rejects(f.invoke(f.request({login:false,token:data.token,path:'/session',query:'?include=home&include=home'})),
+  error=>error.code==='invalid_query'&&error.status===400);
  assert.equal(hasPhonePinContext(f.db),false);
 });
 test('expired device-bound session can be durably revoked and cannot be renewed',async()=>{

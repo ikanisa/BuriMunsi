@@ -831,6 +831,9 @@
         "profile": {
           "$ref": "#/$defs/profile"
         },
+        "home": {
+          "$ref": "#/$defs/home.data"
+        },
         "groupId": {
           "type": "string",
           "minLength": 1,
@@ -2799,7 +2802,12 @@
     },
     "session.query": {
       "type": "object",
-      "properties": {},
+      "properties": {
+        "include": {
+          "type": "string",
+          "const": "home"
+        }
+      },
       "required": [],
       "additionalProperties": false
     },

@@ -48,7 +48,15 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
     val lastReadSavedAt: Long? get() = sessions.lastReadSavedAt
     val lastReadFromCache: Boolean get() = sessions.lastReadFromCache
 
-    fun restore(): Operator? = sessions.restore()
+    fun restore(): Operator? = sessions.restore()?.operator
+
+    internal class Restoration(val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null)
+
+    internal fun restoreForHome():Restoration? {
+        val restored=sessions.restore(includeHome=true)?:return null
+        val snapshot=restored.home?.let{records.acceptRestoredHome(restored.operator,it)}
+        return Restoration(restored.operator,snapshot?.first,snapshot?.second)
+    }
     fun login(phone: String, pin: String): Operator = sessions.login(phone, pin)
     fun refreshSession(): Operator = sessions.refreshSession()
     fun changePin(current: String, next: String, confirm: String): Operator = sessions.changePin(current, next, confirm)

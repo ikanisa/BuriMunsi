@@ -13,7 +13,7 @@ internal class NativeSessionBootstrap(
     private val readJournal: () -> JournalKnowledge,
 ) {
     class Grant(val operator: Operator, val group: String, val revision: Long)
-    class Restored(val grant: Grant?, val navigation: RestorationDecision)
+    class Restored(val grant: Grant?, val navigation: RestorationDecision, val home: Home? = null, val homeSavedAt: Long? = null)
 
     sealed interface Recovery {
         data object PasscodePending : Recovery
@@ -53,7 +53,11 @@ internal class NativeSessionBootstrap(
     fun requireCurrent(grant: Grant) = withCurrent(grant) {}
 
     fun restore(): Restored {
-        val grant = repository.restore()?.let(::bind)
+        // Bind the verified session before opening the potentially blocking
+        // navigation checkpoint. It belongs to this restore, even if another
+        // activity replaces the session while the checkpoint is being read.
+        val combined = repository.restoreForHome()
+        val grant = combined?.operator?.let(::bind)
         val bookmark = if (grant == null) null else try {
             NavigationCheckpoint.decode(checkpoints.read())
         } catch (cancelled: CancellationException) {
@@ -63,7 +67,8 @@ internal class NativeSessionBootstrap(
         }
         val navigation = ScreenRestoration.decide(bookmark, grant?.operator, grant?.group.orEmpty(),
             clock(), receiver, readJournal())
-        return Restored(grant?.takeIf { navigation.route != Route.LOGIN }, navigation)
+        return Restored(grant?.takeIf { navigation.route != Route.LOGIN }, navigation,
+            combined?.home?.takeIf { navigation.route == Route.HOME }, combined?.homeSavedAt)
     }
 
     fun login(phone: String, pin: String): Grant = bind(repository.login(phone, pin))

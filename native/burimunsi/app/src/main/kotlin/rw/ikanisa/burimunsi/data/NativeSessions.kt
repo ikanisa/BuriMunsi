@@ -113,7 +113,9 @@ internal class NativeSessions(
         if(ownedWitness==witness)clearMemoryOperator()
     }
 
-    fun restore():Operator?{
+    class ProfileRead(val operator:Operator,val home:JSONObject?=null)
+
+    fun restore(includeHome:Boolean=false):ProfileRead?{
         // Snapshot, validate and attach under one process-wide lock. A second
         // activity with the same saved bearer joins the existing generation.
         val restored=synchronized(authority){
@@ -144,7 +146,7 @@ internal class NativeSessions(
             witness to saved
         }
         val (witness,saved)=restored?:return null
-        return resumeAttachedSession(witness,saved)
+        return resumeAttachedSession(witness,saved,includeHome)
     }
     fun login(phone:String,pin:String):Operator {
         val normalizedPhone=Values.phone(phone);val normalizedPin=Values.pin(pin)
@@ -202,13 +204,15 @@ internal class NativeSessions(
         }
         return profile
     }
-    private fun resumeAttachedSession(witness:SessionWitness,saved:SavedNativeSession):Operator =
+    private fun resumeAttachedSession(
+        witness:SessionWitness,saved:SavedNativeSession,includeHome:Boolean=false,
+    ):ProfileRead =
         synchronized(sessionRefreshLock){
             try{
                 val pending=saved.pendingPasscode
                 if(pending?.stage==PasscodeStage.INFLIGHT)
-                    recoverPasscode(witness,pending.token,checkNotNull(saved.owner))
-                else refreshSessionLocked(witness,saved.owner)
+                    ProfileRead(recoverPasscode(witness,pending.token,checkNotNull(saved.owner)))
+                else refreshSessionLocked(witness,saved.owner,includeHome)
             }catch(error:Exception){
                 // Settle this failed read before another refresh of the same
                 // witness can publish. A replacement never inherits this cleanup.
@@ -224,10 +228,20 @@ internal class NativeSessions(
 
     fun refreshSession():Operator {
         val witness=ownedSession()
-        return synchronized(sessionRefreshLock){refreshSessionLocked(witness,expectedOwner=null)}
+        return synchronized(sessionRefreshLock){refreshSessionLocked(witness,expectedOwner=null).operator}
     }
-    private fun refreshSessionLocked(witness:SessionWitness,expectedOwner:String?):Operator {
-        val j=try{JSONObject(requestOwned(witness,"GET","/session"))}catch(e:ApiFailure){
+    private fun readSession(witness:SessionWitness,includeHome:Boolean):JSONObject {
+        if(includeHome&&api.resolvesLoginScope){
+            try{return JSONObject(requestOwned(witness,"GET","/session?include=home"))}
+            catch(e:ApiFailure){
+                // A previous backend can reject the new query before loading records.
+                if(e.status!=400||e.code !in setOf("invalid_query","contract_query"))throw e
+            }
+        }
+        return JSONObject(requestOwned(witness,"GET","/session"))
+    }
+    private fun refreshSessionLocked(witness:SessionWitness,expectedOwner:String?,includeHome:Boolean=false):ProfileRead {
+        val j=try{readSession(witness,includeHome)}catch(e:ApiFailure){
             if(e.status==403&&confirmedSessionDenial(e)){authority.invalidateIfCurrent(witness,::clearLocalOperator);throw ApiFailure("session_unavailable",401)}
             throw e
         }
@@ -259,7 +273,7 @@ internal class NativeSessions(
             if(savedProfile!=null&&!profile.hasSameAccess(savedProfile)){
                 authority.renewGrant(witness){ownedWitness=it}
             }else authority.confirmObservationCurrent(witness)
-            profile
+            ProfileRead(profile,j.optJSONObject("home"))
         }
     }
     private fun saveSession(encoded:String){
@@ -333,7 +347,7 @@ internal class NativeSessions(
             }
             witness to saved
         }
-        return resumeAttachedSession(witness,saved)
+        return resumeAttachedSession(witness,saved).operator
     }
     fun observeProcessSession(listener:()->Unit):()->Unit=authority.observe(listener)
     fun hasPendingPasscode():Boolean = synchronized(authority){
@@ -499,7 +513,7 @@ internal class NativeSessions(
                 authority.invalidateIfCurrent(witness,::clearMemoryOperator)
                 throw ApiFailure("passcode_change_unconfirmed",503,true)
             }
-            if((e.status==401||e.status==403&&path=="/session")&&!confirmedSessionDenial(e))
+            if((e.status==401||e.status==403&&path.substringBefore('?')=="/session")&&!confirmedSessionDenial(e))
                 throw ApiFailure("session_revalidation_unavailable",503,false)
             if(e.status==401&&confirmedSessionDenial(e))authority.invalidateIfCurrent(witness,::clearLocalOperator)
             throw e

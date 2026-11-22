@@ -131,7 +131,7 @@ class ApiClient private constructor(origin: String, val installationId: String,
             val group=if(bootstrap)null else (contractContext["groupId"] as? String ?:throw ContractViolation("CONTRACT_CONTEXT"))
             if(group!=null)Values.id(group)
             val route=if(csv)null else contract.route(method,path.removePrefix("/v1/burimunsi"))
-            contract.query(if(csv)"csv" else route!!.first, path.substringAfter('?', ""))
+            val query=contract.query(if(csv)"csv" else route!!.first, path.substringAfter('?', ""))
             // Bind validation and response expectations to the exact JSON sent on the wire.
             val requestJson=body?.let { checkNotNull(it.toString()) }
             val requestData=StrictJson.parse(requestJson ?: "null",requestLimit)
@@ -139,7 +139,8 @@ class ApiClient private constructor(origin: String, val installationId: String,
             if(csv)require(method=="GET"&&body==null&&Regex("/v1/burimunsi/members/[A-Za-z0-9_-]+/ledger\\.csv").matches(path))
             val b=requestData as? Map<*, *>
             val expected=(if(bootstrap)contractContext-"groupId" else contractContext) + mapOf("installationId" to installationId,"generation" to generation,
-                "requestId" to correlation,"recordId" to route?.second,"now" to System.currentTimeMillis()) +
+                "requestId" to correlation,"recordId" to route?.second,"now" to System.currentTimeMillis(),
+                "includeHome" to (route?.first=="session"&&query["include"]=="home")) +
                 (b?.get("phone")?.let{mapOf("phone" to it)} ?: emptyMap()) +
                 (b?.get("memberId")?.let{mapOf("memberId" to it)} ?: emptyMap()) +
                 (b?.get("id")?.let{mapOf("staffId" to it)} ?: emptyMap()) +

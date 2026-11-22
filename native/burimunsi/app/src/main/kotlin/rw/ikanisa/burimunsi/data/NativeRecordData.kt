@@ -35,15 +35,7 @@ internal class NativeRecordData(
                 checkContract(now<who.expiresAt,"session_unavailable")
                 val result=read(value,who)
                 sessions.markRead(now, fromCache = false)
-                try {
-                    var cache=cacheStore.read()?.let(::JSONObject)
-                    if(cache?.optString("sessionScope")!=sessionScope||cache.optString("contractVersion")!=BuriMunsiSchemas.VERSION)cache=null
-                    val entries=cache?.optJSONObject("entries")?:JSONObject()
-                    entries.put(path,JSONObject().put("savedAt",now).put("payload",value))
-                    while(entries.length()>8){val key=entries.keys().asSequence().minByOrNull{entries.getJSONObject(it).getLong("savedAt")}?:break;entries.remove(key)}
-                    val saved=JSONObject().put("contractVersion",BuriMunsiSchemas.VERSION).put("groupId",groupId).put("accountId",who.id).put("sessionScope",sessionScope).put("entries",entries).toString()
-                    if(saved.toByteArray(Charsets.UTF_8).size<=1_000_000)cacheStore.write(saved)
-                }catch(_:Exception){/* Cache persistence cannot change the canonical response. */}
+                saveRecord(path,value,who,sessionScope,now)
                 result
             }
         }catch(error:ApiFailure){
@@ -61,8 +53,35 @@ internal class NativeRecordData(
             }
         }
     }
-    fun home():Home{
-        val j=JSONObject(records("/home"));val a=j.getJSONArray("recentPayments")
+    // Called while the session still owns the process authority lock.
+    private fun saveRecord(path:String,payload:String,owner:Operator,sessionScope:String,now:Long) {
+        try {
+            var cache=cacheStore.read()?.let(::JSONObject)
+            if(cache?.optString("sessionScope")!=sessionScope||cache.optString("contractVersion")!=BuriMunsiSchemas.VERSION)cache=null
+            val entries=cache?.optJSONObject("entries")?:JSONObject()
+            entries.put(path,JSONObject().put("savedAt",now).put("payload",payload))
+            while(entries.length()>8){val key=entries.keys().asSequence().minByOrNull{entries.getJSONObject(it).getLong("savedAt")}?:break;entries.remove(key)}
+            val saved=JSONObject().put("contractVersion",BuriMunsiSchemas.VERSION).put("groupId",groupId).put("accountId",owner.id).put("sessionScope",sessionScope).put("entries",entries).toString()
+            if(saved.toByteArray(Charsets.UTF_8).size<=1_000_000)cacheStore.write(saved)
+        }catch(_:Exception){/* Cache persistence cannot change the canonical response. */}
+    }
+
+    fun acceptRestoredHome(owner:Operator,payload:JSONObject):Pair<Home,Long> {
+        val witness=ownedSession()
+        return authority.withCurrent(witness) {
+            checkContract(operator===owner,"session_changed")
+            val now=System.currentTimeMillis()
+            checkContract(now<owner.expiresAt,"session_unavailable")
+            val home=decodeHome(payload)
+            saveRecord("/home",payload.toString(),owner,Values.sha256(witness.token),now)
+            sessions.markRead(now,fromCache=false)
+            home to now
+        }
+    }
+
+    fun home():Home=decodeHome(JSONObject(records("/home")))
+    private fun decodeHome(j:JSONObject):Home{
+        val a=j.getJSONArray("recentPayments")
         return Home(j.amount("groupBalanceRwf"),j.amount("todayRwf"),j.getInt("memberCount"),j.getInt("unallocatedCount"),(0 until a.length()).map{decodePayment(a.getJSONObject(it))},j.getString("asOf"),if(j.has("unallocatedAmountRwf")&&!j.isNull("unallocatedAmountRwf"))j.amount("unallocatedAmountRwf")else null)
     }
     /** Full-query export collectors use online reads with one immutable local

@@ -545,7 +545,13 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                 if(replacement!=null)refreshSessionRecords(replacement)
                 return
             }
-            try{loadSessionRecords(grant)}catch(e:ApiFailure){
+            try{
+                val home=restored.home
+                if(home!=null&&SnapshotFreshness.reusable(restored.homeSavedAt,clock())){
+                    sessionBootstrap.withCurrent(grant){ showHome(home,false,restored.homeSavedAt) }
+                    receiverStatus.startReceiver()
+                }else loadSessionRecords(grant)
+            }catch(e:ApiFailure){
                 if(retryableSessionFailure(e)){needsSessionCheck=true;sessionRetryPending=true;lastSessionRecoveryAttemptAt=clock()}
                 throw e
             }
@@ -986,11 +992,14 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         receiverStatus.refreshHealth()
     }
 
+    private fun showHome(home:Home,cached:Boolean,savedAt:Long?) {
+        state=state.copy(home=home,gateway=null,offline=cached,savedAt=savedAt,readbackRequired=state.readbackRequired&&cached)
+        if(state.sheet==null)refreshHomeGatewayStatus()
+    }
+
     private suspend fun refreshNow(){
         when(state.route){
-            Route.HOME->{val h=io{repo().home()};val cached=repo().lastReadFromCache;val saved=repo().lastReadSavedAt
-                state=state.copy(home=h,gateway=null,offline=cached,savedAt=saved,readbackRequired=state.readbackRequired&&cached)
-                if(state.sheet==null)refreshHomeGatewayStatus()}
+            Route.HOME->{val h=io{repo().home()};showHome(h,repo().lastReadFromCache,repo().lastReadSavedAt)}
             Route.PAYMENTS -> {
                 val request = pagedRestoration.request()
                 val listing = queryFor(ListingTarget.PAYMENTS)

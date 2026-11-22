@@ -4,6 +4,10 @@ import {nativeRequestUrl,readNativeJson,requireNativeHttpsOrigin} from './wire/n
 import {BuriError,ObservationUploadUnresolved,requirePort,requireThat} from './errors.js';
 import {exactKeys,requireId,requireRequestId} from './values.js';
 import {LISTING_QUERY_KEYS} from './listing-query.js';
+
+function sessionProfile(actor){
+  return {groupId:actor.groupId,profile:{id:actor.id,name:actor.name,phone:actor.phone,role:actor.role,capabilities:actor.capabilities},expiresAt:actor.expiresAt};
+}
 /** Candidate native API adapter; attach only to an admitted Collect Edge request.
  * Do not replace the current router or bypass its application fence.
  * Origin/networkBucket are server-owned deployment inputs, not forwarded client claims.
@@ -64,7 +68,13 @@ export function createNativeHandler({auth,records,contributions,members,gateway,
       const actor=await auth.authenticate(token,installationId);
       requireActiveNativeRequest(req);
       if(strictContract){requireThat(actor.groupId===groupId,'access_denied',403);wireBinding.actorId=actor.id;}
-      if(route==='/session'&&method==='GET')return json({groupId:actor.groupId,profile:{id:actor.id,name:actor.name,phone:actor.phone,role:actor.role,capabilities:actor.capabilities},expiresAt:actor.expiresAt});
+      if(route==='/session'&&method==='GET'){
+        if(wireQuery?.include!=='home')return json(sessionProfile(actor));
+        requirePort(records,['sessionHome']);
+        wireRoute.includeHome=true;
+        const {current,home}=await records.sessionHome(actor);
+        return json({...sessionProfile(current),home});
+      }
       if(route==='/session/logout'&&method==='POST'){await body(req,[]);return json(await auth.logout(actor));}
       if(route==='/session/passcode'&&method==='POST')return json(await auth.changePasscode(actor,await body(req,['current','newPin','confirm','replacementToken'])));
       const recovery=/^\/operations\/([A-Za-z0-9_-]+)\/recovery$/.exec(route);

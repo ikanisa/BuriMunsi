@@ -113,6 +113,10 @@ export function semantics(product,operation,r,expected={}) {
   function rows(list){const ids=new Set();for(const row of list){if(row.groupId!==r.binding.groupId)fail('CONTRACT_IDENTITY');if(ids.has(row.id))fail('CONTRACT_DUPLICATE');ids.add(row.id);}}
   if(data.items&&operation!=='observationReconcileBatch'){rows(data.items);if(data.totalCount<data.items.length||(data.nextCursor!==null&&!data.items.length))fail('CONTRACT_PAGE');}
   if(data.recentPayments)rows(data.recentPayments);
+  if(operation==='session'){
+   if(Object.hasOwn(data,'home')!==(expected.includeHome===true))fail('CONTRACT_CONTEXT');
+   if(data.home)rows(data.home.recentPayments);
+  }
   if(data.groupId!==undefined&&data.groupId!==r.binding.groupId)fail('CONTRACT_IDENTITY');
   if(['payment','paymentDetailV1','member','rawSms'].includes(operation)&&data.id!==expected.recordId)fail('CONTRACT_IDENTITY');
   if(['observation','observationRecoverHeld','observationRecoverHeldAck'].includes(operation)&&data.requestId!==expected.commandRequestId)fail('CONTRACT_IDENTITY');

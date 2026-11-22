@@ -283,6 +283,28 @@ private suspend fun legacyProfileRestores() {
     } finally { stop(model) }
 }
 
+private suspend fun bundledHomeRestores() {
+    val scenario = SessionScenario()
+    scenario.signIn(scenario.repository())
+    Transport.sessionHome = { request ->
+        val session = Transport.handler(request.copy(path = "/v1/burimunsi/session"))
+        val home = Transport.handler(request.copy(path = "/v1/burimunsi/home"))
+        JSONObject(session).put("home", JSONObject(home).put("groupBalanceRwf", 250L)).toString()
+    }
+    val model = BuriViewModel(scenario.app)
+    try {
+        idle(model)
+        check(model.state.operator?.id == scenario.owner && model.state.home?.balanceRwf == 250L)
+        check(Transport.calls.count { it.path.endsWith("/session?include=home") } == 1)
+        check(Transport.calls.none { it.path.endsWith("/home") || it.path.endsWith("/session") })
+        val saved = JSONObject(SecureStore.records.getValue("records")).getJSONObject("entries").getJSONObject("/home")
+        check(JSONObject(saved.getString("payload")).getLong("groupBalanceRwf") == 250L)
+    } finally {
+        stop(model)
+        Transport.sessionHome = null
+    }
+}
+
 fun main() = runBlocking {
     val results = listOf(
         "signed-out startup retires Settings and Sync before a new group signs in" to suspend { interruptedRestore(Replacement.NONE) },
@@ -295,6 +317,7 @@ fun main() = runBlocking {
         "a renewed deadline with identical grants preserves the current route and generation" to suspend { renewedDeadlineKeepsScope() },
         "an equal-valued foreground profile replaces the authority held by the screen" to suspend { equalProfileRefresh() },
         "an older actor-only saved profile restores through a current server profile" to suspend { legacyProfileRestores() },
+        "a paired session and Home response restores and caches the authorized snapshot" to suspend { bundledHomeRestores() },
     ).map { (label, scenario) ->
         runCatching { scenario() }.also { result ->
             println((if (result.isSuccess) "PASS" else "FAIL") + " $flavor $label")

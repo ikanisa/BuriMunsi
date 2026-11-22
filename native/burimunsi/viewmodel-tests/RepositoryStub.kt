@@ -22,6 +22,8 @@ class RecordReadScope internal constructor(private val owner:Any,private val ver
 object Fixture{
  var anchoredMembers:((String,ListingQuery)->Page<String>)?=null
  @Volatile var supportFetch:()->String?={null}
+ var restoredHome:Home?=null
+ var restoredHomeSavedAt:Long?=null
  @Volatile var managedCollection:String?="synthetic-group"
  val repositoryCollections=java.util.concurrent.CopyOnWriteArrayList<String>()
  val enrollmentCollections=java.util.concurrent.CopyOnWriteArrayList<String>()
@@ -116,6 +118,8 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null){
  fun restore():Operator?{Fixture.restoreReads++;Fixture.restoreEntered?.countDown();
   check(Fixture.restoreBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false)
   Fixture.restoreFailure?.let{throw it};return operator}
+ internal class Restoration(val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null)
+ internal fun restoreForHome():Restoration?=restore()?.let{Restoration(it,Fixture.restoredHome,Fixture.restoredHomeSavedAt)}
  fun current()=operator?.takeUnless{Fixture.processSessionInvalidated}?.let{it.copy(id=Fixture.currentOwnerOverride?:it.id)}
  internal fun <T> withCurrentProfile(profile:Operator,publish:(String,Long)->T):T {
   checkContract(operator===profile&&current()==profile,"session_changed")

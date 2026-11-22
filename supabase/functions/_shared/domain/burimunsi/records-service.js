@@ -1,6 +1,6 @@
 import {COMMAND_OPERATIONS} from './postgres-command-outcome.js';
 import {requirePort,requireThat} from './errors.js';
-import {authorize} from './policy.js';
+import {authorize,requiresReceiverBinding} from './policy.js';
 import {requireId,requireRequestId,canonicalJson,sha256,normalizePhone} from './values.js';
 import {ledgerCsv} from './csv.js';
 import {projectRecoveredOutcome,requireOriginDigest} from './operation-recovery.js';
@@ -23,7 +23,8 @@ export class RecordsService {
       requirePort(tx,['reloadActor','loadBinding']);
       const current=await tx.reloadActor(actor.sessionId);
       requireThat(current,'session_unavailable',401);
-      authorize(current,this.groupId,capability,{now:this.clock(),binding:await tx.loadBinding(this.groupId,current.installationId)});
+      const binding=requiresReceiverBinding(capability)?await tx.loadBinding(this.groupId,current.installationId):null;
+      authorize(current,this.groupId,capability,{now:this.clock(),binding});
       requireThat(current.id===actor.id&&current.sessionId===actor.sessionId,'session_unavailable',401);
       return fn(tx,current);
     });
@@ -55,15 +56,19 @@ export class RecordsService {
     },true);
   }
 
-  async home(actor) {
-    return this.within(actor,'records.read',async tx=>{
-      requirePort(tx,['canonicalHome']);
-      const value=await tx.canonicalHome(this.groupId);
-      requireThat(value && Number.isSafeInteger(value.groupBalanceRwf)&&Number.isSafeInteger(value.todayRwf)&&Number.isSafeInteger(value.memberCount)&&Number.isSafeInteger(value.unallocatedCount)&&typeof value.asOf==='string','invalid_snapshot',503);
-      if(value.unallocatedAmountRwf!==undefined)requireThat(Number.isSafeInteger(value.unallocatedAmountRwf),'invalid_snapshot',503);
-      return {groupBalanceRwf:value.groupBalanceRwf,todayRwf:value.todayRwf,memberCount:value.memberCount,unallocatedCount:value.unallocatedCount,
-        ...(value.unallocatedAmountRwf===undefined?{}:{unallocatedAmountRwf:value.unallocatedAmountRwf}),asOf:value.asOf,recentPayments:this.projectRows(value.recentPayments??[],'payments')};
-    });
+  home(actor) {
+    return this.within(actor,'records.read',tx=>this.#home(tx));
+  }
+  sessionHome(actor) {
+    return this.within(actor,'records.read',async(tx,current)=>({current,home:await this.#home(tx)}));
+  }
+  async #home(tx) {
+    requirePort(tx,['canonicalHome']);
+    const value=await tx.canonicalHome(this.groupId);
+    requireThat(value && Number.isSafeInteger(value.groupBalanceRwf)&&Number.isSafeInteger(value.todayRwf)&&Number.isSafeInteger(value.memberCount)&&Number.isSafeInteger(value.unallocatedCount)&&typeof value.asOf==='string','invalid_snapshot',503);
+    if(value.unallocatedAmountRwf!==undefined)requireThat(Number.isSafeInteger(value.unallocatedAmountRwf),'invalid_snapshot',503);
+    return {groupBalanceRwf:value.groupBalanceRwf,todayRwf:value.todayRwf,memberCount:value.memberCount,unallocatedCount:value.unallocatedCount,
+      ...(value.unallocatedAmountRwf===undefined?{}:{unallocatedAmountRwf:value.unallocatedAmountRwf}),asOf:value.asOf,recentPayments:this.projectRows(value.recentPayments??[],'payments')};
   }
   async onboardingSuggestions(actor,query={}) {
     const q=query.q??'',limit=query.limit??40;

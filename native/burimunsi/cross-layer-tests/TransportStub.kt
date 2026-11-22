@@ -11,6 +11,7 @@ data class Request(val method:String,val path:String,val token:String?,val body:
 object Transport {
  val calls=CopyOnWriteArrayList<Request>()
  var handler:(Request)->String={error("No transport fixture")}
+ var sessionHome:((Request)->String)?=null
 }
 class ApiClient(origin:String,val installationId:String,token:()->String?,val installationProfile:String?=null) {
  val resolvesLoginScope get()=installationProfile!=null
@@ -19,7 +20,11 @@ class ApiClient(origin:String,val installationId:String,token:()->String?,val in
  constructor(origin:String,id:String,prefix:String,token:()->String?):this(origin,id,token)
  constructor(origin:String,id:String,provider:ManagedSessionTokenProvider,prefix:String,token:()->String?):this(origin,id,provider,token)
  fun call(method:String,path:String,token:String?=null,body:JSONObject?=null,csv:Boolean=false,recoveryOrigin:String?=null,contractContext:Map<String,Any?> = emptyMap()):String {
-  val request=Request(method,path,token,body,recoveryOrigin,contractContext);Transport.calls.add(request);return Transport.handler(request)
+  val request=Request(method,path,token,body,recoveryOrigin,contractContext)
+  Transport.calls.add(request)
+  if(method=="GET"&&path=="/v1/burimunsi/session?include=home")
+   return Transport.sessionHome?.invoke(request)?:throw ApiFailure("invalid_query",400)
+  return Transport.handler(request)
  }
  internal fun validateCached(path:String,payload:String,context:Map<String,Any?>)=validateCachedPayload(installationId,path,payload,context)
 }

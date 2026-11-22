@@ -2,12 +2,13 @@ import {requireThat} from './errors.js';
 import {normalizePhone} from './values.js';
 import {roleAllowsCapability} from './operator-access.mjs';
 export {CAPABILITIES} from './operator-access.mjs';
+export const requiresReceiverBinding = capability => capability==='sms.read'||capability==='gateway.manage';
 /** actor must be loaded from the trusted native-session store, never req.body. */
 export function authorize(actor, groupId, capability, {now=Date.now(), binding=null}={}) {
   requireThat(actor && actor.active === true && actor.revoked !== true && actor.expiresAt > now, 'session_unavailable',401);
   requireThat(actor.groupId === groupId && roleAllowsCapability(actor.role, capability), 'access_denied',403);
   requireThat(Array.isArray(actor.capabilities) && actor.capabilities.includes(capability),'access_denied',403);
-  if (['sms.read','gateway.manage'].includes(capability)) {
+  if (requiresReceiverBinding(capability)) {
     requireThat(actor.installationProfile === 'internal_receiver' && binding && binding.active === true && binding.groupId === groupId && binding.installationId === actor.installationId,'gateway_unavailable',403);
   }
   return actor;

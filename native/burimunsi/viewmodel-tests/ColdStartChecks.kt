@@ -9,6 +9,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import rw.ikanisa.burimunsi.core.ScreenGate
+import rw.ikanisa.burimunsi.core.Home
 import rw.ikanisa.burimunsi.core.Route
 import rw.ikanisa.burimunsi.core.SnapshotFreshness
 import rw.ikanisa.burimunsi.gateway.GatewayFixture
@@ -33,6 +34,24 @@ fun main()=runBlocking {
     check(Fixture.restoreReads==1&&Fixture.sessionReads==0&&Fixture.homeReads==1&&first.screenGate==ScreenGate.OPEN)
     println("PASS initial foreground shares the in-flight authoritative restore and records read")
     first.viewModelScope.cancel()
+
+    Fixture.restoreEntered=null;Fixture.restoreBarrier=null
+    Fixture.restoredHome=Home(12000,12000,1,0,emptyList(),"now")
+    Fixture.restoredHomeSavedAt=now
+    val bundledReads=Fixture.homeReads
+    val bundled=BuriViewModel(Application()){now}
+    bundled.onForeground();idle(bundled)
+    check(Fixture.homeReads==bundledReads&&bundled.state.home?.balanceRwf==12000L&&
+        bundled.state.savedAt==now&&bundled.presentation.showRecords)
+    println("PASS a fresh Home returned with the current saved session avoids a separate records request")
+    bundled.viewModelScope.cancel()
+    Fixture.restoredHomeSavedAt=now-SnapshotFreshness.TTL_MS-1
+    val staleBundle=BuriViewModel(Application()){now}
+    staleBundle.onForeground();idle(staleBundle)
+    check(Fixture.homeReads==bundledReads+1&&staleBundle.state.home?.balanceRwf==10000L)
+    println("PASS a stale bundled Home cannot replace a fresh records read")
+    staleBundle.viewModelScope.cancel()
+    Fixture.restoredHome=null;Fixture.restoredHomeSavedAt=null
 
     Fixture.restoreEntered=CountDownLatch(1);Fixture.restoreBarrier=CountDownLatch(1)
     val restores=Fixture.restoreReads;val sessions=Fixture.sessionReads;val homes=Fixture.homeReads
