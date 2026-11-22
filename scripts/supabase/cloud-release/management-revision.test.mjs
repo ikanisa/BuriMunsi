@@ -220,3 +220,39 @@ test('SMS cannot be rebound without proven prior approval or with a changed anci
   assert.equal(changed.records.at(-1), 'revision-fixture-revision-source-secret-complete.json');
   assert.ok(!changed.records.some(name => name.endsWith('collect-api-attempt.json')));
 });
+
+test('a lost source-setting HTTP reply resolves only from two matching provider activations under the same fence',async()=>{
+ for(const scenario of ['settled','partial','stale','different_bundle','different_activation']){
+  const f=fixture({sms:true,binaryChanged:scenario==='different_bundle'});
+  const original=f.dependencies.api;
+  let writes=0,reads=0,stamp;
+  f.dependencies.api=async(path,options)=>{
+   const response=await original(path,options);
+   if(path==='secrets'&&options?.method==='POST'){
+    writes++;
+    stamp=new Date().toISOString();
+    throw Error('source_setting_reply_lost');
+   }
+   if(path==='secrets'&&writes){
+    const n=++reads;
+    return {...response,json:()=>response.json().map(row=>{
+     if(!['BUILD_SOURCE_ID','COLLECT_SMS_CORE_SOURCE_SHA256','COLLECT_SMS_SOURCE_APPROVAL'].includes(row.name))return row;
+     const updated_at=scenario==='stale'?new Date(Date.now()-60000).toISOString():
+      scenario==='different_activation'&&n===2?new Date(Date.parse(stamp)+1).toISOString():stamp;
+     const value=scenario==='partial'&&row.name==='BUILD_SOURCE_ID'?sha(previous):row.value;
+     return {...row,value,updated_at};
+    })};
+   }
+   return response;
+  };
+  if(scenario==='settled'){
+   const result=await reviseRuntimeViaManagement(f.input,f.dependencies);
+   assert.equal(result.status,'revision_deployed_live');
+   assert.ok(f.records.includes('revision-fixture-revision-source-binding-provider-observation.json'));
+  }else{
+   await assert.rejects(reviseRuntimeViaManagement(f.input,f.dependencies));
+   assert.ok(!f.records.some(name=>name.endsWith('collect-api-attempt.json')));
+  }
+  assert.equal(writes,1);
+ }
+});
