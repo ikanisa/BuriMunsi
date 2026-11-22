@@ -136,9 +136,11 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
         const body=validateNativeRequest('login',await readNativeJson(request));
         const phone=normalizePhone(body.phone),pin=requirePin(body.pin),network=await networkBucket(request);await owned();
         requireThat(/^[a-f0-9]{64}$/.test(network??''),'trusted_network_resolver_required',503);
-        const now=clock(),phoneHash=await sha256(phone);
+        const now=clock(),phoneHash=await sha256(phone),deviceHash=await sha256(device);
         const budget=await transaction(true,async sql=>{
-          const rows=await sql.unsafe('SELECT private.burimunsi_pin_login_account($1,$2,$3::uuid,$4,$5) AS result',[phone,phoneHash,installation,network,now]);
+          const rows=await sql.unsafe(
+            'SELECT private.burimunsi_pin_login_account($1,$2,$3::uuid,$4,$5,$6,$7) AS result',
+            [phone,phoneHash,installation,network,now,deviceHash,profile]);
           requireThat(rows.length===1&&typeof rows[0].result?.allowed==='boolean','authentication_unavailable',503);return rows[0].result;
         });
         // The denied budget transaction has already committed. No identity read,
@@ -148,7 +150,7 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
         requireThat(verified&&account?.phone===phone&&account.active===true&&account.removed===false,'invalid_credentials',401);
         requireId(account.groupId);requireRequestId(account.id);requireId(account.principalUserId);
         const token=newBearer(),id=crypto.randomUUID(),createdAt=clock(),expiresAt=createdAt+sessionTtlMs;
-        const tokenHash=await sha256(token),deviceHash=await sha256(device);
+        const tokenHash=await sha256(token);
         const created=await transaction(true,async sql=>{
           const rows=await sql.unsafe('SELECT private.burimunsi_pin_create_session($1,$2::uuid,$3::uuid,$4,$5,$6,$7::uuid,$8,$9,$10,$11) AS result',
             [account.groupId,account.id,installation,profile,deviceHash,account.credentialVersion,id,tokenHash,createdAt,expiresAt,account.version]);
