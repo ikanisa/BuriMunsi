@@ -2,11 +2,13 @@ import {MANAGED_SUPABASE_ORIGIN} from '../../../supabase/functions/_shared/deplo
 import {standaloneAdminRoute} from '../../../supabase/functions/_shared/burimunsi-standalone.js';
 import {managedBrowserCookies} from './transport-cookies.js';
 import {refuse} from './transport-failure.js';
+import {BURIMUNSI_ADMIN_COOKIE} from './admin-session-realm.js';
 
 export const SUPABASE_ORIGIN = MANAGED_SUPABASE_ORIGIN;
 export const GOOGLE_CALLBACK = '/v1/auth/google/callback';
 const CHALLENGE = '/v1/security/challenge';
 const PRIVACY = '/privacy/account-deletion';
+const PASSCODE_VERIFY = '/api/admin/auth/passcode/verify';
 export const FRONTENDS = new Set(['https://collect.ikanisa.com', 'https://admin.collect.ikanisa.com', 'https://platform-admin.collect.ikanisa.com', 'https://admin-supabase-qa.collect.ikanisa.com']);
 const METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
 const FORWARD_HEADERS = new Set([
@@ -73,7 +75,11 @@ export function admitRequest(request, rawTarget, frontendOrigin, {browserAdminCo
   if (route.path + route.query !== canonical) refuse(400, 'proxy_path_invalid');
   if (!METHODS.has(request.method)) refuse(405, 'proxy_method_invalid');
   const method = request.method === 'OPTIONS' ? request.headers.get('Access-Control-Request-Method') : request.method;
-  if (burimunsi && (!adminRoute || !standaloneAdminRoute(method, route.logicalPath))) refuse(404, 'proxy_route_not_allowed');
+  // The preceding Core contract accepts this exact verification exchange.
+  const legacyPasscode = method === 'POST' && route.logicalPath === PASSCODE_VERIFY && !route.query;
+  if (burimunsi && (!adminRoute || (!standaloneAdminRoute(method, route.logicalPath) && !legacyPasscode))) {
+    refuse(404, 'proxy_route_not_allowed');
+  }
   for (const name of SPOOFED_AUTHORITY) if (request.headers.has(name)) refuse(400, 'proxy_authority_invalid');
 
   const callback = route.functionName === 'collect-api' && route.logicalPath === GOOGLE_CALLBACK && request.method === 'GET';
@@ -106,9 +112,11 @@ export function upstreamRequest(request, admission, bytes, signal, frontendOrigi
   for (const [name, value] of request.headers) if (FORWARD_HEADERS.has(name)) headers.set(name, value);
   if (browserAdminCookie) managedBrowserCookies(headers, route, browserAdminCookie);
 
-  // Older panels can send the identity header on sign-in. Only the session read consumes it.
+  // Only exact session exchanges receive the client's version opt-in.
   const sessionRead = route.logicalPath === '/api/admin/auth/session' && request.method === 'GET';
-  if (route.functionName === 'admin-api' && sessionRead &&
+  const passcodeExchange = browserAdminCookie === BURIMUNSI_ADMIN_COOKIE && request.method === 'POST' && !route.query &&
+    (route.logicalPath === '/api/admin/auth/phone-passcode' || route.logicalPath === PASSCODE_VERIFY);
+  if (route.functionName === 'admin-api' && (sessionRead || passcodeExchange) &&
       request.headers.get('x-collect-owner-identity-version') === '1') {
     headers.set('X-Collect-Owner-Identity-Version', '1');
   }

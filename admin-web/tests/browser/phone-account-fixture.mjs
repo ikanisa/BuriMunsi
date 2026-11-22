@@ -13,7 +13,7 @@ const cookie = value => ({'Set-Cookie': `${cookieKey}=${value}; Path=/; HttpOnly
 const anonymous = {user: null, expiresAt: null, csrfToken: null, ownerEmail: null};
 const error = code => ({error: {code}});
 
-export function createPhoneAccountFixture({cookieSignIn, lifetime, json, readBody}) {
+export function createPhoneAccountFixture({cookieSignIn, legacySessionResponses, lifetime, json, readBody}) {
   const admin = {id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', displayName: 'Fixture administrator',
     phone: '+250780000001', role: 'admin', active: true, version: 1};
   const members = new Map([[admin.id, admin]]);
@@ -55,7 +55,8 @@ export function createPhoneAccountFixture({cookieSignIn, lifetime, json, readBod
         return send(401, error('invalid_credentials'));
       }
       const issued = issueSession(member.id);
-      return send(200, {...sessionBody(issued), sessionContract: 2}, cookie(issued.sessionId));
+      const direct = !legacySessionResponses && request.headers['x-collect-owner-identity-version'] === '1';
+      return send(200, {...sessionBody(issued), ...(direct ? {sessionContract: 2} : {})}, cookie(issued.sessionId));
     }
     if (!session) return send(401, error('fixture_unauthorized'));
     const actor = members.get(session.accountId);

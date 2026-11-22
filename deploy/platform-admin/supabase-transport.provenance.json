@@ -263,5 +263,12 @@
     },
     "change": "Limit the session identity header to the session read for both current and previously installed phone sign-ins.",
     "deployed": false
+  },
+  "burimunsi_passcode_session_successor": {
+    "source_sha256s": {
+      "transport-request.js": "7148e0be776cadf23616858ed7944ac86c963b31cc3c05febe9e7b9b1337952b"
+    },
+    "change": "Negotiate versioned BuriMunsi sign-in and passcode verification sessions with the current Core and retain the exact legacy verification transport.",
+    "deployed": false
   }
 }

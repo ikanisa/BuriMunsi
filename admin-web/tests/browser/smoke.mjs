@@ -10,6 +10,7 @@ import { qualifyPhoneTeam } from './phone-team.mjs';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const artifact = resolve(root, process.argv[2] ?? process.env.ADMIN_PWA_BUILD_DIR ?? 'build/admin-web-fixture');
 const origin = process.env.ADMIN_PWA_FIXTURE_ORIGIN ?? 'http://127.0.0.1:4175';
+const legacySessions = process.env.ADMIN_PWA_LEGACY_SESSIONS === '1';
 const url = new URL(origin);
 assert(url.protocol === 'http:' && url.hostname === '127.0.0.1' && url.origin === origin && url.port,
   'Use the explicit HTTP loopback origin of the fixture build.');
@@ -22,7 +23,7 @@ execFileSync(process.execPath, [join(root, 'admin-web/scripts/build-admin.mjs'),
 const modulePath = process.env.PLAYWRIGHT_CORE_PATH;
 const { chromium } = await import(modulePath ? pathToFileURL(resolve(modulePath)).href : 'playwright-core');
 const server = spawn(process.execPath, [fileURLToPath(new URL('./fixture-server.mjs', import.meta.url)), artifact], {
-  env: { COLLECT_FIXTURE_PORT: url.port, COLLECT_FIXTURE_SIGN_IN: '1' },
+  env: { COLLECT_FIXTURE_PORT: url.port, COLLECT_FIXTURE_SIGN_IN: '1', COLLECT_FIXTURE_LEGACY_SESSIONS: legacySessions ? '1' : '0' },
   stdio: ['ignore', 'pipe', 'inherit'],
 });
 const exited = new Promise(resolveExit => server.once('close', resolveExit));
@@ -30,7 +31,11 @@ const denied = [];
 const pageErrors = [];
 const unexpectedAuth = [];
 const incorrectIdentityHeaders = [];
-const allowedAuth = new Set(['session', 'phone-passcode', 'passcode/change', 'logout'].map(name => '/api/admin/auth/' + name));
+const sessionPath = '/api/admin/auth/session';
+const signInPath = '/api/admin/auth/phone-passcode';
+const verifyPasscodePath = '/api/admin/auth/passcode/verify';
+const allowedAuth = new Set([sessionPath, signInPath, verifyPasscodePath, '/api/admin/auth/passcode/change', '/api/admin/auth/logout']);
+const sessionApi = url => url.origin === origin && url.pathname === sessionPath;
 let browser;
 try {
   await new Promise((ready, fail) => {
@@ -68,9 +73,10 @@ try {
       const {pathname} = new URL(request.url());
       if (pathname.startsWith('/api/admin/auth/') && !allowedAuth.has(pathname)) unexpectedAuth.push(pathname);
       if (pathname.startsWith('/api/admin/')) {
-        const sessionRead = request.method() === 'GET' && pathname === '/api/admin/auth/session';
+        const sessionRead = request.method() === 'GET' && pathname === sessionPath;
+        const passcodeExchange = request.method() === 'POST' && [signInPath, verifyPasscodePath].includes(pathname);
         const identityVersion = request.headers()['x-collect-owner-identity-version'];
-        if (identityVersion !== (sessionRead ? '1' : undefined)) incorrectIdentityHeaders.push([request.method(), pathname]);
+        if (identityVersion !== (sessionRead || passcodeExchange ? '1' : undefined)) incorrectIdentityHeaders.push([request.method(), pathname]);
       }
     });
     page.on('pageerror', error => pageErrors.push(error.message));
@@ -104,7 +110,7 @@ try {
   await overview.waitFor();
   await firstOverview;
   page.off('request', recordLogin);
-  assert.deepEqual(loginRequests, ['/api/admin/auth/phone-passcode']);
+  assert.deepEqual(loginRequests, legacySessions ? [signInPath, sessionPath] : [signInPath]);
   const cookies = await desktop.context.cookies(origin);
   assert(cookies.some(cookie => cookie.name === 'collect_fixture_session' && cookie.httpOnly));
   assert(!String(await page.evaluate(() => document.cookie)).includes('collect_fixture_session'));
@@ -113,6 +119,43 @@ try {
   await page.goto(origin + '/admin/security/verify-passcode?returnTo=%2Fadmin');
   await overview.waitFor();
   assert.equal(new URL(page.url()).hash, '#/admin');
+
+  // Modern phone accounts bypass the old verification screen. Exercise it
+  // with the preceding Core contract and the same authenticated fixture cookie.
+  const stepUp = await open({ width: 1440, height: 900 }, 'block');
+  const verificationRequests = [];
+  try {
+    await stepUp.context.addCookies(cookies);
+    const ownerEmail = 'local-owner@example.test';
+    const ownerIdentity = {schemaVersion: 1, adminId: 'synthetic-admin', principalId: 'synthetic-principal', email: ownerEmail};
+    const user = {id: ownerIdentity.adminId, principalId: ownerIdentity.principalId, email: ownerEmail,
+      role: 'owner', sessionId: 'synthetic-legacy-session', authMethod: 'phone_passcode', phone: '+250780000001',
+      permissions: ['overview.read'], financialModel: 'canonical_evidence_ledger', passcodeVerifiedAt: new Date(Date.now() - 310_000).toISOString()};
+    const state = {user, ownerEmail, ownerIdentity, expiresAt: new Date(Date.now() + 600_000).toISOString(), csrfToken: 'b'.repeat(64)};
+    await stepUp.context.route(sessionApi, route => route.fulfill({json: state}));
+    await stepUp.context.route(url => url.origin === origin && url.pathname === verifyPasscodePath, route => {
+      const request = route.request();
+      assert.equal(request.method(), 'POST');
+      assert.deepEqual(request.postDataJSON(), {pin: '0123'});
+      assert.equal(request.headers()['x-collect-csrf'], state.csrfToken);
+      user.passcodeVerifiedAt = new Date().toISOString();
+      const proof = {contractVersion: 1, sessionId: user.sessionId, passcodeVerifiedAt: user.passcodeVerifiedAt};
+      const direct = !legacySessions && request.headers()['x-collect-owner-identity-version'] === '1';
+      return route.fulfill({json: {...proof, ...(direct ? {session: {...state, sessionContract: 2}} : {})}});
+    });
+    await stepUp.page.goto(origin + '/admin/security/verify-passcode?returnTo=%2Fadmin');
+    await stepUp.page.getByRole('heading', {name: 'Verify your passcode'}).waitFor();
+    stepUp.page.on('request', request => {
+      const {pathname} = new URL(request.url());
+      if (allowedAuth.has(pathname)) verificationRequests.push(pathname);
+    });
+    await stepUp.page.getByLabel('Four-digit passcode', {exact: true}).fill('0123');
+    await stepUp.page.getByRole('button', {name: 'Verify passcode', exact: true}).click();
+    await stepUp.page.getByRole('heading', {name: 'Operations overview'}).waitFor();
+    assert.deepEqual(verificationRequests, legacySessions ? [verifyPasscodePath, sessionPath] : [verifyPasscodePath]);
+  } finally {
+    await stepUp.context.close();
+  }
 
   const receipts = requestUrl => requestUrl.origin === origin && requestUrl.pathname === '/api/admin/sms/receipts';
   await page.route(receipts, route => route.fulfill({
@@ -140,7 +183,6 @@ try {
   const recovery = await open({ width: 1440, height: 900 }, 'block');
   await recovery.context.addCookies(cookies);
   const sessionPage = recovery.page;
-  const sessionApi = url => url.origin === origin && url.pathname === '/api/admin/auth/session';
   let nextSession = 'default';
   await recovery.context.route(sessionApi, async route => {
     const mode = nextSession;
@@ -259,11 +301,12 @@ try {
   assert.deepEqual(denied, []);
   assert.deepEqual(unexpectedAuth, []);
   assert.deepEqual(incorrectIdentityHeaders, []);
-  const checks = ['obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'confirmed_sign_in_opens_overview_without_another_session_read', 'reload_restores_session', 'retired_passcode_bookmark_returns_to_overview', 'keyboard_receipt_navigation', 'sms_read_failure_retry',
+  const checks = ['obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'retired_passcode_bookmark_returns_to_overview', 'keyboard_receipt_navigation', 'sms_read_failure_retry',
       'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
       'retired_authenticator_bookmark_preserves_safe_destination', 'missing_scoped_admin_identity_removes_controls', 'session_failure_and_recovery_require_server_authority', 'expired_request_and_history_return_require_sign_in',
-      'mobile_drawer_traps_and_restores_focus_and_reflows', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, 'no_verification_or_otp_request', 'identity_version_only_on_session_get'];
-  console.log(JSON.stringify({status: 'pass', environment: 'synthetic_loopback', origin, count: checks.length, checks}, null, 2));
+      'mobile_drawer_traps_and_restores_focus_and_reflows', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, 'no_unexpected_auth_request', 'identity_version_only_on_session_exchanges'];
+  console.log(JSON.stringify({status: 'pass', environment: 'synthetic_loopback', origin, count: checks.length, checks,
+    sessionExchange: {mode: legacySessions ? 'legacy' : 'negotiated', signInRequests: loginRequests.length, verificationRequests: verificationRequests.length}}, null, 2));
 } finally {
   await browser?.close();
   if (server.exitCode === null && server.signalCode === null) server.kill('SIGTERM');
