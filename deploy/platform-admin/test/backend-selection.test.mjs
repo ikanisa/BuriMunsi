@@ -72,7 +72,7 @@ test('Supabase entrypoint retains lost Admin refresh uncertainty without service
   for (const [path, method] of [['/api/admin/auth/session', 'GET'], ['/api/admin/team', 'HEAD']]) {
     let calls = 0;
     const entry = createAdminWorker({fetchImpl: async () => {calls++; throw new Error('synthetic lost custody response');}});
-    const response = await entry.fetch(req(path, {method}), environment(supabaseEnv));
+    const response = await entry.fetch(req(path, {method, headers: {Cookie: '__Host-burimunsi_admin_rrlduytparvsjfmegalh=fixture'}}), environment(supabaseEnv));
     assert.equal(response.status, 502); assert.equal(calls, 1);
     assert.deepEqual(await response.json(), {code: 'proxy_outcome_unknown', reason: 'proxy_upstream_failure'});
   }
@@ -170,7 +170,8 @@ test('integrated transport bytes retain the recorded current source identity', a
     ...provenance.frontend_session_realm_successor.source_sha256s,
     ...provenance.burimunsi_admin_successor.source_sha256s,
     ...provenance.standalone_admin_successor.source_sha256s,
-    ...provenance.burimunsi_phone_passcode_successor.source_sha256s};
+    ...provenance.burimunsi_phone_passcode_successor.source_sha256s,
+    ...provenance.burimunsi_admin_performance_successor.source_sha256s};
   const expected = (await readdir(source))
     .filter(name => /^(?:index|admin-session-realm|supabase-transport|transport-[\w-]+)\.js$/.test(name)).sort();
   assert.deepEqual(Object.keys(files).sort(), expected);
@@ -188,7 +189,9 @@ test('ordinary selection defaults to nominated Supabase and missing configuratio
     calls++; assert.equal(upstream.url, SUPABASE_ORIGIN + '/functions/v1/admin-api/api/admin/auth/session');
     return Response.json({user:null});
   }});
-  const admitted = await entry.fetch(req('/api/admin/auth/session'), environment({...supabaseEnv, COLLECT_BACKEND:undefined}));
+  const admitted = await entry.fetch(req('/api/admin/auth/session', {
+    headers: {Cookie: '__Host-burimunsi_admin_rrlduytparvsjfmegalh=fixture'},
+  }), environment({...supabaseEnv, COLLECT_BACKEND:undefined}));
   assert.equal(admitted.status, 200); assert.equal(calls, 1);
   for (const path of ['/api/admin/auth/session','/index.html']) {
     const denied = await entry.fetch(req(path), environment({COLLECT_BACKEND:undefined}));
@@ -202,7 +205,8 @@ test('default native fetch retains its global receiver on both supported entrypo
   try {
     globalThis.fetch=function(request){if(this!==globalThis)throw new TypeError('Illegal invocation');calls++;assert.equal(request.url,SUPABASE_ORIGIN+'/functions/v1/admin-api/api/admin/auth/session');return Promise.resolve(Response.json({user:null}));};
     for(const handle of [request=>createAdminWorker().fetch(request,environment(supabaseEnv)),createCollectTransport({frontendOrigin:origin, allowedFrontendOrigins:[origin], burimunsi:true})]){
-      const response=await handle(req('/api/admin/auth/session'));assert.equal(response.status,200);assert.deepEqual(await response.json(),{user:null});
+      const response=await handle(req('/api/admin/auth/session', {headers: {Cookie: '__Host-burimunsi_admin_rrlduytparvsjfmegalh=fixture'}}));
+      assert.equal(response.status,200);assert.deepEqual(await response.json(),{user:null});
     }
     assert.equal(calls,2);
   } finally {globalThis.fetch=original;}

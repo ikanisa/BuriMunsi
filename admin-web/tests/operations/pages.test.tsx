@@ -52,7 +52,7 @@ describe('Operational pages', () => {
     const table = screen.getByRole('table');
     expect(within(table).getByText('Accepted')).toBeVisible();
     expect(mock.request).toHaveBeenCalledTimes(1);
-    expect(mock.request).toHaveBeenCalledWith('email/events?limit=25&offset=0');
+    expect(mock.request).toHaveBeenCalledWith('email/events?limit=25&offset=0', {signal: expect.any(AbortSignal)});
     expect(within(table).queryByText('Delivered')).not.toBeInTheDocument();
   });
 
@@ -79,7 +79,7 @@ describe('Operational pages', () => {
     expect(await screen.findByText('Showing 1–25 of 26')).toBeVisible();
     await user.click(screen.getByRole('button', {name: 'Next'}));
     expect(await screen.findByText('Showing 26–26 of 26')).toBeVisible();
-    expect(mock.request).toHaveBeenLastCalledWith('email/events?limit=25&offset=25');
+    expect(mock.request).toHaveBeenLastCalledWith('email/events?limit=25&offset=25', {signal: expect.any(AbortSignal)});
   });
 
   it('lets an operator recover when a saved page is now beyond the total', async () => {
@@ -114,7 +114,7 @@ describe('SMS receipt filters', () => {
     render(<MemoryRouter initialEntries={['/admin/sms-receipts?source=capture&status=received&offset=25&search=missing']}><SmsReceiptsPage /></MemoryRouter>);
     expect(await screen.findByText(/^Loaded .+ Kigali$/)).toBeVisible();
     await user.click(screen.getByRole('button', {name: 'Clear filters'}));
-    expect(mock.request).toHaveBeenLastCalledWith('sms/receipts?limit=25&offset=0');
+    expect(mock.request).toHaveBeenLastCalledWith('sms/receipts?limit=25&offset=0', {signal: expect.any(AbortSignal)});
     expect(screen.getByRole('searchbox', {name: 'Search SMS receipts'})).toHaveValue('');
     expect(screen.queryByText(/^Loaded .+ Kigali$/)).not.toBeInTheDocument();
     settlePage({rows: [capture(1)], total: 1, limit: 25, offset: 0, next_offset: null});
@@ -232,7 +232,7 @@ describe('SMS receipt filters', () => {
     const related = await screen.findByRole('link', {name: `Receiver · ${second.id}`});
     expect(new URL(related.getAttribute('href')!, 'https://admin.invalid').searchParams.get('returnTo')).toBe(back);
     await user.click(related);
-    await waitFor(() => expect(mock.request).toHaveBeenCalledWith(`sms/receipts/receiver/${second.id}?limit=25&offset=0`));
+    await waitFor(() => expect(mock.request).toHaveBeenCalledWith(`sms/receipts/receiver/${second.id}?limit=25&offset=0`, {signal: expect.any(AbortSignal)}));
     expect(screen.getByRole('link', {name: /Back to records/})).toHaveAttribute('href', back);
   });
 

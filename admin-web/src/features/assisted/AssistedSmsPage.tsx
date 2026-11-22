@@ -49,7 +49,7 @@ function Queue({onVerify, allowWrites, sender}: {onVerify: () => void; allowWrit
     const current = () => active && isRecentSensitiveVerification(epoch, actorId, sessionId);
     void (async () => {
       try {
-        if (verificationMode !== 'authenticator' && !await recheckProof?.()) throw new Error(`Verify your ${verificationMode} to open the assisted SMS queue.`);
+        if (verificationMode === 'email' && !await recheckProof?.()) throw new Error(`Verify your ${verificationMode} to open the assisted SMS queue.`);
         if (!current()) return;
         const body: JsonObject = {action: 'list_pending', limit: ASSISTED_PAGE_SIZE};
         if (pageCursor) {body.after_created_at = pageCursor.after_created_at; body.after_job_id = pageCursor.after_job_id;}

@@ -52,7 +52,7 @@ const cookieKey = 'collect_fixture_session';
 const sessionCookie = `${cookieKey}=signed-in`;
 let passcodeVerifiedAt = null;
 const mime = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.ttf': 'font/ttf', '.txt': 'text/plain; charset=utf-8'};
+  '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.ttf': 'font/ttf', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8'};
 function json(response, status, body, extraHeaders = {}) {
   response.writeHead(status, {'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...extraHeaders});
   response.end(JSON.stringify(body));

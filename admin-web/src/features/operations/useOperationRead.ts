@@ -9,37 +9,47 @@ export type OperationReadState<T> =
 export function useOperationRead<T>(
   key: string,
   enabled: boolean,
-  load: () => Promise<T>,
+  load: (signal: AbortSignal) => Promise<T>,
   {pollMs, invalidResponse = 'The workspace response could not be verified.'}: {pollMs?: number; invalidResponse?: string} = {},
 ) {
-  const [result, setResult] = useState<OperationReadState<T> | null>(null);
+  const [read, setRead] = useState<{scope: string; result: OperationReadState<T>} | null>(null);
   const [attempt, setAttempt] = useState(0);
-  const flight = useRef<{key: string; promise: Promise<T>} | null>(null);
+  const flight = useRef<{key: string; promise: Promise<T>; controller: AbortController; readers: number} | null>(null);
+  const lastStarted = useRef(0);
   const attemptKey = `${key}:${attempt}`;
 
   useEffect(() => {
     if (!enabled) return;
-    let read = flight.current;
-    if (!read || read.key !== attemptKey) {
-      read = {key: attemptKey, promise: load()};
-      flight.current = read;
+    let pending = flight.current;
+    if (!pending || pending.key !== attemptKey || pending.controller.signal.aborted) {
+      pending?.controller.abort();
+      const controller = new AbortController();
+      lastStarted.current = Date.now();
+      pending = {key: attemptKey, promise: load(controller.signal), controller, readers: 0};
+      flight.current = pending;
     }
-    const current = read;
+    const current = pending;
+    current.readers++;
     let active = true;
     current.promise.then(value => {
-      if (active) setResult({key: attemptKey, status: 'success', value, receivedAt: Date.now() / 1000});
+      if (active) setRead({scope: key, result: {key: attemptKey, status: 'success', value, receivedAt: Date.now() / 1000}});
     }, (error: unknown) => {
       if (active) {
-        setResult({
+        setRead({scope: key, result: {
           key: attemptKey, status: 'error',
           message: error instanceof AdminRequestError ? error.message : invalidResponse,
-        });
+        }});
       }
     }).finally(() => {
       if (flight.current === current) flight.current = null;
     });
-    return () => {active = false;};
-  }, [attemptKey, enabled, invalidResponse, load]);
+    return () => {
+      active = false;
+      current.readers--;
+      // React's development replay attaches again before this microtask.
+      queueMicrotask(() => {if (!current.readers) current.controller.abort();});
+    };
+  }, [attemptKey, enabled, invalidResponse, key, load]);
 
   const retry = useCallback(() => {
     if (!pollMs || !flight.current) setAttempt(value => value + 1);
@@ -48,7 +58,7 @@ export function useOperationRead<T>(
   useEffect(() => {
     if (!enabled || !pollMs) return;
     const refreshVisible = () => {
-      if (document.visibilityState === 'visible' && navigator.onLine) retry();
+      if (document.visibilityState === 'visible' && navigator.onLine && Date.now() - lastStarted.current >= pollMs) retry();
     };
     const timer = window.setInterval(refreshVisible, pollMs);
     document.addEventListener('visibilitychange', refreshVisible);
@@ -62,5 +72,7 @@ export function useOperationRead<T>(
     };
   }, [enabled, pollMs, retry]);
 
-  return {result: enabled && result?.key === attemptKey ? result : null, retry};
+  const result = enabled && (read?.result.key === attemptKey ||
+    pollMs && read?.scope === key && read.result.status === 'success') ? read?.result ?? null : null;
+  return {result, retry};
 }

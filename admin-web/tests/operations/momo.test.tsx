@@ -30,13 +30,13 @@ describe('incoming SMS refresh', () => {
     mock.request.mockImplementationOnce(() => new Promise(done => {finish = done;})).mockResolvedValue(emptyPage);
     const view = render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
     try {
-      await act(async () => vi.advanceTimersByTimeAsync(15_000));
-      await act(async () => vi.advanceTimersByTimeAsync(15_000));
+      await act(async () => vi.advanceTimersByTimeAsync(30_000));
+      await act(async () => vi.advanceTimersByTimeAsync(30_000));
       await act(async () => screen.getByRole('button', {name: 'Refresh'}).click());
       expect(mock.request).toHaveBeenCalledTimes(1);
       await act(async () => finish(emptyPage));
       expect(screen.getByText('No matching records')).toBeVisible();
-      await act(async () => vi.advanceTimersByTimeAsync(15_000));
+      await act(async () => vi.advanceTimersByTimeAsync(30_000));
       expect(mock.request).toHaveBeenCalledTimes(2);
     } finally {view.unmount(); vi.useRealTimers();}
   });
@@ -58,12 +58,13 @@ describe('incoming SMS refresh', () => {
       await act(async () => {window.dispatchEvent(new Event('online'));});
       expect(mock.request).toHaveBeenCalledTimes(2);
       await act(async () => {document.dispatchEvent(new Event('visibilitychange'));});
-      expect(mock.request).toHaveBeenCalledTimes(3);
       await act(async () => {window.dispatchEvent(new Event('focus'));});
-      expect(mock.request).toHaveBeenCalledTimes(4);
+      expect(mock.request).toHaveBeenCalledTimes(2);
+      await act(async () => vi.advanceTimersByTimeAsync(30_000));
+      expect(mock.request).toHaveBeenCalledTimes(3);
       await act(async () => screen.getByRole('button', {name: 'Transactions'}).click());
       await act(async () => {window.dispatchEvent(new Event('online')); await vi.advanceTimersByTimeAsync(15_000);});
-      expect(mock.request.mock.calls.filter(([path]) => path.startsWith('sms/receipts?'))).toHaveLength(4);
+      expect(mock.request.mock.calls.filter(([path]) => path.startsWith('sms/receipts?'))).toHaveLength(3);
       expect(mock.request.mock.calls.filter(([path]) => path.startsWith('momo/transactions?'))).toHaveLength(1);
     } finally {view.unmount(); visible.mockRestore(); connected.mockRestore(); vi.useRealTimers();}
   });

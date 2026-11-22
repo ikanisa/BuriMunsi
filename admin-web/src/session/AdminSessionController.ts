@@ -1,5 +1,5 @@
 import {AdminApiClient, AdminRequestError, type AdminClientConfig, type AdminRequest} from '../api/client';
-import {isVerificationUuid} from '../api/contracts';
+import {isJsonObject, isVerificationUuid} from '../api/contracts';
 import {bindPendingIdentity} from '../features/core/pendingAttempt';
 import {AdminSignIn} from './adminSignIn';
 import {ManagedAuthenticator, hasStoredAuthenticatorTransition} from './managedAuthenticator';
@@ -10,7 +10,7 @@ import {OTP, sensitiveVerificationDeadline} from './sessionPolicy';
 import {MANAGED_MFA_TRANSITION_QUALIFIED} from './mfaQualification';
 import type {PasswordChangeOutcome, SessionSnapshot} from './sessionContext';
 import {readAdminSession, readSessionEmailProof, type SessionReadback} from './sessionReadback';
-import {parsePasscodeProof, type AdminUser} from './sessionResponses';
+import {parsePasscodeProof, parsePhoneLoginSession, type AdminUser} from './sessionResponses';
 import {PASSCODE} from './phonePasscode';
 import {LOGOUT_INTENT_PREFIX, readLogoutIntents} from './logoutIntent';
 import {readMfaRecoveryIntent, type MfaRecoveryIntent} from './mfaRecovery';
@@ -40,6 +40,7 @@ export class AdminSessionController {
     fenceLogout: () => this.fencePendingLogout(),
     fenceVerification: () => this.authenticator.inProgress || this.fencePendingMfa(),
     restore: (readback) => this.restoreSession(readback),
+    confirmPhoneSession: (user, csrfToken, current) => this.publishSession(user, csrfToken, this.ownsCurrentRevision(current)),
   });
   private readonly emailVerification = new SensitiveEmailVerification({
     current: () => ({actor: this.user, epoch: this.epoch, authenticated: this.snapshot.status === 'authenticated'}),
@@ -228,6 +229,8 @@ export class AdminSessionController {
   };
 
   private install(user: AdminUser) {
+    const unchanged = this.config.phonePasscodeOnly && this.snapshot.status === 'authenticated' &&
+      JSON.stringify(this.user) === JSON.stringify(user);
     const key = authorityKey(user);
     if (this.user && authorityKey(this.user) !== key) {
       this.epoch++;
@@ -246,8 +249,24 @@ export class AdminSessionController {
     };
     checkExpiry();
     if (this.epoch !== epoch || !this.user) return;
-    this.refreshTimer = setTimeout(() => {void this.refresh().catch(() => undefined);}, 60_000);
-    this.emit('authenticated', undefined, false);
+    const refreshMs = this.config.phonePasscodeOnly ? 120_000 : 60_000;
+    const tick = () => {
+      if (this.config.phonePasscodeOnly && (document.visibilityState === 'hidden' || !navigator.onLine)) {
+        this.refreshTimer = setTimeout(tick, refreshMs);
+        return;
+      }
+      void this.refresh().catch(() => undefined);
+    };
+    this.refreshTimer = setTimeout(tick, refreshMs);
+    if (!unchanged) this.emit('authenticated', undefined, false);
+  }
+
+  private async publishSession(user: AdminUser, csrf: string | null | undefined, current: () => boolean): Promise<boolean> {
+    if (!current() || !(await this.bindPending(user, current)) || !current() ||
+        this.fencePendingLogout() || this.fencePendingMfa()) return false;
+    if (csrf !== undefined) this.csrfToken = csrf;
+    this.install(user);
+    return this.user === user && this.snapshot.status === 'authenticated';
   }
 
   readonly refresh = async (): Promise<void> => {await this.restoreSession();};
@@ -308,10 +327,7 @@ export class AdminSessionController {
         if (!current()) return false;
         user = {...user, emailVerifiedAt: this.emailVerification.sessionProof(verifiedAt)};
       }
-      if (!current() || !(await this.bindPending(user, current)) || !current() || this.fencePendingLogout() || this.fencePendingMfa()) return false;
-      if (session.csrfToken !== undefined) this.csrfToken = session.csrfToken;
-      this.install(user);
-      return this.user === user && this.snapshot.status === 'authenticated';
+      return await this.publishSession(user, session.csrfToken, current);
     } catch (failure) {
       if (!current()) return false;
       this.epoch++;
@@ -409,9 +425,21 @@ export class AdminSessionController {
     if (!current()) throw new AdminRequestError('Your session changed. Open this page again.');
     const body = await this.request('auth/passcode/verify', {body: {pin}});
     const message = 'Passcode verification could not be confirmed. Check your session before trying again.';
+    const {session, ...proof} = body;
     let verifiedAt: string;
-    try {verifiedAt = parsePasscodeProof(body, actor, Date.now());}
+    try {verifiedAt = parsePasscodeProof(proof, actor, Date.now());}
     catch {throw new AdminRequestError(message, {outcomeUnknown: true});}
+    if (Object.hasOwn(body, 'session')) {
+      try {
+        if (!isJsonObject(session) || !actor.phone || !current()) throw new Error(message);
+        const {user, csrfToken} = parsePhoneLoginSession(session, actor.phone);
+        if (authorityKey(user) !== key || user.passcodeVerifiedAt !== verifiedAt) throw new Error(message);
+        this.readRevision++;
+        if (!await this.publishSession(user, csrfToken, this.ownsCurrentRevision(current)) ||
+            !this.isRecentSensitiveVerification(epoch, actor.id, actor.sessionId)) throw new Error(message);
+        return;
+      } catch {throw new AdminRequestError(message, {outcomeUnknown: true});}
+    }
     if (!current() || !await this.restoreSession({
       isCurrent: current,
       matches: candidate => authorityKey(candidate) === key && candidate.passcodeVerifiedAt === verifiedAt,

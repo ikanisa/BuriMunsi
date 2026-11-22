@@ -19,7 +19,7 @@ function hasRoot(path, root) {
   return path === root || path.startsWith(root + '/');
 }
 
-async function managedHost(env, fetchImpl) {
+async function validateManagedHost(env) {
   if (env.COLLECT_DEPLOYMENT_PROFILE === undefined ||
       (env.COLLECT_BACKEND ?? 'supabase') !== 'supabase' || env.SUPABASE_INTERNAL_URL !== undefined) {
     throw new Error('BuriMunsi backend profile is required');
@@ -32,12 +32,6 @@ async function managedHost(env, fetchImpl) {
         .some(origin => origin !== BURIMUNSI_ADMIN_ORIGIN)) {
     throw new Error('Backend profile mismatch');
   }
-  return createCollectTransport({
-    frontendOrigin: BURIMUNSI_ADMIN_ORIGIN,
-    allowedFrontendOrigins: [BURIMUNSI_ADMIN_ORIGIN],
-    burimunsi: true,
-    fetchImpl,
-  });
 }
 
 async function serveAssets(request, url, assets) {
@@ -53,15 +47,26 @@ async function serveAssets(request, url, assets) {
 }
 
 export function createAdminWorker({fetchImpl = (request, init) => globalThis.fetch(request, init)} = {}) {
+  const transport = createCollectTransport({
+    frontendOrigin: BURIMUNSI_ADMIN_ORIGIN,
+    allowedFrontendOrigins: [BURIMUNSI_ADMIN_ORIGIN],
+    burimunsi: true,
+    fetchImpl,
+  });
+  let validated;
   return {
     async fetch(request, env) {
       const url = new URL(request.url);
       if (url.origin !== BURIMUNSI_ADMIN_ORIGIN || env.ADMIN_ORIGIN !== BURIMUNSI_ADMIN_ORIGIN) {
         return failure(403, 'origin_denied', 'This workspace origin is unavailable.');
       }
-      let transport;
       try {
-        transport = await managedHost(env, fetchImpl);
+        const profile = [env.COLLECT_DEPLOYMENT_PROFILE, env.COLLECT_DEPLOYMENT_PROFILE_SHA256,
+          env.COLLECT_BACKEND, env.SUPABASE_URL, env.SUPABASE_INTERNAL_URL !== undefined, env.APP_ENVIRONMENT];
+        if (!validated || profile.some((value, i) => value !== validated[i])) {
+          await validateManagedHost(env);
+          validated = profile;
+        }
       } catch {
         return failure(503, 'backend_configuration_invalid', 'The workspace backend is unavailable.');
       }

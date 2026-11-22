@@ -88,10 +88,29 @@ function BuriMunsiAccess({session, scope, onBack, onVerify, operatorPreparationE
     if (!currentAction()) return false;
     try {await recheck(); return currentAction();} catch {return false;}
   };
+  const loadGroupData = async (collection: string, verifiedAt: string) => {
+    const current = () => groupCurrent(collection, verifiedAt);
+    if (!current()) throw new Error('Authority changed');
+    const negotiate = (nativeAdministrationEnabled || nativeRevocationEnabled || nativePinEnabled) && !readOnlyReview;
+    const directoryRead = readBuriDirectory(session.request, collection, operatorApprovalEnabled && !readOnlyReview, current);
+    const loadProvisioning = () => {
+      if (!current()) throw new Error('Authority changed');
+      return readNativeReviewDirectory(session.request, collection, negotiate, current).catch(() => null);
+    };
+    const [directory, provisioning] = await Promise.all([
+      directoryRead,
+      usesPasscode ? loadProvisioning() : directoryRead.then(loadProvisioning),
+    ]);
+    if (!current()) throw new Error('Authority changed');
+    setGroup({scope, proofAt: verifiedAt, collectionId: collection, directory, provisioning, provisioningError: provisioning === null});
+  };
   const loadScopes = async () => {
     if (!identity || !allowed || busy.current || !active()) return; busy.current = true; setState('loading'); setMessage(''); setData(null); setGroup(null); setOutcomes({});
     try {
-      const verifiedAt = await recheck();
+      // The standalone readers recheck the current owner and recent passcode on
+      // the server. Keep the extra readback for the predecessor email workflow.
+      const verifiedAt = usesPasscode ? currentProofTime() : await recheck();
+      if (!verifiedAt || !proofCurrent(verifiedAt)) throw new Error('Verification unavailable');
       const [response, attempts] = await Promise.all([
         session.request('momo/native-setup'),
         readOnlyReview ? [] : listBuriMutationAttempts(identity),
@@ -101,6 +120,10 @@ function BuriMunsiAccess({session, scope, onBack, onVerify, operatorPreparationE
       if (new Set(pending.map(value => `${value.kind}:${value.requestId}`)).size !== pending.length || !proofCurrent(verifiedAt)) throw new Error('Access changed');
       const initial = pending.find(value => groups.some(item => item.id === value.collectionId))?.collectionId ?? (groups.length === 1 ? groups[0].id : '');
       setData({scope, proofAt: verifiedAt, groups, pending}); setSelected(initial); selectedRef.current = initial; setGroup(null); setOutcomes({});
+      if (usesPasscode && groups.length === 1) {
+        try {await loadGroupData(initial, verifiedAt);}
+        catch {if (proofCurrent(verifiedAt)) setMessage('The selected group or its BuriMunsi access could not be verified.');}
+      }
     } catch {if (active()) {setData(null); setGroup(null); setMessage(`Owner verification, prepared groups or retained requests could not be confirmed. Verify your ${proofLabel} and try again.`);}}
     finally {busy.current = false; if (active()) setState('ready');}
   };
@@ -108,18 +131,9 @@ function BuriMunsiAccess({session, scope, onBack, onVerify, operatorPreparationE
     if (!scopeData || !selected || !scopeData.groups.some(item => item.id === selected) || busy.current || !fresh()) return;
     const collection = selected; busy.current = true; setState('loading'); setMessage('');
     try {
-      const verifiedAt = await recheck();
-      const current = () => groupCurrent(collection, scopeData.proofAt);
-      if (verifiedAt !== scopeData.proofAt || !current()) throw new Error('Authority changed');
-      const directory = await readBuriDirectory(session.request, collection, operatorApprovalEnabled && !readOnlyReview, current);
-      if (!current()) throw new Error('Authority changed');
-      let provisioning: BuriProvisioning | null = null, provisioningError = false;
-      try {
-        const negotiate = (nativeAdministrationEnabled || nativeRevocationEnabled || nativePinEnabled) && !readOnlyReview;
-        provisioning = await readNativeReviewDirectory(session.request, collection, negotiate, current);
-      } catch {provisioningError = true;}
-      if (!current()) throw new Error('Authority changed');
-      setGroup({scope, proofAt: verifiedAt, collectionId: collection, directory, provisioning, provisioningError});
+      const verifiedAt = usesPasscode ? currentProofTime() : await recheck();
+      if (!verifiedAt || verifiedAt !== scopeData.proofAt) throw new Error('Authority changed');
+      await loadGroupData(collection, verifiedAt);
     } catch {if (active()) {setGroup(null); setMessage('The selected group or its BuriMunsi access could not be verified.');}}
     finally {busy.current = false; if (active()) setState('ready');}
   };
@@ -151,6 +165,7 @@ function BuriMunsiAccess({session, scope, onBack, onVerify, operatorPreparationE
   const revocationEnabled = nativeContractConfirmed && (nativeAdministrationEnabled || nativeRevocationEnabled);
   const pinEnabled = nativeContractConfirmed && (nativeAdministrationEnabled || nativePinEnabled);
   const selectedGroup = scopeData?.groups.find(item => item.id === selected);
+  const singleGroup = usesPasscode && scopeData?.groups.length === 1;
   const groupContext = user && identity && groupData && !readOnlyReview ? {
     request: session.request, user, identity, collectionId: groupData.collectionId,
   } : undefined;
@@ -171,11 +186,11 @@ function BuriMunsiAccess({session, scope, onBack, onVerify, operatorPreparationE
     {message && <p role="alert">{message}</p>}{state === 'loading' && <LoadingState label="Checking BuriMunsi access" />}
     {!freshView && <p>Verify your current owner {proofLabel} before viewing these records.</p>}
     {hasPendingVerification() && <p>Resolve the original verification request before continuing.</p>}
-    <Button type="button" disabled={state !== 'ready' || hasPendingVerification()} onClick={() => void loadScopes()}>{scopeData ? 'Refresh prepared groups' : 'Check verification and load groups'}</Button>{onVerify && !freshView && <Button type="button" disabled={state !== 'ready'} onClick={onVerify}>{verificationLabel ?? `Verify ${proofLabel}`}</Button>}
+    <Button type="button" disabled={state !== 'ready' || hasPendingVerification() || usesPasscode && !freshView} onClick={() => void loadScopes()}>{usesPasscode ? (scopeData ? 'Refresh access' : 'Load BuriMunsi access') : (scopeData ? 'Refresh prepared groups' : 'Check verification and load groups')}</Button>{onVerify && !freshView && <Button type="button" disabled={state !== 'ready'} onClick={onVerify}>{verificationLabel ?? `Verify ${proofLabel}`}</Button>}
   </div></Card>
   {scopeData && <><Card><div className="core-detail"><h2>Prepared groups</h2>{scopeData.groups.length === 0 ? <EmptyState title="No prepared groups" description="Prepare a receiving group before reviewing BuriMunsi access." /> : <>
-    <label>Group<select className="admin-input" value={selected} disabled={state !== 'ready'} onChange={event => {setSelected(event.target.value); selectedRef.current = event.target.value; setGroup(null); setOutcomes({});}}><option value="">Select a group</option>{scopeData.groups.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
-    {selected && <><p>Recorded scope: {selectedGroup?.enabled ? 'enabled' : 'not enabled'} · {selectedGroup?.paired ? 'receiving phone paired' : 'no receiving phone paired'}.</p><Button type="button" disabled={state !== 'ready'} onClick={() => void loadGroup()}>Load group access</Button></>}
+    {singleGroup ? <p>{selectedGroup?.title}</p> : <label>Group<select className="admin-input" value={selected} disabled={state !== 'ready'} onChange={event => {setSelected(event.target.value); selectedRef.current = event.target.value; setGroup(null); setOutcomes({});}}><option value="">Select a group</option>{scopeData.groups.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>}
+    {selected && <><p>Recorded scope: {selectedGroup?.enabled ? 'enabled' : 'not enabled'} · {selectedGroup?.paired ? 'receiving phone paired' : 'no receiving phone paired'}.</p>{!singleGroup && <Button type="button" disabled={state !== 'ready'} onClick={() => void loadGroup()}>Load group access</Button>}</>}
     </>}{!readOnlyReview && scopeData.pending.filter(item => !scopeData.groups.some(group => group.id === item.collectionId)).map(item => <p role="alert" key={`${item.kind}:${item.requestId}`}>A retained request belongs to unavailable group <code>{item.collectionId}</code>. Keep its original reference: <code>{item.requestId}</code>.</p>)}</div></Card>
     {!readOnlyReview && selected && scopeData.pending.filter(item => item.collectionId === selected).map(item => <Card key={`${item.kind}:${item.requestId}`}><div className="core-detail"><h2>Original {item.kind === 'operator' ? 'approval' : 'native setup'} request</h2><p>Request reference: <code>{item.requestId}</code></p><p>Account: {item.principalId}</p><Button type="button" disabled={state !== 'ready'} onClick={() => void checkOriginal(item)}>Check original request</Button>{outcomes[`${item.kind}:${item.requestId}`] && <p role="status">{outcomes[`${item.kind}:${item.requestId}`]}</p>}</div></Card>)}
     {groupData && <BuriDirectoryView directory={groupData.directory} provisioning={groupData.provisioning} provisioningError={groupData.provisioningError} />}
