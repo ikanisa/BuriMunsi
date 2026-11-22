@@ -15,8 +15,8 @@ from verify_native_boundary import A, SMS_NAMES, manifest_failures
 ROOT = Path(__file__).resolve().parents[1]
 OVERLAY = ROOT.parents[1]
 RUNNER = 'androidx.test.runner.AndroidJUnitRunner'
-VERSION_CODE = 56
-VERSION_NAME = '0.23.0-collect.34'
+VERSION_CODE = 57
+VERSION_NAME = '0.23.0-collect.35'
 ROLES = {'staff': 'staff', 'internal_receiver': 'gateway'}
 TYPES = ('debug', 'qualification', 'nativeTest')
 
