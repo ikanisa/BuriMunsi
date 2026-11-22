@@ -13,7 +13,7 @@ internal class NativeSessions(
     context: Context,
     private val api: ApiClient,
     groupId: String?,
-    private val cacheStore: SecureStore,
+    private val cacheStore: NativeRecordCache,
 ) : NativeSessionRequests {
     companion object {
         private val signOutLock = Any()
@@ -115,7 +115,8 @@ internal class NativeSessions(
 
     class ProfileRead(val operator:Operator,val home:JSONObject?=null,val useRecentHome:Boolean=false)
 
-    fun restore(includeHome:Boolean=false,canReuseHome:(SavedNativeSession)->Boolean={false}):ProfileRead?{
+    fun restore(includeHome:Boolean=false,canReuseHome:(SavedNativeSession)->Boolean={false},
+        wantsHome:(String?,String)->Boolean={_,_->true}):ProfileRead?{
         // Snapshot, validate and attach under one process-wide lock. A second
         // activity with the same saved bearer joins the existing generation.
         val restored=synchronized(authority){
@@ -146,9 +147,12 @@ internal class NativeSessions(
             witness to saved
         }
         val (witness,saved)=restored?:return null
-        return resumeAttachedSession(witness,saved,includeHome,canReuseHome)
+        // The checkpoint selects work only. It can block on local storage, so
+        // neither authority nor the shared profile lock can be held here.
+        val loadHome=includeHome&&saved.pendingPasscode?.stage!=PasscodeStage.INFLIGHT&&wantsHome(saved.owner,saved.groupId)
+        return resumeAttachedSession(witness,saved,loadHome,canReuseHome)
     }
-    fun login(phone:String,pin:String):Operator {
+    fun login(phone:String,pin:String,includeHome:Boolean=false):ProfileRead {
         val normalizedPhone=Values.phone(phone);val normalizedPin=Values.pin(pin)
         val ticket=synchronized(authority){
             val raw=sessionStore.read()
@@ -164,7 +168,17 @@ internal class NativeSessions(
         }
         val context=mapOf<String,Any?>("generation" to ticket.toString())+
             (if(api.resolvesLoginScope)emptyMap() else mapOf("groupId" to groupId))
-        val j=JSONObject(api.call("POST","/v1/burimunsi/session/login",body=JSONObject().put("phone",normalizedPhone).put("pin",normalizedPin),contractContext=context))
+        val body=JSONObject().put("phone",normalizedPhone).put("pin",normalizedPin)
+        val path="/v1/burimunsi/session/login"
+        val bundle=includeHome&&api.resolvesLoginScope
+        val j=JSONObject(try{
+            api.call("POST",if(bundle)"$path?include=home"else path,body=body,contractContext=context)
+        }catch(e:ApiFailure){
+            // Older servers reject the query before authenticating. A reply
+            // that might follow a committed sign-in cannot justify a second POST.
+            if(!bundle||e.uncertain||e.status!=400||e.code !in setOf("invalid_query","contract_query"))throw e
+            api.call("POST",path,body=body,contractContext=context)
+        })
         val selected=if(j.has("groupId"))Values.id(j.getString("groupId")) else if(api.resolvesLoginScope)throw ApiFailure("invalid_api_response") else groupId
         val expiry=j.getLong("expiresAt")
         val t=j.getString("token");check(isNativeBearer(t))
@@ -202,7 +216,7 @@ internal class NativeSessions(
             }
             throw e
         }
-        return profile
+        return ProfileRead(profile,j.optJSONObject("home"))
     }
     private fun resumeAttachedSession(
         witness:SessionWitness,saved:SavedNativeSession,includeHome:Boolean=false,

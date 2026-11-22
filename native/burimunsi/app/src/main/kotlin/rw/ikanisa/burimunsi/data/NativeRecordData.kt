@@ -1,5 +1,6 @@
 package rw.ikanisa.burimunsi.data
 
+import android.content.Context
 import org.json.JSONObject
 import rw.ikanisa.burimunsi.core.*
 import rw.ikanisa.burimunsi.storage.SecureStore
@@ -15,10 +16,35 @@ class RecordReadScope internal constructor(private val owner:Any,private val ver
     override fun toString()="RecordReadScope"
 }
 
+internal data class RecordSnapshot<T>(val value:T,val offline:Boolean,val savedAt:Long?)
+
+/** Serializes durable snapshot replacement with cache invalidation. A request
+ * started before a committed mutation or sign-out cannot refill the cache. */
+internal class NativeRecordCache(context:Context) {
+    private companion object {
+        val lock=Any()
+        val epoch=java.util.concurrent.atomic.AtomicLong()
+    }
+    private val file=SecureStore(context,"records")
+
+    fun revision():Long=epoch.get()
+    fun read():String?=file.read()
+
+    fun update(revision:Long,replace:(String?)->String?):Unit=synchronized(lock){
+        if(revision==epoch.get())replace(file.read())?.let(file::write)
+    }
+
+    fun clear(verify:Boolean=false):Unit=synchronized(lock){
+        epoch.incrementAndGet()
+        file.clear()
+        if(verify)checkContract(file.read()==null,"record_cache_unavailable")
+    }
+}
+
 internal class NativeRecordData(
     private val sessions: NativeSessions,
     private val api: ApiClient,
-    private val cacheStore: SecureStore,
+    private val cacheStore: NativeRecordCache,
     private val receiptVersions: AllocationReceiptVersions,
     private val recordReadOwner: Any,
 ) : NativeSessionRequests by sessions {
@@ -80,21 +106,25 @@ internal class NativeRecordData(
     }
 
     private fun records(path:String):String = records(path){value,_->value}
-    private fun <T> records(path:String,read:(String,Operator)->T):T {
+    private fun <T> records(path:String,read:(String,Operator)->T):T = snapshot(path,read).value
+
+    private fun <T> snapshot(path:String,read:(String,Operator)->T):RecordSnapshot<T> {
         val witness=ownedSession()
-        val who=authority.withCurrent(witness){operator?:throw ApiFailure("session_unavailable",401)}
+        val (who,group)=authority.withCurrent(witness){(operator?:throw ApiFailure("session_unavailable",401)) to groupId}
         if(System.currentTimeMillis()>=who.expiresAt)throw ApiFailure("session_unavailable",401)
         val sessionScope=Values.sha256(witness.token)
+        val revision=cacheStore.revision()
         try {
             val value=requestOwned(witness,"GET",path)
-            return authority.withCurrent(witness){
+            val verified=authority.withCurrent(witness){
                 val now=System.currentTimeMillis()
                 checkContract(now<who.expiresAt,"session_unavailable")
                 val result=read(value,who)
                 sessions.markRead(now, fromCache = false)
-                saveRecord(path,value,who,sessionScope,now)
-                result
+                result to now
             }
+            saveRecord(path,value,who,group,sessionScope,verified.second,revision)
+            return authority.withCurrent(witness){RecordSnapshot(verified.first,false,verified.second)}
         }catch(error:ApiFailure){
             if(error.status!=0||error.code!="connection_unavailable")throw error
             return authority.withCurrent(witness){
@@ -103,37 +133,46 @@ internal class NativeRecordData(
                 val entry=cachedRecord(path,groupId,who,sessionScope,now,recent=false)?:throw error
                 val payload=api.validateCached(path,entry.payload,mapOf("groupId" to groupId,"actorId" to who.id,"generation" to witness.generation.toString()))
                 val result=read(payload,who)
-                sessions.markRead(entry.savedAt, fromCache = true); result
+                sessions.markRead(entry.savedAt, fromCache = true)
+                RecordSnapshot(result,true,entry.savedAt)
             }
         }
     }
-    // Called while the session still owns the process authority lock.
-    private fun saveRecord(path:String,payload:String,owner:Operator,sessionScope:String,now:Long) {
+    private fun saveRecord(path:String,payload:String,owner:Operator,group:String,sessionScope:String,now:Long,revision:Long) {
         try {
-            var cache=cacheStore.read()?.let(::JSONObject)
-            val access=accessScope(owner)
-            if(cache?.optString("sessionScope")!=sessionScope||cache.optString("contractVersion")!=BuriMunsiSchemas.VERSION||
-                cache.optString("groupId")!=groupId||cache.optString("accountId")!=owner.id||
-                cache.optString("accessScope")!=access)cache=null
-            val entries=cache?.optJSONObject("entries")?:JSONObject()
-            entries.put(path,JSONObject().put("savedAt",now).put("payload",payload))
-            while(entries.length()>8){val key=entries.keys().asSequence().minByOrNull{entries.getJSONObject(it).getLong("savedAt")}?:break;entries.remove(key)}
-            val saved=JSONObject().put("contractVersion",BuriMunsiSchemas.VERSION).put("groupId",groupId).put("accountId",owner.id)
-                .put("sessionScope",sessionScope).put("accessScope",access).put("entries",entries).toString()
-            if(saved.toByteArray(Charsets.UTF_8).size<=1_000_000)cacheStore.write(saved)
+            cacheStore.update(revision){stored->
+                var cache=stored?.let(::JSONObject)
+                val access=accessScope(owner)
+                if(cache?.optString("sessionScope")!=sessionScope||cache.optString("contractVersion")!=BuriMunsiSchemas.VERSION||
+                    cache.optString("groupId")!=group||cache.optString("accountId")!=owner.id||
+                    cache.optString("accessScope")!=access)cache=null
+                val entries=cache?.optJSONObject("entries")?:JSONObject()
+                // An earlier in-flight read can reach the write lock second.
+                if((entries.optJSONObject(path)?.opt("savedAt") as? Number)?.toLong()?.let{it>now}==true)return@update null
+                entries.put(path,JSONObject().put("savedAt",now).put("payload",payload))
+                while(entries.length()>8){val key=entries.keys().asSequence().minByOrNull{entries.getJSONObject(it).getLong("savedAt")}?:break;entries.remove(key)}
+                val saved=JSONObject().put("contractVersion",BuriMunsiSchemas.VERSION).put("groupId",group).put("accountId",owner.id)
+                    .put("sessionScope",sessionScope).put("accessScope",access).put("entries",entries).toString()
+                saved.takeIf{it.toByteArray(Charsets.UTF_8).size<=1_000_000}
+            }
         }catch(_:Exception){/* Cache persistence cannot change the canonical response. */}
     }
 
-    fun acceptRestoredHome(owner:Operator,payload:JSONObject):Pair<Home,Long> {
+    fun acceptRestoredHome(owner:Operator,payload:JSONObject,revision:Long):Pair<Home,Long>? {
         val witness=ownedSession()
-        return authority.withCurrent(witness) {
+        if(cacheStore.revision()!=revision)return null
+        val (home,now,group)=authority.withCurrent(witness) {
             checkContract(operator===owner,"session_changed")
             val now=System.currentTimeMillis()
             checkContract(now<owner.expiresAt,"session_unavailable")
             val home=decodeHome(payload)
-            saveRecord("/home",payload.toString(),owner,Values.sha256(witness.token),now)
             sessions.markRead(now,fromCache=false)
-            home to now
+            Triple(home,now,groupId)
+        }
+        saveRecord("/home",payload.toString(),owner,group,Values.sha256(witness.token),now,revision)
+        return authority.withCurrent(witness){
+            checkContract(operator===owner,"session_changed")
+            (home to now).takeIf{cacheStore.revision()==revision}
         }
     }
 
@@ -172,8 +211,18 @@ internal class NativeRecordData(
         return scope?.read(recordReadOwner,path)?:if(target in setOf(ListingTarget.PAYMENTS,ListingTarget.MEMBERS,ListingTarget.LEDGER,ListingTarget.HISTORY))records(path)else sessions.request("GET",path)
     }
     fun payments(listing:ListingQuery,cursor:String?=null,memberId:String?=null,scope:RecordReadScope?=null):Page<Payment> {
+        if(scope==null)return paymentPage(listing,cursor,memberId).value
         val member=memberId?.let(Values::id)
-        val result=page(listingRead(ListingTarget.PAYMENTS,listingPath("/payments",ListingTarget.PAYMENTS,listing,cursor,mapOf("memberId" to member)),scope),::decodePayment)
+        val path=listingPath("/payments",ListingTarget.PAYMENTS,listing,cursor,mapOf("memberId" to member))
+        return decodePaymentPage(scope.read(recordReadOwner,path),member)
+    }
+    fun paymentPage(listing:ListingQuery,cursor:String?=null,memberId:String?=null):RecordSnapshot<Page<Payment>> {
+        val member=memberId?.let(Values::id)
+        val path=listingPath("/payments",ListingTarget.PAYMENTS,listing,cursor,mapOf("memberId" to member))
+        return snapshot(path){payload,_->decodePaymentPage(payload,member)}
+    }
+    private fun decodePaymentPage(payload:String,member:String?):Page<Payment> {
+        val result=page(payload,::decodePayment)
         if(member!=null)checkContract(result.items.all{it.memberId==member},"invalid_member_payment_scope")
         return result
     }
@@ -211,9 +260,11 @@ internal class NativeRecordData(
             payment
         }
     }
-    fun member(id:String):Member {
+    fun member(id:String):Member = memberRecord(id).value
+
+    fun memberRecord(id:String):RecordSnapshot<Member> {
         val memberId=Values.id(id)
-        return records("/members/$memberId"){payload,_->
+        return snapshot("/members/$memberId"){payload,_->
             val member=decodeMember(JSONObject(payload))
             checkContract(member.id==memberId,"invalid_api_response")
             member

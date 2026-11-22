@@ -61,7 +61,7 @@ fun main(){
  repo.payments()
  val quietHomeStarted=CountDownLatch(1)
  val releaseQuietHome=CountDownLatch(1)
- var quietHomeResponse:Result<JSONObject>?=null
+ var quietHomeResponse:Result<NativeRepository.QuietHome>?=null
  api.handler={request->
   if(request.path.endsWith("/home")){
    quietHomeStarted.countDown()
@@ -78,7 +78,7 @@ fun main(){
   releaseQuietHome.countDown()
   quietHomeThread.join(3000)
   ck("late unpublished Home preserves offline Payments provenance and the protected cache",
-   !quietHomeThread.isAlive&&quietHomeResponse?.getOrThrow()?.getLong("groupBalanceRwf")==18000L&&
+   !quietHomeThread.isAlive&&quietHomeResponse?.getOrThrow()?.payload?.getLong("groupBalanceRwf")==18000L&&
     repo.lastReadFromCache&&repo.lastReadSavedAt==paymentSavedAt&&SecureStore.records["records"]==protectedCache)
  }finally{releaseQuietHome.countDown()}
  api.handler=happy;repo.sms();ck("successful noncached SMS clears stale cache flag",!repo.lastReadFromCache)

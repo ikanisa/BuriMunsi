@@ -18,6 +18,7 @@ import rw.ikanisa.burimunsi.core.*
 import rw.ikanisa.burimunsi.data.ApiClient
 import rw.ikanisa.burimunsi.data.ApiFailure
 import rw.ikanisa.burimunsi.data.NativeRepository
+import rw.ikanisa.burimunsi.data.NativeRecordCache
 import rw.ikanisa.burimunsi.data.Transport
 import rw.ikanisa.burimunsi.gateway.GatewayFixture
 import rw.ikanisa.burimunsi.storage.SecureStore
@@ -96,6 +97,7 @@ private suspend fun interruptedRestore(replacement: Replacement) {
     val model = BuriViewModel(scenario.app, checkpoint, System::currentTimeMillis)
     try {
         check(checkpoint.entered.await(10, TimeUnit.SECONDS))
+        model.onFixtureMain { onForeground() }
         original.logout()
         if (replacement != Replacement.NONE) {
             scenario.role = "staff"
@@ -112,8 +114,10 @@ private suspend fun interruptedRestore(replacement: Replacement) {
             // Identical subject, group and token still need a new server profile and records request.
             check(original.current()?.role == Role.STAFF)
             check(model.state.operator?.role == Role.STAFF && model.state.route == Route.HOME && model.state.home != null)
+            check(model.screenGate==ScreenGate.OPEN&&model.presentation.showRecords)
+            check(model.onFixtureMain { consumeFreshDraw(Route.HOME,checkNotNull(state.home)) })
             check(!model.allows(Capability.GATEWAY))
-            check(Transport.calls.count { it.method == "GET" && it.path.endsWith("/session") } == 2)
+            check(Transport.calls.count { it.method == "GET" && it.path.endsWith("/session") } == 1)
         } else {
             check(model.state.route == Route.LOGIN && model.state.operator == null &&
                 model.state.gateway == null && !model.presentation.showRecords)
@@ -305,6 +309,50 @@ private suspend fun bundledHomeRestores() {
     }
 }
 
+private suspend fun settingsRestoreSkipsUnusedHome() {
+    val scenario = SessionScenario()
+    scenario.signIn(scenario.repository())
+    Transport.calls.clear()
+    val checkpoint = scenario.held()
+    checkpoint.release.countDown()
+    val model = BuriViewModel(scenario.app, checkpoint, System::currentTimeMillis)
+    try {
+        idle(model)
+        check(model.state.route == Route.SETTINGS && model.state.operator?.id == scenario.owner)
+        check(Transport.calls.map { it.path } == listOf("/v1/burimunsi/session"))
+    } finally { stop(model) }
+}
+
+private suspend fun loginHomeRequests(include: Boolean, oldServer: Boolean = false, uncertain: Boolean = false) {
+    val scenario = SessionScenario()
+    Transport.loginHome = { request ->
+        if(uncertain)throw ApiFailure("connection_unavailable",0,true)
+        if(oldServer)throw ApiFailure("invalid_query",400)
+        val login = Transport.handler(request.copy(path = "/v1/burimunsi/session/login"))
+        val home = if(include)JSONObject(Transport.handler(request.copy(path = "/v1/burimunsi/home")))
+            .put("groupBalanceRwf",300L) else JSONObject.NULL
+        JSONObject(login).put("home",home).toString()
+    }
+    val model=BuriViewModel(scenario.app)
+    try {
+        idle(model)
+        model.onFixtureMain { login("0780000001","2468") }
+        idle(model)
+        val bundled="/v1/burimunsi/session/login?include=home"
+        val expected=when {
+            uncertain||include->listOf(bundled)
+            oldServer->listOf(bundled,"/v1/burimunsi/session/login","/v1/burimunsi/home")
+            else->listOf(bundled,"/v1/burimunsi/home")
+        }
+        check(Transport.calls.map{it.path}==expected)
+        if(uncertain)check(model.state.operator==null&&model.state.home==null)
+        else check(model.state.operator?.id==scenario.owner&&model.state.home?.balanceRwf==(if(include)300L else 0L))
+    } finally {
+        stop(model)
+        Transport.loginHome=null
+    }
+}
+
 private suspend fun recentHomeKeepsAgeAndAuthorization() {
     val scenario = SessionScenario()
     val repo = scenario.repository()
@@ -368,6 +416,20 @@ private fun firstPageCacheRequiresExactQuery() {
     check(Transport.calls.size == requests+1)
 }
 
+private fun invalidationRejectsOldRecordWrites() {
+    val scenario=SessionScenario()
+    val first=NativeRecordCache(scenario.app)
+    val second=NativeRecordCache(scenario.app)
+    val expired=first.revision()
+    second.clear(verify=true)
+    first.update(expired){error("The invalidated record cannot write")}
+    check(first.read()==null)
+    val live=first.revision()
+    first.update(live){"fresh scoped synthetic snapshot"}
+    check(second.read()=="fresh scoped synthetic snapshot")
+    second.clear(verify=true)
+}
+
 fun main() = runBlocking {
     val results = listOf(
         "signed-out startup retires Settings and Sync before a new group signs in" to suspend { interruptedRestore(Replacement.NONE) },
@@ -381,8 +443,14 @@ fun main() = runBlocking {
         "an equal-valued foreground profile replaces the authority held by the screen" to suspend { equalProfileRefresh() },
         "an older actor-only saved profile restores through a current server profile" to suspend { legacyProfileRestores() },
         "a paired session and Home response restores and caches the authorized snapshot" to suspend { bundledHomeRestores() },
+        "a restored Settings destination never requests unused Home records" to suspend { settingsRestoreSkipsUnusedHome() },
+        "bundled sign-in displays the confirmed Home without another request" to suspend { loginHomeRequests(include=true) },
+        "a committed sign-in without its optional Home fetches only Home" to suspend { loginHomeRequests(include=false) },
+        "an older server can reject the optional sign-in query before authentication" to suspend { loginHomeRequests(include=false,oldServer=true) },
+        "an uncertain bundled sign-in never repeats a credential request" to suspend { loginHomeRequests(include=false,uncertain=true) },
         "recent Home cache keeps its age and expires on access changes or timeout" to suspend { recentHomeKeepsAgeAndAuthorization() },
         "recent first pages require an exact query and explicit reads still reach the server" to suspend { firstPageCacheRequiresExactQuery() },
+        "a cache invalidation fences a late write from another repository instance" to suspend { invalidationRejectsOldRecordWrites() },
     ).map { (label, scenario) ->
         runCatching { scenario() }.also { result ->
             println((if (result.isSuccess) "PASS" else "FAIL") + " $flavor $label")

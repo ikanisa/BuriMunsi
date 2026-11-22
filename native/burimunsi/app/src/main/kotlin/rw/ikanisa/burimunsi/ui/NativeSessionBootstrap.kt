@@ -15,7 +15,7 @@ internal class NativeSessionBootstrap(
     class Grant(val operator: Operator, val group: String, val revision: Long,
         val home: Home? = null, val homeSavedAt: Long? = null)
     class Restored(val grant: Grant?, val navigation: RestorationDecision, val home: Home? = null,
-        val homeSavedAt: Long? = null, val reusedHome: Boolean = false)
+        val homeSavedAt: Long? = null, val reusedHome: Boolean = false, val recovery: Recovery? = null)
 
     sealed interface Recovery {
         data object PasscodePending : Recovery
@@ -54,19 +54,31 @@ internal class NativeSessionBootstrap(
 
     fun requireCurrent(grant: Grant) = withCurrent(grant) {}
 
+    private fun readCheckpoint(): NavigationCheckpoint? = try {
+        NavigationCheckpoint.decode(checkpoints.read())
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        null
+    }
+
     fun restore(): Restored {
-        // Bind the verified session before opening the potentially blocking
-        // navigation checkpoint. It belongs to this restore, even if another
-        // activity replaces the session while the checkpoint is being read.
-        val combined = repository.restoreForHome(allowRecentCache = readJournal() == JournalKnowledge.CLEAR)
-        val grant = combined?.operator?.let { bind(it) }
-        val bookmark = if (grant == null) null else try {
-            NavigationCheckpoint.decode(checkpoints.read())
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            null
+        var savedScope: Pair<String?, String>? = null
+        var bookmark: NavigationCheckpoint? = null
+        val combined = try {
+            repository.restoreForHome(allowRecentCache = readJournal() == JournalKnowledge.CLEAR) { owner, group ->
+                savedScope = owner to group
+                bookmark = readCheckpoint()
+                bookmark?.let { it.route == Route.HOME || owner == null || !it.validFor(owner, group, clock()) } ?: true
+            }
+        } catch (changed: ContractFailure) {
+            val (owner, group) = savedScope ?: throw changed
+            if (changed.code != "session_changed" || owner == null) throw changed
+            return Restored(null, ScreenRestoration.decide(null, null, "", clock(), receiver, readJournal()),
+                recovery = recover(owner, group))
         }
+        val grant = combined?.operator?.let { bind(it) }
+        if (grant != null && savedScope == null) bookmark = readCheckpoint()
         val navigation = ScreenRestoration.decide(bookmark, grant?.operator, grant?.group.orEmpty(),
             clock(), receiver, readJournal())
         val acceptHome = navigation.route == Route.HOME && (combined?.reusedHome != true || !navigation.pending)
@@ -74,7 +86,8 @@ internal class NativeSessionBootstrap(
             combined?.home?.takeIf { acceptHome }, combined?.homeSavedAt, combined?.reusedHome == true)
     }
 
-    fun login(phone: String, pin: String): Grant = bind(repository.login(phone, pin))
+    fun login(phone: String, pin: String): Grant =
+        repository.loginForHome(phone,pin).let{bind(it.operator,it.home,it.homeSavedAt)}
     fun refresh(): Grant = bind(repository.refreshSession())
     fun refreshHome(): Grant = repository.refreshHome().let { bind(it.operator, it.home, it.homeSavedAt) }
 

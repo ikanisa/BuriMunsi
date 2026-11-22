@@ -12,6 +12,7 @@ object Transport {
  val calls=CopyOnWriteArrayList<Request>()
  var handler:(Request)->String={error("No transport fixture")}
  var sessionHome:((Request)->String)?=null
+ var loginHome:((Request)->String)?=null
 }
 class ApiClient(origin:String,val installationId:String,token:()->String?,val installationProfile:String?=null) {
  val resolvesLoginScope get()=installationProfile!=null
@@ -24,6 +25,9 @@ class ApiClient(origin:String,val installationId:String,token:()->String?,val in
   Transport.calls.add(request)
   if(method=="GET"&&path=="/v1/burimunsi/session?include=home")
    return Transport.sessionHome?.invoke(request)?:throw ApiFailure("invalid_query",400)
+  if(method=="POST"&&path=="/v1/burimunsi/session/login?include=home")
+   return Transport.loginHome?.invoke(request)
+    ?:JSONObject(Transport.handler(request.copy(path=path.substringBefore('?')))).put("home",JSONObject.NULL).toString()
   return Transport.handler(request)
  }
  internal fun validateCached(path:String,payload:String,context:Map<String,Any?>)=validateCachedPayload(installationId,path,payload,context)

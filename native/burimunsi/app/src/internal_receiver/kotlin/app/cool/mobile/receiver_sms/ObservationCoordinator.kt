@@ -79,7 +79,7 @@ internal class ObservationCoordinator(context:Context,private val repository:Nat
         val merged=ObservationConsent.reconcile(local,server,actual)?:return fail(Fence.CONSENT_RECONCILE_REJECTED)
         if(owned(session){
             if(!currentControls(session,actualControl,local,actual))false
-            else{config.saveConsent(owner,merged);true}
+            else{if(merged!=local)config.saveConsent(owner,merged);true}
         }!=true)return fail(Fence.OWNER_CHANGED)
         if(!merged.confirmed){
             if(owned(session){currentControls(session,actualControl,merged,actual)}!=true)return fail(Fence.OWNER_CHANGED)

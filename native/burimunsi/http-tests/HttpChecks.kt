@@ -497,6 +497,23 @@ fun main(){
  ck("phone PIN mode is explicit and carries only automatic installation proof",Wire.last?.getRequestProperty("X-BuriMunsi-Auth")=="phone_pin"&&Wire.last?.getRequestProperty("X-BuriMunsi-Profile")=="internal_receiver"&&Wire.last?.getRequestProperty("X-BuriMunsi-Device")=="d".repeat(64))
  ck("phone PIN bootstrap does not invent managed or operator proof",Wire.last?.getRequestProperty("X-BuriMunsi-Collect-Session")==null&&Wire.last?.getRequestProperty("Authorization")==null)
  ck("phone PIN bootstrap retains exact Edge mount and installation identity",Wire.last?.url?.path=="/functions/v1/collect-api/v1/burimunsi/session/login"&&Wire.last?.getRequestProperty("X-BuriMunsi-Installation")==nativeInstall)
+ val bundledLogin="/v1/burimunsi/session/login?include=home"
+ val loginBody=JSONObject().put("phone","+250780000001").put("pin","2468")
+ val loginContext=mapOf("generation" to "18")
+ val homeData=JSONObject("""{"groupBalanceRwf":17000,"todayRwf":1000,"memberCount":1,"unallocatedCount":0,"asOf":"2026-11-09T08:00:00Z","recentPayments":[]}""")
+ Wire.reply=Reply(transform={v->v.getJSONObject("data").put("groupId","group-1").put("home",homeData)})
+ val bundled=JSONObject(native.call("POST",bundledLogin,body=loginBody,contractContext=loginContext))
+ ck("bundled login validates Home on the same scope-discovering request",
+    bundled.getJSONObject("home").getLong("groupBalanceRwf")==17000L&&Wire.last?.url?.query=="include=home"&&
+        Wire.last?.getRequestProperty("X-BuriMunsi-Group")==null)
+ ck("unrequested Home cannot accompany a legacy sign-in response",
+    runCatching{native.call("POST",bundledLogin.substringBefore('?'),body=loginBody,contractContext=loginContext)}.isFailure)
+ Wire.reply=Reply(transform={v->v.getJSONObject("data").put("groupId","group-1").put("home",JSONObject.NULL)})
+ val incomplete=JSONObject(native.call("POST",bundledLogin,body=loginBody,contractContext=loginContext))
+ ck("bundled login accepts a valid token with an explicitly unavailable Home",incomplete.has("home")&&incomplete.isNull("home"))
+ Wire.reply=Reply(transform={v->v.getJSONObject("data").put("groupId","group-1")})
+ val missingHome=runCatching{native.call("POST",bundledLogin,body=loginBody,contractContext=loginContext)}.exceptionOrNull() as ApiFailure
+ ck("missing requested Home is an uncertain contract failure",missingHome.uncertain&&missingHome.code=="contract_context")
  val cloud="https://rrlduytparvsjfmegalh.supabase.co";val publishable="sb_publishable_"+"p".repeat(24)
  val cloudClient=ApiClient.phonePin(cloud,nativeInstall,"staff","/functions/v1/collect-api",publishable){"d".repeat(64)}
  cloudClient.call("POST","/v1/burimunsi/session/login",body=JSONObject().put("phone","+250780000001").put("pin","2468"),contractContext=mapOf("generation" to "18"))

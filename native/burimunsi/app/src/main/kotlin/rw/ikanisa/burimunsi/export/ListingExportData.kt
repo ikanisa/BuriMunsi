@@ -17,23 +17,24 @@ internal class ListingExportData(private val repository:NativeRepository,private
         var firstAsOf:String?=null
         fun <T> pages(id:(T)->String,read:(String?)->Page<T>):List<T> {
             check();repository.validateRecordReadScope(scope)
-            var page=read(null)
+            val page=read(null)
             if(firstAsOf==null)firstAsOf=page.asOf
             checkContract(page.totalCount in 0..20_000,"export_limit")
             checkContract(page.items.map(id).toSet().size==page.items.size&&page.items.size<=page.totalCount,"invalid_page")
             checkContract((page.nextCursor==null)==(page.items.size==page.totalCount),"invalid_page")
             val seen=mutableSetOf<String>()
+            val records=PageIntegrity.Accumulator(page,id)
             if(target !in setOf(ListingTarget.SMS,ListingTarget.OBSERVATIONS))progress(page.items.size,page.totalCount)
-            while(page.nextCursor!=null){
+            while(records.nextCursor!=null){
                 check();repository.validateRecordReadScope(scope)
-                val cursor=page.nextCursor!!;checkContract(seen.add(cursor),"invalid_page")
+                val cursor=checkNotNull(records.nextCursor);checkContract(seen.add(cursor),"invalid_page")
                 val next=read(cursor)
                 checkContract(next.nextCursor==null||next.nextCursor !in seen,"invalid_page")
-                page=PageIntegrity.append(page,next,id)
-                if(target !in setOf(ListingTarget.SMS,ListingTarget.OBSERVATIONS))progress(page.items.size,page.totalCount)
+                records.append(next)
+                if(target !in setOf(ListingTarget.SMS,ListingTarget.OBSERVATIONS))progress(records.size,page.totalCount)
             }
             check();repository.validateRecordReadScope(scope)
-            return page.items
+            return records.snapshot().items
         }
         fun text(value:String?)=value?.let{ExportCell.Text(it)}?:ExportCell.Blank
         fun money(value:Long?)=value?.let{ExportCell.Money(it,"RWF")}?:ExportCell.Blank

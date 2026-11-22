@@ -123,7 +123,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     private var lastQueueRefreshAt=0L
     private var signOutRetryJob:Job?=null
     private var lifecycleObserved=false
-    private var initialClientSetup=true
+    private var initialSetupPending=true
     private var pendingFreshDraw: Pair<Route, Any>? = null
 
     override fun consumeFreshDraw(route: Route, records: Any): Boolean {
@@ -144,6 +144,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     private var sessionChecking by mutableStateOf(false)
     private var visibleExpired by mutableStateOf(false)
     private var resumeQueued=false
+    private var resumeMayReuseRecords=false
     private var restoreRetryPending=false
     private var sessionRetryPending=false
     private var lastRestoreAttemptAt=0L
@@ -265,6 +266,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     }
     /** Called by LifecycleResumeEffect. Does not cancel a dispatched operation. */
     fun onBackground(){
+        resumeMayReuseRecords=!state.starting&&!state.busy&&state.operator!=null
         pendingFreshDraw=null
         queuedNavigation=null
         receiverStatus.invalidate()
@@ -284,14 +286,18 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     }
     fun onForeground(){
         if(lifecycleObserved&&foreground)return
-        val coalesceInitialRestore=!lifecycleObserved&&
-            (initialClientSetup||repository!=null&&sessionBootstrap.shareInitialForeground())
+        val firstForeground=!lifecycleObserved
+        val coalesceInitialRestore=firstForeground&&
+            (initialSetupPending||repository!=null&&sessionBootstrap.shareInitialForeground())
         lifecycleObserved=true;foreground=true;needsSessionCheck=true
         if(coalesceInitialRestore){
             // If restoration has already validated the owner, this first
             // foreground callback is the same transition, not another resume.
             if(state.operator!=null&&!state.starting&&!resumeQueued)needsSessionCheck=false
-        }else resumeQueued=true
+        }else{
+            resumeQueued=true
+            if(firstForeground)resumeMayReuseRecords=false
+        }
         gateway.foregroundChanged(true)
         permissionsChanged()
         refreshSupport()
@@ -325,10 +331,12 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     }
     private fun drainResumeCheck(){
         if(!foreground||!resumeQueued||state.busy)return
-        if(repository==null){resumeQueued=false;needsSessionCheck=false;return}
+        val allowRecent=resumeMayReuseRecords
         resumeQueued=false
+        resumeMayReuseRecords=false
+        if(repository==null){needsSessionCheck=false;return}
         if(state.operator==null&&restoreRetryPending)retrySavedSession()
-        else if(BuildConfig.IS_GATEWAY||state.operator!=null)refreshSession() else needsSessionCheck=false
+        else if(BuildConfig.IS_GATEWAY||state.operator!=null)refreshSession(allowRecentVisible=allowRecent) else needsSessionCheck=false
     }
     /** Evaluated while resumed, also synchronously before accepting any user action. */
     fun checkVisibleFreshness(){
@@ -549,6 +557,10 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             throw e
         }
         restoreRetryPending=false
+        restored.recovery?.let { recovery ->
+            refreshRestoredRecovery(recovery,restored.navigation.pending)
+            return
+        }
         val grant=restored.grant
         if(grant==null){
             state=UiState(busy=true,starting=starting,pending=restored.navigation.pending)
@@ -563,8 +575,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             }catch(changed:ContractFailure){
                 if(changed.code!="session_changed")throw changed
                 val recovery=io{sessionBootstrap.recover(grant.operator.id,grant.group)}
-                val replacement=presentSessionRecovery(recovery,restored.navigation.pending,busy=true)
-                if(replacement!=null)refreshSessionRecords(replacement)
+                refreshRestoredRecovery(recovery,restored.navigation.pending)
                 return
             }
             try{
@@ -581,6 +592,13 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         sessionRetryPending=false
         if(!resumeQueued)needsSessionCheck=false
     }
+    private suspend fun refreshRestoredRecovery(recovery:NativeSessionBootstrap.Recovery,pending:Boolean){
+        val replacement=presentSessionRecovery(recovery,pending,busy=true)?:return
+        refreshSessionRecords(replacement)
+        sessionRetryPending=false
+        if(!resumeQueued)needsSessionCheck=false
+    }
+
     private suspend fun loadSessionRecords(grant:NativeSessionBootstrap.Grant){
         refreshSessionRecords(grant)
         receiverStatus.startReceiver()
@@ -634,29 +652,26 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     init {
         work(bypassGate=true,kind=UiOperation.INITIAL_READ){
             operationLabel="Checking access"
-            // Protected installation storage can block on Android Keystore. Let
-            // Android draw the startup surface while the same restore sets it up.
-            val (installation, support, records)=try{
-                io {
+            val (device,support,source)=try{
+                io{
                     Values.apiOrigin(BuildConfig.BURI_API_ORIGIN)
-                    val installation=DeviceProvisioning(app,GatewayFactory.installationId(app))
+                    val device=DeviceProvisioning(app,GatewayFactory.installationId(app))
                     val support=SupportContactClient(BuildConfig.BURI_API_ORIGIN,BuildConfig.BURI_API_PATH_PREFIX,BuildConfig.COLLECT_PUBLISHABLE_KEY)
-                    val api=ApiClient.phonePin(BuildConfig.BURI_API_ORIGIN,installation.installationId,installationProfile,
-                        BuildConfig.BURI_API_PATH_PREFIX,BuildConfig.COLLECT_PUBLISHABLE_KEY){installation.registrationToken()}
-                    Triple(installation,support,NativeRepository(app,api))
+                    val api=ApiClient.phonePin(BuildConfig.BURI_API_ORIGIN,device.installationId,
+                        installationProfile,BuildConfig.BURI_API_PATH_PREFIX,BuildConfig.COLLECT_PUBLISHABLE_KEY,device::registrationToken)
+                    Triple(device,support,NativeRepository(app,api))
                 }
             }catch(cancelled:CancellationException){throw cancelled}
             catch(_:Exception){
                 state=UiState(error="Unable to sign in. Contact admin.",configurationRequired=true,busy=true)
                 return@work
-            }finally{initialClientSetup=false}
-            install=installation
+            }finally{initialSetupPending=false}
+            install=device
             supportClient=support
-            repository=records
+            repository=source
             observeProcessSession()
             sessionBootstrap.beginInitialRestore()
             if(lifecycleObserved&&foreground&&!resumeQueued)sessionBootstrap.shareInitialForeground()
-
             var completed=false
             try{
                 if(recoverReceiverRetirement())return@work
@@ -791,7 +806,11 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         val grant=io{sessionBootstrap.login(phone,pin)}
         restoreRetryPending=false;clearViews()
         sessionBootstrap.withCurrent(grant){state=UiState(operator=grant.operator,route=Route.HOME,busy=true,pending=state.pending)}
-        loadSessionRecords(grant)
+        val home=grant.home
+        if(home!=null&&SnapshotFreshness.reusable(grant.homeSavedAt,clock())){
+            sessionBootstrap.withCurrent(grant){showHome(home,false,grant.homeSavedAt)}
+            receiverStatus.startReceiver()
+        }else loadSessionRecords(grant)
         visibleExpired=false;if(!resumeQueued)needsSessionCheck=false
     }
     override fun logout(){
@@ -831,7 +850,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             catch(error:Exception){Result.failure(error)}
         }
         val payload=try{
-            select<JSONObject?> {
+            select<NativeRepository.QuietHome?> {
                 departure.onAwait { null }
                 request.onAwait { it.getOrThrow() }
             }
@@ -839,12 +858,23 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             leaveQuietHome=null
             request.cancel()
         }?:return false
-        val (home,savedAt)=io{records.acceptQuietHome(grant.operator,payload)}
+        val (home,savedAt)=io{records.acceptQuietHome(grant.operator,payload)}?:return false
         sessionBootstrap.withCurrent(grant){showHome(home,false,savedAt)}
         return true
     }
 
-    fun refreshSession(quiet:Boolean=false){
+    private fun recentPassiveRecords():Boolean {
+        if(state.sheet!=null||state.pending||state.offline||state.readbackRequired||state.draftDirty||
+            !SnapshotFreshness.recent(state.savedAt,clock()))return false
+        return when(state.route){
+            Route.HOME->state.home!=null
+            Route.PAYMENTS->state.payments!=null
+            Route.MEMBERS->state.members!=null
+            else->false
+        }
+    }
+
+    fun refreshSession(quiet:Boolean=false,allowRecentVisible:Boolean=false){
         clearRawDisclosure()
         if(!quiet)needsSessionCheck=true
         if(state.busy){resumeQueued=true;return}
@@ -858,11 +888,12 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                 // Check the encrypted original proof before ordinary session validation.
                 if(recoverReceiverRetirement())return@work
                 val previous=state.operator?:run{needsSessionCheck=false;return@work}
+                val reusable=allowRecentVisible&&recentPassiveRecords()&&io{journalKnowledge()==JournalKnowledge.CLEAR}
                 val loadHome=state.route==Route.HOME&&state.sheet==null
                 val passive=quiet&&state.sheet==null&&!state.draftDirty&&!state.pending&&
                     !state.offline&&!state.readbackRequired&&screenGate==ScreenGate.OPEN&&!visibleRecordsExpired(clock())
                 val yieldHome=loadHome&&passive
-                val grant=io{if(loadHome&&!yieldHome)sessionBootstrap.refreshHome()else sessionBootstrap.refresh()}
+                val grant=io{if(loadHome&&!yieldHome&&!reusable)sessionBootstrap.refreshHome()else sessionBootstrap.refresh()}
                 val current=grant.operator
                 val sameAccess=previous.hasSameAccess(current)
                 if(!sameAccess){
@@ -882,6 +913,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                     return@work
                 }
                 val home=grant.home
+                val recent=reusable&&sameAccess&&recentPassiveRecords()&&io{journalKnowledge()==JournalKnowledge.CLEAR}
                 if(yieldHome&&canYield){
                     if(!refreshQuietHome(grant)){
                         sessionBootstrap.requireCurrent(grant)
@@ -890,7 +922,8 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                     }
                 }else if(state.route==Route.HOME&&home!=null&&SnapshotFreshness.reusable(grant.homeSavedAt,clock())){
                     sessionBootstrap.withCurrent(grant){showHome(home,false,grant.homeSavedAt)}
-                }else refreshNow()
+                }else if(recent&&recentPassiveRecords())refreshRememberedReceiverStatus()
+                else refreshNow()
                 if(state.sheet!=null){
                     if(panelAllowed(state.sheet))refreshPanelNow()
                     else{resetPanelInputs();state=state.copy(sheet=null,sheetId=null,raw=null,staff=null,audit=null,history=null,selectedStaff=null,selectedMember=null,draft=emptyMap(),draftDirty=false)}
@@ -1101,9 +1134,9 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                 }else null
                 val cachedPage = recent?.takeIf{SnapshotFreshness.recent(it.second,clock())}
                     ?.let{NativePagedRestoration.Read(it.first,false,it.second)}
-                val first = cachedPage ?: pagedRestoration.read(request) { it.payments(listing) }
+                val first = cachedPage ?: pagedRestoration.readRecord(request) { it.paymentPage(listing) }
                 val restored = pagedRestoration.restore(request, first, Payment::id) { cursor ->
-                    pagedRestoration.read(request) { it.payments(listing, cursor) }
+                    pagedRestoration.readRecord(request) { it.paymentPage(listing, cursor) }
                 }
                 pagedRestoration.withCurrent(request) {
                     val (page, offline, savedAt) = restored.content
@@ -1171,12 +1204,12 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                 val id = state.routeId ?: state.member?.id ?: return
                 val request = pagedRestoration.request()
                 val listing = queryFor(ListingTarget.PAYMENTS)
-                val member = pagedRestoration.read(request) { it.member(id) }
-                val payments = pagedRestoration.read(request) { it.payments(listing, memberId = id) }
+                val member=pagedRestoration.readRecord(request){it.memberRecord(id)}
+                val payments=pagedRestoration.readRecord(request){it.paymentPage(listing,memberId=id)}
                 val first = payments.copy(offline = member.offline || payments.offline,
                     savedAt = SnapshotFreshness.oldest(clock(), member.savedAt, payments.savedAt))
                 val restored = pagedRestoration.restore(request, first, Payment::id) { cursor ->
-                    pagedRestoration.read(request) { it.payments(listing, cursor = cursor, memberId = id) }
+                    pagedRestoration.readRecord(request) { it.paymentPage(listing,cursor=cursor,memberId=id) }
                 }
                 pagedRestoration.withCurrent(request) {
                     val (page, offline, savedAt) = restored.content

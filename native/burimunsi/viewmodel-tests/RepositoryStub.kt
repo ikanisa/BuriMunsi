@@ -4,6 +4,7 @@ import org.json.JSONObject
 import org.json.JSONArray
 import rw.ikanisa.burimunsi.core.*
 class ApiFailure(val code:String,val status:Int=400,val uncertain:Boolean=false):RuntimeException(code)
+internal data class RecordSnapshot<T>(val value:T,val offline:Boolean,val savedAt:Long?)
 class ManagedRequestAccess(val token:String,val collectionId:String)
 fun interface ManagedSessionTokenProvider { fun currentAccessToken():String?;fun currentAccessContext():ManagedRequestAccess?=null;fun currentCollectionId():String?=null }
 interface ManagedSessionHost { val managedSessionTokenProvider:ManagedSessionTokenProvider;fun signOutManagedSession(){} }
@@ -121,8 +122,12 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null){
   check(Fixture.restoreBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false)
   Fixture.restoreFailure?.let{throw it};return operator}
  internal class Restoration(val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null,val reusedHome:Boolean=false)
- internal fun restoreForHome(allowRecentCache:Boolean):Restoration?=restore()?.let{Restoration(it,Fixture.restoredHome,Fixture.restoredHomeSavedAt,Fixture.restoredHomeReused)}
+ internal fun restoreForHome(allowRecentCache:Boolean,wantsHome:(String?,String)->Boolean):Restoration?=restore()?.let{
+  val include=wantsHome(it.id,collectionId)
+  Restoration(it,Fixture.restoredHome.takeIf{include},Fixture.restoredHomeSavedAt.takeIf{include},include&&Fixture.restoredHomeReused)
+ }
  internal fun refreshHome()=Restoration(refreshSession())
+ internal fun loginForHome(phone:String,pin:String)=Restoration(login(phone,pin))
  fun current()=operator?.takeUnless{Fixture.processSessionInvalidated}?.let{it.copy(id=Fixture.currentOwnerOverride?:it.id)}
  internal fun <T> withCurrentProfile(profile:Operator,publish:(String,Long)->T):T {
   checkContract(operator===profile&&current()==profile,"session_changed")
@@ -157,13 +162,14 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null){
  fun pending():Any?{if(Fixture.journalFailure)throw ContractFailure("operation_store_unavailable");return if(Fixture.pendingFlag)"original-operation" else null}
  fun reconcilePending():JSONObject{Fixture.reconciles++;Fixture.recoveryFailure?.let{throw it};if(Fixture.resolveOnCheck&&Fixture.outcomeState in setOf("committed","cancelled"))Fixture.pendingFlag=false;return JSONObject().put("state",Fixture.outcomeState).put("financialState",Fixture.financialState)}
  fun home():Home{Fixture.readFailure?.let{throw it};provenance();Fixture.homeReads++;check(Fixture.homeBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false);return Home(10000,10000,1,1,listOf(Fixture.payment()),"now")}
- internal fun readQuietHome():JSONObject {
+ internal class QuietHome(val payload:JSONObject)
+ internal fun readQuietHome():QuietHome {
   Fixture.readFailure?.let{throw it}
   Fixture.homeReads++
   check(Fixture.homeBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false)
-  return JSONObject()
+  return QuietHome(JSONObject())
  }
- internal fun acceptQuietHome(owner:Operator,payload:JSONObject):Pair<Home,Long> =
+ internal fun acceptQuietHome(owner:Operator,result:QuietHome):Pair<Home,Long>? =
   withCurrentProfile(owner){_,_->Home(10000,10000,1,1,listOf(Fixture.payment()),"now") to
       (Fixture.recordSavedAt?:System.currentTimeMillis())}
  internal fun recentPayments(listing:ListingQuery):Pair<Page<Payment>,Long>?=Fixture.recentPaymentPage
@@ -215,6 +221,16 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null){
  }
  fun payment(id:String):Payment{Fixture.paymentReads++;if(Fixture.paymentFailure)throw ApiFailure("connection_unavailable",0);provenance();return postedPayments[id]?:Fixture.payment(id)}
  fun member(id:String):Member{Fixture.memberReadFailure?.let{throw it};provenance(Fixture.memberCached||Fixture.cached);return Fixture.member.copy(id=id)}
+ internal fun memberRecord(id:String):RecordSnapshot<Member>{
+  val value=member(id)
+  val cached=Fixture.memberCached||Fixture.cached
+  return RecordSnapshot(value,cached,if(Fixture.missingReadTimestamp)null else if(cached)Fixture.saved else Fixture.recordSavedAt?:System.currentTimeMillis())
+ }
+ internal fun paymentPage(listing:ListingQuery,cursor:String?=null,memberId:String?=null):RecordSnapshot<Page<Payment>>{
+  val value=payments(listing,cursor,memberId)
+  val cached=Fixture.cached
+  return RecordSnapshot(value,cached,if(Fixture.missingReadTimestamp)null else if(cached)Fixture.saved else Fixture.recordSavedAt?:System.currentTimeMillis())
+ }
  fun ledger(id:String,cursor:String?=null):Page<LedgerRow>{provenance();Fixture.paged?.let{handler->val p=handler("MEMBER",cursor,id,"all");provenance();return Page(p.items.map{LedgerRow(it,"tx-1",10000,"at","90001","Payer")},p.nextCursor,p.totalCount,p.revision,p.asOf)};return Page(listOf(LedgerRow("l-1","tx-1",10000,"2026-11-07T12:00:00Z","90001","Payer")),null,1,"v1","2026-11-07T12:00:00Z")}
  fun sms(q:String="",cursor:String?=null,filter:String="all",limit:Int?=null):Page<SmsRow>{Fixture.smsQueries.add(q);Fixture.lastFilter=filter;Fixture.paged?.let{handler->val p=handler("SMS",cursor,q,filter);return Page(p.items.map{SmsRow(it,"M-Money","at","synthetic",filter,null)},p.nextCursor,p.totalCount,p.revision,p.asOf)};return Fixture.page(listOf(SmsRow("s-1","M-Money","at","synthetic",filter,null)))}
  fun observationPage(q:String="",cursor:String?=null,limit:Int?=null):Page<ObservationListRow> {Fixture.observationQueries.add(q);Fixture.observationReads++;Fixture.observationFailure?.let{throw it};Fixture.observationPaged?.let{return it(q,cursor)};return Page(Fixture.observationRows,null,Fixture.observationRows.size,"observations-v1","2026-11-09T00:00:00Z")}
