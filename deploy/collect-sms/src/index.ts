@@ -1,4 +1,5 @@
 import {reportApplicationHealth} from "./application-health.ts";
+import {burimunsiWakeChannel} from "./burimunsi-wake.ts";
 import {scheduleOccurrences} from "./schedules.ts";
 import {ledgerSnapshot} from "./snapshots.ts";
 import {recoveryExport} from "./recovery.ts";
@@ -230,6 +231,10 @@ app.post("/v1/device/registration", async (c) =>
   registerDevice(c, await body(c)),
 );
 app.get("/v1/device/jobs", pullJobs);
+app.post("/v1/device/wake-channel", async (c) => {
+  if (Object.keys(await body(c)).length) throw new ApiError(400, "invalid_request", "Device wake takes no fields");
+  return burimunsiWakeChannel(c);
+});
 app.post("/v1/device/acceptances", async (c) => acceptJobs(c, await body(c)));
 app.post("/v1/device/events", async (c) => deviceEvents(c, await body(c)));
 app.get("/v1/device/messages/:id/permit", messagePermit);
