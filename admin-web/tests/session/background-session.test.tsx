@@ -226,7 +226,10 @@ describe('scheduled Admin session checks', () => {
       await act(async () => {await vi.advanceTimersByTimeAsync(28_000);});
       expect(screen.getByText('Rechecking account access…')).toBeInTheDocument();
       await act(async () => {await vi.advanceTimersByTimeAsync(3_000);});
-      expect(screen.queryByText('Rechecking account access…')).toBeNull();
+      expect(checks).toBe(5);
+      // The retry timer dispatches the read; body parsing and session binding
+      // complete asynchronously before React can publish the recovered state.
+      await vi.waitFor(() => expect(screen.queryByText('Rechecking account access…')).toBeNull());
       expect(search.closest('[inert]')).toBeNull();
       expect(screen.getByRole('textbox', {name: 'Search Groups'})).toBe(search);
       expect(search).toHaveValue('savings');

@@ -1,6 +1,6 @@
 {
   "format": "collect.admin.notices.v1",
-  "lock_sha256": "4a8db35b808083c5fed523a3a70e837f0088b41ba258a14b116558014e910468",
+  "lock_sha256": "9d123bf3d7001a4333c6aa5021075fa648b88cb9d3772f21446a82038ef41658",
   "packages": [
     {
       "name": "@remix-run/route-pattern",
