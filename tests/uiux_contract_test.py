@@ -120,7 +120,7 @@ class UiUxContract(unittest.TestCase):
         self.assertNotIn('rememberSaveable',self.app);self.assertNotIn('SavedStateHandle',self.vm)
         self.assertIn('state.selectedMember',self.vm);self.assertIn('draft=emptyMap()',self.vm)
     def test_all_original_routes_are_rendered(self):
-        body=self.shell.split('RouteEntrance(t(titleFor(s.route))){when(s.route){',1)[1].split('}}}',1)[0]
+        body=self.shell.split('RouteEntrance(t(titleFor(s.route)),onFullyDrawn){when(s.route){',1)[1].split('}}}',1)[0]
         expected={screen['route'].upper() for screen in ORIGINAL_MAP['screens']}
         self.assertEqual(set(re.findall(r'Route\.(\w+)->',body)),expected)
     def test_all_original_panels_are_rendered(self):

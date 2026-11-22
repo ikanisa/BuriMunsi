@@ -282,8 +282,8 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     }
     fun onForeground(){
         if(lifecycleObserved&&foreground)return
-        val sameTransition=!lifecycleObserved||foreground
-        val coalesceInitialRestore=sameTransition&&
+        val firstForeground=!lifecycleObserved
+        val coalesceInitialRestore=firstForeground&&
             (initialSetupPending||repository!=null&&sessionBootstrap.shareInitialForeground())
         lifecycleObserved=true;foreground=true;needsSessionCheck=true
         if(coalesceInitialRestore){
@@ -292,7 +292,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             if(state.operator!=null&&!state.starting&&!resumeQueued)needsSessionCheck=false
         }else{
             resumeQueued=true
-            if(sameTransition)resumeMayReuseRecords=false
+            if(firstForeground)resumeMayReuseRecords=false
         }
         gateway.foregroundChanged(true)
         permissionsChanged()
@@ -544,8 +544,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         }
         restoreRetryPending=false
         restored.recovery?.let { recovery ->
-            val replacement=presentSessionRecovery(recovery,restored.navigation.pending,busy=true)
-            if(replacement!=null)refreshSessionRecords(replacement)
+            refreshRestoredRecovery(recovery,restored.navigation.pending)
             return
         }
         val grant=restored.grant
@@ -562,8 +561,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             }catch(changed:ContractFailure){
                 if(changed.code!="session_changed")throw changed
                 val recovery=io{sessionBootstrap.recover(grant.operator.id,grant.group)}
-                val replacement=presentSessionRecovery(recovery,restored.navigation.pending,busy=true)
-                if(replacement!=null)refreshSessionRecords(replacement)
+                refreshRestoredRecovery(recovery,restored.navigation.pending)
                 return
             }
             try{
@@ -580,6 +578,13 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         sessionRetryPending=false
         if(!resumeQueued)needsSessionCheck=false
     }
+    private suspend fun refreshRestoredRecovery(recovery:NativeSessionBootstrap.Recovery,pending:Boolean){
+        val replacement=presentSessionRecovery(recovery,pending,busy=true)?:return
+        refreshSessionRecords(replacement)
+        sessionRetryPending=false
+        if(!resumeQueued)needsSessionCheck=false
+    }
+
     private suspend fun loadSessionRecords(grant:NativeSessionBootstrap.Grant){
         refreshSessionRecords(grant)
         receiverStatus.startReceiver()

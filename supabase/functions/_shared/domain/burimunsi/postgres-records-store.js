@@ -8,6 +8,7 @@ import {canonicalListingInstant,listingText} from './listing-query.js';
 import {readMemberListing} from './postgres-member-listing.js';
 import {nativePaymentListingScope,paymentAllocationFilterSql,paymentReferenceSql,paymentsSql,readCanonicalHome} from './postgres-payment-reads.js';
 import {projectLedger,projectMember,projectPayment} from './postgres-record-projections.js';
+import {claimPhonePinReadSnapshot} from './phone-pin-request.js';
 
 const MEMBERS=`SELECT u.id,m.collection_id,u.full_name,u.momo_number,m.active,m.revision,u.revision AS person_revision,m.joined_at,
  coalesce((SELECT sum(l.amount_minor) FROM app.ledger_entries l WHERE l.collection_id=m.collection_id AND l.member_id=m.user_id),0) AS balance
@@ -49,7 +50,7 @@ export class PostgresRecordsStore {
     return this.sourceReader.revealSms(actor,request);
   }
   async withReadSnapshot(fn,{primary=false}={}){
-    return this.authority.read(async sql=>{
+    const read=async sql=>{
       if(primary){
         const check=(await sql.unsafe('SELECT pg_is_in_recovery() AS replica'))[0];
         requireThat(check?.replica===false,'command_primary_required',503);
@@ -230,7 +231,10 @@ export class PostgresRecordsStore {
         }
       };
       return fn(ops);
-    });
+    };
+    const existing=claimPhonePinReadSnapshot(this.authority.db,this.groupId);
+    requireThat(!existing||!primary,'request_not_admitted',503);
+    return existing?read(existing):this.authority.read(read);
   }
   async memberExists(sql,group,id){requireThat((await sql.unsafe('SELECT id FROM app.memberships WHERE collection_id=$1 AND user_id=$2',[group,id])).length===1,'member_unavailable',404);}
 }

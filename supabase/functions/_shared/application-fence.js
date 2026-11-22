@@ -2,7 +2,7 @@ import {ApiError} from './domain/core.js';
 
 const SHA=/^[a-f0-9]{64}$/, UUID=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 export const FENCE_IO_TIMEOUT_MS=5000;
-export const CONTROL_ROLLBACK_ACK=Symbol('confirmed control rollback');
+export const CONTROL_ROLLBACK_ACK=Symbol('control_rollback_ack');
 const KINDS=new Set(['http_collect','http_admin','jobs']);
 const contexts=new WeakSet();
 const reservedDispatches=new WeakMap();
@@ -35,8 +35,10 @@ const leaseSetupSql = "SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout=
  runtimeRoleSql + '; SELECT pg_catalog.pg_advisory_xact_lock_shared(7346371,1)';
 async function runtimeRole(tx){await tx.unsafe(runtimeRoleSql);}
 async function result(tx,name,values){const rows=await tx.unsafe('SELECT '+signatures[name]+' AS result',values);need(rows.length===1&&rows[0].result&&typeof rows[0].result==='object');return rows[0].result;}
+/** @param {(tx: import('npm:postgres@3.4.7').TransactionSql) => unknown} [verifyAdmission] */
 export function sqlFenceBackend(businessSql,controlSql,verifyAdmission=undefined){
  need(typeof businessSql?.begin==='function'&&typeof controlSql?.reserve==='function');
+ need(verifyAdmission===undefined||typeof verifyAdmission==='function');
  const rawCall=(name,values)=>businessSql.begin('ISOLATION LEVEL READ COMMITTED',async tx=>{
   await runtimeRole(tx);
   if(name==='register'&&verifyAdmission)await verifyAdmission(tx);
@@ -46,8 +48,12 @@ export function sqlFenceBackend(businessSql,controlSql,verifyAdmission=undefined
  const register=(id,source,kind)=>{const original=Promise.resolve(rawCall('register',[id,source,kind])),observation=bounded(original);registrationCompletions.set(observation,original);return observation;};
  return Object.freeze({register,close:(id,epoch,source,outcome,reason,dispatches,uncertain)=>call('close',[id,epoch,source,outcome,reason,dispatches,uncertain]),status:id=>call('status',[id]),
   async lease(id,epoch,source){
-   const tx=await reserveDatabaseConnection(controlSql);let beginDispatched=false,released=false,cleanup=null;
-   const releaseReservation=()=>{if(released)return;released=true;tx.release(CONTROL_ROLLBACK_ACK);};
+   const tx=await reserveDatabaseConnection(controlSql);let beginDispatched=false,released=false,cleanup=null,reusable=false;
+   const releaseReservation=()=>{
+    if(released)return;
+    released=true;
+    tx.release(reusable?CONTROL_ROLLBACK_ACK:undefined);
+   };
    const release=()=>{
     if(!cleanup)cleanup=(async()=>{
      // BEGIN can have executed even when its acknowledgement was lost. A
@@ -58,14 +64,19 @@ export function sqlFenceBackend(businessSql,controlSql,verifyAdmission=undefined
     })();
     // Bound observation, not the original cleanup. A late ACK may release once;
     // a rejection quarantines forever. Never enqueue another rollback/reset.
-    return bounded(cleanup);
+    return bounded(cleanup).catch(error=>{reusable=false;throw error;});
    };
    try{beginDispatched=true;await tx.unsafe('BEGIN ISOLATION LEVEL READ COMMITTED');
     // These fixed setup commands share one wire round trip. No authority
     // lookup starts until PostgreSQL confirms the role, limits and WORK lock.
     await tx.unsafe(leaseSetupSql);
     const row=await result(tx,'assert',[id,epoch,source]);
-    return {row,async assert(){need(!cleanup&&!released);return bounded(result(tx,'assert',[id,epoch,source]));},release};
+    reusable=active(row,id,source,epoch).mode==='open';
+    return {row,async assert(){
+     need(!cleanup&&!released);
+     try{return active(await bounded(result(tx,'assert',[id,epoch,source])),id,source,epoch);}
+     catch(error){reusable=false;throw error;}
+    },release};
    }catch(error){await release().catch(()=>{});throw error;}
   }
  });

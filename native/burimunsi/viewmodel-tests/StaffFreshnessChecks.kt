@@ -15,7 +15,7 @@ fun main()=runBlocking {
     val before=Fixture.staffMutations
     model.saveStaff("Synthetic Staff","0780000002","4682",true,false);idle()
     check(Fixture.staffMutations==before+1&&model.state.pending)
-    check(Fixture.lastStaffBody?.optString("pin")=="4682")
+    check(Fixture.lastStaffBody?.optString("action")=="create"&&Fixture.lastStaffBody?.has("pin")==false)
     check(model.state.error=="Check the previous action, then sign in again before adding staff.")
     model.saveStaff("Synthetic Staff","0780000002","4682",true,false);idle()
     check(Fixture.staffMutations==before+1&&model.state.pending)

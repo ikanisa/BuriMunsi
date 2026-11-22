@@ -97,8 +97,8 @@ function validHomeZone(column) {
 }
 
 export async function readCanonicalHome(sql,g,at,auto) {
-  // Share the credited set and timezone names across the two receipt reads.
-  // A missing or malformed source timestamp must never become today's receipt.
+  // Check the same source-grounded timestamps before paying for the full
+  // role-aware projection of the three receipts displayed on Home.
   const nativeTimes = auto ? `native_times AS MATERIALIZED (
     SELECT * FROM private.burimunsi_home_payment_times($1, ARRAY(
       SELECT DISTINCT c.native_source_id FROM credited c WHERE c.native_source_id IS NOT NULL

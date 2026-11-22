@@ -97,6 +97,15 @@ private suspend fun interruptedRestore(replacement: Replacement) {
     val model = BuriViewModel(scenario.app, checkpoint, System::currentTimeMillis)
     try {
         check(checkpoint.entered.await(10, TimeUnit.SECONDS))
+        if (replacement == Replacement.SAME_OWNER) {
+            model.onFixtureMain { onForeground() }
+            // The receiver's independent foreground permission check may
+            // schedule one start before the checkpoint returns.
+            if (BuildConfig.IS_GATEWAY) withTimeout(5_000) {
+                while (GatewayFixture.uploadStarts == receiverStarts) delay(2)
+            }
+        }
+        val startsBeforeRestore = GatewayFixture.uploadStarts
         original.logout()
         if (replacement != Replacement.NONE) {
             scenario.role = "staff"
@@ -107,12 +116,14 @@ private suspend fun interruptedRestore(replacement: Replacement) {
         checkpoint.release.countDown()
         idle(model)
         check(model.state.route != Route.SETTINGS) { "A superseded restore displayed the old Settings route" }
-        check(GatewayFixture.uploadStarts == receiverStarts) { "An interrupted restore started Sync" }
+        check(GatewayFixture.uploadStarts == startsBeforeRestore) { "An interrupted restore started Sync" }
         check(Transport.calls.none { it.method != "GET" && !it.path.contains("/session/") })
         if (replacement == Replacement.SAME_OWNER) {
             // Identical subject, group and token still need a new server profile and records request.
             check(original.current()?.role == Role.STAFF)
             check(model.state.operator?.role == Role.STAFF && model.state.route == Route.HOME && model.state.home != null)
+            check(model.screenGate==ScreenGate.OPEN&&model.presentation.showRecords)
+            check(model.onFixtureMain { consumeFreshDraw(Route.HOME,checkNotNull(state.home)) })
             check(!model.allows(Capability.GATEWAY))
             check(Transport.calls.count { it.method == "GET" && it.path.endsWith("/session") } == 1)
         } else {

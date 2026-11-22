@@ -7,7 +7,7 @@ import {dispatchMessage} from '../../../supabase/functions/_shared/managed-jobs-
 const shared = new URL('../../../supabase/functions/_shared/', import.meta.url);
 const runtime = new URL('edge-runtime.js', shared).href;
 const doubles = new Map([
-  ['./deployment-database.js', 'export async function assertRuntimeDeployment() {} export const assertDatabaseIdentity=assertRuntimeDeployment;'],
+  ['./deployment-database.js', 'export async function assertRuntimeDeployment() {} export async function prepareDeploymentCheck() { throw new Error("unexpected HTTP proof in scheduled jobs"); }'],
   ['./postgres-connections.js', `export const connection = () => ({});
     export const fenceConnection = () => ({reserve() { throw Error('unexpected fence I/O'); }});`],
   ['./postgres.js', 'export class PostgresDatabase { constructor() { return globalThis.__activeJobsFixture.database; } }'],

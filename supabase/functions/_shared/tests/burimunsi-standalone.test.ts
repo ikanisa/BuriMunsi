@@ -207,7 +207,9 @@ Deno.test('standalone compares the only database collection with the configured 
         const query = parts.join('?');
         queries.push(query);
         if (query.startsWith('SET LOCAL ROLE')) return [];
-        if (query.startsWith('SELECT private.collect_assert_deployment') && query.includes('SELECT id FROM app.collections LIMIT 2')) return [{allowed: true, collections:ids}];
+        if (query.startsWith('SELECT private.collect_assert_deployment') && query.includes('FROM (SELECT id FROM app.collections LIMIT 2)')) {
+          return [{allowed: true, scope_matches: ids.length === 1 && ids[0] === group}];
+        }
         throw new Error('unexpected statement');
       });
     }};

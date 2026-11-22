@@ -100,8 +100,13 @@ export function createHandler(functionName, envReader = () => Deno.env.toObject(
       }
       env.MOMO_PROCESSING_PAUSED ??= 'true';
       env.AUTH_MEMBER_REGISTRATION_ENABLED ??= 'false';
+      const timedRead = standalone && collect && logical.method === 'GET' &&
+        logical.headers.get('X-BuriMunsi-Auth') === 'phone_pin' &&
+        (path === '/v1/burimunsi/payments' ||
+         (path === '/v1/burimunsi/session' && new URL(logical.url).search === '?include=home'));
       await runtime.initializeDatabase(env, collectionId, standalone && openWork === openApplicationWork);
       const work = await runtime.admit(env, openWork, admin ? 'http_admin' : 'http_collect', request.signal);
+      const admittedAt = timedRead ? performance.now() : 0;
       assertNotCancelled(request.signal);
 
       if (pendingNativeIngress) {
@@ -126,7 +131,12 @@ export function createHandler(functionName, envReader = () => Deno.env.toObject(
       assertNotCancelled(request.signal);
       const routeEnv = approvedBrowserOrigin ? {...env, ALLOWED_ORIGINS: approvedBrowserOrigin} : env;
       const response = await worker.fetch(logical, routeEnv, {waitUntil: promise => runtime.waitUntil(promise)});
-      return await edgeHttpResponse(response, logical, {functionName, path, admin, cors});
+      const output = await edgeHttpResponse(response, logical, {functionName, path, admin, cors});
+      if (timedRead && output.ok) {
+        const finished = performance.now();
+        output.headers.set('Server-Timing', `admission;dur=${Math.round(admittedAt - started)}, records;dur=${Math.round(finished - admittedAt)}`);
+      }
+      return output;
     } catch (error) {
       const health = {
         status: 503,

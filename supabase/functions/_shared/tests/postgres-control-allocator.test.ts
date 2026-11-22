@@ -1,7 +1,7 @@
 // New allocator branches use controlled factories, with native SQL/driver proof
 // separately retained in the exact-bound native qualification receipt.
 const runtime:any=await import('../postgres.js');
-const {reserveDatabaseConnection,CONTROL_ROLLBACK_ACK}=await import('../application-fence.js');
+const {CONTROL_ROLLBACK_ACK,reserveDatabaseConnection}=await import('../application-fence.js');
 const need=(v:unknown)=>{if(!v)throw Error('ALLOCATOR_FAILURE_INVARIANT');};
 const pause=(ms:number)=>new Promise<void>(r=>setTimeout(r,ms));
 async function rejected(p:Promise<any>){try{await p;}catch{return;}throw Error('UNEXPECTED_SUCCESS');}
@@ -54,13 +54,37 @@ Deno.test('shutdown cannot initiate first end during original reservation setup 
  const tx=await held.reserve();await rejected(held.end({timeout:0}));need(heldEnds===0);tx.release();need(await held.end({timeout:0})===undefined);need(heldEnds===1);
 });
 
+Deno.test('only an acknowledged rollback warms a slot and previous borrowers cannot reach it',async()=>{
+ let created=0,ended=0,borrowed=0,released=0;
+ const pool=runtime.leaseOwnedControlPool(()=>{
+  created++;
+  return {
+   async reserve(){const serial=++borrowed;return {unsafe(){return serial;},release(){released++;}};},
+   async end(){ended++;},
+  };
+ },{reuse:true});
+ const first=await pool.reserve(),staleQuery=first.unsafe;
+ need(first.unsafe()===1);
+ first.release(CONTROL_ROLLBACK_ACK);
+ const next=await pool.reserve();
+ need(next.unsafe()===2&&created===1&&ended===0&&released===1);
+ await rejected(Promise.resolve().then(()=>staleQuery()));
+ first.release(CONTROL_ROLLBACK_ACK);
+ need(next.unsafe()===2&&released===1);
+ next.release();await pause(20);need(ended===1&&released===2);
+ const fresh=await pool.reserve();need(created===2&&fresh.unsafe()===3);
+ fresh.release(CONTROL_ROLLBACK_ACK);
+ await pool.end();need(ended===2&&released===3);
+});
+
 Deno.test('confirmed release reuses one warm socket while an occupied connection stays private',async()=>{
  let created=0,ended=0,releases=0;
  const pool=runtime.leaseOwnedControlPool(()=>{const sequence=++created;return {
   async reserve(){return {sequence,release(){releases++;}};},async end(){ended++;}
  };},{reuse:true,capacity:2});
  const first=await pool.reserve(),other=await pool.reserve();
+ const firstSequence=first.sequence;
  const queued=pool.reserve();first.release(CONTROL_ROLLBACK_ACK);const next=await queued;
- need(first.sequence===next.sequence&&other.sequence!==next.sequence&&created===2);
+ need(firstSequence===next.sequence&&other.sequence!==next.sequence&&created===2);
  next.release(CONTROL_ROLLBACK_ACK);other.release();await pool.end();need(ended===2&&releases===3);
 });

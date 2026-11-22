@@ -20,14 +20,17 @@ const request=(token='synthetic-job-token',contract=approval)=>new Request('http
 
 fencedTest('native auto cycle invokes the existing ledger under the admitted jobs work and redacts output',async()=>{
  let calls=0;
- const handler=createScheduledHandler(environment,cleanup,receipts,{processNativeAuto:auto,
+ const handler=createScheduledHandler(environment,cleanup,receipts,{processNativeAuto:async(_env:any,options:any)=>{
+  assertEquals(options,{limit:1});
+  return auto();
+ },
   processNativeSmsLedger:async(env:any,options:any)=>{
    calls++;assertEquals(env.DB.applicationWork.kind,'jobs');assertEquals(options,{limit:4});
-   return {status:'complete',processed:4,results:Array.from({length:4},()=>({state:'unmatched',rawBody:'private-source',memberId:'private-member'}))};
+   return {status:'complete',processed:1,results:[{state:'unmatched',rawBody:'private-source',memberId:'private-member'}]};
   }});
  const response=await handler(request()),body=await response.json();
  assertEquals(response.status,200);assertEquals(calls,1);
- assertEquals(body.native_sms_ledger,{status:'complete',processed:4,results:Array.from({length:4},()=>({state:'unmatched'}))});
+ assertEquals(body.native_sms_ledger,{status:'complete',processed:1,results:[{state:'unmatched'}]});
  assertEquals(JSON.stringify(body).includes('private-'),false);
 });
 fencedTest('unknown native ledger outcomes make the tick unconfirmed',async()=>{

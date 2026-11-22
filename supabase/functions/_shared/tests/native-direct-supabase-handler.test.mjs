@@ -10,10 +10,10 @@ import {admitDirectSupabaseNativeIngress} from '../native-direct-supabase-ingres
 const state={events:[],buckets:[],authority:[]};globalThis.__directIngressTest=state;
 const mock={
  './runtime-env.js':`export const COLLECT_SUPABASE_ORIGIN='${MANAGED_SUPABASE_ORIGIN}';export const configurePublicRuntimeEnv=e=>({...e});export const normalizeRuntimeEnv=e=>({...e});export const isGoogleProviderNavigation=()=>false;`,
- './deployment-database.js':`export const assertRuntimeDeployment=async()=>{globalThis.__directIngressTest.events.push('schema')}; export const assertDatabaseIdentity=assertRuntimeDeployment;`,
+ './deployment-database.js':`export const assertRuntimeDeployment=async()=>{globalThis.__directIngressTest.events.push('schema')};export const prepareDeploymentCheck=async()=>async()=>{globalThis.__directIngressTest.events.push('schema')};`,
  './postgres-connections.js':`export const connection=()=>{globalThis.__directIngressTest.events.push('database');return {}};export const fenceConnection=()=>({});`,
  './postgres.js':`export class PostgresDatabase{constructor(){this.sql={}}setApplicationWork(work){this.applicationWork=work}}`,
- './application-fence.js':`export const sqlFenceBackend=()=>({});export const openApplicationWork=async()=>{globalThis.__directIngressTest.events.push('fence');return {finish:async()=>{},waitUntil:p=>p}};`,
+ './application-fence.js':`export const sqlFenceBackend=(sql,control,beforeRegister)=>({beforeRegister});export const openApplicationWork=async({backend})=>{await backend?.beforeRegister?.();globalThis.__directIngressTest.events.push('fence');return {finish:async()=>{},waitUntil:p=>p}};`,
  './adapters.js':`export class SupabaseObjectBucket{constructor(){}}export const providerAdapters=()=>({});`,
  './domain/index.js':`export default {fetch:async(request,env)=>{const s=globalThis.__directIngressTest;s.events.push('dispatch');s.buckets.push(await env.__network(request));s.authority.push([request.headers.get('authorization'),request.headers.get('cookie'),request.headers.get('x-forwarded-for')]);return Response.json({fixture:true})}};`,
  './domain/core.js':`export const json=(v,status=200,headers={})=>Response.json(v,{status,headers});`,
@@ -62,5 +62,25 @@ test('missing direct adapter, disabled native, unsupported mode and wrong origin
   [{admitDirectSupabaseNativeIngress},{},req({},'https://wrong.fixture.invalid')]]){
   reset();const handler=createHandler('collect-api',()=>({...env(),...change}),{...options,reportHealth:()=>{}});
   assert.equal((await handler(input)).status,503);assert.equal(state.events.includes('database'),false);
+ }
+});
+
+test('dedicated fresh PIN read verifies the database at admission and returns bounded timing only',async()=>{
+ const project=MANAGED_SUPABASE_ORIGIN;
+ const profile=canonicalProfile({format:'collect.deployment.v1',id:'collect-managed-production-cloud',mode:'managed',
+  environment:'production',supabase_origin:project,member_api_origin:project,admin_origin:project,
+  public_origin:project,google_callback_origin:project});
+ const production=()=>({...env(),COLLECT_DEPLOYMENT_PROFILE:profile,
+  COLLECT_DEPLOYMENT_PROFILE_SHA256:createHash('sha256').update(profile).digest('hex'),APP_ENVIRONMENT:'production',
+  BURIMUNSI_PRODUCT_MODE:'standalone',BURIMUNSI_COLLECTION_ID:'fixture-group'});
+ const handler=createHandler('collect-api',production,{standalone:true,admitDirectSupabaseNativeIngress,reportHealth:()=>{}});
+ for(const [path,timed] of [['/session?include=home',true],['/payments?filter=all&sort=newest&limit=100',true],['/session',false]]){
+  reset();
+  const response=await handler(new Request(project+'/functions/v1/collect-api/v1/burimunsi'+path,
+   {headers:{'X-BuriMunsi-Auth':'phone_pin'}}));
+  assert.equal(response.status,200);
+  assert.deepEqual(state.events,['database','schema','fence','native','dispatch']);
+  if(timed)assert.match(response.headers.get('Server-Timing'),/^admission;dur=\d+, records;dur=\d+$/);
+  else assert.equal(response.headers.get('Server-Timing'),null);
  }
 });

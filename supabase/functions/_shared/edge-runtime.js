@@ -1,6 +1,6 @@
 import {SupabaseObjectBucket, providerAdapters} from './adapters.js';
 import {sqlFenceBackend} from './application-fence.js';
-import {assertRuntimeDeployment,assertDatabaseIdentity} from './deployment-database.js';
+import {assertRuntimeDeployment, prepareDeploymentCheck} from './deployment-database.js';
 import {connection, fenceConnection} from './postgres-connections.js';
 import {PostgresDatabase} from './postgres.js';
 
@@ -9,20 +9,24 @@ import {PostgresDatabase} from './postgres.js';
 export class EdgeRuntimeWork {
   stage = 'environment';
   work;
-  verifyAdmission;
+  beforeRegister;
 
   /** @param {string} [standaloneCollectionId] */
-  async initializeDatabase(env, standaloneCollectionId = undefined, foldIntoRegistration = false) {
+  async initializeDatabase(env, standaloneCollectionId = undefined, checkAtRegistration = false) {
     this.stage = 'database_initialization';
     env.DB = new PostgresDatabase(connection(env.COLLECT_DATABASE_URL, env));
-    if(foldIntoRegistration)this.verifyAdmission=tx=>assertDatabaseIdentity(tx,env,standaloneCollectionId);
-    else await assertRuntimeDeployment(env.DB.sql, env, standaloneCollectionId);
+    if (checkAtRegistration) {
+      this.beforeRegister = await prepareDeploymentCheck(env, standaloneCollectionId);
+      if (!this.beforeRegister) throw new Error('deployment_identity_required');
+    } else {
+      await assertRuntimeDeployment(env.DB.sql, env, standaloneCollectionId);
+    }
   }
 
   async admit(env, openWork, kind, signal) {
     this.stage = 'fence_admission';
     this.work = await openWork({
-      backend: sqlFenceBackend(env.DB.sql, fenceConnection(env.COLLECT_DATABASE_URL, env), this.verifyAdmission),
+      backend: sqlFenceBackend(env.DB.sql, fenceConnection(env.COLLECT_DATABASE_URL, env), this.beforeRegister),
       sourceSha256: env.BUILD_SOURCE_ID,
       kind,
       ...(signal === undefined ? {} : {signal}),

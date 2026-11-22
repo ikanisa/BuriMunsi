@@ -3,6 +3,7 @@ import {BuriError,requireThat,requirePort} from './errors.js';
 import {normalizePhone,requirePin,requireId,requireRequestId,sha256,exactKeys} from './values.js';
 import {PinHasher,newBearer,PIN_ITERATIONS} from './pin.js';
 import {lockCollectMutation} from '../../postgres-mutation-lock.js';
+import {BURIMUNSI_PRODUCT_MODE} from '../../burimunsi-standalone.js';
 import {requireActiveNativeRequest} from './wire/request-boundary.mjs';
 import {validateNativeRequest,requestBinding,bindNativeResponse,CONTRACT_VERSION} from './wire/native-contract.mjs';
 import {nativeRequestUrl,readNativeJson,requireNativeHttpsOrigin} from './wire/native-http.mjs';
@@ -12,6 +13,13 @@ import {pgInteger} from './postgres-values.js';
 // flag, actor object, stored hash or client-selected collection. Raw credentials
 // remain in this closure and are passed only as parameterized SQL arguments.
 const proofs=new WeakMap(),active=new WeakSet();
+const recordReadPath=/^\/v1\/burimunsi\/(?:session|home|payments(?:\/[A-Za-z0-9_-]+(?:\/history)?)?|members(?:\/[A-Za-z0-9_-]+)?|ledger|staff|audit)$/;
+const responseBindingHeaders=['X-BuriMunsi-Request','X-BuriMunsi-Generation','X-BuriMunsi-Contract','X-BuriMunsi-Payment-Reference-Version'];
+
+class ReadSnapshotRefusal extends Error {
+  constructor(response){super('read_snapshot_declined');this.response=response;}
+}
+
 export const PIN_CONTEXT_SQL='SELECT * FROM private.burimunsi_pin_session_context($1,$2::uuid,$3,$4)';
 export const PIN_SET_CONTEXT_SQL='SELECT private.burimunsi_set_pin_context($1,$2::uuid,$3,$4) AS result';
 export const PIN_RENEW_SQL='SELECT * FROM private.burimunsi_pin_renew_session($1,$2::uuid,$3,$4,$5,$6)';
@@ -21,21 +29,46 @@ export const RETIREMENT_OUTCOME_SQL='SELECT private.burimunsi_gateway_retirement
 // This applies only after the database has independently validated the session.
 export const PIN_CLOCK_SKEW_MS=5000;
 export function hasPhonePinContext(db){return proofs.has(db);}
-export function phonePinReadSelector(db,request){
-  const proof=proofs.get(db);
-  if(!proof)return null;
+
+function activeReadSnapshot(db) {
+  const proof=proofs.get(db),snapshot=proof?.snapshot;
+  if(!snapshot)return null;
+  const {request,work}=snapshot,[token,installation,device,profile]=proof.values;
+  requireThat(db.applicationWork===work,'request_not_admitted',503);
   requireActiveNativeRequest(request);
-  requireThat(proof.request===request&&db.applicationWork===proof.work,'request_not_admitted',503);
-  return proof.selector;
+  requireThat(request.headers.get('Authorization')==='Bearer '+token&&request.headers.get('X-BuriMunsi-Installation')===installation&&
+    request.headers.get('X-BuriMunsi-Device')===device&&request.headers.get('X-BuriMunsi-Profile')===profile&&
+    request.headers.get('X-BuriMunsi-Group')===proof.groupId&&request.headers.get('X-BuriMunsi-Auth')==='phone_pin'&&
+    !request.headers.has('X-BuriMunsi-Collect-Session'),'session_unavailable',401);
+  requireThat(responseBindingHeaders.every((name,index)=>request.headers.get(name)===snapshot.binding[index]),'request_not_admitted',503);
+  return snapshot;
 }
-export function snapshotPhonePinProof(db,tx){
-  const proof=proofs.get(db);
-  return proof?.snapshot===tx && db.ownsNativeRead?.(tx) ? proof.row : null;
+
+// These are identifiers for the transaction's actor reload, not an actor that
+// can authorize data by itself. Bind them to the original request and lease.
+export function phonePinReadSelector(db,request) {
+  const snapshot=activeReadSnapshot(db);if(!snapshot)return null;
+  requireThat(snapshot.request===request,'request_not_admitted',503);
+  snapshot.selected=true;
+  return snapshot.identity;
 }
+
+export function claimPhonePinReadSnapshot(db,groupId) {
+  const snapshot=activeReadSnapshot(db);if(!snapshot)return null;
+  requireThat(!snapshot.claimed&&snapshot.identity.groupId===groupId,'request_not_admitted',503);
+  snapshot.claimed=true;
+  return snapshot.sql;
+}
+
+export function ownsPhonePinReadSnapshot(db,sql) {
+  const snapshot=activeReadSnapshot(db);
+  return snapshot?.sql===sql;
+}
+
 export async function applyPhonePinContext(db,sql,groupId){
   const proof=proofs.get(db);if(!proof)return false;
   requireThat(proof.groupId===groupId,'access_denied',403);
-  if(snapshotPhonePinProof(db,sql))return true;
+  if(ownsPhonePinReadSnapshot(db,sql))return true;
   let rows;
   try{rows=await sql.unsafe(PIN_SET_CONTEXT_SQL,proof.values);}
   catch(error){if(error?.code==='42501')throw new BuriError('session_unavailable',401);throw error;}
@@ -61,9 +94,9 @@ function requirePinTransition(request,url,{readSession=false}={}){
   requireThat(url.search===''||(readSession&&url.search==='?include=home'),'invalid_query',400);
 }
 
-/** Bounded native phone/PIN authentication. Web Admin continues through GoTrue
- * and its own OTP/CAPTCHA path. No Auth identity, BFF session or MFA proof is
- * created. SQL revalidates approved principals and all opaque proof components.
+/** Bounded native phone/PIN authentication. No Auth identity, browser session
+ * or MFA proof is created. SQL revalidates approved principals and all opaque
+ * proof components.
  */
 export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()=>Date.now(),sessionTtlMs=1800000}){
   requireThat(typeof networkBucket==='function'&&typeof clock==='function'&&Number.isSafeInteger(sessionTtlMs)&&
@@ -83,9 +116,12 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
     const login=method==='POST'&&path==='/v1/burimunsi/session/login';
     const logout=method==='POST'&&path==='/v1/burimunsi/session/logout';
     const retirement=method==='GET'&&/^\/v1\/burimunsi\/gateway\/replacements\/([a-f0-9-]{36})\/outcome$/.exec(path);
-    const readSession=method==='GET'&&path==='/v1/burimunsi/session';
+    const readSession=method==='GET'&&path==='/v1/burimunsi/session',includeHome=url.search==='?include=home';
     const renewing=readSession||(method==='POST'&&path==='/v1/burimunsi/session/passcode');
     const db=env?.DB,work=db?.applicationWork;requirePort(db,['transaction','context','readContext','setClaims']);requirePort(work,['assert']);
+    const supportsReadSnapshot=typeof db.withNativeReadSnapshot==='function';
+    const combinedRead=method==='GET'&&(supportsReadSnapshot?recordReadPath.test(path):
+      env.BURIMUNSI_PRODUCT_MODE===BURIMUNSI_PRODUCT_MODE&&(path==='/v1/burimunsi/payments'||readSession&&includeHome));
     requireThat(!active.has(db),'native_context_busy',503);
     requireThat(request.headers.get('X-BuriMunsi-Auth')==='phone_pin'&&!request.headers.has('X-BuriMunsi-Collect-Session'),'invalid_credentials',401);
     const installation=requireRequestId(request.headers.get('X-BuriMunsi-Installation')),
@@ -93,18 +129,43 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
     requireThat(['staff','internal_receiver'].includes(profile)&&/^[a-f0-9]{64}$/.test(device??''),'invalid_credentials',401);
     if(login)requireThat(!request.headers.has('X-BuriMunsi-Group')&&!request.headers.has('authorization'),'invalid_credentials',401);
     if(login||logout||retirement||renewing)requirePinTransition(request,url,{readSession:readSession||login});
-    const shareRead = method==='GET' && typeof db.withNativeReadSnapshot==='function' &&
-      /^\/v1\/burimunsi\/(?:session|home|payments(?:\/[A-Za-z0-9_-]+(?:\/history)?)?|members(?:\/[A-Za-z0-9_-]+)?|ledger|staff|audit)$/.test(path);
-    const owned=async()=>{requireActiveNativeRequest(request);requireThat(db.applicationWork===work,'request_not_admitted',503);await assertWorkOwner(work);
+    const owned=async(durable=false)=>{requireActiveNativeRequest(request);requireThat(db.applicationWork===work,'request_not_admitted',503);
+      if(durable)await work.assert();else await assertWorkOwner(work);
       requireThat(db.applicationWork===work,'request_not_admitted',503);requireActiveNativeRequest(request);};
-    const transaction=async(write,fn)=>db.transaction(async sql=>{
-      await owned();if(write){await db.context(sql);await lockCollectMutation(sql);}
+    const transaction=async(write,fn,consistentRead=false)=>db.transaction(async sql=>{
+      await owned();if(write){
+        if(consistentRead)await sql.unsafe('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ WRITE');
+        await db.context(sql);await lockCollectMutation(sql);
+      }
       else{await sql.unsafe('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');await db.readContext(sql,{isolation:'repeatable read'});}
-      const result=await fn(sql);await owned();return result;
+      const result=await fn(sql);await owned(true);return result;
     });
     active.add(db);const local={...env};delete local.AUTH_ACTOR;delete local.AUTH_VERIFIED;delete local.ADMIN_AUTH_EXCHANGE;
+    const readOnly=fn=>supportsReadSnapshot?db.withNativeReadSnapshot(fn):transaction(false,fn);
+    const setContext=async(sql,values)=>{
+      const rows=await sql.unsafe(PIN_SET_CONTEXT_SQL,values);
+      requireThat(rows.length<=1,'session_unavailable',401);
+      return rows[0]?.result;
+    };
+    const serveRead=async(sql,principal,values,readRequest=request)=>{
+      const identity=Object.freeze({id:principal.nativeAccountId,sessionId:principal.principalSessionId,
+        installationId:installation,groupId:principal.groupId});
+      const snapshot={request:readRequest,work,identity,sql,claimed:false,selected:false,
+        binding:responseBindingHeaders.map(name=>readRequest.headers.get(name))};
+      proofs.set(db,Object.freeze({groupId:principal.groupId,values,snapshot}));
+      activeReadSnapshot(db);
+      const response=await operation(principal,local,readRequest);
+      requireActiveNativeRequest(request);activeReadSnapshot(db);
+      requireThat(response instanceof Response,'request_not_admitted',503);
+      if(!response.ok)throw new ReadSnapshotRefusal(response);
+      requireThat(!snapshot.selected||snapshot.claimed,'request_not_admitted',503);
+      return response;
+    };
     try{
-      db.setClaims({});await owned();
+      db.setClaims({});
+      // The combined branch enters the assertion-owning transaction next. No
+      // async work or authority-bearing I/O occurs before that entry check.
+      if(!combinedRead)await owned();
       if(logout){
         // The narrow barrier is allowed even when account access is temporarily
         // suspended. It validates exact device proofs and can only revoke them;
@@ -173,34 +234,31 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
         const binding=requestBinding(request,installation,account.groupId);binding.actorId=account.id;
         const data={groupId:account.groupId,token,expiresAt:integer(created.expiresAt),profile:{id:account.id,name:account.name,phone:account.phone,
           role:account.role,capabilities:[...account.capabilities]}};
-        const includeHome=url.search==='?include=home';
         if(includeHome){
           const values=Object.freeze([token,installation,device,profile]);
-          const readHome=async tx=>{
-            const row=(await tx.unsafe(PIN_SET_CONTEXT_SQL,values))[0]?.result;
-            const principal=current(row,installation,profile,clock());
-            requireThat(principal.groupId===account.groupId&&principal.nativeAccountId===account.id,'session_unavailable',401);
-            const authHeaders=new Headers(request.headers);
-            authHeaders.delete('Content-Length');authHeaders.delete('Content-Type');
-            authHeaders.set('Authorization','Bearer '+token);authHeaders.set('X-BuriMunsi-Group',account.groupId);
-            const read=new Request(new URL('/v1/burimunsi/session?include=home',origin),{headers:authHeaders,signal:request.signal});
-            proofs.set(db,{groupId:account.groupId,values,snapshot:tx,row,request:read,work,
-              selector:Object.freeze({id:account.id,sessionId:principal.principalSessionId,groupId:account.groupId})});
-            const response=await operation(principal,local,read);
-            if(response.status>=500)return null;
-            requireThat(response.ok,'session_unavailable',401);
-            const envelope=await response.json();
-            requireThat(envelope.ok===true&&envelope.binding?.actorId===account.id&&envelope.binding?.groupId===account.groupId&&
-              envelope.binding?.installationId===installation&&envelope.data?.profile?.id===account.id,'session_unavailable',401);
-            return envelope.data.home;
-          };
-          try{data.home=typeof db.withNativeReadSnapshot==='function' ? await db.withNativeReadSnapshot(readHome) : await transaction(false,readHome);}
-          catch(error){
-            if(error?.code==='42501')throw new BuriError('session_unavailable',401);
-            if(['application_fenced','application_fence_unavailable'].includes(error?.code))throw error;
-            if(error instanceof BuriError && error.status<500)throw error;
+          try{
+            data.home=await readOnly(async sql=>{
+              const principal=current(await setContext(sql,values),installation,profile,clock());
+              requireThat(principal.groupId===account.groupId&&principal.nativeAccountId===account.id,'session_unavailable',401);
+              const authHeaders=new Headers(request.headers);
+              authHeaders.delete('Content-Length');authHeaders.delete('Content-Type');
+              authHeaders.set('Authorization','Bearer '+token);authHeaders.set('X-BuriMunsi-Group',account.groupId);
+              const read=new Request(new URL('/v1/burimunsi/session?include=home',origin),{headers:authHeaders,signal:request.signal});
+              const response=await serveRead(sql,principal,values,read);
+              const envelope=await response.json();
+              requireThat(envelope.ok===true&&envelope.binding?.actorId===account.id&&envelope.binding?.groupId===account.groupId&&
+                envelope.binding?.installationId===installation&&envelope.binding?.requestId===binding.requestId&&
+                envelope.binding?.generation===binding.generation&&envelope.data?.profile?.id===account.id,'session_unavailable',401);
+              return envelope.data.home;
+            });
+            activeReadSnapshot(db);
+          }catch(error){
+            if(error?.code==='42501'||error instanceof ReadSnapshotRefusal&&error.response.status<500)throw new BuriError('session_unavailable',401);
+            if(['application_fenced','application_fence_unavailable','request_not_admitted'].includes(error?.code)||
+                error instanceof BuriError&&error.status<500)throw error;
             data.home=null;
           }
+          await owned(true);
         }
         return new Response(JSON.stringify(bindNativeResponse({operation:'login',includeHome},binding,body,data)),{status:200,headers:headers()});
       }
@@ -212,36 +270,46 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
       // No other business command may use an expired proof.
       const requestedGroup=request.headers.get('X-BuriMunsi-Group');
       if(renewing)requireId(requestedGroup);
-      const serve=async(row,snapshot=null)=>{
+      const readPrincipal=row=>{
         const principal=current(row,installation,profile,clock());
         requireThat(requestedGroup===principal.groupId,'native_scope_changed',403);
-        const selector=Object.freeze({id:principal.nativeAccountId,sessionId:principal.principalSessionId,groupId:principal.groupId});
-        proofs.set(db,{groupId:principal.groupId,values,selector,snapshot,row,request,work});
-        return operation(principal,local);
+        return principal;
       };
-      if(shareRead){
-        const needsRenewal=Symbol('renew');
-        const response=await db.withNativeReadSnapshot(async tx=>{
-          let row;
-          try{row=(await tx.unsafe(PIN_SET_CONTEXT_SQL,values))[0]?.result;}
-          catch(error){if(error?.code!=='42501')throw error;
-            if(readSession)return needsRenewal;
-            throw new BuriError('session_unavailable',401);}
-          // The existing SQL renewal rule is one minute. Early revalidation
-          // remains read-only. Expired and nearly expired sessions use the
-          // normal guarded renewal outside this repeatable-read transaction.
-          if(readSession&&(!row||integer(row.expires_at)<=clock()+60000))return needsRenewal;
-          return serve(row,tx);
-        });
-        if(response!==needsRenewal)return response;
+      if(combinedRead){
+        const needsRenewal=new Error('native_read_needs_renewal');
+        try{
+          // Bundled Home keeps renewal and the projection in one transaction.
+          // Renewal already installs scoped context and locks current authority.
+          const response=readSession&&includeHome?await transaction(true,async sql=>{
+            const rows=await sql.unsafe(PIN_RENEW_SQL,[...values,requestedGroup,sessionTtlMs]);
+            requireThat(rows.length===1,'session_unavailable',401);
+            return serveRead(sql,readPrincipal(rows[0]),values);
+          },true):await readOnly(async sql=>{
+            let row;
+            try{row=await setContext(sql,values);}
+            catch(error){if(readSession&&error?.code==='42501')throw needsRenewal;throw error;}
+            // The bare session still revalidates without taking a writer lock
+            // when it is healthy. Roll back the probe before guarded renewal.
+            if(readSession&&(!row||integer(row.expires_at)<=clock()+60000))throw needsRenewal;
+            return serveRead(sql,readPrincipal(row),values);
+          });
+          activeReadSnapshot(db);
+          return response;
+        }catch(error){
+          if(error instanceof ReadSnapshotRefusal)return error.response;
+          if(error?.code==='42501')throw new BuriError('session_unavailable',401);
+          if(error!==needsRenewal)throw error;
+        }
       }
-      let row;
-      try{row=await transaction(renewing,async sql=>{
+      let principal;
+      try{principal=await transaction(renewing,async sql=>{
         const rows=await sql.unsafe(renewing?PIN_RENEW_SQL:PIN_CONTEXT_SQL,
           renewing?[...values,requestedGroup,sessionTtlMs]:values);
-        requireThat(rows.length===1,'session_unavailable',401);return rows[0];
+        requireThat(rows.length===1,'session_unavailable',401);
+        return readPrincipal(rows[0]);
       });}catch(error){if(error?.code==='42501')throw new BuriError('session_unavailable',401);throw error;}
-      const result=await serve(row);await owned();return result;
+      proofs.set(db,Object.freeze({groupId:principal.groupId,values}));
+      const result=await operation(principal,local);await owned();return result;
     }finally{proofs.delete(db);try{db.setClaims({});}finally{active.delete(db);}}
   };
 }
