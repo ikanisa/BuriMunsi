@@ -132,8 +132,8 @@ test('public BuriMunsi deletion support serves only its static document and styl
   assert.equal(response.headers.get('X-Collect-Document'), 'burimunsi.privacy.support.v1');
   assert.match(response.headers.get('Content-Security-Policy'), /default-src 'none'.*form-action 'none'/);
   const document = await response.text();
-  assert.match(document, /Contact support about account deletion/);
-  assert.doesNotMatch(document, /<script\b|<form\b/);
+  assert.ok(document.includes('href="https://wa.me/250788767816" rel="noreferrer">Contact support on WhatsApp at +250 788 767 816</a>'));
+  assert.doesNotMatch(document, /mailto:|<script\b|<form\b/i);
   const alias = await worker.fetch(request('/functions/v1/collect-api' + path), env);
   assert.equal(await alias.text(), document);
   const style = await worker.fetch(request(path + '/assets/style.css'), env);

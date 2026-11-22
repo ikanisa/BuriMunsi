@@ -143,9 +143,6 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         notificationAccessGranted=notifications;batteryExemptionGranted=batteryExempt
         receiverStatus.refreshHealth()
     }
-    private var supportJob:Job?=null
-    private var supportClient:SupportContactClient?=null
-    override var supportPhone:String? by mutableStateOf(null);private set
     private val memberInputs = MemberImportInputs()
     private val memberRegistration = NativeMemberRegistration(::repo)
     /** Consult the process authority before claiming a result, even while its change callback is queued. */
@@ -259,7 +256,6 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         state=state.copy(gateway=null)
         lifecycleObserved=true;foreground=false;needsSessionCheck=true;resumeQueued=true
         gateway.foregroundChanged(false)
-        supportJob?.cancel();supportJob=null;supportPhone=null
         exposureJob?.cancel();exposureJob=null
     }
     fun onForeground(){
@@ -273,7 +269,6 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         }else resumeQueued=true
         gateway.foregroundChanged(true)
         permissionsChanged()
-        refreshSupport()
         startExposureChecks()
         drainResumeCheck()
         drainMemberDocument()
@@ -292,15 +287,6 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         val now=clock()
         if(lastConnectivityRetryAt>0L&&now>=lastConnectivityRetryAt&&now-lastConnectivityRetryAt<5_000L)return
         lastConnectivityRetryAt=now;resumeQueued=true;drainResumeCheck()
-    }
-    private fun refreshSupport(){
-        if(!foreground||state.starting||supportPhone!=null||supportJob?.isActive==true||
-            (state.operator!=null&&state.sheet!=Sheet.HELP))return
-        val client=supportClient?:return
-        supportJob=viewModelScope.launch{
-            val result=withContext(Dispatchers.IO){client.read()}
-            if(foreground)supportPhone=result
-        }
     }
     private fun drainResumeCheck(){
         if(!foreground||!resumeQueued||state.busy)return
@@ -613,7 +599,6 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         try {
             install=DeviceProvisioning(app,GatewayFactory.installationId(app))
             Values.apiOrigin(BuildConfig.BURI_API_ORIGIN)
-            supportClient=SupportContactClient(BuildConfig.BURI_API_ORIGIN,BuildConfig.BURI_API_PATH_PREFIX,BuildConfig.COLLECT_PUBLISHABLE_KEY)
             val api=ApiClient.phonePin(BuildConfig.BURI_API_ORIGIN,install!!.installationId,
                 installationProfile,BuildConfig.BURI_API_PATH_PREFIX,BuildConfig.COLLECT_PUBLISHABLE_KEY){install!!.registrationToken()}
             repository=NativeRepository(app,api)
@@ -720,7 +705,6 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                     drainMemberDocument()
                     drainGatewayPermissionStatus()
                     checkpointNavigation()
-                    refreshSupport()
                 }
             }
         }.also { job -> if (onFinished != null) job.invokeOnCompletion { onFinished() } }
@@ -778,7 +762,6 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                     else->null
                 }
                 state=UiState(pending=state.pending,error=notice)
-                refreshSupport()
             }
         }
         }
@@ -1493,7 +1476,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         val resolveBlankPhoneDenial=existing!=null&&pin.isBlank()&&normalizedPhone!=Values.phone(existing.phone)
         val body=JSONObject().put("action",if(existing==null)"create" else "edit").put("name",name.trim()).put("phone",normalizedPhone)
         if(existing!=null)body.put("id",existing.id).put("expectedVersion",existing.version)
-        if(pin.isNotBlank())body.put("pin",Values.pin(pin))
+        if(existing!=null&&pin.isNotBlank())body.put("pin",Values.pin(pin))
         val caps=JSONArray().put(Capability.READ.key);if(enroll)caps.put(Capability.ENROLL.key);if(allocate)caps.put(Capability.ALLOCATE.key);body.put("capabilities",caps)
         command{repo().staffAction(body,resolveBlankPhoneDenial)};val staff=io{repo().staff()};state=state.copy(sheet=Sheet.STAFF,sheetId=null,staff=staff,panelSavedAt=clock(),selectedStaff=null,draft=emptyMap(),draftDirty=false)
     }
@@ -1587,7 +1570,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         code=="fresh_records_required"->"These records have expired. Reconnect and refresh before continuing."
         code=="invalid_name"->"Use a name of 2–100 characters without control characters."
         code=="invalid_note"->"Use an identification note of 8–500 characters without control characters."
-        code.startsWith("invalid_history")||code in setOf("invalid_page","invalid_api_response","invalid_member_payment_scope")->"Received inconsistent records. Refresh or contact support."
+        code.startsWith("invalid_history")||code in setOf("invalid_page","invalid_api_response","invalid_member_payment_scope")->"Received inconsistent records. Refresh or contact support on WhatsApp at +250 788 767 816."
         code=="history_limit"->"This history is too large for the phone. Contact an administrator for a full extract."
         code=="record_unavailable"->"This record is unavailable. Go back or refresh."
         code=="invalid_credentials"->"Phone or passcode is incorrect."

@@ -1,5 +1,6 @@
 import type {ReactNode} from 'react';
 import {Card} from '../ui';
+import {SupportLink} from '../ui/SupportLink';
 import burimunsiWordmark from '../ui/assets/burimunsi-wordmark.png';
 import {adminBrand} from '../branding';
 import './auth.css';
@@ -11,6 +12,7 @@ export function AuthFrame({title, subtitle, children}: {title: string; subtitle:
       <span><small>Admin workspace</small></span>
     </div>
     <Card className="admin-auth-card"><h1>{title}</h1><p className="admin-auth-subtitle">{subtitle}</p>{children}</Card>
+    <p className="admin-auth-help"><SupportLink /></p>
   </div></main>;
 }
 

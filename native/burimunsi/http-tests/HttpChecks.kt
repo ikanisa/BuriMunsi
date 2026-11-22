@@ -130,24 +130,10 @@ fun main(){
  ck("opted-in reveal cannot silently omit its hint result",runCatching{observationWire.semantics("observationReveal",envelope(observationRevealed),hintContext)}.isFailure)
  ck("forged quoted text is rejected",runCatching{observationWire.semantics("observationReveal",envelope(hintData+("displayHints" to (hintSet+("hints" to listOf(hint+("text" to "9,000 RWF")))))),hintContext)}.isFailure)
  ck("mismatched body hash is rejected",runCatching{observationWire.semantics("observationReveal",envelope(hintData+("displayHints" to (hintSet+("bodySha256" to "b".repeat(64))))),hintContext)}.isFailure)
- val support=SupportContactClient("https://test.invalid","/functions/v1/collect-api")
- Wire.reply=Reply(body="""{"support_channels":[{"key":"support.whatsapp","channel_type":"whatsapp","is_active":true,"value":"250780000001"}]}""")
- ck("public support contact is dynamically normalized",support.read()=="+250780000001")
- ck("support uses exact shared public route without credentials",Wire.last?.url?.path=="/functions/v1/collect-api/v1/rpc/get_public_runtime_config"&&Wire.last?.requestMethod=="POST"&&Wire.last?.written?.toString("UTF-8")=="{}"&&Wire.last?.getRequestProperty("Authorization")==null&&Wire.last?.getRequestProperty("X-BuriMunsi-Device")==null)
- ck("support disallows redirects and transport caching",Wire.last?.instanceFollowRedirects==false&&Wire.last?.useCaches==false)
- for((label,body) in listOf(
-  "missing" to """{"support_channels":[]}""",
-  "inactive" to """{"support_channels":[{"key":"support.whatsapp","is_active":false,"value":"250780000001"}]}""",
-  "duplicate" to """{"support_channels":[{"key":"support.whatsapp","value":"250780000001"},{"key":"support.whatsapp","value":"250780000002"}]}""",
-  "wrong channel" to """{"support_channels":[{"key":"support.whatsapp","channel_type":"email","value":"250780000001"}]}""",
-  "unsafe phone" to """{"support_channels":[{"key":"support.whatsapp","value":"250780000001?x=1"}]}""",
-  "duplicate JSON key" to """{"support_channels":[],"support_channels":[]}""")){
-  Wire.reply=Reply(body=body);ck("support $label is unavailable",support.read()==null)
- }
- Wire.reply=Reply(status=302,body="{}");ck("support redirect is unavailable",support.read()==null)
- Wire.reply=Reply(type="text/html",body="{}");ck("support non-JSON is unavailable",support.read()==null)
- Wire.reply=Reply(body=" ".repeat(65_537));ck("support oversized response is unavailable",support.read()==null)
- Wire.reply=Reply(streamFactory={throw IOException("offline")});ck("offline support never invents a fallback",support.read()==null)
+ val beforeSupport=Wire.opened
+ ck("support uses the public WhatsApp number without sending account or message details",
+    rw.ikanisa.burimunsi.core.BuriMunsiSupport.phone=="+250 788 767 816"&&
+    rw.ikanisa.burimunsi.core.BuriMunsiSupport.whatsappUrl=="https://wa.me/250788767816"&&Wire.opened==beforeSupport)
  Wire.reply=Reply()
  val scope=mapOf<String,Any?>("groupId" to "group-1","actorId" to "actor-1","generation" to "3")
  val api=ApiClient("https://test.invalid","installation-1"){"d".repeat(64)}
@@ -501,8 +487,6 @@ fun main(){
  val cloudClient=ApiClient.phonePin(cloud,nativeInstall,"staff","/functions/v1/collect-api",publishable){"d".repeat(64)}
  cloudClient.call("POST","/v1/burimunsi/session/login",body=JSONObject().put("phone","+250780000001").put("pin","2468"),contractContext=mapOf("generation" to "18"))
  ck("cloud login sends the public project key without inventing an authorization token",Wire.last?.getRequestProperty("apikey")==publishable&&Wire.last?.getRequestProperty("Authorization")==null)
- Wire.reply=Reply(body="""{"support_channels":[{"key":"support.whatsapp","value":"250780000001"}]}""")
- ck("cloud help sends the public project key",SupportContactClient(cloud,"/functions/v1/collect-api",publishable).read()=="+250780000001"&&Wire.last?.getRequestProperty("apikey")==publishable)
  Wire.reply=Reply()
  val beforePublicKeyRefusals=Wire.opened
  for((origin,prefix,key) in listOf(Triple(cloud,"/functions/v1/collect-api",""),Triple(cloud,"/functions/v1/collect-api","sb_secret_"+"x".repeat(24)),
