@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import {createHash, randomBytes, randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
-import {ownedFixturePool} from './postgres-fixture-pool.mjs';
+import {Buffer} from 'node:buffer';
 import {openApplicationWork, sqlFenceBackend} from '../../functions/_shared/application-fence.js';
 import {CONTRACT_VERSION} from '../../functions/_shared/domain/burimunsi/wire/native-contract.mjs';
 import {createPhonePinRequestGate, phonePinReadSelector} from '../../functions/_shared/domain/burimunsi/phone-pin-request.js';
@@ -28,10 +28,7 @@ const token = () => randomBytes(32).toString('hex');
 const hash = raw => createHash('sha256').update(raw).digest('hex');
 const unused = () => { throw Error('Unexpected write or external operation'); };
 
-export async function qualifyNativeReads({owner, admin, database, fixtureRoot, source}) {
-  const {host:socket, port} = owner.connectionParameters;
-  const pool = await ownedFixturePool({root:fixtureRoot, socket, port:Number(port), database,
-    user:'postgres', clusterName:'collect_archive_next_fixture'});
+export async function qualifyNativeReads({pool, inspect, source}) {
   const backend = sqlFenceBackend(pool, pool);
   async function admitted(fn, kind = 'http_collect') {
     const admission = await openApplicationWork({backend, sourceSha256:source, kind});
@@ -85,7 +82,7 @@ export async function qualifyNativeReads({owner, admin, database, fixtureRoot, s
   }
 
   async function lease(actor) {
-    const {rows} = await admin.query(`SELECT expires_at AS initial, pin_lease_expires_at AS renewed,
+    const rows = await inspect(`SELECT expires_at AS initial, pin_lease_expires_at AS renewed,
       floor(extract(epoch FROM clock_timestamp())*1000)::bigint AS now
       FROM private.burimunsi_sessions WHERE id=$1`, [actor.session]);
     assert.equal(rows.length, 1);
@@ -139,6 +136,27 @@ export async function qualifyNativeReads({owner, admin, database, fixtureRoot, s
       await db.context(sql);
     }), {code:'application_fence_unavailable'}));
     console.log('PASS original PostgreSQL write fence rejects the former repeatable-read write transaction');
+    const marker = randomUUID();
+    const failedRead = new Error('simulated consumer error');
+    await admitted(async db => {
+      await assert.rejects(db.withNativeReadSnapshot(async sql => {
+        const [context] = await sql.unsafe(`SELECT current_user AS role, current_setting('transaction_read_only') AS read_only,
+          current_setting('transaction_isolation') AS isolation, current_setting('lock_timeout') AS lock_limit,
+          current_setting('statement_timeout') AS statement_limit,current_setting('search_path') AS path,
+          current_setting('request.jwt.claims') AS claims,current_setting('collect.edge_verified') AS verified`);
+        assert.deepEqual({...context},{role:'collect_runtime', read_only:'on', isolation:'repeatable read',
+          lock_limit:'5s', statement_limit:'15s', path:'app,public,pg_catalog', claims:'{}', verified:'true'});
+        assert.equal(await db.withNativeReadSnapshot(nested=>nested===sql),true);
+        assert.throws(()=>db.transaction(()=>{}),/read_snapshot_cannot_write/);
+        await sql.unsafe("SELECT set_config('burimunsi.fixture_read_rollback',$1,true)",[marker]);
+        throw failedRead;
+      }),error=>error===failedRead);
+      await db.withNativeReadSnapshot(async sql=>{
+        const [state]=await sql.unsafe("SELECT current_setting('burimunsi.fixture_read_rollback',true) AS prior");
+        assert.notEqual(state.prior,marker);
+      });
+    });
+    console.log('PASS native read uses the restricted role and current claims, honors read-only isolation and rolls back a failed consumer');
     for (const account of accounts) {
       for (const [state, ttl] of [['current',1800000], ['due',45000], ['expired',1200]]) {
         const actor = await issue(account, ttl);

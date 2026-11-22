@@ -2,6 +2,9 @@
 // phone-directory migration runs unmodified on the same server as the HTTP reads.
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {execFileSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {ownedFixturePool} from './postgres-fixture-pool.mjs';
 import {randomUUID} from 'node:crypto';
 import {readRecordedHistory, readRecordedSql} from '../../../scripts/supabase/cloud-release/recorded-history.mjs';
 import {qualifyNativeReads} from './fresh-phone-reads.mjs';
@@ -16,6 +19,9 @@ const latest = [
   '20261122191200_burimunsi_known_device_login_budget.sql',
   '20261122191300_burimunsi_event_driven_jobs.sql',
   '20261122191400_burimunsi_admin_realtime.sql',
+  '20261122191500_burimunsi_gateway_realtime_wake.sql',
+  '20261122200000_burimunsi_admin_handset_intake.sql',
+  '20261122201000_burimunsi_admin_inbox_coverage.sql',
 ];
 
 export async function verifyFreshPhoneReads({owner,admin,database,fixtureRoot}) {
@@ -79,5 +85,15 @@ export async function verifyFreshPhoneReads({owner,admin,database,fixtureRoot}) 
   await owner.query('SELECT private.collect_fence_drain($1,$2,$3)',hold);
   for (const name of latest) await apply(name);
   await owner.query('SELECT private.collect_fence_release_v3($1,$2,$3)',[randomUUID(),control.epoch,source]);
-  await qualifyNativeReads({owner,admin,database,fixtureRoot,source});
+  const {host:socket,port} = owner.connectionParameters;
+  const pool = await ownedFixturePool({root:fixtureRoot,socket,port:Number(port),database,
+    user:'postgres',clusterName:'collect_archive_next_fixture'});
+  await qualifyNativeReads({pool, source, inspect:async (sql,values)=>(await admin.query(sql,values)).rows});
+
+  const pgSocket = socket+'/.s.PGSQL.'+port;
+  const deno = fileURLToPath(new URL('scripts/supabase/node_modules/deno/deno',root));
+  const lock = fileURLToPath(new URL('supabase/functions/deno.lock',root));
+  const driver = fileURLToPath(new URL('./fresh-phone-driver.mjs',import.meta.url));
+  execFileSync(deno,['run','--node-modules-dir=none','--lock='+lock,'--frozen','--cached-only','--allow-read','--allow-env',
+    '--allow-net=unix:'+pgSocket,'--allow-write='+pgSocket,driver,socket,String(port),database,source],{stdio:'inherit'});
 }
