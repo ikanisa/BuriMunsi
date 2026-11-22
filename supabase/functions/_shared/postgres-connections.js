@@ -13,7 +13,9 @@ function configuredConnection(url,control,env) {
   if(ca!==undefined&&(typeof ca!=='string'||!ca.startsWith('-----BEGIN CERTIFICATE-----\n')||ca.length>32768))throw new Error('Invalid database CA.');
   const poolKey=(control?'control:':'business:')+url+'\n'+(ca??'');
   if (!pools.has(poolKey)) {const options={max: control ? 1 : 4, prepare: false,
-    idle_timeout: 20, connect_timeout: 10, ssl: local ? false : {rejectUnauthorized: true,...(ca?{ca}:{}),servername:target.hostname},
+    // A fresh native read commonly follows a 30-second cache expiry. Keep the
+    // existing bounded sockets across that gap; every request still opens its own transaction.
+    idle_timeout: 45, connect_timeout: 10, ssl: local ? false : {rejectUnauthorized: true,...(ca?{ca}:{}),servername:target.hostname},
     types: {numeric: {to:1700,from:[1700],serialize:String,parse:value=>{const n=Number(value);if(!/^-?\d+(?:\.0+)?$/.test(value)||!Number.isSafeInteger(n))throw new Error('integer_out_of_range');return n;}},bigint: {to: 20, from: [20], serialize: String, parse: value => {
       const n = Number(value); if (!Number.isSafeInteger(n)) throw new Error('integer_out_of_range'); return n;
     }}}, onnotice: () => {}};
