@@ -67,6 +67,7 @@ async function qualifyBrowserReads(pool,source,originalCookie){
     assert.equal(made.status,200,JSON.stringify(made.data));
     const signed=await call('auth/phone-passcode',{body:{phone,pin:initial}});
     assert.equal(signed.status,200,JSON.stringify(signed.data));
+    assert.equal(signed.data.sessionContract,2);
     assert.match(signed.cookie,/^[a-f0-9]{64}$/);
     assert.equal(signed.data.user.accountId,made.data.id);
     const view={cookie:signed.cookie};
@@ -89,8 +90,37 @@ export async function verifyPhoneOperatorAccounts({owner,database,fixtureRoot}) 
   const [{actual,local,cluster}] = (await owner.query("SELECT current_database() AS actual,inet_server_addr() IS NULL AS local,current_setting('cluster_name') AS cluster")).rows;
   assert.ok(local && actual===database && /^collect_archive_[0-9a-f]{24}_test$/.test(database) && cluster==='collect_archive_next_fixture');
   await primeJournalSchema(owner);
+  // The archive omits scheduler installation. Restore its guarded catalog
+  // from retained definitions without configuring jobs, credentials or dispatch.
+  const scheduler=await migration('20261117073850_collect_managed_jobs_hmac.sql');
+  const shape=scheduler.match(/CREATE TABLE collect_ops\.jobs_config\([\s\S]*?CREATE TABLE collect_ops\.jobs_dispatches\([\s\S]*?\n\);/);
+  const parserPreimage=await readFile(new URL('./native-parser-review-preimage.sql',import.meta.url),'utf8');
+  const reconcile=parserPreimage.match(/CREATE OR REPLACE FUNCTION collect_ops\.reconcile_jobs\(\)[\s\S]*?END\$function\$\s*;/);
+  assert.ok(shape && reconcile);
+  await owner.query('CREATE SCHEMA IF NOT EXISTS collect_ops');
+  await owner.query(shape[0]);
+  const policyFunctions=[...scheduler.matchAll(/CREATE FUNCTION collect_ops\.(?:record_jobs_readiness|dispatch_jobs|activate_jobs|review_unknown_jobs|tick_jobs)\([\s\S]*?\nEND\$\$;/g)];
+  assert.equal(policyFunctions.length,5);
+  for (const [definition] of policyFunctions) await owner.query(definition);
+  await owner.query(reconcile[0]);
+  await owner.query('REVOKE ALL ON ALL FUNCTIONS IN SCHEMA collect_ops FROM PUBLIC,anon,authenticated,service_role,collect_runtime,collect_importer');
+  const {rows:[{scheduler:status}]}=await owner.query('SELECT private._collect_fence_scheduler_status() AS scheduler');
+  assert.equal(status.blocking,false,JSON.stringify(status));
   await owner.query(await migration('20261119114600_burimunsi_admin_sms_health.sql'));
-  await owner.query(await migration('20261122125000_burimunsi_browser_passcode.sql'));
+  for (const name of [
+    '20261122125000_burimunsi_browser_passcode.sql',
+    '20261122140000_burimunsi_batch_payment_projections.sql',
+    '20261122180000_burimunsi_internal_query_performance.sql',
+  ]) await owner.query(await migration(name));
+  const performanceFunctions=[
+    'private.burimunsi_auto_projection_batch(text,text[])','private.burimunsi_home_payment_times(text,text[])',
+    'private.burimunsi_admin_transaction_facts(text)','private._collect_fence_resources()',
+    'private.burimunsi_native_sms_post_candidates(integer)','private.burimunsi_operator_directory(text,text,text,text,text,uuid)',
+    'collect_ops.reconcile_jobs()',
+  ];
+  const performanceDefinitions=async()=>(await owner.query(
+    'SELECT routine,md5(pg_get_functiondef(routine::regprocedure)) AS fingerprint FROM unnest($1::text[]) AS routine ORDER BY routine',[performanceFunctions])).rows;
+  const beforePerformance=await performanceDefinitions();
   const historical=await fixture('burimunsi-browser-passcode.sql');
   const seed=historical.split('\nDO $exercise$\n');
   assert.equal(seed.length,2);
@@ -122,7 +152,7 @@ export async function verifyPhoneOperatorAccounts({owner,database,fixtureRoot}) 
   const hold=randomUUID(),args=[hold,state.epoch,state.source_sha256];
   await owner.query('SELECT private.collect_fence_begin_quiesce($1,$2,$3)',args);
   await owner.query('SELECT private.collect_fence_drain($1,$2,$3)',args);
-  await owner.query(await migration('20261122160000_burimunsi_phone_operator_accounts.sql'));
+  await owner.query(await migration('20261122190000_burimunsi_phone_operator_accounts.sql'));
   await owner.query('SELECT private.collect_fence_release_v3($1,$2,$3)',[randomUUID(),state.epoch,state.source_sha256]);
   await admitted(owner,'http_collect',async db=>{
     const current=(await db.query('SELECT * FROM private.burimunsi_pin_session_context($1,$2,$3,$4)',[token,installation,device,'staff'])).rows;
@@ -143,5 +173,6 @@ export async function verifyPhoneOperatorAccounts({owner,database,fixtureRoot}) 
   const pool=await ownedFixturePool({root:fixtureRoot,socket,port:Number(port),database,user:'postgres',clusterName:cluster});
   try { await qualifyBrowserReads(pool,state.source_sha256,originalCookie); } finally { await pool.end(); }
   assert.deepEqual(await receiverState(),originalReceiver);
-  return {existingBrowserSession:true,existingNativeSession:true,phoneAccountLifecycle:true,adminAndStaffGroupsAndPayments:true,unchangedDisabledReceiver:true};
+  assert.deepEqual(await performanceDefinitions(),beforePerformance);
+  return {existingBrowserSession:true,existingNativeSession:true,phoneAccountLifecycle:true,adminAndStaffGroupsAndPayments:true,unchangedDisabledReceiver:true,epoch64PerformanceRoutinesPreserved:true};
 }

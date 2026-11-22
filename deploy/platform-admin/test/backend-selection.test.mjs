@@ -28,23 +28,27 @@ test('past product origins and Cloudflare service selection are closed', async (
 
 test('explicit Supabase selection uses the nominated project once without touching Cloudflare or assets', async () => {
   let calls = 0;
-  const content = new Uint8Array([0, 9, 123, 195, 169, 255]);
+  const path = '/api/admin/team/accounts';
+  const requestId = '9f34a000-5ec2-4255-851c-b4e530ee5000';
+  const content = new TextEncoder().encode(JSON.stringify({
+    requestId, displayName: 'Éline Fixture', phone: '+250780000002', role: 'staff',
+  }, null, 2));
   const entry = createAdminWorker({fetchImpl: async upstream => {
     calls++;
-    assert.equal(upstream.url, SUPABASE_ORIGIN + '/functions/v1/admin-api/api/admin/team?cursor=a%2Bb&cursor=c');
-    assert.equal(upstream.method, 'PATCH');
+    assert.equal(upstream.url, SUPABASE_ORIGIN + '/functions/v1/admin-api' + path);
+    assert.equal(upstream.method, 'POST');
     assert.deepEqual(new Uint8Array(await upstream.arrayBuffer()), content);
     for (const [name, value] of [['Origin', origin], ['Cookie', '__Host-collect_admin=managed_fixture'],
-      ['Idempotency-Key', 'fixture-operation'], ['X-Collect-CSRF', 'fixture-csrf'],
+      ['Idempotency-Key', requestId], ['X-Collect-CSRF', 'fixture-csrf'], ['Content-Type', 'application/json'],
       ['X-Collect-Requested-With', 'collect-admin'], ['X-Collect-Admin', '1']]) {
       assert.equal(upstream.headers.get(name), value);
     }
     return Response.json({ok: true}, {headers: {'Set-Cookie': cookie, 'Cache-Control': 'public'}});
   }});
-  const response = await entry.fetch(req('/api/admin/team?cursor=a%2Bb&cursor=c', {
-    method: 'PATCH', body: content, headers: {Origin: origin,
+  const response = await entry.fetch(req(path, {
+    method: 'POST', body: content, headers: {Origin: origin, 'Content-Type': 'application/json',
       Cookie: '__Host-collect_admin=old_fixture; __Host-burimunsi_admin_rrlduytparvsjfmegalh=managed_fixture',
-      'Idempotency-Key': 'fixture-operation', 'X-Collect-CSRF': 'fixture-csrf',
+      'Idempotency-Key': requestId, 'X-Collect-CSRF': 'fixture-csrf',
       'X-Collect-Requested-With': 'collect-admin', 'X-Collect-Admin': '1'},
   }), environment(supabaseEnv));
   assert.equal(response.status, 200); assert.equal(calls, 1);
@@ -53,14 +57,16 @@ test('explicit Supabase selection uses the nominated project once without touchi
 });
 
 test('Supabase entrypoint binds cold Admin reads to its configured frontend with no service fallback', async () => {
-  for (const [path, method] of [['/api/admin/auth/session', 'GET'], ['/api/admin/team', 'HEAD']]) {
+  for (const path of ['/api/admin/auth/session', '/api/admin/team', '/api/admin/core/groups?search=a%2Bb&offset=0']) {
     let calls = 0;
     const entry = createAdminWorker({fetchImpl: async upstream => {
-      calls++; assert.equal(upstream.headers.get('Origin'), origin);
+      calls++; assert.equal(upstream.method, 'GET');
+      assert.equal(upstream.url, SUPABASE_ORIGIN + '/functions/v1/admin-api' + path);
+      assert.equal(upstream.headers.get('Origin'), origin);
       assert.equal(upstream.headers.get('Cookie'), '__Host-collect_admin=fixture');
       return new Response(null, {status: 204, headers: {'Set-Cookie': cookie}});
     }});
-    const response = await entry.fetch(req(path, {method,
+    const response = await entry.fetch(req(path, {
       headers: {'Sec-Fetch-Site': 'same-origin', Cookie: '__Host-burimunsi_admin_rrlduytparvsjfmegalh=fixture'},
     }), environment(supabaseEnv));
     assert.equal(response.status, 204); assert.equal(calls, 1);
@@ -69,10 +75,10 @@ test('Supabase entrypoint binds cold Admin reads to its configured frontend with
 });
 
 test('Supabase entrypoint retains lost Admin refresh uncertainty without service fallback', async () => {
-  for (const [path, method] of [['/api/admin/auth/session', 'GET'], ['/api/admin/team', 'HEAD']]) {
+  for (const path of ['/api/admin/auth/session', '/api/admin/team']) {
     let calls = 0;
     const entry = createAdminWorker({fetchImpl: async () => {calls++; throw new Error('synthetic lost custody response');}});
-    const response = await entry.fetch(req(path, {method, headers: {Cookie: '__Host-burimunsi_admin_rrlduytparvsjfmegalh=fixture'}}), environment(supabaseEnv));
+    const response = await entry.fetch(req(path, {headers: {Cookie: '__Host-burimunsi_admin_rrlduytparvsjfmegalh=fixture'}}), environment(supabaseEnv));
     assert.equal(response.status, 502); assert.equal(calls, 1);
     assert.deepEqual(await response.json(), {code: 'proxy_outcome_unknown', reason: 'proxy_upstream_failure'});
   }
@@ -171,7 +177,8 @@ test('integrated transport bytes retain the recorded current source identity', a
     ...provenance.burimunsi_admin_successor.source_sha256s,
     ...provenance.standalone_admin_successor.source_sha256s,
     ...provenance.burimunsi_phone_passcode_successor.source_sha256s,
-    ...provenance.burimunsi_admin_performance_successor.source_sha256s};
+    ...provenance.burimunsi_admin_performance_successor.source_sha256s,
+    ...provenance.burimunsi_session_read_successor.source_sha256s};
   const expected = (await readdir(source))
     .filter(name => /^(?:index|admin-session-realm|supabase-transport|transport-[\w-]+)\.js$/.test(name)).sort();
   assert.deepEqual(Object.keys(files).sort(), expected);

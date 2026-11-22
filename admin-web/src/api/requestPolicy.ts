@@ -90,9 +90,7 @@ export function requestHeaders(config: AdminClientConfig, path: string, options:
     if (config.backend === 'supabase' && before.csrfToken && !mfaRecovery) headers['X-Collect-CSRF'] = before.csrfToken;
   }
   const sessionRead = path === 'auth/session' && method === 'GET';
-  const passcodeExchange = config.phonePasscodeOnly && method === 'POST' &&
-    (path === 'auth/phone-passcode' || path === 'auth/passcode/verify');
-  if (config.backend === 'supabase' && (sessionRead || passcodeExchange)) headers['X-Collect-Owner-Identity-Version'] = '1';
+  if (config.backend === 'supabase' && sessionRead) headers['X-Collect-Owner-Identity-Version'] = '1';
   if (config.backend === 'supabase') headers.apikey = config.publishableKey!;
   if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey;
   if (options.reviewReason) headers['X-Collect-Review-Reason'] = options.reviewReason.trim();

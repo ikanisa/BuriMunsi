@@ -88,6 +88,7 @@ test('the existing native Admin credentials open an opaque same-origin browser s
   const cookie = response.headers.get('Set-Cookie');
   assert.match(cookie, /^__Host-collect_admin=[0-9a-f]{64}; Path=\/; HttpOnly; SameSite=Strict; Max-Age=1800; Secure$/);
   const browserCookie = cookie.split(';')[0];
+  assert.equal(value.sessionContract, 2);
   assert.equal(value.user.role, 'admin');
   assert.equal(value.user.accountId,value.adminIdentity.accountId);
   assert.equal(value.adminIdentity.principalId,principal);
@@ -142,6 +143,7 @@ test('Staff receive their own limited account and can optionally change their pa
   const login=await handleAdmin(request('phone-passcode',{body:{phone:staffPhone,pin}}),env);
   assert.equal(login.status,200);
   const data=await login.json(),cookie=login.headers.get('set-cookie').split(';')[0];
+  assert.equal(data.sessionContract,2);
   assert.equal(data.user.role,'staff');
   assert.equal(Object.hasOwn(data.user,'email'),false);
   assert.equal(data.adminIdentity,undefined);

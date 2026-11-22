@@ -2,7 +2,6 @@ import {MANAGED_SUPABASE_ORIGIN} from '../../../supabase/functions/_shared/deplo
 import {standaloneAdminRoute} from '../../../supabase/functions/_shared/burimunsi-standalone.js';
 import {managedBrowserCookies} from './transport-cookies.js';
 import {refuse} from './transport-failure.js';
-import {BURIMUNSI_ADMIN_COOKIE} from './admin-session-realm.js';
 
 export const SUPABASE_ORIGIN = MANAGED_SUPABASE_ORIGIN;
 export const GOOGLE_CALLBACK = '/v1/auth/google/callback';
@@ -107,11 +106,9 @@ export function upstreamRequest(request, admission, bytes, signal, frontendOrigi
   for (const [name, value] of request.headers) if (FORWARD_HEADERS.has(name)) headers.set(name, value);
   if (browserAdminCookie) managedBrowserCookies(headers, route, browserAdminCookie);
 
-  // Owner metadata opt-in and native device proof are restricted to their consumers.
+  // Older panels can send the identity header on sign-in. Only the session read consumes it.
   const sessionRead = route.logicalPath === '/api/admin/auth/session' && request.method === 'GET';
-  const passcodeExchange = browserAdminCookie === BURIMUNSI_ADMIN_COOKIE && request.method === 'POST' &&
-    ['/api/admin/auth/phone-passcode', '/api/admin/auth/passcode/verify'].includes(route.logicalPath);
-  if (route.functionName === 'admin-api' && (sessionRead || passcodeExchange) &&
+  if (route.functionName === 'admin-api' && sessionRead &&
       request.headers.get('x-collect-owner-identity-version') === '1') {
     headers.set('X-Collect-Owner-Identity-Version', '1');
   }

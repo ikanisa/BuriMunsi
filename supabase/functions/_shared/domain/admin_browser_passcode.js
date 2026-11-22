@@ -155,9 +155,7 @@ export async function handleBrowserPasscode(request, env, path) {
     if (issued !== true) throw credentialsDenied();
     const headers = new Headers({Cookie: '__Host-collect_admin=' + token, Origin: origin});
     const account = await browserPasscodeSession(new Request(request.url, {headers}), env);
-    const session = publicSession(account);
-    const bundled = request.headers.get('X-Collect-Owner-Identity-Version') === '1' && session.adminIdentity;
-    return json({...session, ...(bundled ? {sessionContract: 2} : {})}, 200, {'Set-Cookie': adminCookie(token, SESSION_SECONDS)});
+    return json({...publicSession(account), sessionContract: 2}, 200, {'Set-Cookie': adminCookie(token, SESSION_SECONDS)});
   }
   if (path === '/auth/passcode/change') {
     const account = await browserPasscodeSession(request, env);

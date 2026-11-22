@@ -87,6 +87,7 @@ test('the BuriMunsi browser proxy closes legacy auth, native and invitation rout
     ['POST', '/api/admin/auth/forgot-password'], ['POST', '/api/admin/auth/complete-password'],
     ['POST', '/api/admin/auth/change-password'], ['GET', '/api/admin/auth/email-verification'],
     ['POST', '/api/admin/auth/email/request'], ['POST', '/api/admin/auth/email/verify'],
+    ['POST', '/api/admin/auth/passcode/verify'], ['GET', '/api/admin/auth/passcode/change'],
     ['POST', '/api/admin/auth/google/start'], ['POST', '/api/admin/auth/google/exchange'],
     ['GET', '/api/admin/auth/mfa/factors'], ['POST', '/api/admin/auth/mfa/verify'],
     ['POST', '/api/admin/auth/mfa/recover'], ['GET', '/api/admin/auth/user'],
@@ -94,6 +95,9 @@ test('the BuriMunsi browser proxy closes legacy auth, native and invitation rout
     ['POST', '/api/admin/team/invite'], ['GET', '/api/admin/team/invitation-status'],
     ['POST', '/api/admin/team/7dfc16fb-b3b8-4c2d-b6f8-bcbfd8025001/resend'],
     ['GET', '/api/admin/team/v2'], ['POST', '/api/admin/team/v2/invite'],
+    ['HEAD', '/api/admin/team'], ['PATCH', '/api/admin/team'], ['POST', '/api/admin/team'], ['GET', '/api/admin/team/accounts'],
+    ['GET', '/api/admin/team/accounts/7dfc16fb-b3b8-4c2d-b6f8-bcbfd8025001/access'],
+    ['POST', '/api/admin/team/accounts/7dfc16fb-b3b8-4c2d-b6f8-bcbfd8025001/role'],
     ['POST', '/api/admin/auth/session'], ['GET', '/api/admin/auth/phone-passcode'],
   ];
   for (const [method, path] of paths) {
@@ -106,25 +110,55 @@ test('the BuriMunsi browser proxy closes legacy auth, native and invitation rout
   }
 });
 
-test('the phone sign-in and passcode verification forms use the dedicated Admin transport', async () => {
-  const routes = [['POST', 'auth/phone-passcode'], ['POST', 'auth/passcode/verify'], ['GET', 'auth/session'],
-    ['POST', 'auth/logout'], ['GET', 'team']];
+test('dedicated phone sign-in, personal passcode changes and Team account operations forward exactly once', async () => {
+  const id = '7dfc16fb-b3b8-4c2d-b6f8-bcbfd8025001';
+  const create = '7dfc16fb-b3b8-4c2d-b6f8-bcbfd8025002', promote = '7dfc16fb-b3b8-4c2d-b6f8-bcbfd8025003', disable = '7dfc16fb-b3b8-4c2d-b6f8-bcbfd8025004';
+  const access = 'team/accounts/' + id + '/access';
+  const routes = [
+    ['POST', 'auth/phone-passcode', {phone: '+250780000001', pin: '0123'}],
+    ['GET', 'auth/session'], ['GET', 'team'],
+    ['POST', 'team/accounts', {requestId: create, displayName: 'Fixture user', phone: '+250780000002', role: 'staff'}],
+    ['POST', access, {requestId: promote, expectedVersion: 1, active: true, role: 'admin'}],
+    ['POST', access, {requestId: disable, expectedVersion: 2, active: false}],
+    ['POST', 'auth/passcode/change', {current: '0123', newPin: '8547', confirm: '8547'}],
+    ['POST', 'auth/logout', {}],
+  ];
+  const attributes = '; Path=/; Secure; HttpOnly; SameSite=Strict';
   const forwarded = [];
   const worker = createAdminWorker({fetchImpl: async upstream => {
-    assert.equal(upstream.headers.get('Origin'), BURIMUNSI_ADMIN_ORIGIN);
-    if (upstream.method === 'POST') assert.equal(await upstream.text(), '{}');
-    forwarded.push([upstream.method, upstream.url]);
-    const headers = upstream.url.endsWith('/auth/phone-passcode') ?
-      {'Set-Cookie': '__Host-collect_admin=fixture; Path=/; Secure; HttpOnly; SameSite=Strict'} : {};
+    forwarded.push({method: upstream.method, url: upstream.url, body: await upstream.text(), headers: upstream.headers});
+    const headers = {};
+    if (upstream.url.endsWith('/auth/phone-passcode')) headers['Set-Cookie'] = '__Host-collect_admin=issued' + attributes;
+    if (upstream.url.endsWith('/auth/passcode/change') || upstream.url.endsWith('/auth/logout')) headers['Set-Cookie'] = '__Host-collect_admin=' + attributes + '; Max-Age=0';
     return Response.json({ok: true}, {headers});
   }});
-  for (const [method, path] of routes) {
-    const mutation = method === 'POST' ? {headers: {Origin: BURIMUNSI_ADMIN_ORIGIN, 'Content-Type': 'application/json',
-      'X-Collect-Requested-With': 'collect-admin'}, body: '{}'} :
-      {headers: {Cookie: BURIMUNSI_ADMIN_COOKIE + '=fixture'}};
-    assert.equal((await worker.fetch(request('/api/admin/' + path, {method, ...mutation}), env)).status, 200);
+  for (const [method, path, payload] of routes) {
+    const signIn = path === 'auth/phone-passcode';
+    const headers = {'X-Collect-Owner-Identity-Version': '1'};
+    if (!signIn) headers.Cookie = BURIMUNSI_ADMIN_COOKIE + '=issued';
+    const body = payload && JSON.stringify(payload);
+    if (method === 'POST') {
+      Object.assign(headers, {Origin: BURIMUNSI_ADMIN_ORIGIN, 'Content-Type': 'application/json', 'X-Collect-Requested-With': 'collect-admin'});
+      if (!signIn) headers['X-Collect-CSRF'] = 'same-session-csrf';
+      if (payload.requestId) headers['Idempotency-Key'] = payload.requestId;
+    }
+    const response = await worker.fetch(request('/api/admin/' + path, {method, headers, body}), env);
+    assert.equal(response.status, 200, path);
+    assert.deepEqual(await response.json(), {ok: true});
+    assert.equal(forwarded.length, 1, path);
+    const out = forwarded.pop();
+    assert.equal(out.method, method);
+    assert.equal(out.url, vars.SUPABASE_URL + '/functions/v1/admin-api/api/admin/' + path);
+    assert.equal(out.body, body ?? '');
+    assert.equal(out.headers.get('Origin'), BURIMUNSI_ADMIN_ORIGIN);
+    assert.equal(out.headers.get('Cookie'), signIn ? null : '__Host-collect_admin=issued');
+    assert.equal(out.headers.get('X-Collect-CSRF'), method === 'POST' && !signIn ? 'same-session-csrf' : null);
+    assert.equal(out.headers.get('Idempotency-Key'), payload?.requestId ?? null);
+    assert.equal(out.headers.get('X-Collect-Owner-Identity-Version'), path === 'auth/session' ? '1' : null);
+    const clear = path === 'auth/passcode/change' || path === 'auth/logout';
+    const expectedCookie = signIn ? '=issued' + attributes : clear ? '=' + attributes + '; Max-Age=0' : null;
+    assert.equal(response.headers.get('Set-Cookie'), expectedCookie && BURIMUNSI_ADMIN_COOKIE + expectedCookie);
   }
-  assert.deepEqual(forwarded, routes.map(([method, path]) => [method, vars.SUPABASE_URL + '/functions/v1/admin-api/api/admin/' + path]));
 });
 
 test('SMS oversight uses the protected same-origin GET route and refuses changes', async () => {

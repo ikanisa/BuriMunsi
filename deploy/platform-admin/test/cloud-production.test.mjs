@@ -69,10 +69,10 @@ test('anonymous session reads stay local and leave the prior issuer cookie alone
   assert.equal(calls, 1);
 });
 
-test('the browser passcode exchange forwards the proof opt-in and requires the issued cookie', async () => {
+test('the browser passcode exchange strips the legacy identity header and requires the issued cookie', async () => {
   const {vars} = JSON.parse(await readFile(new URL('../wrangler.burimunsi.jsonc', import.meta.url)));
   const worker = createAdminWorker({fetchImpl: async request => {
-    assert.equal(request.headers.get('X-Collect-Owner-Identity-Version'), '1');
+    assert.equal(request.headers.get('X-Collect-Owner-Identity-Version'), null);
     return Response.json({sessionContract: 2});
   }});
   const response = await worker.fetch(new Request(vars.ADMIN_ORIGIN + '/api/admin/auth/phone-passcode', {

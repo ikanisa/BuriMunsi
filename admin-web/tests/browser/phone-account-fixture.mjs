@@ -55,7 +55,7 @@ export function createPhoneAccountFixture({cookieSignIn, lifetime, json, readBod
         return send(401, error('invalid_credentials'));
       }
       const issued = issueSession(member.id);
-      return send(200, sessionBody(issued), cookie(issued.sessionId));
+      return send(200, {...sessionBody(issued), sessionContract: 2}, cookie(issued.sessionId));
     }
     if (!session) return send(401, error('fixture_unauthorized'));
     const actor = members.get(session.accountId);

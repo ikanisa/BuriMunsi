@@ -256,5 +256,12 @@
     },
     "change": "Validate the deployed profile once per configuration, serve anonymous same-origin session reads locally and support a cookie-bound passcode response.",
     "deployed": false
+  },
+  "burimunsi_session_read_successor": {
+    "source_sha256s": {
+      "transport-request.js": "7bb51219dfb19baaaeb247a468ef34a8677624e9043bc357bf3266c968abe15b"
+    },
+    "change": "Limit the session identity header to the session read for both current and previously installed phone sign-ins.",
+    "deployed": false
   }
 }

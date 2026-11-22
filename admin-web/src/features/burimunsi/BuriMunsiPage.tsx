@@ -109,7 +109,7 @@ function BuriMunsiAccess({session, scope, onBack, onVerify, operatorPreparationE
   const loadScopes = async () => {
     if (!identity || !allowed || busy.current || !active()) return; busy.current = true; setState('loading'); setMessage(''); setData(null); setGroup(null); setOutcomes({});
     try {
-      // The standalone readers recheck the current owner and recent passcode on
+      // The standalone readers recheck the current operator and access scope on
       // the server. Keep the extra readback for the predecessor email workflow.
       const verifiedAt = usesPasscode ? currentProofTime() : await recheck();
       if (!verifiedAt || !proofCurrent(verifiedAt)) throw new Error('Verification unavailable');
@@ -189,7 +189,7 @@ function BuriMunsiAccess({session, scope, onBack, onVerify, operatorPreparationE
     {message && <p role="alert">{message}</p>}{state === 'loading' && <LoadingState label="Checking BuriMunsi access" />}
     {!freshView && !scopedPhone && <p>Verify your current owner {proofLabel} before viewing these records.</p>}
     {hasPendingVerification() && <p>Resolve the original verification request before continuing.</p>}
-    <Button type="button" disabled={state !== 'ready' || hasPendingVerification() || usesPasscode && !freshView} onClick={() => void loadScopes()}>{usesPasscode ? (scopeData ? 'Refresh access' : scopedPhone ? 'Load groups' : 'Load BuriMunsi access') : (scopeData ? 'Refresh prepared groups' : 'Check verification and load groups')}</Button>{onVerify && !freshView && !scopedPhone && <Button type="button" disabled={state !== 'ready'} onClick={onVerify}>{verificationLabel ?? `Verify ${proofLabel}`}</Button>}
+    <Button type="button" disabled={state !== 'ready' || hasPendingVerification() || usesPasscode && !freshView} onClick={() => void loadScopes()}>{usesPasscode ? (scopeData ? 'Refresh access' : 'Load BuriMunsi access') : (scopeData ? 'Refresh prepared groups' : 'Check verification and load groups')}</Button>{onVerify && !freshView && !scopedPhone && <Button type="button" disabled={state !== 'ready'} onClick={onVerify}>{verificationLabel ?? `Verify ${proofLabel}`}</Button>}
   </div></Card>
   {scopeData && <><Card><div className="core-detail"><h2>Prepared groups</h2>{scopeData.groups.length === 0 ? <EmptyState title="No prepared groups" description="Prepare a receiving group before reviewing BuriMunsi access." /> : <>
     {singleGroup ? <p>{selectedGroup?.title}</p> : <label>Group<select className="admin-input" value={selected} disabled={state !== 'ready'} onChange={event => {setSelected(event.target.value); selectedRef.current = event.target.value; setGroup(null); setOutcomes({});}}><option value="">Select a group</option>{scopeData.groups.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>}

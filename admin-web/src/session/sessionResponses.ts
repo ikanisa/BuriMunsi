@@ -114,8 +114,11 @@ export function parseSessionUser(body: JsonObject, now: number): AdminUser {
 
 export function parsePhoneLoginSession(body: JsonObject, phone: string, now = Date.now()) {
   const user = parseSessionUser(body, now);
+  const boundIdentity = user.accountId
+    ? !!user.principalId && (user.role === 'staff' ? body.adminIdentity == null : hasScopedAdminAuthority(user))
+    : isVerifiedCurrentOwner(user);
   if (!hasSessionFields(body) || body.sessionContract !== 2 || !isCsrfToken(body.csrfToken) ||
-      !(user.accountId ? hasScopedAdminAuthority(user) : isVerifiedCurrentOwner(user)) || user.authMethod !== 'phone_passcode' || user.phone !== phone ||
+      !boundIdentity || user.authMethod !== 'phone_passcode' || user.phone !== phone ||
       !user.passcodeVerifiedAt) throw new Error('Invalid BuriMunsi sign-in session.');
   return {user, csrfToken: body.csrfToken};
 }
