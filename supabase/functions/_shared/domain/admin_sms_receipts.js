@@ -1,5 +1,5 @@
 import {ApiError,uuid,text,digest,id,now} from './core.js';
-import {accountDatabase,adminAccountSession,adminCanonicalActor} from './admin_accounts.js';
+import {accountDatabase,accountReadDatabase,adminAccountSession,adminCanonicalActor} from './admin_accounts.js';
 import {decrypt} from './encryption.js';
 import {assertMutationAdmission} from './mutations.js';
 
@@ -120,7 +120,7 @@ export async function adminSmsMetadataRead(request,env,account,actor,parts,url){
  const list=parts.length===1&&parts[0]==='receipts',detail=parts.length===3&&parts[0]==='receipts';
  if(!list&&!detail)fail(404,'not_found','This SMS metadata view does not exist.');
  const f=filters(url,list?['limit','offset','search','status','source_kind','extraction_status','duplicates']:['limit','offset']);
- const scoped=accountDatabase(env,account,'sms.read');
+ const scoped=accountReadDatabase(env,account,'sms.read');
  if(detail){
   if(parts[1]!=='capture')fail(404,'not_found','This capture metadata view does not exist.');
   const id=uuid(parts[2],'receipt_id');
@@ -136,10 +136,12 @@ export async function adminSmsMetadataRead(request,env,account,actor,parts,url){
  if(f.sourceKind&&f.sourceKind!=='capture'||f.extraction&&f.extraction!=='not_extracted'||f.duplicates)conditions.push('0=1');
  if(f.search){conditions.push('(instr(lower(s.id),lower(?))>0 OR instr(u.public_id,?)>0 OR instr(lower(u.full_name),lower(?))>0)');args.push(f.search,f.search,f.search);}
  const where=conditions.length?' WHERE '+conditions.join(' AND '):'';
- const [count,result]=await scoped.DB.batch([
-  scoped.DB.prepare('SELECT count(*) AS total FROM sms_receipts s JOIN users u ON u.id=s.owner_user_id AND s.originating_session_id IS NOT NULL'+where).bind(...args),
-  scoped.DB.prepare(sourceSql+where+' ORDER BY s.created_at DESC,s.id ASC LIMIT ? OFFSET ?').bind(...args,f.limit,f.offset)]);
- const total=count.results[0].total,rows=result.results.map(sourceRow);
+ const [result]=await scoped.DB.batch([scoped.DB.prepare(`WITH matches AS NOT MATERIALIZED (${sourceSql}${where}),
+  totals AS (SELECT count(*) AS page_total FROM matches),
+  page AS (SELECT * FROM matches ORDER BY created_at DESC,id ASC LIMIT ? OFFSET ?)
+  SELECT page.*,totals.page_total FROM totals LEFT JOIN page ON true ORDER BY page.created_at DESC,page.id ASC`)
+  .bind(...args,f.limit,f.offset)]);
+ const total=result.results[0]?.page_total,rows=result.results.filter(row=>row.id!==null).map(sourceRow);
  if(!Number.isSafeInteger(total)||total<0||rows.length!==Math.max(0,Math.min(f.limit,total-f.offset)))badSource();
  return {rows,total,limit:f.limit,offset:f.offset,next_offset:f.offset+rows.length<total?f.offset+rows.length:null};
 }
