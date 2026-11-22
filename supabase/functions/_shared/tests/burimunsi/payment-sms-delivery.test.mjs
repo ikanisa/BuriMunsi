@@ -105,7 +105,7 @@ test('changed recipient, a refused prepare or missing eligible work can never PO
 
 test('lost submission acknowledgement is recorded and the original ID is read with no destination', async () => {
   const missed = await run({ lost: true });
-  assert.deepEqual(missed.result, {status: 'unconfirmed', processed: 1, outcome: 'unknown'});
+  assert.deepEqual(missed.result, {status: 'complete', processed: 1, outcome: 'unknown'});
   const original = await run({ job: { ...row, phase: 'inspect', destination: null, body_sha256: sha(text) } });
   assert.deepEqual(original.operations.map(([op]) => op), ['claim', 'get', 'finish']);
   assert.deepEqual(original.operations[1][1], {
@@ -160,7 +160,7 @@ test('BuriMunsi holds a terminal summary without its phone proof and recovers th
     return Response.json(detail);
   }});
   const first=await run({transportFactory});
-  assert.deepEqual(first.result,{status:'unconfirmed',processed:1,outcome:'unknown'});
+  assert.deepEqual(first.result,{status:'complete',processed:1,outcome:'unknown'});
   assert.deepEqual(first.operations.at(-1)[1].slice(3),['unknown',null,null]);
   detail=gatewayDetail('delivered',[attempt('first',2)],[
     part('first',1,{delivered_at:point}),part('first',0,{delivered_at:point})]);

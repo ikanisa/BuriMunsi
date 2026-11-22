@@ -101,7 +101,9 @@ export async function drainBuriMunsiPaymentSms(env, { makeTransport = createOpen
   check(Array.isArray(jobs) && jobs.length <= 1);
   if (jobs.length === 0) return { status: 'complete', processed: 0 };
   const result = await runClaim(jobs[0], runtime, query, work, makeTransport(runtime.config));
-  const status = result.outcome === 'held' ? 'held' : result.outcome === 'unknown' ? 'unconfirmed' : 'complete';
+  // Completion acknowledges the durable journal transition. The provider's
+  // outcome remains unknown until GET on the original message proves otherwise.
+  const status = result.outcome === 'held' ? 'held' : 'complete';
   return { status, processed: 1, ...result };
 }
 
@@ -114,6 +116,8 @@ export function scheduledPaymentSmsResult(result) {
       return {status: 'complete', processed: 1, outcome: 'accepted', gateway_state: result.gateway_state};
     if (result.status === 'complete' && result.outcome === 'suppressed')
       return {status: 'complete', processed: 1, outcome: 'suppressed'};
+    if (result.status === 'complete' && result.outcome === 'unknown')
+      return {status: 'complete', processed: 1, outcome: 'unknown'};
     if (result.status === 'unconfirmed' && result.outcome === 'unknown')
       return {status: 'unconfirmed', processed: 1, outcome: 'unknown'};
     if (result.status === 'held' && result.outcome === 'held')

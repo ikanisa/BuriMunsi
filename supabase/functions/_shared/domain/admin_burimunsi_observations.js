@@ -1,9 +1,9 @@
-// Candidate-only managed Admin view. The SQL it requires is an unregistered
-// draft; setting the flag is insufficient until that draft is qualified.
+// Collection-scoped metadata and separately authorized, audited content disclosure.
 import {ApiError,json,uuid,text,digest,id,now,requirePermission} from './core.js';
 import {accountDatabase,adminAccountSession,adminCanonicalActor} from './admin_accounts.js';
 import {assertMutationAdmission} from './mutations.js';
 import {decrypt} from './encryption.js';
+import {payerStates,payerReasons} from './burimunsi/payer-outcomes.js';
 import {ScopedCursor} from './burimunsi/cursor.js';
 import {canonicalJson} from './burimunsi/values.js';
 import {observationDisplayHints} from './burimunsi/observation-display-hints.js';
@@ -60,7 +60,9 @@ async function collections(env,account,url){
  return json({contractVersion:1,items,asOf:now()});
 }
 async function page(env,account,actor,url){
- filters(url,['collectionId','limit','cursor']);const collectionId=group(url.searchParams.get('collectionId'));
+ filters(url,['collectionId','limit','cursor','includeProcessing']);
+ const includeProcessing=url.searchParams.get('includeProcessing');
+ if(includeProcessing!==null&&includeProcessing!=='1')invalid();const collectionId=group(url.searchParams.get('collectionId'));
  const rawLimit=url.searchParams.get('limit')??'25';if(!/^(?:[1-9][0-9]?|100)$/.test(rawLimit))invalid();
  const limit=Number(rawLimit),token=url.searchParams.get('cursor');if(token!==null&&(!token||token.length>2048))invalid();
  const scoped=accountDatabase(env,account,'sms.read'),cursor=requestCursorKey(env);
@@ -87,10 +89,34 @@ async function page(env,account,actor,url){
   items.push({requestId:v.requestId,sourceId:v.sourceId,admittedAt:at,
    retentionState:retained?'retained':'unresolved',bodySha256:retained?v.bodySha256:null});
  }
+ let inboxCheck;
+ if(includeProcessing==='1'){
+  const finances=actor.permissions.has('payments.read');
+  const sourceIds=items.map(v=>v.sourceId);
+  const result=await select(scoped,'SELECT private.burimunsi_admin_observation_outcomes(?,ARRAY(SELECT jsonb_array_elements_text(?::jsonb)),?::boolean) AS result',collectionId,JSON.stringify(sourceIds),finances);
+  if(!Array.isArray(result)||result.length!==items.length)bad();
+  const indexed=new Map();
+  for(const row of result){
+   if(!isObject(row)||Object.keys(row).length!==5||!seen.has(row.sourceId)||indexed.has(row.sourceId)||
+    !['pending','blocked','held','historical','duplicate','excluded','retrying','reversed','posted','non_payment','unmatched'].includes(row.processing)||
+    !(row.paymentReference===null||finances&&typeof row.paymentReference==='string'&&/^[0-9]{12}$/.test(row.paymentReference))||
+    !(row.payerStatus===null||finances&&payerStates.has(row.payerStatus))||
+    !(row.payerReason===null||finances&&payerReasons.has(row.payerReason)))bad();
+   indexed.set(row.sourceId,{processing:row.processing,paymentReference:row.paymentReference,payerStatus:row.payerStatus,payerReason:row.payerReason});
+  }
+  for(const item of items)Object.assign(item,indexed.get(item.sourceId));
+  const check=await select(scoped,'SELECT private.burimunsi_observation_admin_inbox_check(?) AS result',collectionId);
+  if(!isObject(check)||Object.keys(check).length!==6||!['unknown','checking','incomplete','verified'].includes(check.state)||
+    !(check.headsMatch===null||typeof check.headsMatch==='boolean'))bad();
+  for(const field of ['checkedAt','candidateCount','missingCount','pendingCount'])if(check[field]!==null)num(check[field],0,Number.MAX_SAFE_INTEGER);
+  if(check.state==='verified'&&(check.checkedAt===null||check.candidateCount===null||check.missingCount!==0||check.pendingCount!==0||check.headsMatch!==true))bad();
+  inboxCheck={state:check.state,checkedAt:check.checkedAt===null?null:stamp(check.checkedAt),candidateCount:check.candidateCount,
+   missingCount:check.missingCount,pendingCount:check.pendingCount,headsMatch:check.headsMatch};
+ }
  const t=Date.now();if(!Number.isSafeInteger(t)||t<=0)bad();
  const nextCursor=offset+items.length<total?await cursor.create({...scope,after:{offset:offset+items.length},expiresAt:t+15*60*1000}):null;
  if(nextCursor!==null&&nextCursor.length>2048)bad();
- return json({contractVersion:1,collectionId,items,nextCursor,asOf:new Date(t).toISOString()});
+ return json({contractVersion:1,collectionId,items,nextCursor,asOf:new Date(t).toISOString(),...(inboxCheck?{inboxCheck}:{})});
 }
 async function content(request,env,account,actor,parts,url){
  filters(url,['collectionId','displayHintsVersion']);const collectionId=group(url.searchParams.get('collectionId'));

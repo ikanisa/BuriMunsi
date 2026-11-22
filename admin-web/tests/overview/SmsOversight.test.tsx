@@ -1,4 +1,4 @@
-import {render, screen} from '@testing-library/react';
+import {act, render, screen, waitFor} from '@testing-library/react';
 import {describe, expect, it, vi} from 'vitest';
 import {SmsOversight} from '../../src/features/overview/SmsOversight';
 import {parseSmsOversight} from '../../src/features/overview/smsOversightContract';
@@ -39,6 +39,27 @@ describe('SMS oversight', () => {
     expect(screen.getByText('Gateway accepted')).toBeVisible();
     expect(screen.getByText('Reported delivered')).toBeVisible();
     expect(() => parseSmsOversight({...payload, queues: {...payload.queues, burimunsi_payer_sms: {...payer, delivered: -1}}})).toThrow();
+  });
+  it('shows the signed run, gateway heartbeat, expired commitments and suppression reasons', async () => {
+    const body = sample(), digest = 'b'.repeat(64);
+    const response = {...body,worker_heartbeat:'confirmed_dispatch',queues:{...body.queues,burimunsi_sms_operations:{
+      payer:{pending:1,gateway_accepted:0,sent:0,delivered:2,failed:0,unknown:0,suppressed:1,expired:1},oldest_pending_seconds:95,
+      reasons:{unverified_destination:1,gateway_expired:1},scheduler_enabled:true,cron_active:true,cron_interval_seconds:1,unresolved_dispatches:1,gateway_heartbeat:'recent',last_confirmed_at:body.checked_at,last_confirmed_sha256:digest,gateway_last_seen_at:body.checked_at}}};
+    render(<SmsOversight request={vi.fn(async () => response)} permissions={['system_health.read','sms.read']} authorityKey="owner" />);
+    expect(await screen.findByText('Last confirmed scheduled run')).toBeVisible(); expect(screen.getByText('1 s')).toBeVisible();
+    expect(screen.getByText('Last receipt gateway heartbeat')).toBeVisible(); expect(screen.getByText('Expired')).toBeVisible();
+    expect(screen.getByText('Payer number unverified')).toBeInTheDocument();
+    expect(parseSmsOversight(response).operations?.lastConfirmedDigest).toBe(digest);
+  });
+  it('refetches current health immediately on an operations change and stops when permission is removed',async()=>{
+    const request=vi.fn(async()=>sample());
+    const view=render(<SmsOversight request={request} permissions={['system_health.read','sms.read']} authorityKey="owner" />);
+    await screen.findByText('Queued receipts');
+    await act(async()=>{window.dispatchEvent(new Event('burimunsi-operations-changed'));});
+    await waitFor(()=>expect(request).toHaveBeenCalledTimes(2));
+    view.rerender(<SmsOversight request={request} permissions={[]} authorityKey="signed-out" />);
+    await act(async()=>{window.dispatchEvent(new Event('burimunsi-operations-changed'));});
+    expect(request).toHaveBeenCalledTimes(2);
   });
   it('does not show stale counts as current', async () => {
     const request = vi.fn(async () => sample(new Date(Date.now() - 65_000).toISOString()));

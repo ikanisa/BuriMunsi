@@ -1,3 +1,4 @@
+import {payerStates,payerReasons} from './burimunsi/payer-outcomes.js';
 import {ApiError} from './core.js';
 import {accountDatabase,accountReadDatabase} from './admin_accounts.js';
 
@@ -120,12 +121,29 @@ async function nativeSmsHealth(scoped,env,account,actor){
  return {burimunsi_sms:smsCounters(row.burimunsi_sms,nativeQueueKeys,true),
   burimunsi_payer_sms:smsCounters(row.burimunsi_payer_sms,payerQueueKeys)};
 }
-async function health(env,account,actor){
+async function operationalSmsHealth(scoped,env,account,actor){
+ if(typeof env.DB.adminReadBatch!=='function'||!account.permissions.includes('sms.read')||!actor.permissions.has('sms.read'))return null;
+ const [sample]=await scoped.DB.batch([scoped.DB.prepare('SELECT private.burimunsi_admin_sms_operations() AS result')]);
+ const row=sample?.results?.length===1?sample.results[0].result:undefined;
+ if(row===null)return null;
+ const timestamp=value=>value===null||typeof value==='string'&&Number.isFinite(Date.parse(value))&&new Date(value).toISOString()===value;
+ if(!row||Object.keys(row).length!==(Object.hasOwn(row,'cron_interval_seconds')?11:10)||
+  !(row.cron_interval_seconds===undefined||[null,1,60].includes(row.cron_interval_seconds))||typeof row.cron_active!=='boolean'||!nonnegative(row.unresolved_dispatches)||
+  !['not_recorded','recent','stale'].includes(row.gateway_heartbeat)||(row.gateway_last_seen_at===null)!==(row.gateway_heartbeat==='not_recorded')||!row.reasons||Array.isArray(row.reasons)||typeof row.reasons!=='object'||
+  !Object.entries(row.reasons).every(([key,n])=>payerReasons.has(key)&&nonnegative(n))||
+  !(row.oldest_pending_seconds===null||nonnegative(row.oldest_pending_seconds))||typeof row.scheduler_enabled!=='boolean'||
+  !timestamp(row.last_confirmed_at)||!timestamp(row.gateway_last_seen_at)||(row.last_confirmed_at===null)!==(row.last_confirmed_sha256===null)||
+  !(row.last_confirmed_sha256===null||/^[a-f0-9]{64}$/.test(row.last_confirmed_sha256)))unavailable();
+ smsCounters(row.payer,[...payerStates]);
+ return row;
+}
+async function health(env,account,actor,includeEvidence){
  const scoped=accountReadDatabase(env,account,'system_health.read');
- let result,nativeSms;
+ let result,nativeSms,operations;
  try{
   result=await scoped.DB.batch(oversightHealthSql.map(sql=>scoped.DB.prepare(sql)));
   nativeSms=await nativeSmsHealth(scoped,env,account,actor);
+  if(includeEvidence)operations=await operationalSmsHealth(scoped,env,account,actor);
  }catch(error){if(error instanceof ApiError)throw error;unavailable();}
  if(!Array.isArray(result)||result.length!==oversightHealthSql.length||result.some(item=>!Array.isArray(item?.results)||item.results.length!==1))unavailable();
  const [clock,momo,sms,notifications,email,invitations,delivery]=result.map(item=>item.results[0]),at=clock.observed_seconds;
@@ -139,9 +157,9 @@ async function health(env,account,actor){
    native_sms_ledger:env.BURIMUNSI_NATIVE_AUTO_TRANSACTIONS_ENABLED==='true'?'enabled':'disabled',
    momo_extractor:env.MOMO_AI_ENABLED!=='true'?'disabled':typeof env.AI?.run==='function'?'configured':'missing',
    transactional_email:typeof env.AUTH_EMAIL?.send==='function'?'configured':'missing'},
-  metrics_scope:'all_retained_rows',worker_heartbeat:'not_recorded',
+  metrics_scope:'all_retained_rows',worker_heartbeat:operations?.last_confirmed_at?'confirmed_dispatch':'not_recorded',
   queues:{
-   ...nativeSms,
+   ...nativeSms,...(operations?{burimunsi_sms_operations:operations}:{}),
    momo:metrics(momo,['pending','retry','processing','expired_lease','needs_review','source_unresolved','attempt_exhausted','records_with_error'],{oldest_due_at:'oldest_due_seconds',last_changed_at:'last_changed_at'},at),
    assisted_sms:{...metrics(sms,['queued','claimed','expired_claim','send_started','observed_sent','failed_no_send','uncertain'],{oldest_queued_at:'oldest_queued_seconds',oldest_unobserved_send_at:'oldest_unobserved_send_seconds',last_created_at:'last_created_at'},at),automatic_retry:false},
    notifications:{...metrics(notifications,['pending','sent','failed','read'],{oldest_pending_at:'oldest_pending_seconds',last_created_at:'last_created_at'},at),semantics:'persisted_in_app_events'},
@@ -156,8 +174,8 @@ async function health(env,account,actor){
 export async function adminOversightRead(request,env,account,actor,parts,url=new URL(request.url)){
  if(request.method!=='GET')denied(405,'method_not_allowed','Oversight is read-only.');
  if(parts.length===1&&parts[0]==='health'){
-  fields(url,[]);grants(account,actor,'system_health.read');
-  return health(env,account,actor);
+  fields(url,['evidenceVersion']);const version=url.searchParams.get('evidenceVersion');if(version!==null&&version!=='2')invalid();
+  grants(account,actor,'system_health.read');return health(env,account,actor,version==='2');
  }
  if(parts.length!==2||parts[0]!=='audit'||!['domain','accounts'].includes(parts[1]))denied(404,'oversight_not_found','This oversight view does not exist.');
  grants(account,actor,'audit.read');

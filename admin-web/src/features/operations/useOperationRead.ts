@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {AdminRequestError} from '../../api/client';
+import {useVisibleOperationsRefresh} from './useVisibleOperationsRefresh';
 
 export type OperationReadState<T> =
   | {key: string; status: 'success'; value: T; receivedAt: number}
@@ -10,15 +11,16 @@ export function useOperationRead<T>(
   key: string,
   enabled: boolean,
   load: () => Promise<T>,
-  {pollMs, invalidResponse = 'The workspace response could not be verified.'}: {pollMs?: number; invalidResponse?: string} = {},
+  {pollMs, collectionId, invalidResponse = 'The workspace response could not be verified.'}: {pollMs?: number; collectionId?: string; invalidResponse?: string} = {},
 ) {
-  const [result, setResult] = useState<OperationReadState<T> | null>(null);
+  const [result, setResult] = useState<(OperationReadState<T> & {scope: string}) | null>(null);
   const [attempt, setAttempt] = useState(0);
   const flight = useRef<{key: string; promise: Promise<T>} | null>(null);
+  const pending = useRef<string | null>(null);
   const attemptKey = `${key}:${attempt}`;
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {flight.current = null; pending.current = null; return;}
     let read = flight.current;
     if (!read || read.key !== attemptKey) {
       read = {key: attemptKey, promise: load()};
@@ -27,40 +29,35 @@ export function useOperationRead<T>(
     const current = read;
     let active = true;
     current.promise.then(value => {
-      if (active) setResult({key: attemptKey, status: 'success', value, receivedAt: Date.now() / 1000});
+      if (active) setResult({key: attemptKey, scope: key, status: 'success', value, receivedAt: Date.now() / 1000});
     }, (error: unknown) => {
       if (active) {
         setResult({
-          key: attemptKey, status: 'error',
+          key: attemptKey, scope: key, status: 'error',
           message: error instanceof AdminRequestError ? error.message : invalidResponse,
         });
       }
     }).finally(() => {
-      if (flight.current === current) flight.current = null;
+      if (!active || flight.current !== current) return;
+      flight.current = null;
+      if (pending.current === attemptKey) {
+        pending.current = null;
+        if (document.visibilityState === 'visible' && navigator.onLine) setAttempt(value => value + 1);
+      }
     });
     return () => {active = false;};
-  }, [attemptKey, enabled, invalidResponse, load]);
+  }, [attemptKey, enabled, invalidResponse, key, load]);
 
   const retry = useCallback(() => {
     if (!pollMs || !flight.current) setAttempt(value => value + 1);
   }, [pollMs]);
 
-  useEffect(() => {
-    if (!enabled || !pollMs) return;
-    const refreshVisible = () => {
-      if (document.visibilityState === 'visible' && navigator.onLine) retry();
-    };
-    const timer = window.setInterval(refreshVisible, pollMs);
-    document.addEventListener('visibilitychange', refreshVisible);
-    window.addEventListener('focus', refreshVisible);
-    window.addEventListener('online', refreshVisible);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener('visibilitychange', refreshVisible);
-      window.removeEventListener('focus', refreshVisible);
-      window.removeEventListener('online', refreshVisible);
-    };
-  }, [enabled, pollMs, retry]);
+  const refresh = useCallback((invalidated: boolean) => {
+    if (invalidated && flight.current) pending.current = flight.current.key;
+    else retry();
+  }, [retry]);
+  useVisibleOperationsRefresh(enabled, pollMs, refresh, collectionId);
 
-  return {result: enabled && result?.key === attemptKey ? result : null, retry};
+  const sameScope = pollMs !== undefined && result?.scope === key && result.status === 'success';
+  return {result: enabled && (result?.key === attemptKey || sameScope) ? result : null, retry};
 }

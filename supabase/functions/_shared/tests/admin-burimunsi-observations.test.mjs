@@ -58,6 +58,14 @@ async function fixture(){
     const [collectionId,limit,offset]=s.args;if(!f.allowed.has(collectionId))throw denied();
     return {results:[{result:{collectionId,totalCount:f.rows.length,revision:f.revision,items:f.rows.slice(offset,offset+limit)}}]};
    }
+   if(s.sql.startsWith('SELECT private.burimunsi_admin_observation_outcomes(')){
+    const [group,ids,financial]=s.args;if(!f.allowed.has(group))throw denied();
+    return {results:[{result:JSON.parse(ids).map(sourceId=>({sourceId,processing:'posted',paymentReference:financial?'100000000001':null,
+      payerStatus:financial?'delivered':null,payerReason:null}))}]};
+   }
+   if(s.sql.startsWith('SELECT private.burimunsi_observation_admin_inbox_check(')){
+    if(!f.allowed.has(s.args[0]))throw denied();return {results:[{result:f.check}]};
+   }
    if(s.sql.startsWith('SELECT private.burimunsi_observation_admin_hint_profile(')){
     if(!f.allowed.has(s.args[0]))throw denied();return {results:[{result:f.hintProfile?structuredClone(f.hintProfile):null}]};
    }
@@ -179,4 +187,17 @@ test('legacy Admin reveal omits the optional hint field even when hinting is ena
  const f=await fixture();f.env.BURIMUNSI_OBSERVATION_HINTS_ENABLED='true';
  const result=await(await call(f,`observations/${sourceId}/content?collectionId=${gid}`,{'X-Collect-Review-Reason':'Review this source'})).json();
  assert.equal(Object.hasOwn(result,'displayHints'),false);
+});
+
+test('receiver list returns the scoped posting, reported payer delivery and full inbox check without exposing private content',async()=>{
+ const f=await fixture();f.check={state:'verified',checkedAt:Date.now(),candidateCount:1,missingCount:0,pendingCount:0,headsMatch:true};
+ const endpoint='observations?collectionId='+gid+'&includeProcessing=1';
+ const redacted=await(await call(f,endpoint)).json();
+ assert.equal(redacted.items[0].paymentReference,null);assert.equal(redacted.items[0].payerStatus,null);
+ f.actor.permissions.add('payments.read');
+ const page=await(await call(f,endpoint)).json();
+ assert.equal(page.items[0].processing,'posted');assert.equal(page.items[0].paymentReference,'100000000001');
+ assert.equal(page.items[0].payerStatus,'delivered');assert.equal(page.inboxCheck.state,'verified');assert.ok(!JSON.stringify(page).includes(message));
+ f.check.headsMatch=false;await assert.rejects(call(f,endpoint),error(503,'observation_unavailable'));
+ await assert.rejects(call(f,'observations?collectionId='+other+'&includeProcessing=1'),error(403,'permission_required'));
 });
