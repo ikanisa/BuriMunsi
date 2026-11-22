@@ -112,6 +112,9 @@ class ObservationJournal(private val storage:ObservationJournalStore) {
         }
         save(ObservationJournalState(pending,trim));ObservationAppend.STORED
     }
+    /** A scheduling hint only. It grants no scope and returns no receipt data. */
+    fun hasPendingWork():Boolean = synchronized(lock){storage.read().pending.isNotEmpty()}
+
     fun pending(owner:ObservationOwner):List<ObservationEntry> = synchronized(lock){
         checkContract(owner.valid(),"invalid_observation_owner");storage.read().pending.filter{it.owner==owner}
     }

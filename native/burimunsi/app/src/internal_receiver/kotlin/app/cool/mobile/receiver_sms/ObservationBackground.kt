@@ -58,13 +58,44 @@ internal object ObservationBackground {
     }
     fun ensure(context:Context){
         if(BuildConfig.IS_QUALIFICATION||!BuildConfig.IS_GATEWAY)return
+        ensurePeriodic(context)
+        signal(context)
+    }
+    private fun ensurePeriodic(context:Context){
         val scheduler=context.getSystemService(JobScheduler::class.java)?:return
         if(scheduler.getPendingJob(RECOVERY)==null){
             val job=JobInfo.Builder(RECOVERY,ComponentName(context,ObservationJobService::class.java))
                 .setPersisted(true).setPeriodic(15*60*1000L).build()
             check(scheduler.schedule(job)==JobScheduler.RESULT_SUCCESS){"Observation recovery unavailable"}
         }
-        signal(context)
+    }
+
+    /** Process creation alone is not evidence of receipt work. Real Android receipt,
+     * boot, explicit Sync and periodic job events continue to wake their own workers. */
+    fun onProcessStart(context:Context) {
+        if(BuildConfig.IS_QUALIFICATION||!BuildConfig.IS_GATEWAY)return
+        val app=context.applicationContext
+        runCatching { ensurePeriodic(app) }
+        Thread({
+            val needed=ObservationWakeup.recoverOnProcessStart(
+                pendingReceipt={ObservationJournal(ObservationStateStore(app)).hasPendingWork()},
+                heldReceipt={HeldRecoveryJournal.hasRecords(app)},
+                pendingControl={
+                    if(!ObservationLegacyOwnership.controlTransitionClear(app)) true
+                    else {
+                        val owner=NativeRepository.restorableObservationOwner(app)
+                        val config=ObservationConfigStore(app)
+                        val consent=owner?.let(config::consent)
+                        if(owner==null || consent==null) false else {
+                            val permitted=app.checkSelfPermission(Manifest.permission.READ_SMS)==PackageManager.PERMISSION_GRANTED &&
+                                app.checkSelfPermission(Manifest.permission.RECEIVE_SMS)==PackageManager.PERMISSION_GRANTED
+                            !consent.confirmed || consent.revision.enabled!=(permitted && !config.paused(owner))
+                        }
+                    }
+                },
+            )
+            if(needed) runCatching { BuriContinuousSupervisor.recover(app) }
+        },"burimunsi-observation-process-recovery").start()
     }
     fun finish(context:Context,again:Boolean,finish:()->Unit)=wakeup.finish(again,finish,
         {dispatchLocal(context,15_000)},{signalled->dispatchNetwork(context,if(signalled)0 else 60_000)})
