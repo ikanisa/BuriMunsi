@@ -645,7 +645,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                         Values.apiOrigin(BuildConfig.BURI_API_ORIGIN)
                         val api=ApiClient.phonePin(BuildConfig.BURI_API_ORIGIN,device.installationId,
                             installationProfile,BuildConfig.BURI_API_PATH_PREFIX,BuildConfig.COLLECT_PUBLISHABLE_KEY,device::registrationToken)
-                        NativeRepository(app,api)
+                        NativeRepository(app,api,deferDisplayCacheWrites=true)
                     }catch(cancelled:CancellationException){throw cancelled}
                     catch(_:Exception){null}
                     device to source

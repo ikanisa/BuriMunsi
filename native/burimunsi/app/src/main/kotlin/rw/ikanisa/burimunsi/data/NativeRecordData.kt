@@ -2,6 +2,10 @@ package rw.ikanisa.burimunsi.data
 
 import android.content.Context
 import org.json.JSONObject
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import rw.ikanisa.burimunsi.core.*
 import rw.ikanisa.burimunsi.storage.SecureStore
 import rw.ikanisa.wire.BuriMunsiSchemas
@@ -24,11 +28,39 @@ internal class NativeRecordCache(context:Context) {
     private companion object {
         val lock=Any()
         val epoch=java.util.concurrent.atomic.AtomicLong()
+        private class Pending(val revision: Long, val finished: CountDownLatch = CountDownLatch(1))
+        private val pending = mutableMapOf<String, Pending>()
+        // The durable cache contains at most eight entries. Keep the same bound on optional
+        // queued writes and apply backpressure when a disk stays stalled.
+        private val writer = ThreadPoolExecutor(1, 1, 10L, TimeUnit.SECONDS, ArrayBlockingQueue<Runnable>(8),
+            { work -> Thread(work, "burimunsi-record-cache").apply { isDaemon = true } },
+            ThreadPoolExecutor.CallerRunsPolicy()).apply { allowCoreThreadTimeOut(true) }
     }
     private val file=SecureStore(context,"records")
 
     fun revision():Long=epoch.get()
-    fun read():String?=file.read()
+    fun read(path:String):String? {
+        // A subsequent read of this entry can immediately rely on a preceding live result,
+        // including the first offline read after a successful response.
+        val write = synchronized(pending) { pending[path]?.takeIf { it.revision == epoch.get() } }
+        write?.finished?.await()
+        return file.read()
+    }
+
+    fun defer(path: String, revision: Long, persist: () -> Unit) {
+        val write = Pending(revision)
+        synchronized(pending) {
+            if (revision != epoch.get()) return
+            pending[path] = write
+        }
+        writer.execute {
+            try { persist() }
+            finally {
+                synchronized(pending) { if (pending[path] === write) pending.remove(path) }
+                write.finished.countDown()
+            }
+        }
+    }
 
     fun update(revision:Long,replace:(String?)->String?):Unit=synchronized(lock){
         if(revision==epoch.get())replace(file.read())?.let(file::write)
@@ -47,13 +79,14 @@ internal class NativeRecordData(
     private val cacheStore: NativeRecordCache,
     private val receiptVersions: AllocationReceiptVersions,
     private val recordReadOwner: Any,
+    private val deferDisplayCacheWrites: Boolean,
 ) : NativeSessionRequests by sessions {
     private data class CachedRecord(val payload:String,val savedAt:Long)
 
     private fun accessScope(owner:Operator)=owner.role.name+":"+owner.capabilities.sorted().joinToString(",")
 
     private fun cachedRecord(path:String,group:String,owner:Operator,sessionScope:String,now:Long,recent:Boolean):CachedRecord? {
-        val cache=try{cacheStore.read()?.let(::JSONObject)}catch(_:Exception){null}?:return null
+        val cache=try{cacheStore.read(path)?.let(::JSONObject)}catch(_:Exception){null}?:return null
         if(cache.optString("contractVersion")!=BuriMunsiSchemas.VERSION||cache.optString("sessionScope")!=sessionScope||
             cache.optString("groupId")!=group||cache.optString("accountId")!=owner.id)return null
         if((recent||cache.has("accessScope"))&&cache.optString("accessScope")!=accessScope(owner))return null
@@ -106,9 +139,9 @@ internal class NativeRecordData(
     }
 
     private fun records(path:String):String = records(path){value,_->value}
-    private fun <T> records(path:String,read:(String,Operator)->T):T = snapshot(path,read).value
+    private fun <T> records(path:String,read:(String,Operator)->T):T = snapshot(path,read=read).value
 
-    private fun <T> snapshot(path:String,read:(String,Operator)->T):RecordSnapshot<T> {
+    private fun <T> snapshot(path:String,firstDisplay:Boolean=false,read:(String,Operator)->T):RecordSnapshot<T> {
         val witness=ownedSession()
         val (who,group)=authority.withCurrent(witness){(operator?:throw ApiFailure("session_unavailable",401)) to groupId}
         if(System.currentTimeMillis()>=who.expiresAt)throw ApiFailure("session_unavailable",401)
@@ -123,7 +156,7 @@ internal class NativeRecordData(
                 sessions.markRead(now, fromCache = false)
                 result to now
             }
-            saveRecord(path,value,who,group,sessionScope,verified.second,revision)
+            persistRecord(path,value,who,group,sessionScope,verified.second,revision,firstDisplay)
             return authority.withCurrent(witness){RecordSnapshot(verified.first,false,verified.second)}
         }catch(error:ApiFailure){
             if(error.status!=0||error.code!="connection_unavailable")throw error
@@ -138,6 +171,13 @@ internal class NativeRecordData(
             }
         }
     }
+    private fun persistRecord(path:String,payload:String,owner:Operator,group:String,sessionScope:String,now:Long,
+        revision:Long,firstDisplay:Boolean) {
+        if (deferDisplayCacheWrites && firstDisplay) {
+            cacheStore.defer(path,revision) { saveRecord(path,payload,owner,group,sessionScope,now,revision) }
+        } else saveRecord(path,payload,owner,group,sessionScope,now,revision)
+    }
+
     private fun saveRecord(path:String,payload:String,owner:Operator,group:String,sessionScope:String,now:Long,revision:Long) {
         try {
             cacheStore.update(revision){stored->
@@ -169,14 +209,14 @@ internal class NativeRecordData(
             sessions.markRead(now,fromCache=false)
             Triple(home,now,groupId)
         }
-        saveRecord("/home",payload.toString(),owner,group,Values.sha256(witness.token),now,revision)
+        persistRecord("/home",payload.toString(),owner,group,Values.sha256(witness.token),now,revision,firstDisplay=true)
         return authority.withCurrent(witness){
             checkContract(operator===owner,"session_changed")
             (home to now).takeIf{cacheStore.revision()==revision}
         }
     }
 
-    fun home():Home=decodeHome(JSONObject(records("/home")))
+    fun home():Home=snapshot("/home",firstDisplay=true){value,_->decodeHome(JSONObject(value))}.value
 
     fun readQuietHome(): JSONObject {
         val scope = recordReadScope { witness, _ -> sessions.requestUnpublishedHome(witness) }
@@ -219,7 +259,7 @@ internal class NativeRecordData(
     fun paymentPage(listing:ListingQuery,cursor:String?=null,memberId:String?=null):RecordSnapshot<Page<Payment>> {
         val member=memberId?.let(Values::id)
         val path=listingPath("/payments",ListingTarget.PAYMENTS,listing,cursor,mapOf("memberId" to member))
-        return snapshot(path){payload,_->decodePaymentPage(payload,member)}
+        return snapshot(path,firstDisplay=cursor==null && memberId==null){payload,_->decodePaymentPage(payload,member)}
     }
     private fun decodePaymentPage(payload:String,member:String?):Page<Payment> {
         val result=page(payload,::decodePayment)
