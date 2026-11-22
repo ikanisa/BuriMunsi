@@ -1,8 +1,12 @@
-# Deployment settings for the linked Collect Supabase Cloud project.
+# Deployment settings for the dedicated BuriMunsi Supabase project.
 project_id = "rrlduytparvsjfmegalh"
 
 [db]
 major_version = 17
+
+[auth]
+enable_signup = false
+enable_anonymous_sign_ins = false
 
 [functions.collect-api]
 verify_jwt = false

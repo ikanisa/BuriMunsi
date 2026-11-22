@@ -3,44 +3,79 @@ import assert from 'node:assert/strict';
 import {PROJECT, sha} from './access.mjs';
 import {reviseRuntimeViaManagement} from './management-revision.mjs';
 
-const previous = 'a'.repeat(64), next = 'b'.repeat(64);
+const previous = 'a'.repeat(64), next = 'b'.repeat(64), gateway = 'c'.repeat(64);
+const previousApproval = 'd'.repeat(64), candidateApproval = 'e'.repeat(64);
+const approval = (source, approvalSha256) => JSON.stringify({
+  approvalSha256, coreSourceSha256: source,
+  format: 'collect.sms.gateway-source-approval.v1', gatewayReleaseSha256: gateway,
+});
 const preimages = {BURIMUNSI_PRODUCT_MODE: sha('standalone'), BURIMUNSI_COLLECTION_ID: sha('synthetic-collection')};
 const owner = {session_user: 'postgres', current_user: 'postgres', current_database: 'postgres',
   version: 170006, isolation: 'read committed', project: PROJECT};
 
-function fixture({identity = owner, unknownQuiesce = false} = {}) {
+function fixture({identity = owner, unknownQuiesce = false, sms = false, binaryChanged = false} = {}) {
   const queries = [], records = [];
   let current = {mode: 'open', epoch: '10', operation_id: null, source_sha256: previous};
   let functions = ['collect-api', 'admin-api', 'collect-jobs'].map((slug, i) => ({
     slug, id: `00000000-0000-4000-8000-00000000000${i}`, status: 'ACTIVE',
     verify_jwt: false, version: 1, ezbr_sha256: previous,
   }));
+  let registration = null, smsSettings = {}, globalVersion = 1;
+  if (sms) {
+    const sidecar = {slug: 'collect-sms', id: '00000000-0000-4000-8000-000000000003',
+      status: 'ACTIVE', verify_jwt: false, version: 1, ezbr_sha256: gateway};
+    functions.push(sidecar);
+    registration = {digest: previousApproval, entries: [{...sidecar, sourceSha256: gateway}],
+      reviewedEvidenceSha256: previousApproval};
+    smsSettings = {COLLECT_SMS_ENABLED: sha('true'), COLLECT_SMS_DISPATCH_PAUSED: sha('false'),
+      COLLECT_SMS_CORE_SOURCE_SHA256: sha(previous), COLLECT_SMS_RELEASE_SHA256: sha(gateway),
+      COLLECT_SMS_SOURCE_APPROVAL: sha(approval(previous, previousApproval))};
+  }
   const input = {label: 'fixture-revision', testEvidence: {passed: true, sourceSha256: next},
     expectedBefore: {mode: 'open', epoch: 10, source_sha256: previous},
-    expectedFunctions: functions, expectedSecretPreimages: preimages, requireChangedBundles: true};
+    expectedFunctions: functions, expectedSecretPreimages: preimages, requireChangedBundles: true,
+    ...(sms ? {smsBinding: {gatewayReleaseSha256: gateway, previousApprovalSha256: previousApproval,
+      candidateApprovalSha256: candidateApproval}} : {})};
   let sourceSecret = previous;
   const result = (value, status = 201) => ({status, json: () => structuredClone(value)});
   const dependencies = {
     captureSnapshot: () => ({sourceSha: next, summary: () => ({sourceSha256: next}), makeForm: slug => slug}),
     check: () => ({status: 'passed', sourceSha256: next}),
-    readRegistration: () => null,
+    readRegistration: () => registration,
+    ...(sms ? {async refreshAncillaryAfterSourceSecret({registration: prior}) {
+      assert.equal(registration, prior);
+      assert.equal(records.at(-1), 'revision-fixture-revision-source-secret-complete.json');
+      const row = functions.find(item => item.slug === 'collect-sms');
+      registration = {digest: candidateApproval, reviewedEvidenceSha256: candidateApproval,
+        entries: [{...row, sourceSha256: gateway}]};
+      return registration;
+    }} : {}),
     save(name) { records.push(name); },
     async api(path, options) {
       if (path === 'secrets') {
         if (options) {
           const changes = JSON.parse(options.body);
-          assert.deepEqual(changes, [{name: 'BUILD_SOURCE_ID', value: next}]);
+          const expected = [{name: 'BUILD_SOURCE_ID', value: next}];
+          if (sms) {
+            expected.push({name: 'COLLECT_SMS_CORE_SOURCE_SHA256', value: next},
+              {name: 'COLLECT_SMS_SOURCE_APPROVAL', value: approval(next, candidateApproval)});
+            for (const {name, value} of expected.slice(1)) smsSettings[name] = sha(value);
+            functions = functions.map(row => ({...row, version: 2,
+              ezbr_sha256: binaryChanged && row.slug === 'collect-sms' ? next : row.ezbr_sha256}));
+            globalVersion = 2;
+          }
+          assert.deepEqual(changes, expected);
           sourceSecret = next;
         }
-        return result(Object.entries({...preimages, BUILD_SOURCE_ID: sha(sourceSecret)})
+        return result(Object.entries({...preimages, ...smsSettings, BUILD_SOURCE_ID: sha(sourceSecret)})
           .map(([name, value]) => ({name, value})));
       }
       if (path === 'functions') return result(functions);
       if (path.startsWith('functions/deploy?slug=')) {
         assert.equal(options.body, path.split('=')[1]);
         functions = functions.map(row => row.slug === options.body
-          ? {...row, version: 2, ezbr_sha256: next} : row);
-        return result({version: 2});
+          ? {...row, version: globalVersion + 1, ezbr_sha256: next} : row);
+        return result({version: globalVersion + 1});
       }
       assert.equal(path, 'database/query');
       assert.equal(options.method, 'POST');
@@ -121,4 +156,25 @@ test('an uncertain fence write is sent once and stops at its existing intent', a
   });
   assert.equal(f.queries.filter(query => query.parameters.length).length, 1);
   assert.deepEqual(f.records, ['revision-fixture-revision-intent.json']);
+});
+
+
+test('An acknowledged source update preserves the active SMS gateway across a global version bump', async () => {
+  const f = fixture({sms: true});
+  const completed = await reviseRuntimeViaManagement(f.input, f.dependencies);
+  assert.equal(completed.status, 'revision_deployed_live');
+  assert.ok(f.records.includes('revision-fixture-revision-ancillary-refreshed.json'));
+  assert.equal(f.records.at(-1), 'revision-fixture-revision-complete.json');
+});
+
+test('SMS cannot be rebound without proven prior approval or with a changed ancillary bundle', async () => {
+  const withoutApproval = fixture({sms: true});
+  await assert.rejects(reviseRuntimeViaManagement({...withoutApproval.input, smsBinding: undefined},
+    withoutApproval.dependencies), /reviewed_management_sms_rebind_required/);
+  assert.deepEqual(withoutApproval.records, []);
+  const changed = fixture({sms: true, binaryChanged: true});
+  await assert.rejects(reviseRuntimeViaManagement(changed.input, changed.dependencies),
+    /ancillary_requalification_invalid/);
+  assert.equal(changed.records.at(-1), 'revision-fixture-revision-source-secret-complete.json');
+  assert.ok(!changed.records.some(name => name.endsWith('collect-api-attempt.json')));
 });

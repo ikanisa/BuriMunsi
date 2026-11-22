@@ -1,7 +1,7 @@
 // Supabase Management API SQL over independent, owner-authorized transactions.
 // https://supabase.com/docs/reference/api/v1-run-a-query
-import {management, PROJECT, sha} from './access.mjs';
-import {requireSecretPreimages, reviseRuntime} from './revise-runtime.mjs';
+import {management, PROJECT, record, sha} from './access.mjs';
+import {requireRevisionSchedulerReady, requireSecretPreimages, reviseRuntime} from './revise-runtime.mjs';
 
 const identity = "SELECT session_user,current_user,current_database(),current_setting('server_version_num')::int AS version,current_setting('transaction_isolation') AS isolation,(SELECT project_ref FROM private.collect_fence_control WHERE singleton) AS project";
 const fence = 'SELECT mode,epoch,operation_id,source_sha256 FROM private.collect_fence_control WHERE singleton';
@@ -63,9 +63,27 @@ async function openRevisionDatabase(api) {
   return {query, async end() { closed = true; }};
 }
 
+function smsSourceSettings(binding, source, approvalSha256) {
+  return {
+    COLLECT_SMS_ENABLED: 'true',
+    COLLECT_SMS_DISPATCH_PAUSED: 'false',
+    COLLECT_SMS_RELEASE_SHA256: binding.gatewayReleaseSha256,
+    COLLECT_SMS_CORE_SOURCE_SHA256: source,
+    COLLECT_SMS_SOURCE_APPROVAL: JSON.stringify({
+      approvalSha256,
+      coreSourceSha256: source,
+      format: 'collect.sms.gateway-source-approval.v1',
+      gatewayReleaseSha256: binding.gatewayReleaseSha256,
+    }),
+  };
+}
+
+const settingDigests = settings =>
+  Object.fromEntries(Object.entries(settings).map(([name, value]) => [name, sha(value)]));
+
 export async function reviseRuntimeViaManagement(input, {api = management, ...dependencies} = {}) {
   const {migrations = [], resumeFencedRevision, acceptAncillaryRequalification,
-    expectedBefore, expectedFunctions, expectedSecretPreimages} = input;
+    expectedBefore, expectedFunctions, expectedSecretPreimages, testEvidence, smsBinding} = input;
   if (!Array.isArray(migrations) || migrations.length !== 0 ||
       resumeFencedRevision != null || acceptAncillaryRequalification ||
       expectedBefore?.mode !== 'open' || !Array.isArray(expectedFunctions) ||
@@ -73,6 +91,70 @@ export async function reviseRuntimeViaManagement(input, {api = management, ...de
       !digest(expectedSecretPreimages?.BURIMUNSI_COLLECTION_ID)) {
     throw Error('initial_standalone_management_revision_required');
   }
-  requireSecretPreimages(expectedSecretPreimages, (await api('secrets')).json());
-  return reviseRuntime(input, {...dependencies, api, open: () => openRevisionDatabase(api)});
+  const initialSecrets = (await api('secrets')).json();
+  requireSecretPreimages(expectedSecretPreimages, initialSecrets);
+  const smsEnabled = initialSecrets.some(row => row.name === 'COLLECT_SMS_ENABLED' && row.value === sha('true'));
+  if (!smsEnabled && !smsBinding) {
+    return reviseRuntime(input, {...dependencies, api, open: () => openRevisionDatabase(api)});
+  }
+  if (!smsEnabled || !smsBinding || Object.keys(smsBinding).sort().join('|') !==
+      'candidateApprovalSha256|gatewayReleaseSha256|previousApprovalSha256' ||
+      Object.values(smsBinding).some(value => !digest(value) || /^0+$/.test(value)) ||
+      !digest(testEvidence?.sourceSha256) || !digest(expectedBefore.source_sha256) ||
+      new Set([...Object.values(smsBinding), testEvidence.sourceSha256, expectedBefore.source_sha256]).size !== 5 ||
+      typeof dependencies.refreshAncillaryAfterSourceSecret !== 'function') {
+    throw Error('reviewed_management_sms_rebind_required');
+  }
+  const before = smsSourceSettings(smsBinding, expectedBefore.source_sha256, smsBinding.previousApprovalSha256);
+  const candidate = smsSourceSettings(smsBinding, testEvidence.sourceSha256, smsBinding.candidateApprovalSha256);
+  const beforeDigests = settingDigests(before), candidateDigests = settingDigests(candidate);
+  requireSecretPreimages(beforeDigests, initialSecrets);
+
+  let revisionDatabase, fenceId, writeAttempted = false, sourceChanged = false;
+  async function confirmStoppedFence() {
+    if (!revisionDatabase || !uuid(fenceId)) throw Error('management_sms_rebind_fence_unconfirmed');
+    const {rows: [current]} = await revisionDatabase.query(fence);
+    const {rows: [active]} = await revisionDatabase.query(admissions);
+    const {rows: [schedule]} = await revisionDatabase.query(scheduler);
+    if (current.mode !== 'fenced' || current.operation_id !== fenceId ||
+        Number(current.epoch) !== expectedBefore.epoch ||
+        current.source_sha256 !== expectedBefore.source_sha256 || active.n !== 0) {
+      throw Error('management_sms_rebind_fence_unconfirmed');
+    }
+    requireRevisionSchedulerReady(schedule.status);
+  }
+  const scopedApi = async (path, options) => {
+    if (path === 'secrets' && options?.method === 'POST') {
+      if (writeAttempted || options.body !== JSON.stringify([{name: 'BUILD_SOURCE_ID', value: testEvidence.sourceSha256}])) {
+        throw Error('management_sms_rebind_post_refused');
+      }
+      requireSecretPreimages({...expectedSecretPreimages, ...beforeDigests}, (await api('secrets')).json());
+      await confirmStoppedFence();
+      writeAttempted = true;
+      const body = JSON.stringify([{name: 'BUILD_SOURCE_ID', value: testEvidence.sourceSha256},
+        ...['COLLECT_SMS_CORE_SOURCE_SHA256', 'COLLECT_SMS_SOURCE_APPROVAL'].map(name => ({name, value: candidate[name]}))]);
+      const written = await api(path, {...options, body});
+      await confirmStoppedFence();
+      requireSecretPreimages({...expectedSecretPreimages, ...candidateDigests}, (await api('secrets')).json());
+      sourceChanged = true;
+      return written;
+    }
+    if (path.startsWith('functions/deploy?slug=')) {
+      if (!sourceChanged) throw Error('management_sms_rebind_unconfirmed');
+      await confirmStoppedFence();
+    }
+    const response = await api(path, options);
+    if (path === 'secrets') requireSecretPreimages(sourceChanged ? candidateDigests : beforeDigests, response.json());
+    return response;
+  };
+  const {save = record} = dependencies;
+  return reviseRuntime(input, {...dependencies, api: scopedApi,
+    async open() {
+      revisionDatabase = await openRevisionDatabase(api);
+      return revisionDatabase;
+    },
+    save(name, value) {
+      save(name, value);
+      if (name === 'revision-' + input.label + '-intent.json') fenceId = value.fenceId;
+    }});
 }

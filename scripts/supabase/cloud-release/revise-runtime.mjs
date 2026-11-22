@@ -217,7 +217,8 @@ async function requireUpgradeReceipt(c,prior,sourceSha,readback,current){
 export async function reviseRuntime({label,testEvidence,migrations=[],resumeFencedRevision=null,expectedBefore=null,expectedFunctions=null,
  requireChangedBundles=false,expectedSecretPreimages=null,acceptAncillaryRequalification=false},{
  captureSnapshot=captureRuntimeSnapshot,check=checkSnapshot,open=connect,api=management,save=record,
- readHistory=history,applyMigration=applyEntry,readRecord=readRevisionRecord,readRegistration=readAncillaryRegistration
+ readHistory=history,applyMigration=applyEntry,readRecord=readRevisionRecord,readRegistration=readAncillaryRegistration,
+ refreshAncillaryAfterSourceSecret=null
 }={}){
  if(!/^[a-z][a-z0-9-]{3,60}$/.test(label)||!testEvidence||testEvidence.passed!==true)throw Error('reviewed_revision_required');
  if(!Array.isArray(migrations)||migrations.length>5)throw Error('reviewed_migrations_required');
@@ -230,7 +231,13 @@ export async function reviseRuntime({label,testEvidence,migrations=[],resumeFenc
  if(resumeFencedRevision===label)throw Error('reviewed_revision_required');
  const prior=resumeFencedRevision===null?null:readRecord('revision-'+resumeFencedRevision+'-intent.json');
  if(resumeFencedRevision!==null&&!prior)throw Error('revision_record_invalid');
- const registration=readRegistration(),registrationEvidence=registrationSnapshot(registration),providerApi=api;
+ if(refreshAncillaryAfterSourceSecret!==null&&(typeof refreshAncillaryAfterSourceSecret!=='function'||prior||
+    expectedBefore===null||expectedFunctions===null||entries.length!==0))
+  throw Error('initial_ancillary_refresh_not_allowed');
+ let registration=readRegistration();
+ if(refreshAncillaryAfterSourceSecret!==null&&!registration?.entries?.length)
+  throw Error('initial_ancillary_refresh_not_allowed');
+ const registrationEvidence=registrationSnapshot(registration),providerApi=api;
  let ancillaryRequalification=null;
  if(prior&&JSON.stringify(prior.ancillaryRegistration??null)!==JSON.stringify(registrationEvidence)){
   if(!acceptAncillaryRequalification)throw Error('fenced_revision_ancillary_proof_changed');
@@ -375,7 +382,21 @@ export async function reviseRuntime({label,testEvidence,migrations=[],resumeFenc
   const secrets=(await api('secrets')).json();
   if(!Array.isArray(secrets)||secrets.filter(x=>x?.name==='BUILD_SOURCE_ID').length!==1||
      secrets.find(x=>x.name==='BUILD_SOURCE_ID')?.value!==sha(snapshot.sourceSha))throw Error('revision_source_secret_unconfirmed');
-  if(changingSecret)save(name+'-source-secret-complete.json',{sourceSha256:snapshot.sourceSha,secretSha256:sha(snapshot.sourceSha),at:new Date().toISOString()});
+  if(changingSecret){
+   save(name+'-source-secret-complete.json',{sourceSha256:snapshot.sourceSha,secretSha256:sha(snapshot.sourceSha),at:new Date().toISOString()});
+   if(refreshAncillaryAfterSourceSecret!==null){
+    const next=await refreshAncillaryAfterSourceSecret({registration,oldFunctions:before,
+      sourceSha256:snapshot.sourceSha,fenceId,epoch:Number(f.epoch)});
+    if(next===null||!next?.entries?.length)throw Error('runtime_revision_ancillary_refresh_invalid');
+    if(registration.digest!==next.digest){
+     requireVersionOnlyRequalification(registration,next);
+     save(name+'-ancillary-refreshed.json',{previousDigest:registration.digest,newDigest:next.digest,
+      at:new Date().toISOString()});
+    }
+    registration=next;
+    requireSameRegistration(registration,readRegistration());
+   }
+  }
   const deployed=[];
   const deploymentBefore=(await api('functions')).json();
   if(prior)reconcileResumeFunctions(prior,deploymentBefore,snapshot.sourceSha,readRecord,labels,requireChangedBundles);
