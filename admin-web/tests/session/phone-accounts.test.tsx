@@ -49,6 +49,21 @@ describe('dedicated phone accounts', () => {
     expect(screen.queryByRole('cell', {name: 'Staff'})).toBeNull();
   });
 
+  it.each([
+    ['admin', 'staff', 'Staff'],
+    ['owner', undefined, 'Unassigned'],
+  ] as const)('does not present shared %s authority as a dedicated BuriMunsi role', (sharedRole, assignedRole, displayedRole) => {
+    const operator: BuriSharedOperator = {adminId, principalId, displayName: 'Test operator', role: sharedRole, email: ''};
+    const directory = {collectionId: 'group-one', configured: true, team: [operator], approvals: assignedRole ?
+      [{operator, phone: staff.phone, role: assignedRole, active: false, version: 1,
+        sharedStatus: 'active' as const, capabilities: ['records.read']}] : []};
+    render(<BuriDirectoryView directory={directory} provisioning={null} provisioningError={false} phoneAccounts />);
+    const row = within(screen.getByRole('row', {name: /Test operator/}));
+    expect(row.getByRole('cell', {name: displayedRole})).toBeVisible();
+    expect(row.queryByRole('cell', {name: 'Admin'})).toBeNull();
+    expect(row.getByText(assignedRole ? 'Recorded disabled' : 'No approval recorded')).toBeVisible();
+  });
+
   it('binds the two-role directory and scoped administrator to the authenticated native account', () => {
     const body = cookie(), actor = parseSessionUser(body, Date.now());
     expect(hasScopedAdminAuthority(actor)).toBe(true);
