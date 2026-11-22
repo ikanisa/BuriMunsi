@@ -1,7 +1,7 @@
 import {adminCookieToken, validateAdminOrigin} from '../admin-security.js';
 import {BURIMUNSI_ADMIN_ORIGIN, BURIMUNSI_PRODUCT_MODE} from '../burimunsi-standalone.js';
 import {ApiError, digest, first, json, readJson} from './core.js';
-import {adminCookie, adminPublicUser, guardedOwnerSessionIdentity} from './admin_accounts_legacy.js';
+import {adminCookie, adminPublicUser} from './admin_accounts_legacy.js';
 import {newAdminCookieToken} from './admin_bff_tokens.js';
 import {adminPasscodeProof, attestAdminPasscodeAccount} from './admin_email_policy.js';
 import {nativePinHasher} from './burimunsi/native-secrets.js';
@@ -59,12 +59,13 @@ export async function browserPasscodeSession(request, env, required = true) {
     if (required) throw signedOut();
     return null;
   }
-  if (result.collectionId !== group || !Number.isSafeInteger(result.expiresAt) ||
+  if (result.collectionId !== group || !['admin','staff'].includes(result.operatorRole) ||
+      !['owner','admin','staff'].includes(result.storageRole) || !Number.isSafeInteger(result.expiresAt) ||
       result.expiresAt <= Math.floor(Date.now() / 1000) || !Array.isArray(result.permissions) ||
       result.permissions.some(permission => typeof permission !== 'string')) throw unavailable();
   if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) await requireCsrf(request, token);
   const account = attestAdminPasscodeAccount({
-    id: result.adminId, principal_id: result.principalId, email: result.email, role: 'owner',
+    id: result.adminId, principal_id: result.principalId, email: result.email, role: result.storageRole,
     auth_version: result.authVersion, auth_session_id: result.sessionId, public_id: result.publicId,
     origin, token_hash: hash, expires_at: result.expiresAt, auth_at: result.verifiedAt,
     issued_assurance_level: 1, issued_mfa_at: null, issued_mfa_factor_id: null,
@@ -75,17 +76,21 @@ export async function browserPasscodeSession(request, env, required = true) {
   return account;
 }
 
-function publicSession(account, ownerIdentity) {
+function publicSession(account) {
   const proof = adminPasscodeProof(account);
+  const {email: _email, ...profile} = adminPublicUser(account) ?? {};
   const user = account ? {
-    ...adminPublicUser(account),
-    phone: proof.phone, displayName: proof.name, authMethod: 'phone_passcode',
+    ...profile,
+    accountId: proof.accountId, role: proof.operatorRole, phone: proof.phone, displayName: proof.name, authMethod: 'phone_passcode',
     passcodeVerifiedAt: iso(proof.verifiedAt),
   } : null;
   return {
     user, expiresAt: account ? iso(account.expires_at) : null,
-    csrfToken: account?.csrfToken ?? null, ownerEmail: ownerIdentity?.email ?? null,
-    ...(ownerIdentity ? {ownerIdentity} : {}),
+    csrfToken: account?.csrfToken ?? null, ownerEmail: null,
+    ...(proof?.operatorRole === 'admin' ? {adminIdentity: {
+      schemaVersion: 1, accountId: proof.accountId, adminId: proof.adminId,
+      principalId: proof.principalId, collectionId: proof.collectionId, role: 'admin',
+    }} : {}),
   };
 }
 
@@ -116,7 +121,7 @@ async function checkPasscode(request, env, group, phone, pin) {
   const dummy = {algorithm: 'pbkdf2-sha256+hmac-v1', pepperId: hasher.pepperId,
     iterations: PIN_ITERATIONS, salt: '0'.repeat(32), hash: '0'.repeat(64)};
   const verified = await hasher.verify(phone, pin, account?.pinHash ?? dummy);
-  if (!verified || account?.phone !== phone || account.role !== 'admin') throw credentialsDenied();
+  if (!verified || account?.phone !== phone || !['admin','staff'].includes(account.role)) throw credentialsDenied();
   if (request.signal.aborted) throw new ApiError(400, 'request_aborted', 'The sign-in check was interrupted.');
   return account;
 }
@@ -136,9 +141,7 @@ export async function handleBrowserPasscode(request, env, path) {
   if (new URL(request.url).search) throw new ApiError(400, 'invalid_request', 'Invalid sign-in request.');
   if (path === '/auth/session' && request.method === 'GET') {
     const account = await browserPasscodeSession(request, env, false);
-    const ownerIdentity = account && request.headers.get('X-Collect-Owner-Identity-Version') === '1'
-      ? await guardedOwnerSessionIdentity(env, account) : null;
-    return json(publicSession(account, ownerIdentity));
+    return json(publicSession(account));
   }
   if (request.method !== 'POST') throw new ApiError(404, 'not_found', 'This sign-in action is unavailable.');
   if (path === '/auth/phone-passcode') {
@@ -155,20 +158,23 @@ export async function handleBrowserPasscode(request, env, path) {
     const identity=request.headers.get('X-Collect-Owner-Identity-Version')==='1' ? await guardedOwnerSessionIdentity(env,account) : null;
     return json({...publicSession(account,identity),...(identity?{sessionContract:2}:{})}, 200, {'Set-Cookie': adminCookie(token, SESSION_SECONDS)});
   }
-  if (path === '/auth/passcode/verify') {
+  if (path === '/auth/passcode/change') {
     const account = await browserPasscodeSession(request, env);
     const proof = adminPasscodeProof(account);
-    const [phone, pin] = normalizedCredentials(await readJson(request, 1024), proof.phone);
-    const candidate = await checkPasscode(request, env, group, phone, pin);
+    const body = await readJson(request, 1024);
+    if (Object.keys(body).length !== 3 || !['current','newPin','confirm'].every(key =>
+      typeof body[key] === 'string' && /^[0-9]{4}$/.test(body[key])) ||
+      body.newPin !== body.confirm || body.newPin === body.current) {
+      throw new ApiError(400, 'invalid_passcode_change', 'Enter your current passcode and confirm a different four-digit passcode.');
+    }
+    const candidate = await checkPasscode(request, env, group, proof.phone, body.current);
     if (candidate.id !== proof.accountId) throw signedOut();
-    const confirmed = await changeSession(env,
-      'SELECT private.burimunsi_browser_pin_verify(?,?,?,?::uuid,?,?) AS result',
-      group, account.token_hash, origin, candidate.id, candidate.credentialVersion, candidate.version);
-    if (confirmed !== true) throw signedOut();
-    const current = await browserPasscodeSession(request, env);
-    const identity=request.headers.get('X-Collect-Owner-Identity-Version')==='1' ? await guardedOwnerSessionIdentity(env,current) : null;
-    return json({contractVersion: 1, ...(identity?{session:{...publicSession(current,identity),sessionContract:2}}:{}), sessionId: current.public_id,
-      passcodeVerifiedAt: iso(adminPasscodeProof(current).verifiedAt)});
+    const hash = await nativePinHasher(env).hash(proof.phone, body.newPin);
+    const changed = await changeSession(env,
+      'SELECT private.burimunsi_browser_pin_change(?,?,?,?::uuid,?,?,?::jsonb) AS result',
+      group, account.token_hash, origin, candidate.id, candidate.credentialVersion, candidate.version, JSON.stringify(hash));
+    if (changed !== true) throw signedOut();
+    return json({ok:true}, 200, {'Set-Cookie':adminCookie()});
   }
   if (path === '/auth/logout') {
     const token = adminCookieToken(request);

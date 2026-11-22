@@ -29,7 +29,7 @@ VALUES('browser-fixture-owner','synthetic-primary','browser-fixture-owner','2026
 INSERT INTO app.users(id,public_id,created_at,updated_at)
 VALUES('browser-fixture-staff','812345','2026-01-01','2026-01-01');
 INSERT INTO app.collections(id,slug,creator_user_id,title,collection_type,created_at,updated_at)
-VALUES('browser-fixture-group','browser-fixture-group','synthetic-primary','Synthetic browser group','community','2026-01-01','2026-01-01');
+VALUES('browser-fixture-group','browser-fixture-group','synthetic-primary','Synthetic browser group','community','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z');
 INSERT INTO app.memberships(id,collection_id,user_id,role,active,joined_at)
 VALUES(gen_random_uuid()::text,'browser-fixture-group','synthetic-primary','owner',1,'2026-01-01');
 INSERT INTO app.momo_receiving_accounts(id,provider,public_code,recipient_name,receiver_hash,timezone,created_at)

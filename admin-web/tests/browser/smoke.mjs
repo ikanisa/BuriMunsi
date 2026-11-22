@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { installLocalNetworkFence } from './local-network-fence.cjs';
+import { qualifyPhoneTeam } from './phone-team.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const artifact = resolve(root, process.argv[2] ?? process.env.ADMIN_PWA_BUILD_DIR ?? 'build/admin-web-fixture');
@@ -27,6 +28,8 @@ const server = spawn(process.execPath, [fileURLToPath(new URL('./fixture-server.
 const exited = new Promise(resolveExit => server.once('close', resolveExit));
 const denied = [];
 const pageErrors = [];
+const unexpectedAuth = [];
+const allowedAuth = new Set(['session', 'phone-passcode', 'passcode/change', 'logout'].map(name => '/api/admin/auth/' + name));
 let browser;
 try {
   await new Promise((ready, fail) => {
@@ -60,6 +63,10 @@ try {
     const context = await browser.newContext({ viewport, serviceWorkers });
     context.setDefaultTimeout(10_000);
     const page = await context.newPage();
+    context.on('request', request => {
+      const {pathname} = new URL(request.url());
+      if (pathname.startsWith('/api/admin/auth/') && !allowedAuth.has(pathname)) unexpectedAuth.push(pathname);
+    });
     page.on('pageerror', error => pageErrors.push(error.message));
     if (serviceWorkers === 'block') await installLocalNetworkFence(page, origin, denied);
     else context.on('request', request => {
@@ -88,10 +95,8 @@ try {
   await page.reload();
   await overview.waitFor();
   await page.goto(origin + '/admin/security/verify-passcode?returnTo=%2Fadmin');
-  await page.getByRole('heading', { name: 'Verify your passcode' }).waitFor();
-  await page.getByLabel('Four-digit passcode', { exact: true }).fill('0123');
-  await page.getByRole('button', { name: 'Verify passcode', exact: true }).click();
   await overview.waitFor();
+  assert.equal(new URL(page.url()).hash, '#/admin');
 
   const receipts = requestUrl => requestUrl.origin === origin && requestUrl.pathname === '/api/admin/sms/receipts';
   await page.route(receipts, route => route.fulfill({
@@ -114,6 +119,8 @@ try {
   await page.goBack();
   await overview.waitFor();
 
+  const phoneTeamChecks = await qualifyPhoneTeam({admin: page, origin, open});
+
   const recovery = await open({ width: 1440, height: 900 }, 'block');
   await recovery.context.addCookies(cookies);
   const sessionPage = recovery.page;
@@ -124,13 +131,10 @@ try {
     nextSession = 'default';
     if (mode === 'default') return route.fallback();
     if (mode === 'unavailable') return route.fulfill({ status: 503, json: { error: { code: 'service_unavailable' } } });
-    // The default fixture owner lacks the protected-owner proof and receiving permissions.
+    // The role and grants alone cannot establish the current Admin's scope.
     const response = await route.fetch();
     const body = await response.json();
-    const { id, principalId, email, permissions } = body.user;
-    return route.fulfill({ response, json: { ...body, ownerEmail: email,
-      user: { ...body.user, passcodeVerifiedAt: null, permissions: [...permissions, 'admin_users.manage', 'receivers.manage'] },
-      ownerIdentity: { schemaVersion: 1, adminId: id, principalId, email } } });
+    return route.fulfill({ response, json: { ...body, adminIdentity: null } });
   });
   const protectedReads = [];
   sessionPage.on('request', request => {
@@ -139,26 +143,21 @@ try {
   });
 
   await sessionPage.goto(origin + '/admin/security/authenticator?' + new URLSearchParams({ returnTo: '/admin/burimunsi?draft=private' }));
-  await sessionPage.getByRole('heading', { name: 'Verify your passcode' }).waitFor();
-  assert.equal(new URL(sessionPage.url()).hash, '#/admin/security/verify-passcode?returnTo=%2Fadmin%2Fburimunsi');
-  await sessionPage.getByRole('button', { name: 'Back', exact: true }).click();
-  await sessionPage.getByRole('heading', { name: 'Access unavailable' }).waitFor();
+  await sessionPage.getByRole('heading', { name: 'BuriMunsi access' }).waitFor();
+  await sessionPage.getByRole('button', { name: 'Load groups' }).waitFor();
   assert.equal(new URL(sessionPage.url()).hash, '#/admin/burimunsi');
 
-  nextSession = 'owner';
+  nextSession = 'unattested';
   await sessionPage.reload();
-  await sessionPage.getByRole('heading', { name: 'BuriMunsi access' }).waitFor();
-  await sessionPage.getByRole('button', { name: 'Verify passcode', exact: true }).click();
-  await sessionPage.getByRole('heading', { name: 'Verify your passcode' }).waitFor();
-  await sessionPage.getByRole('button', { name: 'Back', exact: true }).click();
-  await sessionPage.getByRole('heading', { name: 'BuriMunsi access' }).waitFor();
+  await sessionPage.getByRole('heading', { name: 'Access unavailable' }).waitFor();
+  assert.equal(await sessionPage.getByRole('button', { name: 'Load groups' }).count(), 0);
 
   nextSession = 'unavailable';
   await sessionPage.reload();
   await sessionPage.getByRole('heading', { name: 'Workspace unavailable' }).waitFor();
   assert.equal(await sessionPage.getByRole('heading', { name: 'BuriMunsi access' }).count(), 0);
   await sessionPage.getByRole('button', { name: 'Try again' }).click();
-  await sessionPage.getByRole('heading', { name: 'Access unavailable' }).waitFor();
+  await sessionPage.getByRole('button', { name: 'Load groups' }).waitFor();
 
   const sessionRead = sessionPage.waitForResponse(response => sessionApi(new URL(response.url())));
   await sessionPage.goto(origin + '/admin/licenses');
@@ -178,7 +177,7 @@ try {
   const mobile = await open({ width: 390, height: 844 }, 'block');
   await mobile.page.goto(origin + '/admin/sms-receipts');
   await mobile.page.getByRole('heading', { name: 'Welcome to BuriMunsi' }).waitFor();
-  assert(!mobile.page.url().includes('fixture@example.test'));
+  assert(!decodeURIComponent(mobile.page.url()).includes('780000001'));
   assert.equal(await mobile.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   assert.equal(await mobile.page.getByRole('heading', { name: 'SMS receipts' }).count(), 0);
 
@@ -241,13 +240,12 @@ try {
   assert(cachedPaths.every(path => path.startsWith('/_build/') || ['/', '/manifest.json', '/version.json'].includes(path)));
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(denied, []);
-  console.log(JSON.stringify({
-    status: 'pass', environment: 'synthetic_loopback',
-    checks: ['obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'reload_restores_session', 'passcode_step_up_and_readback', 'keyboard_receipt_navigation', 'sms_read_failure_retry',
+  assert.deepEqual(unexpectedAuth, []);
+  const checks = ['obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'reload_restores_session', 'retired_passcode_bookmark_returns_to_overview', 'keyboard_receipt_navigation', 'sms_read_failure_retry',
       'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
-      'verification_preserves_safe_destination_and_rechecks_owner', 'failed_session_recheck_drops_old_owner_grant', 'expired_request_and_history_return_require_sign_in',
-      'mobile_drawer_traps_and_restores_focus_and_reflows', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only'],
-  }, null, 2));
+      'retired_authenticator_bookmark_preserves_safe_destination', 'missing_scoped_admin_identity_removes_controls', 'session_failure_and_recovery_require_server_authority', 'expired_request_and_history_return_require_sign_in',
+      'mobile_drawer_traps_and_restores_focus_and_reflows', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, 'no_verification_or_otp_request'];
+  console.log(JSON.stringify({status: 'pass', environment: 'synthetic_loopback', origin, count: checks.length, checks}, null, 2));
 } finally {
   await browser?.close();
   if (server.exitCode === null && server.signalCode === null) server.kill('SIGTERM');
