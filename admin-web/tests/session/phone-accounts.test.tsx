@@ -9,6 +9,8 @@ import {parseSessionUser} from '../../src/session/sessionResponses';
 import {hasScopedAdminAuthority} from '../../src/session/ownerIdentity';
 import {sensitiveVerificationDeadline} from '../../src/session/sessionPolicy';
 import {scopes} from '../burimunsi/fixture';
+import {BuriDirectoryView} from '../../src/features/burimunsi/BuriDirectoryView';
+import type {BuriSharedOperator} from '../../src/features/burimunsi/contracts';
 
 const adminId = '10000000-0000-4000-8000-000000000001', principalId = '20000000-0000-4000-8000-000000000001';
 const sessionId = '30000000-0000-4000-8000-000000000001';
@@ -37,6 +39,16 @@ beforeEach(() => {vi.stubGlobal('crypto', webcrypto);});
 afterEach(() => {cleanups.splice(0).forEach(cleanup => cleanup()); window.history.replaceState(null, '', '/'); vi.unstubAllGlobals(); localStorage.clear(); sessionStorage.clear();});
 
 describe('dedicated phone accounts', () => {
+  it('shows the assigned BuriMunsi role for an operator whose underlying shared role differs', () => {
+    const operator: BuriSharedOperator = {adminId, principalId, displayName: 'Test operator', role: 'staff', email: ''};
+    const directory = {collectionId: 'group-one', configured: true, team: [operator],
+      approvals: [{operator, phone: admin.phone, role: 'admin' as const, active: true, version: 1,
+        sharedStatus: 'active' as const, capabilities: ['records.read']}]};
+    render(<BuriDirectoryView directory={directory} provisioning={null} provisioningError={false} phoneAccounts />);
+    expect(screen.getByRole('cell', {name: 'Admin'})).toBeVisible();
+    expect(screen.queryByRole('cell', {name: 'Staff'})).toBeNull();
+  });
+
   it('binds the two-role directory and scoped administrator to the authenticated native account', () => {
     const body = cookie(), actor = parseSessionUser(body, Date.now());
     expect(hasScopedAdminAuthority(actor)).toBe(true);
