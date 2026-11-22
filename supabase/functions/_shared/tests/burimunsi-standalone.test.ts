@@ -7,6 +7,7 @@ import {logicalRequest} from '../edge-http-transport.js';
 import {adminSessionOriginMatches, validateAdminOrigin} from '../admin-security.js';
 import {handleAuth} from '../domain/auth.js';
 import {momoGatewayRoute} from '../domain/momo_gateway.js';
+import domain from '../domain/index.js';
 
 const project = MANAGED_SUPABASE_ORIGIN;
 const group = 'fixture-group';
@@ -159,14 +160,40 @@ Deno.test('standalone direct deletion information remains available without acco
   const document = await response.text();
   const style = '/functions/v1/collect-api' + path + '/assets/style.css';
   assertEquals(document.includes(`href="${style}"`), true);
-  assertEquals(document.includes('Contact support about account deletion'), true);
-  assertEquals(/<form\b|<script\b|@collect\.ikanisa\.com/i.test(document), false);
+  assertEquals(document.includes('href="https://wa.me/250788767816" rel="noreferrer">Contact support on WhatsApp at +250 788 767 816</a>'), true);
+  assertEquals(/mailto:|<form\b|<script\b|@collect\.ikanisa\.com/i.test(document), false);
   const head = await handler(request('collect-api', path, 'HEAD'));
   assertEquals(head.status, 200);
   assertEquals(await head.text(), '');
   const stylesheet = await handler(request('collect-api', path + '/assets/style.css', 'GET'));
   assertEquals(stylesheet.status, 200);
   assertEquals(stylesheet.headers.get('Content-Type'), 'text/css; charset=utf-8');
+});
+
+Deno.test('installed BuriMunsi clients receive the published WhatsApp number from the public configuration', async () => {
+  const operation = 'get_public_runtime_config';
+  const channel = {key: 'support.whatsapp', channel_type: 'whatsapp', is_active: true, value: '+250788767816'};
+  const previous = {version: 3, support_channels: [{key: 'support.email', value: 'old@example.test'}]};
+  async function configuration(stored: unknown, standalone: boolean) {
+    const DB = {prepare: (sql: string) => {
+      assertEquals(sql, 'SELECT value_json FROM runtime_config WHERE key=?');
+      return {bind: (key: string) => {
+        assertEquals(key, operation);
+        return {first: () => stored === undefined ? null : {value_json: JSON.stringify(stored)}};
+      }};
+    }};
+    return await domain.fetch(new Request('https://example.test/v1/rpc/' + operation, {
+      method: 'POST', body: '{}', headers: {'Content-Type': 'application/json'},
+    }), {DB, BURIMUNSI_PRODUCT_MODE: standalone ? 'standalone' : undefined}, {});
+  }
+  for (const [stored, expected] of [[previous, {version: 3, support_channels: [channel]}], [undefined, {support_channels: [channel]}]]) {
+    const response = await configuration(stored, true);
+    assertEquals(response.status, 200);
+    assertEquals(await response.json(), expected);
+  }
+  const shared = await configuration(previous, false);
+  assertEquals(await shared.json(), previous);
+  assertEquals((await configuration([], true)).status, 503);
 });
 
 Deno.test('standalone compares the only database collection with the configured scope under the runtime role', async () => {

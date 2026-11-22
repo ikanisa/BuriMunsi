@@ -10,8 +10,6 @@ interface BuriController {
     /** Non-secret, existing installation identity; never a token or a new registration. */
     val installationId:String get()=""
     val installationProfile:String get()="staff"
-    /** Validated live public support contact, or null while unavailable. */
-    val supportPhone:String? get()=null
     val presentation:ScreenPresentation get()=state.presentation(screenGate,System.currentTimeMillis())
     val screenGate:ScreenGate get()=ScreenGate.OPEN
     val receivingPermissionsRequired:Boolean get()=false

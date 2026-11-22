@@ -14,7 +14,6 @@ class ApiClient(origin:String,id:String,token:()->String?){
  constructor(origin:String,id:String,prefix:String,token:()->String?):this(origin,id,token)
  constructor(origin:String,id:String,provider:ManagedSessionTokenProvider,prefix:String,token:()->String?):this(origin,id,provider,token)
 }
-class SupportContactClient(origin:String,prefix:String,publicKey:String=""){fun read():String?=Fixture.supportFetch()}
 data class CapturedListingQuery(val target:ListingTarget,val query:ListingQuery,val cursor:String?,val memberId:String?,val limit:Int=100)
 class RecordReadScope internal constructor(private val owner:Any,private val verify:()->Unit){
  internal fun validate(expected:Any){checkContract(owner===expected,"session_changed");verify()}
@@ -22,7 +21,6 @@ class RecordReadScope internal constructor(private val owner:Any,private val ver
 }
 object Fixture{
  var anchoredMembers:((String,ListingQuery)->Page<String>)?=null
- @Volatile var supportFetch:()->String?={null}
  var restoredHome:Home?=null
  var restoredHomeSavedAt:Long?=null
  var restoredHomeReused=false
