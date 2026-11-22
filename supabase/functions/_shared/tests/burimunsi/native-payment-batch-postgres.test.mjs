@@ -9,6 +9,15 @@ const migration=name=>readFileSync(new URL('../../../../migrations/'+name,import
 
 test('batched native payment projections preserve collection, actor and receipt disclosure', {skip:!fixture},()=>{
   const batch=migration('20261122140000_burimunsi_batch_payment_projections.sql');
+  const performance=migration('20261122180000_burimunsi_internal_query_performance.sql');
+  const shared=performance.indexOf('-- Shared application admission and scheduler read paths.');
+  const directory=performance.indexOf('DO $directory$');
+  const directoryEnd=performance.indexOf('\n$directory$;',directory);
+  assert.ok(shared>=0);
+  assert.ok(directory>shared);
+  assert.ok(directoryEnd>directory);
+  const readHelpers=performance.slice(0,shared)+'COMMIT;\n';
+  const directoryChange=performance.slice(directory,directoryEnd)+'\n$directory$;\n';
   const prior=migration('20261112200100_burimunsi_native_auto_transactions.sql');
   const scalar=prior.match(/CREATE FUNCTION private\.burimunsi_auto_projection\(p_source text\)[\s\S]*?END;\$fn\$;/)?.[0]
     .replace("'outcome',j.payment_outcome,'canReveal',can_reveal", "'outcome',coalesce(j.posting_facts->>'payment_outcome',j.payment_outcome),'canReveal',can_reveal,'facts',j.posting_facts");
@@ -30,9 +39,10 @@ test('batched native payment projections preserve collection, actor and receipt 
       END
     $$;
     CREATE TABLE private.burimunsi_auto_sms_jobs(
-      source_id text PRIMARY KEY,collection_id text,state text,payment_outcome text,posting_facts jsonb);
-    INSERT INTO private.burimunsi_auto_sms_jobs VALUES
-      ('mine','group','completed','pending','{"payment_outcome":"successful","amount_minor":25}'),
+      source_id text PRIMARY KEY,collection_id text,state text,payment_outcome text,posting_facts jsonb,
+      transaction_id text,relation text);
+    INSERT INTO private.burimunsi_auto_sms_jobs(source_id,collection_id,state,payment_outcome,posting_facts) VALUES
+      ('mine','group','completed','pending','{"payment_outcome":"successful","amount_minor":25,"transaction_at":"2026-11-22T08:00:00Z","transaction_timezone":"Africa/Kigali"}'),
       ('another','group','completed','failed',NULL),
       ('foreign','other-group','completed','successful','{"amount_minor":900}'),
       ('waiting','group','processing',NULL,NULL);
@@ -62,6 +72,17 @@ test('batched native payment projections preserve collection, actor and receipt 
         RETURN '{"private_receipt_proof":"must not be returned"}';
       END
     $$;
+    CREATE FUNCTION private.burimunsi_browser_pin_owner_actor(text,text,text,text) RETURNS uuid
+      LANGUAGE sql AS $$ SELECT '11111111-1111-4111-8111-111111111111'::uuid $$;
+    CREATE FUNCTION private.burimunsi_operator_directory(p_actor text,p_cookie text,p_origin text,p_public text,p_collection text,p_request uuid)
+      RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $$
+    DECLARE sid uuid;
+    BEGIN
+      PERFORM pg_advisory_xact_lock(734636924058501::bigint);
+      sid:=private.burimunsi_browser_pin_owner_actor(p_actor,p_cookie,p_origin,p_public);
+      RETURN jsonb_build_object('sessionId',sid,'collectionId',p_collection);
+    END
+    $$;
     CREATE TABLE private.burimunsi_transaction_scopes(
       collection_id text,transaction_id text,receiving_account_id text,native_source_id text);
     CREATE TABLE app.momo_transactions(
@@ -86,7 +107,9 @@ test('batched native payment projections preserve collection, actor and receipt 
     BEGIN
       IF NOT has_function_privilege('collect_runtime','private.burimunsi_auto_projection_batch(text,text[])','execute')
         OR EXISTS (SELECT 1 FROM unnest(ARRAY['anon','authenticated','service_role','collect_importer']) r
-          WHERE has_function_privilege(r,'private.burimunsi_auto_projection_batch(text,text[])','execute')) THEN
+          WHERE has_function_privilege(r,'private.burimunsi_auto_projection_batch(text,text[])','execute') OR
+            has_function_privilege(r,'private.burimunsi_home_payment_times(text,text[])','execute') OR
+            has_function_privilege(r,'private.burimunsi_admin_transaction_facts(text)','execute')) THEN
         RAISE EXCEPTION 'projection grants changed';
       END IF;
     END
@@ -107,10 +130,23 @@ test('batched native payment projections preserve collection, actor and receipt 
           OR current_setting('burimunsi.native_receipt_frame') <> 'prior-frame' THEN
           RAISE EXCEPTION 'native batch does not match exact scalar projections';
         END IF;
+        SELECT count(*), count(*) FILTER(
+          WHERE t.transaction_at IS DISTINCT FROM p.value->'facts'->>'transaction_at'
+            OR t.transaction_timezone IS DISTINCT FROM p.value->'facts'->>'transaction_timezone')
+        INTO row_count,differences
+        FROM private.burimunsi_home_payment_times('group',ARRAY['mine','another','foreign','waiting','mine',NULL]) t
+        JOIN private.burimunsi_auto_projection_batch('group',ARRAY['mine','another']) p USING (source_id);
+        IF row_count<>2 OR differences<>0 OR current_setting('burimunsi.native_receipt_frame') <> 'prior-frame' THEN
+          RAISE EXCEPTION 'home times escaped the allowed projection';
+        END IF;
       END LOOP;
       BEGIN
         PERFORM private.burimunsi_auto_projection_batch('other-group',ARRAY['foreign']);
         RAISE EXCEPTION 'cross-collection request passed';
+      EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+      BEGIN
+        PERFORM private.burimunsi_home_payment_times('other-group',ARRAY['foreign']);
+        RAISE EXCEPTION 'cross-collection home times passed';
       EXCEPTION WHEN insufficient_privilege THEN NULL; END;
       PERFORM set_config('synthetic.assert_denied','yes',true);
       BEGIN
@@ -126,13 +162,24 @@ test('batched native payment projections preserve collection, actor and receipt 
     END
     $compare$;
     SET LOCAL synthetic.operator='staff';
+    DO $directory_contract$
+    DECLARE result jsonb;
+    BEGIN
+      result:=private.burimunsi_operator_directory('owner','cookie','origin','public','group',NULL);
+      IF result->>'collectionId'<>'group' OR NOT EXISTS(SELECT 1 FROM pg_locks
+        WHERE locktype='advisory' AND pid=pg_backend_pid() AND mode='ShareLock')
+        OR EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND pid=pg_backend_pid() AND mode='ExclusiveLock') THEN
+        RAISE EXCEPTION 'directory did not preserve scope with a shared mutation lock';
+      END IF;
+    END
+    $directory_contract$;
     PREPARE legacy(text) AS ${paymentsSql(true)} AND t.id='tx';
     PREPARE batch(text) AS ${nativePaymentListingScope}${paymentsSql(true,{batch:true})};
     EXECUTE legacy('group');
     EXECUTE batch('group');
     ROLLBACK;
   `;
-  const result=fixture.run('postgres',['-Atq'],setup+scalar+batch+verify);
+  const result=fixture.run('postgres',['-Atq'],setup+scalar+batch+readHelpers+directoryChange+verify);
   assert.equal(result.status,0,result.stderr);
   const lines=result.stdout.trim().split('\n');
   assert.equal(lines.length,2);

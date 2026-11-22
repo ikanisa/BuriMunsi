@@ -8,7 +8,7 @@ import {PostgresRecordsStore} from '../../domain/burimunsi/postgres-records-stor
 const fixture=loadBuriPostgresFixture();
 test('conflicting sources disappear from unallocated counts and change the page revision', {skip:!fixture},async()=>{
  const queries=[];const sql={unsafe:async(q)=>{queries.push(q);
-  if(q.startsWith('SELECT count(*) AS total'))return [{total:0}];
+  if(q.startsWith('WITH totals AS'))return [{page_total:0,id:null}];
   if(q.includes(' AS unallocated_amount'))return [{balance:0,today:0,members:0,unallocated:0,unallocated_amount:0,id:null}];
   return [];
  }};
@@ -19,7 +19,7 @@ test('conflicting sources disappear from unallocated counts and change the page 
   await tx.listRevision('group','payments',null);
   await tx.canonicalHome('group');
  });
- const count=queries.find(q=>q.startsWith('SELECT count(*) AS total'));
+ const count=queries.find(q=>q.startsWith('WITH totals AS'));
  const revision=queries.find(q=>q.startsWith('SELECT t.id,t.version,t.has_conflict'));
  const home=queries.find(q=>q.includes(' AS unallocated_amount'));
  assert.ok(count&&revision&&home);
@@ -42,16 +42,18 @@ test('conflicting sources disappear from unallocated counts and change the page 
   }
   if(base==='revision')body=`SELECT conflict_count FROM (${body}) result`;
   if(base==='home')body=`SELECT unallocated,unallocated_amount FROM (${body}) result`;
+  if(base==='count')body=`SELECT page_total,coalesce(id,'empty') FROM (${body}) result`;
   return `PREPARE ${name}(${types}) AS WITH ${definitions.join(',')} ${body}; EXECUTE ${name}(${args});`;
  }
  let statement='BEGIN READ ONLY;';
  for(const [i,relation,source]of [[0,'duplicate','tx'],[1,'conflict','tx'],[2,'conflict','another']]){
-  statement+=prepared(`count_${i}`,'count',relation,source,count,'text,text',"'group','%%'");
+  statement+=prepared(`count_${i}`,'count',relation,source,count,'text,text,int,int',"'group','%%',40,0");
   statement+=prepared(`revision_${i}`,'revision',relation,source,revision,'text',"'group'");
   statement+=prepared(`home_${i}`,'home',relation,source,home,'text,text',"'group','2026-11-13T10:00:00Z'");
  }
+ statement+=prepared('count_empty','count','duplicate','tx',count,'text,text,int,int',"'group','%%',40,1");
  statement+='ROLLBACK;';
  const child=fixture.run('postgres',['-Atq'],statement);
  assert.equal(child.status,0,child.stderr);
- assert.deepEqual(child.stdout.trim().split('\n'),['1','0','1|100','0','1','0|0','1','0','1|100']);
+ assert.deepEqual(child.stdout.trim().split('\n'),['1|tx','0','1|100','0|empty','1','0|0','1|tx','0','1|100','1|empty']);
 });

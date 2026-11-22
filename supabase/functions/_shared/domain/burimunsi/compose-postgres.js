@@ -1,6 +1,6 @@
 import {PostgresManagedSessions} from './postgres-managed-sessions.js';
 import {PostgresPhonePinSessions} from './postgres-phone-pin-sessions.js';
-import {hasPhonePinContext} from './phone-pin-request.js';
+import {hasPhonePinContext,phonePinReadSelector} from './phone-pin-request.js';
 import {PostgresOperatorDirectory} from './postgres-operator-directory.js';
 import {PostgresIdentityDirectory} from './postgres-identity-directory.js';
 import {PostgresProcessingAdmission} from './postgres-processing-admission.js';
@@ -171,7 +171,7 @@ export function createPostgresNativePorts({admission,config,db,bridges,clock=()=
 }
 export function composePostgresNativeRequest(options) {
   const ports=createPostgresNativePorts(options);
-  return composeNativeRequest({...options,ports});
+  return composeNativeRequest({...options,ports,readRecordActor:()=>phonePinReadSelector(options.db)});
 }
 
 /** Build bounded worker entrypoints inside a genuine admitted worker context.

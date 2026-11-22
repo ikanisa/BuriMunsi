@@ -17,6 +17,7 @@ export class RecordsService {
     Object.assign(this,{store,groupId,cursor,clock,smartOnboardingImport});
   }
   async within(actor,capability,fn,command=false) {
+    requireThat(actor?.groupId===this.groupId,'access_denied',403);
     const method=command?'withCommandSnapshot':'withReadSnapshot';
     requirePort(this.store,[method]);
     return this.store[method](async tx=>{

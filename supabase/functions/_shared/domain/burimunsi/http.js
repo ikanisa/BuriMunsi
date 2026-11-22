@@ -5,6 +5,8 @@ import {BuriError,ObservationUploadUnresolved,requirePort,requireThat} from './e
 import {exactKeys,requireId,requireRequestId} from './values.js';
 import {LISTING_QUERY_KEYS} from './listing-query.js';
 
+const recordSnapshotReads = new Set(['home','payments','members','ledger','payment','member','history','staff','audit','onboardingSuggestions']);
+
 function sessionProfile(actor){
   return {groupId:actor.groupId,profile:{id:actor.id,name:actor.name,phone:actor.phone,role:actor.role,capabilities:actor.capabilities},expiresAt:actor.expiresAt};
 }
@@ -12,7 +14,7 @@ function sessionProfile(actor){
  * Do not replace the current router or bypass its application fence.
  * Origin/networkBucket are server-owned deployment inputs, not forwarded client claims.
  */
-export function createNativeHandler({auth,records,contributions,members,gateway,observations=null,cursor=null,origin,networkBucket,strictContract=false,groupId,requestReadTimeoutMs=15000,verifiedObservationStatusEnabled=false}) {
+export function createNativeHandler({auth,records,contributions,members,gateway,observations=null,cursor=null,origin,networkBucket,strictContract=false,groupId,requestReadTimeoutMs=15000,verifiedObservationStatusEnabled=false,readRecordActor=null}) {
   requirePort(auth,['login','authenticate','logout','changePasscode','manageStaff']);
   requirePort(records,['home','page','detail','exportLedger','commandStatus']);
   requirePort(contributions,['allocate']);requirePort(members,['enroll','setActive']);
@@ -65,7 +67,12 @@ export function createNativeHandler({auth,records,contributions,members,gateway,
       }
       const token=(req.headers.get('authorization')??'').match(/^Bearer ([a-f0-9]{64})$/)?.[1];
       requireActiveNativeRequest(req);
-      const actor=await auth.authenticate(token,installationId);
+      // The server-owned PIN selector only names the actor to the records
+      // service, which reloads and checks the full actor inside its snapshot.
+      const usesRecordSnapshot=recordSnapshotReads.has(wireRoute?.operation)||
+        (wireRoute?.operation==='session'&&wireQuery?.include==='home');
+      const selector=method==='GET'&&token&&usesRecordSnapshot?readRecordActor?.():null;
+      const actor=selector??await auth.authenticate(token,installationId);
       requireActiveNativeRequest(req);
       if(strictContract){requireThat(actor.groupId===groupId,'access_denied',403);wireBinding.actorId=actor.id;}
       if(route==='/session'&&method==='GET'){

@@ -61,19 +61,17 @@ test('actual Admin groups list compiles both count and page searches with bound 
    compiled.length=0;
    const url=new URL('https://fixture.invalid/api/admin/core/groups');url.searchParams.set('search',search);url.searchParams.set('limit','100');url.searchParams.set('offset','0');
    const result=await list(env,'groups',url);
-   assert.deepEqual(result.rows.map(row=>row.id),ids);assert.equal(result.total,ids.length);assert.equal(compiled.length,2);
-   for(const query of compiled){
-    assert.equal(/\binstr\s*\(/i.test(query.text),false);
-    assert.equal((query.text.match(/pg_catalog\.strpos\(/g)??[]).length,search?3:0);
-    if(search){
-     assert.equal(query.text.includes("pg_catalog.strpos(lower(COALESCE(title,'')),lower($1))>0"),true);
-     assert.equal(query.text.includes("pg_catalog.strpos(lower(COALESCE(slug,'')),lower($2))>0"),true);
-     assert.equal(query.text.includes("pg_catalog.strpos(lower(COALESCE(description,'')),lower($3))>0"),true);
-     assert.deepEqual(query.values.slice(0,3),[search,search,search]);assert.equal(query.text.includes(search),false);
-    }
+   assert.deepEqual(result.rows.map(row=>row.id),ids);assert.equal(result.total,ids.length);assert.equal(compiled.length,1);
+   const [query]=compiled;
+   assert.equal(/\binstr\s*\(/i.test(query.text),false);
+   assert.equal((query.text.match(/pg_catalog\.strpos\(/g)??[]).length,search?6:0);
+   if(search){
+    const fields=['title','slug','description','title','slug','description'];
+    fields.forEach((field,i)=>assert.ok(query.text.includes(`pg_catalog.strpos(lower(COALESCE(${field},'')),lower($${i+1}))>0`)));
+    assert.deepEqual(query.values.slice(0,6),Array(6).fill(search));assert.equal(query.text.includes(search),false);
    }
-   assert.match(compiled[1].text,search?/ORDER BY created_at DESC,id DESC LIMIT \$4 OFFSET \$5$/:/ORDER BY created_at DESC,id DESC LIMIT \$1 OFFSET \$2$/);
-   assert.deepEqual(compiled[1].values.slice(-2),[100,0]);
+   assert.match(query.text,search?/ORDER BY created_at DESC,id DESC LIMIT \$7 OFFSET \$8\)/:/ORDER BY created_at DESC,id DESC LIMIT \$1 OFFSET \$2\)/);
+   assert.deepEqual(query.values.slice(-2),[100,0]);
   }
  }finally{db.close();}
 });

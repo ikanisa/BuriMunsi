@@ -13,7 +13,7 @@ import {requireThat,requirePort} from './errors.js';
  * There are deliberately no no-op, memory, auto-approve or demo fallbacks.
  * Operational activation is explicit and defaults OFF.
  */
-export function composeNativeRequest({admission,config,ports,secrets,networkBucket,clock=()=>Date.now()}) {
+export function composeNativeRequest({admission,config,ports,secrets,networkBucket,clock=()=>Date.now(),readRecordActor=null}) {
   requireThat(admission?.verified===true&&admission.groupId===config?.groupId,'request_not_admitted',503);
   requireThat(config?.enabled===true&&config.groupId&&config.origin,'native_service_disabled',503);
   requireThat(secrets?.pinPepper instanceof Uint8Array&&secrets.cursorKey instanceof Uint8Array,'authentication_unconfigured',503);
@@ -34,7 +34,7 @@ export function composeNativeRequest({admission,config,ports,secrets,networkBuck
   const cursor=new ScopedCursor(secrets.cursorKey);
   const records=new RecordsService({store:ports.records,groupId,cursor,clock,smartOnboardingImport});
   return createNativeHandler({auth,records,contributions,members,gateway,observations:ports.observations,cursor,
-    origin:config.origin,networkBucket,groupId,strictContract:true});
+    origin:config.origin,networkBucket,groupId,strictContract:true,readRecordActor});
 }
 
 /** Shared request/worker selection. Enabled preparation can never silently fall

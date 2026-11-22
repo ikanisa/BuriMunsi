@@ -36,29 +36,38 @@ async function list(env,type,url,{id:resourceId=null,activeOnly=false,eligiblePe
  }
  if(f.status){if(!coreStatuses[type].includes(f.status))fail(400,'invalid_filter','This status is unavailable for these records.');predicates.push('status=?');args.push(f.status);}
  if(f.search){const search=coreSearch(type,f.search,spec.search);predicates.push(...search.predicates);args.push(...search.args);}
- const where=predicates.length?` WHERE ${predicates.map(p=>`(${p})`).join(' AND ')}`:'',cte=`WITH records AS (${spec.query})`,ordering=coreOrdering(type,f.sort);
+ const where=predicates.length?` WHERE ${predicates.map(p=>`(${p})`).join(' AND ')}`:'',ordering=coreOrdering(type,f.sort);
  // A skipped member does not need a balance or membership count unless it sorts or filters the page.
- const pageSql = type === 'members' && f.offset > 0
-  ? `WITH records AS NOT MATERIALIZED (${spec.query}), selected AS (
+ const pageSql = type==='members' && f.offset>0
+  ? `SELECT records.* FROM records JOIN (
        SELECT id FROM records${where} ORDER BY ${ordering} LIMIT ? OFFSET ?
-     )
-     SELECT records.* FROM records JOIN selected USING (id) ORDER BY ${ordering}`
-  : `${cte} SELECT * FROM records${where} ORDER BY ${ordering} LIMIT ? OFFSET ?`;
- const [count,page]=await env.DB.batch([env.DB.prepare(`${cte} SELECT count(*) AS total FROM records${where}`).bind(...args),
-  env.DB.prepare(pageSql).bind(...args,f.limit,f.offset)]);
- const total=exact(count.results[0].total),result=page.results.map(spec.row);
+     ) selected USING (id)`
+  : `SELECT * FROM records${where} ORDER BY ${ordering} LIMIT ? OFFSET ?`;
+ const [page]=await env.DB.batch([env.DB.prepare(`WITH records AS NOT MATERIALIZED (${spec.query}),
+  totals AS (SELECT count(*) AS page_total FROM records${where}), page AS (${pageSql})
+  SELECT page.*,totals.page_total FROM totals LEFT JOIN page ON true ORDER BY ${ordering}`)
+  .bind(...args,...args,f.limit,f.offset)]);
+ const total=exact(page.results[0].page_total);
+ const result=page.results.flatMap(row=>row.id===null?[]:[spec.row(row)]);
  if(result.length!==Math.max(0,Math.min(f.limit,total-f.offset)))fail(503,'invalid_source_data','Workspace measurements are unavailable.');
  return {...marker,rows:result,total};
 }
 
-// Every related page is counted and read in one guarded D1 batch. A scoped
-// lookup must never silently fall back to the global people/receiver directory.
-async function relatedPage(env,query,args,map,{limit=25,offset=0}={}){
- const [count,result]=await env.DB.batch([env.DB.prepare(`SELECT count(*) AS total FROM (${query})`).bind(...args),
-  env.DB.prepare(`SELECT * FROM (${query}) ORDER BY id LIMIT ? OFFSET ?`).bind(...args,limit,offset)]);
- const total=exact(count.results[0].total),values=result.results.map(map);
+// A scoped relationship count and page use the same guarded statement.
+function relatedPageStatement(env,query,args,{limit=25,offset=0}={}){
+ return env.DB.prepare(`WITH records AS NOT MATERIALIZED (${query}),
+  totals AS (SELECT count(*) AS page_total FROM records), page AS (SELECT * FROM records ORDER BY id LIMIT ? OFFSET ?)
+  SELECT page.*,totals.page_total FROM totals LEFT JOIN page ON true ORDER BY page.id`).bind(...args,limit,offset);
+}
+function relatedPageResult(result,map,{limit=25,offset=0}={}){
+ const total=exact(result.results[0].page_total);
+ const values=result.results.flatMap(row=>row.id===null?[]:[map(row)]);
  if(values.length!==Math.max(0,Math.min(limit,total-offset)))fail(503,'invalid_source_data','Related records are unavailable.');
  return {rows:values,page:{total,limit,offset,next_offset:offset+values.length<total?offset+values.length:null}};
+}
+async function relatedPage(env,query,args,map,options={}){
+ const [result]=await env.DB.batch([relatedPageStatement(env,query,args,options)]);
+ return relatedPageResult(result,map,options);
 }
 function allowedOperations(type,resource,account,receiverLocked=false){
  if(account.role==='staff')return [];
@@ -91,8 +100,15 @@ async function operatingDetail(env,account,type,resourceId,url){
   if(account.permissions.includes('ledger.read'))relations.ledger_entries=[`SELECT * FROM (${ledgerSql}) WHERE payment_id=?`,[resourceId],ledgerRow];
  }
  if(relation&&!Object.hasOwn(relations,relation))fail(400,'invalid_filter','This related record page is unavailable.');
- for(const [name,[query,args,map]] of Object.entries(relations)){
-  if(relation&&name!==relation)continue;const page=await relatedPage(env,query,args,map,relation?f:{});related[name]=page.rows;related_pages[name]=page.page;
+ const selected=Object.entries(relations).filter(([name])=>!relation||name===relation);
+ if(selected.length){
+  const options=relation?f:{};
+  const results=await env.DB.batch(selected.map(([, [query,args]])=>relatedPageStatement(env,query,args,options)));
+  selected.forEach(([name,[,,map]],index)=>{
+   const page=relatedPageResult(results[index],map,options);
+   related[name]=page.rows;
+   related_pages[name]=page.page;
+  });
  }
  let receiverLocked=type==='groups'&&(resource.is_platform_sponsored===true||resource.visibility==='public_approved');
  if(type==='payees'){const group=await first(env,'SELECT is_platform_sponsored,visibility_status FROM collections WHERE id=?',resource.group_id);receiverLocked=!group||group.is_platform_sponsored===1||group.visibility_status==='public_approved';}
@@ -101,24 +117,23 @@ async function operatingDetail(env,account,type,resourceId,url){
   allowed_operations:allowed,related,related_pages,related_truncated:false};
 }
 async function overview(env,url){
- filters(url,['country']);const [result]=await env.DB.batch([env.DB.prepare(`SELECT
- (SELECT count(*) FROM users) AS users,(SELECT count(*) FROM users WHERE member_type='app') AS app_users,
- (SELECT count(*) FROM users WHERE member_type='direct') AS direct_users,
- (SELECT count(*) FROM admin_users WHERE role IN ('owner','admin') AND status='active') AS admin_users,
- (SELECT count(*) FROM admin_users WHERE role='staff' AND status='active') AS staff_users,
- (SELECT count(*) FROM collections) AS groups,
+ filters(url,['country']);const [result]=await env.DB.batch([env.DB.prepare(`SELECT people.*,operators.*,group_stats.*,payment_stats.*,ledger_stats.*,
  (SELECT count(DISTINCT user_id) FROM memberships WHERE active=1) AS active_members,
- (SELECT count(*) FROM collections WHERE receiver_momo_number IS NOT NULL) AS payees,
- (SELECT count(*) FROM collections WHERE receiver_momo_number IS NOT NULL AND status='active') AS active_payees,
- (SELECT count(*) FROM payments) AS transactions,
- (SELECT count(*) FROM payments WHERE status IN ('recorded','ambiguous') AND member_id IS NULL) AS unallocated_transactions,
- (SELECT count(*) FROM ledger_entries) AS ledger_entries,
- (SELECT count(*) FROM ledger_entries WHERE kind='reversal') AS reversed_entries,
- (SELECT count(*) FROM payment_evidence) AS payment_evidence,
- (SELECT CAST(COALESCE(sum(amount_minor),0) AS TEXT) FROM payments) AS total_recorded_rwf,
- (SELECT CAST(COALESCE(sum(amount_minor),0) AS TEXT) FROM payments WHERE status IN ('reconciled','confirmed')) AS total_reconciled_rwf,
- (SELECT CAST(COALESCE(sum(amount_minor),0) AS TEXT) FROM payments WHERE status IN ('recorded','ambiguous') AND member_id IS NULL) AS total_unallocated_rwf,
- (SELECT CAST(COALESCE(sum(amount_minor),0) AS TEXT) FROM ledger_entries) AS total_net_contributions_rwf`)]);
+ (SELECT count(*) FROM payment_evidence) AS payment_evidence
+ FROM (SELECT count(*) AS users,count(*) FILTER(WHERE member_type='app') AS app_users,
+  count(*) FILTER(WHERE member_type='direct') AS direct_users FROM users) people
+ CROSS JOIN (SELECT count(*) FILTER(WHERE role IN ('owner','admin') AND status='active') AS admin_users,
+  count(*) FILTER(WHERE role='staff' AND status='active') AS staff_users FROM admin_users) operators
+ CROSS JOIN (SELECT count(*) AS groups,count(*) FILTER(WHERE receiver_momo_number IS NOT NULL) AS payees,
+  count(*) FILTER(WHERE receiver_momo_number IS NOT NULL AND status='active') AS active_payees FROM collections) group_stats
+ CROSS JOIN (SELECT count(*) AS transactions,
+  count(*) FILTER(WHERE status IN ('recorded','ambiguous') AND member_id IS NULL) AS unallocated_transactions,
+  CAST(coalesce(sum(amount_minor),0) AS TEXT) AS total_recorded_rwf,
+  CAST(coalesce(sum(amount_minor) FILTER(WHERE status IN ('reconciled','confirmed')),0) AS TEXT) AS total_reconciled_rwf,
+  CAST(coalesce(sum(amount_minor) FILTER(WHERE status IN ('recorded','ambiguous') AND member_id IS NULL),0) AS TEXT) AS total_unallocated_rwf
+  FROM payments) payment_stats
+ CROSS JOIN (SELECT count(*) AS ledger_entries,count(*) FILTER(WHERE kind='reversal') AS reversed_entries,
+  CAST(coalesce(sum(amount_minor),0) AS TEXT) AS total_net_contributions_rwf FROM ledger_entries) ledger_stats`)]);
  const source=result.results[0],amountKeys=Object.keys(adminBridgeMetrics).filter(k=>k.startsWith('total_')),
   countKeys=Object.keys(adminBridgeMetrics).filter(k=>!k.startsWith('total_'));
  const counts=Object.fromEntries(countKeys.map(k=>[k,exact(source[k])])),amounts=Object.fromEntries(amountKeys.map(k=>[k,amountString(source[k])]));
