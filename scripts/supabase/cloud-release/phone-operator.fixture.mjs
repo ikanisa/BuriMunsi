@@ -90,16 +90,22 @@ export async function verifyPhoneOperatorAccounts({owner,database,fixtureRoot}) 
   const [{actual,local,cluster}] = (await owner.query("SELECT current_database() AS actual,inet_server_addr() IS NULL AS local,current_setting('cluster_name') AS cluster")).rows;
   assert.ok(local && actual===database && /^collect_archive_[0-9a-f]{24}_test$/.test(database) && cluster==='collect_archive_next_fixture');
   await primeJournalSchema(owner);
-  // The archive omits scheduler installation. Restore its real row type and
-  // captured unaltered reconciliation body without enabling jobs or dispatch.
+  // The archive omits scheduler installation. Restore its guarded catalog
+  // from retained definitions without configuring jobs, credentials or dispatch.
   const scheduler=await migration('20261117073850_collect_managed_jobs_hmac.sql');
-  const shape=scheduler.match(/CREATE FUNCTION collect_ops\.native_jobs_epoch\(\)[\s\S]*?CREATE TABLE collect_ops\.jobs_dispatches\([\s\S]*?\n\);/);
+  const shape=scheduler.match(/CREATE TABLE collect_ops\.jobs_config\([\s\S]*?CREATE TABLE collect_ops\.jobs_dispatches\([\s\S]*?\n\);/);
   const parserPreimage=await readFile(new URL('./native-parser-review-preimage.sql',import.meta.url),'utf8');
   const reconcile=parserPreimage.match(/CREATE OR REPLACE FUNCTION collect_ops\.reconcile_jobs\(\)[\s\S]*?END\$function\$\s*;/);
   assert.ok(shape && reconcile);
   await owner.query('CREATE SCHEMA IF NOT EXISTS collect_ops');
   await owner.query(shape[0]);
+  const policyFunctions=[...scheduler.matchAll(/CREATE FUNCTION collect_ops\.(?:record_jobs_readiness|dispatch_jobs|activate_jobs|review_unknown_jobs|tick_jobs)\([\s\S]*?\nEND\$\$;/g)];
+  assert.equal(policyFunctions.length,5);
+  for (const [definition] of policyFunctions) await owner.query(definition);
   await owner.query(reconcile[0]);
+  await owner.query('REVOKE ALL ON ALL FUNCTIONS IN SCHEMA collect_ops FROM PUBLIC,anon,authenticated,service_role,collect_runtime,collect_importer');
+  const {rows:[{scheduler:status}]}=await owner.query('SELECT private._collect_fence_scheduler_status() AS scheduler');
+  assert.equal(status.blocking,false,JSON.stringify(status));
   await owner.query(await migration('20261119114600_burimunsi_admin_sms_health.sql'));
   for (const name of [
     '20261122125000_burimunsi_browser_passcode.sql',
