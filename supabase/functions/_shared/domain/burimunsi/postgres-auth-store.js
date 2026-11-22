@@ -1,9 +1,9 @@
 import {requirePort,requireThat,BuriError} from './errors.js';
 import {authorize} from './policy.js';
-import {requireId,requireRequestId,canonicalJson,sha256} from './values.js';
+import {requireId,requireRequestId,canonicalJson,sha256,normalizePhone} from './values.js';
 import {pgInteger} from './postgres-values.js';
 import {PostgresNativeAuthority} from './postgres-authority.js';
-import {hasPhonePinContext,PIN_CLOCK_SKEW_MS} from './phone-pin-request.js';
+import {hasPhonePinContext,ownsPhonePinReadSnapshot,PIN_CLOCK_SKEW_MS} from './phone-pin-request.js';
 import {readRecoveryProof} from './postgres-operation-recovery.js';
 import {retainPhoneBoundPin} from './pin.js';
 import {requireOriginDigest,projectRecoveredOutcome,cancelledStaffOperation,originalStaffOperation} from './operation-recovery.js';
@@ -43,7 +43,14 @@ export class PostgresNativeAuthStore extends PostgresNativeAuthority {
     // the expiry check remains strict against the edge clock for both paths.
     const pin=hasPhonePinContext(this.db),expiry=pin?'pin.expires_at':'s.expires_at';
     const pinJoin=pin?'JOIN LATERAL private.burimunsi_pin_context() pin ON pin.native_session_id=s.id':'';
-    const rows=await tx.unsafe(`SELECT s.id AS session_id,${expiry} AS expires_at,s.installation_id,a.*,d.profile AS installation_profile
+    const sameSnapshot=pin&&this.sessionBinding!==null&&this.operatorDirectory!==null&&ownsPhonePinReadSnapshot(this.db,tx);
+    const currentProof=sameSnapshot?`,
+      (pin.collection_id=s.collection_id AND pin.principal_user_id=a.principal_user_id AND pin.account_id=a.id
+       AND pin.created_at<=floor(extract(epoch FROM clock_timestamp())*1000)+${PIN_CLOCK_SKEW_MS}
+       AND pin.expires_at>floor(extract(epoch FROM clock_timestamp())*1000)) AS pin_current,
+      private.burimunsi_operator_is_current(a.collection_id,a.principal_user_id,a.phone,a.role,a.capabilities) AS operator_current`:'';
+    const rows=await tx.unsafe(`SELECT s.id AS session_id,${expiry} AS expires_at,s.installation_id,
+      a.id,a.collection_id,a.principal_user_id,a.phone,a.name,a.role,a.capabilities,d.profile AS installation_profile${currentProof}
       FROM private.burimunsi_sessions s
       ${pinJoin}
       JOIN private.burimunsi_accounts a ON a.id=s.account_id AND a.collection_id=s.collection_id
@@ -60,6 +67,16 @@ export class PostgresNativeAuthStore extends PostgresNativeAuthority {
     requireThat(rows.length<=1,'session_unavailable',401);const r=rows[0];if(!r)return null;
     const actor={id:r.id,principalUserId:r.principal_user_id,sessionId:r.session_id,phone:r.phone,name:r.name,groupId:r.collection_id,
       role:r.role,capabilities:r.capabilities,active:true,revoked:false,expiresAt:pgInteger(r.expires_at,{minimum:now+1,code:'session_unavailable'}),installationId:r.installation_id,installationProfile:r.installation_profile};
+    if(sameSnapshot){
+      // The authoritative PIN context and directory function ran on this same
+      // snapshot. Preserve their identity and permission checks without making
+      // two more requests to fetch the same authority rows.
+      requireThat(r.pin_current===true,'session_unavailable',401);
+      requireId(actor.principalUserId);requireRequestId(actor.id);requireRequestId(actor.sessionId);
+      requireThat(normalizePhone(actor.phone)===actor.phone&&['admin','staff'].includes(actor.role)&&
+        Array.isArray(actor.capabilities)&&r.operator_current===true,'access_denied',403);
+      return {...actor,principalSessionId:actor.sessionId,authMethod:'phone_pin'};
+    }
     if(this.sessionBinding){const binding=await this.sessionBinding.assertInTransaction(tx,actor);
       actor.expiresAt=binding.expiresAt;actor.principalSessionId=binding.principalSessionId;
       if(binding.authMethod)actor.authMethod=binding.authMethod;}

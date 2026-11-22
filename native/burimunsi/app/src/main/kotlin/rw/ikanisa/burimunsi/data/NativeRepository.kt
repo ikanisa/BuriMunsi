@@ -87,6 +87,13 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
     fun pairGateway(code: String, replace: Boolean): JSONObject = receiverPairing.pairGateway(code, replace)
 
     fun home(): Home = records.home()
+
+    /** A quiet Home read can finish after the screen has left. No cache or
+     * shared read provenance is written until the controller accepts it. */
+    internal fun readQuietHome(): JSONObject = records.readQuietHome()
+
+    internal fun acceptQuietHome(owner: Operator, payload: JSONObject): Pair<Home, Long> =
+        records.acceptRestoredHome(owner, payload)
     internal fun recentPayments(listing:ListingQuery) = records.recentPayments(listing)
     internal fun recentMembers(listing:ListingQuery) = records.recentMembers(listing)
     fun recordReadScope(): RecordReadScope = records.recordReadScope()

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {canonicalProfile,MANAGED_SUPABASE_ORIGIN} from '../deployment-profile.js';
-import {assertRuntimeDeployment} from '../deployment-database.js';
+import {assertRuntimeDeployment, prepareDeploymentCheck} from '../deployment-database.js';
 
 const profile={format:'collect.deployment.v1',id:'collect-production',mode:'managed',environment:'production',
  supabase_origin:MANAGED_SUPABASE_ORIGIN,
@@ -35,4 +35,28 @@ test('an invalid profile digest fails before opening a database transaction',asy
 test('non-managed profiles are rejected before database work',async()=>{
  const sql=fake();await assert.rejects(assertRuntimeDeployment(sql,env('self_hosted')),/Invalid public deployment profile/);
  assert.deepEqual(sql.calls,[]);
+});
+
+test('standalone registration proof captures exact deployment and collection in one scoped query',async()=>{
+ const input=env(),digest=input.COLLECT_DEPLOYMENT_PROFILE_SHA256;
+ const check=await prepareDeploymentCheck(input,'this-group');
+ input.COLLECT_DEPLOYMENT_PROFILE_SHA256='0'.repeat(64);
+ for (const [rows,error] of [
+  [[{allowed:true,scope_matches:true}],null],
+  [[{allowed:true,scope_matches:false}],'burimunsi_collection_mismatch'],
+  [[{allowed:true}],'burimunsi_collection_mismatch'],
+  [[{allowed:false,scope_matches:true}],'deployment_identity_mismatch'],
+  [[],'deployment_identity_mismatch'],
+ ]) {
+  let count=0;
+  const result=check(async(parts,...bound)=>{
+   count++;
+   assert.deepEqual(bound,[digest,'this-group']);
+   assert.match(parts.join('?'),/count\(\*\) = 1 AND bool_and\(id = \?\)/);
+   assert.match(parts.join('?'),/SELECT id FROM app.collections LIMIT 2/);
+   return rows;
+  });
+  if(error)await assert.rejects(result,{message:error});else await result;
+  assert.equal(count,1);
+ }
 });

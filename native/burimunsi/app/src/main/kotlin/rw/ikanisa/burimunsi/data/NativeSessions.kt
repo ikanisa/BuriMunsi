@@ -498,6 +498,18 @@ internal class NativeSessions(
         path: String,
         body: JSONObject?,
         recoveryOrigin: String?,
+    ): String = callOwned(witness, method, path, body, recoveryOrigin, publishProvenance = true)
+
+    internal fun requestUnpublishedHome(witness: SessionWitness): String =
+        callOwned(witness, "GET", "/home", null, null, publishProvenance = false)
+
+    private fun callOwned(
+        witness: SessionWitness,
+        method: String,
+        path: String,
+        body: JSONObject?,
+        recoveryOrigin: String?,
+        publishProvenance: Boolean,
     ): String {
         val binding=authority.withCurrent(witness){
             mapOf("groupId" to groupId,"generation" to witness.generation.toString()) +
@@ -507,7 +519,8 @@ internal class NativeSessions(
             val value=api.call(method,"/v1/burimunsi$path",witness.token,body,recoveryOrigin=recoveryOrigin,
                 contractContext=binding)
             return authority.withCurrent(witness){
-                lastReadFromCache=false;lastReadSavedAt=System.currentTimeMillis();value
+                if(publishProvenance)markRead(System.currentTimeMillis(),fromCache=false)
+                value
             }
         }catch(e:ApiFailure){
             // A malformed/truncated response after a passcode POST may hide a

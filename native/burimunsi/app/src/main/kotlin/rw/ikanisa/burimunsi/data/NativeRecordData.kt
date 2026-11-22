@@ -138,6 +138,11 @@ internal class NativeRecordData(
     }
 
     fun home():Home=decodeHome(JSONObject(records("/home")))
+
+    fun readQuietHome(): JSONObject {
+        val scope = recordReadScope { witness, _ -> sessions.requestUnpublishedHome(witness) }
+        return JSONObject(scope.read(recordReadOwner, "/home"))
+    }
     private fun decodeHome(j:JSONObject):Home{
         val a=j.getJSONArray("recentPayments")
         return Home(j.amount("groupBalanceRwf"),j.amount("todayRwf"),j.getInt("memberCount"),j.getInt("unallocatedCount"),(0 until a.length()).map{decodePayment(a.getJSONObject(it))},j.getString("asOf"),if(j.has("unallocatedAmountRwf")&&!j.isNull("unallocatedAmountRwf"))j.amount("unallocatedAmountRwf")else null)
@@ -145,7 +150,10 @@ internal class NativeRecordData(
     /** Full-query export collectors use online reads with one immutable local
      * identity witness. Server cursors independently bind group/actor/query and
      * data revision. Ordinary offline cache is deliberately unavailable here. */
-    fun recordReadScope():RecordReadScope {
+    fun recordReadScope():RecordReadScope =
+        recordReadScope { witness, path -> requestOwned(witness, "GET", path) }
+
+    private fun recordReadScope(read: (SessionWitness, String) -> String):RecordReadScope {
         val witness=ownedSession()
         val captured=authority.withCurrent(witness){
             val who=operator?:throw ApiFailure("session_unavailable",401)
@@ -157,7 +165,7 @@ internal class NativeRecordData(
             checkContract(groupId==captured.first&&who.id==captured.second&&who.role==captured.third.first&&
                 who.capabilities==captured.third.second&&System.currentTimeMillis()<who.expiresAt&&!sessions.hasInflightPasscode(witness),"session_changed")
         }}
-        return RecordReadScope(recordReadOwner,verify){path->verify();requestOwned(witness,"GET",path)}
+        return RecordReadScope(recordReadOwner,verify){path->verify();read(witness,path)}
     }
     fun validateRecordReadScope(scope:RecordReadScope){scope.validate(recordReadOwner)}
     private fun listingRead(target:ListingTarget,path:String,scope:RecordReadScope?):String {

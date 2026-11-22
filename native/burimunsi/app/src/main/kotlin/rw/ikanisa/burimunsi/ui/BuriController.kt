@@ -25,6 +25,8 @@ interface BuriController {
     /** Quiet reads may accept a navigation request without accepting a command. */
     val navigationBlocked:Boolean get()=state.busy||screenGate!=ScreenGate.OPEN
     val requestedRoute:Route? get()=null
+    /** Consume a one-shot draw signal for the exact freshly verified records. */
+    fun consumeFreshDraw(route: Route, records: Any): Boolean = false
     val exportFeedback:UiExportFeedback? get()=null
     val listingTarget:ListingTarget? get()=null
     val listingQuery:ListingQuery get()=ListingQuery()

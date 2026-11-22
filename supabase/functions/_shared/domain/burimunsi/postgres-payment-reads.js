@@ -60,6 +60,8 @@ const IS_POSTED=`coalesce(p.status IN ('reconciled','confirmed'),false) AND cred
 const UNPOSTED_READABLE=`${NO_CONFLICT} AND p.status IS DISTINCT FROM 'reversed' AND p.status IS DISTINCT FROM 'corrected' AND NOT (${IS_POSTED})`;
 const UNALLOCATED_INCOMING=`t.event_kind='incoming_receipt' AND t.allocation_state='unallocated' AND ${UNPOSTED_READABLE}`;
 const managedOnly=auto=>auto?' AND x.native_source_id IS NULL':'';
+const validHomeZone=column=>`CASE WHEN ${column} COLLATE "C" IN ('Africa/Kigali','UTC','Etc/UTC') THEN true
+ ELSE EXISTS (SELECT 1 FROM zones z WHERE z.name=${column}) END`;
 
 export function paymentAllocationFilterSql(auto,filter) {
   switch(filter){
@@ -71,7 +73,8 @@ export function paymentAllocationFilterSql(auto,filter) {
 }
 
 export async function readCanonicalHome(sql,g,at,auto) {
-  // Share the credited set and timezone names across the two receipt reads.
+  // The common canonical names avoid enumerating the timezone catalog.
+  // Keep the exact catalog lookup for historical names in both receipt reads.
   // A missing or malformed source timestamp must never become today's receipt.
   const rows=await sql.unsafe(`WITH credited AS MATERIALIZED (${CREDITED}),
     zones AS MATERIALIZED (SELECT name FROM pg_timezone_names),
@@ -80,7 +83,7 @@ export async function readCanonicalHome(sql,g,at,auto) {
             JOIN app.momo_transactions t ON t.id=c.transaction_id
             WHERE CASE WHEN t.transaction_at ~ '(Z|[+-][0-9]{2}:[0-9]{2})$'
              AND pg_input_is_valid(t.transaction_at,'timestamp with time zone')
-             AND EXISTS (SELECT 1 FROM zones z WHERE z.name=t.transaction_timezone)
+             AND ${validHomeZone('t.transaction_timezone')}
             THEN t.transaction_at::timestamptz >= (date_trunc('day',$2::timestamptz AT TIME ZONE t.transaction_timezone) AT TIME ZONE t.transaction_timezone)
              AND t.transaction_at::timestamptz < ((date_trunc('day',$2::timestamptz AT TIME ZONE t.transaction_timezone)+interval '1 day') AT TIME ZONE t.transaction_timezone)
              AND t.transaction_at::timestamptz <= $2::timestamptz ELSE false END),
@@ -99,7 +102,7 @@ export async function readCanonicalHome(sql,g,at,auto) {
             SELECT q.*,c.credited_amount,q.transaction_at::timestamptz AS ordered_at FROM credited c
             JOIN LATERAL (${paymentsSql(auto)} AND t.id=c.transaction_id OFFSET 0) q ON true
             WHERE CASE WHEN q.transaction_at ~ '(Z|[+-][0-9]{2}:[0-9]{2})$' AND pg_input_is_valid(q.transaction_at,'timestamp with time zone')
-              AND EXISTS (SELECT 1 FROM zones z WHERE z.name=q.transaction_timezone)
+              AND ${validHomeZone('q.transaction_timezone')}
               THEN q.transaction_at::timestamptz <= $2::timestamptz ELSE false END
             ORDER BY ordered_at DESC,q.id DESC LIMIT 3)
     SELECT totals.balance,today.today,counts.*,recent.* FROM totals CROSS JOIN today CROSS JOIN counts

@@ -2,8 +2,8 @@
 // real transaction adapter and server settings; it is not production evidence.
 import assert from 'node:assert/strict';
 import postgres from 'npm:postgres@3.4.7';
-import {PostgresDatabase} from '../postgres.js';
-import {applicationWorkTuple} from '../application-fence.js';
+import {fenceConnection,PostgresDatabase} from '../postgres.js';
+import {applicationWorkTuple,sqlFenceBackend} from '../application-fence.js';
 import {syntheticFixtureWork,finishFixtureWork} from './helpers/fenced-unit.js';
 import {SupabaseObjectBucket} from '../adapters.js';
 import {joinCollectMutation} from '../postgres-mutation-lock.js';
@@ -24,6 +24,53 @@ async function waitForBlockedConnection(writer: postgres.TransactionSql, message
   await new Promise(resolve => setTimeout(resolve, 10));
  }
  assert.fail(message);
+}
+
+async function verifyWarmControl(sql:postgres.Sql,url:URL){
+ await sql.unsafe(`CREATE FUNCTION private.collect_fence_assert_work(i uuid,e bigint,s text)
+ RETURNS jsonb LANGUAGE plpgsql SET search_path=pg_catalog AS $$
+ DECLARE previous text := nullif(current_setting('collect.synthetic_lease',true),'');
+ BEGIN
+  IF current_user <> 'collect_runtime' OR current_setting('collect.edge_verified',true) <> 'true'
+    OR current_setting('statement_timeout') <> '5s' OR current_setting('lock_timeout') <> '5s'
+    OR current_setting('transaction_isolation') <> 'read committed'
+  THEN RAISE EXCEPTION 'unexpected_control_context'; END IF;
+  PERFORM set_config('collect.synthetic_lease',i::text,true);
+  RETURN jsonb_build_object('contractVersion',1,'admissionId',i,'epoch',e,'sourceSha256',s,
+    'state','active','mode','open','pid',pg_backend_pid(),'previous',previous);
+ END $$`);
+ const control=fenceConnection(url.href),backend=sqlFenceBackend(sql,control);
+ const source='a'.repeat(64),firstId=crypto.randomUUID(),secondId=crypto.randomUUID();
+ const lockAvailable=async()=> (await sql`SELECT pg_try_advisory_xact_lock(7346371,1) AS acquired`)[0].acquired;
+ let lease:Awaited<ReturnType<typeof backend.lease>>|undefined;
+ try{
+  lease=await backend.lease(firstId,1,source);
+  const pid=lease.row.pid;
+  assert.equal(lease.row.previous,null);
+  assert.equal((await lease.assert()).previous,firstId);
+  assert.equal(await lockAvailable(),false);
+  await lease.release();
+  assert.equal(await lockAvailable(),true);
+  lease=await backend.lease(secondId,1,source);
+  assert.equal(lease.row.pid,pid,'the same safe physical PostgreSQL connection must be reused');
+  assert.equal(lease.row.previous,null,'rollback must clear the previous work context');
+  assert.equal((await lease.assert()).previous,secondId);
+  assert.equal(await lockAvailable(),false);
+  await lease.release();
+  assert.equal(await lockAvailable(),true);
+
+  const checked=sqlFenceBackend(sql,control,{beforeRegister:async (tx:postgres.TransactionSql)=>{
+   const [context]=await tx.unsafe("SELECT current_user AS role, current_setting('collect.edge_verified') AS verified");
+   assert.deepEqual({...context},{role:'collect_runtime',verified:'true'});
+   await tx.unsafe('INSERT INTO app.synthetic_unfenced VALUES(91)');
+   throw Error('synthetic_pre_register_rejected');
+  }});
+  await assert.rejects(checked.register(firstId,source,'http_collect'),/synthetic_pre_register_rejected/);
+  assert.equal((await sql`SELECT EXISTS(SELECT 1 FROM app.synthetic_unfenced WHERE id=91) AS escaped`)[0].escaped,false);
+ }finally{
+  await lease?.release();
+  await control.end();
+ }
 }
 
 Deno.test({name:'real PostgreSQL keeps read and write context transaction-local and fenced',ignore:!target,fn:async()=>{
@@ -88,6 +135,7 @@ Deno.test({name:'real PostgreSQL keeps read and write context transaction-local 
    CREATE TRIGGER collect_fence_statement_v1 BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE
      ON private.storage_put_intents FOR EACH STATEMENT EXECUTE FUNCTION private._collect_fence_statement();
   `);
+  await verifyWarmControl(sql,url);
   // Shadow functions in app cannot falsify the mode or hijack the settings.
   await sql.unsafe('SET search_path=app,pg_catalog');
   await work.assert();

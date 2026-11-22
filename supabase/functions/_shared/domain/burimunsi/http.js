@@ -12,7 +12,7 @@ function sessionProfile(actor){
  * Do not replace the current router or bypass its application fence.
  * Origin/networkBucket are server-owned deployment inputs, not forwarded client claims.
  */
-export function createNativeHandler({auth,records,contributions,members,gateway,observations=null,cursor=null,origin,networkBucket,strictContract=false,groupId,requestReadTimeoutMs=15000,verifiedObservationStatusEnabled=false}) {
+export function createNativeHandler({auth,records,contributions,members,gateway,observations=null,cursor=null,origin,networkBucket,strictContract=false,groupId,requestReadTimeoutMs=15000,verifiedObservationStatusEnabled=false,readIdentity}) {
   requirePort(auth,['login','authenticate','logout','changePasscode','manageStaff']);
   requirePort(records,['home','page','detail','exportLedger','commandStatus']);
   requirePort(contributions,['allocate']);requirePort(members,['enroll','setActive']);
@@ -65,7 +65,8 @@ export function createNativeHandler({auth,records,contributions,members,gateway,
       }
       const token=(req.headers.get('authorization')??'').match(/^Bearer ([a-f0-9]{64})$/)?.[1];
       requireActiveNativeRequest(req);
-      const actor=await auth.authenticate(token,installationId);
+      const freshRead=strictContract&&method==='GET'&&(route==='/payments'||route==='/session'&&wireQuery.include==='home');
+      const actor=(freshRead?readIdentity?.(req):null)??await auth.authenticate(token,installationId);
       requireActiveNativeRequest(req);
       if(strictContract){requireThat(actor.groupId===groupId,'access_denied',403);wireBinding.actorId=actor.id;}
       if(route==='/session'&&method==='GET'){

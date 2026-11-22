@@ -2,6 +2,7 @@ import {BuriError,requireThat,requirePort} from './errors.js';
 import {normalizePhone,requirePin,requireId,requireRequestId,sha256,exactKeys} from './values.js';
 import {PinHasher,newBearer,PIN_ITERATIONS} from './pin.js';
 import {lockCollectMutation} from '../../postgres-mutation-lock.js';
+import {BURIMUNSI_PRODUCT_MODE} from '../../burimunsi-standalone.js';
 import {requireActiveNativeRequest} from './wire/request-boundary.mjs';
 import {validateNativeRequest,requestBinding,bindNativeResponse,CONTRACT_VERSION} from './wire/native-contract.mjs';
 import {nativeRequestUrl,readNativeJson,requireNativeHttpsOrigin} from './wire/native-http.mjs';
@@ -20,6 +21,40 @@ export const RETIREMENT_OUTCOME_SQL='SELECT private.burimunsi_gateway_retirement
 // This applies only after the database has independently validated the session.
 export const PIN_CLOCK_SKEW_MS=5000;
 export function hasPhonePinContext(db){return proofs.has(db);}
+
+function activeReadSnapshot(db) {
+  const proof=proofs.get(db),snapshot=proof?.snapshot;
+  if(!snapshot)return null;
+  const {request,work}=snapshot,[token,installation,device,profile]=proof.values;
+  requireThat(db.applicationWork===work,'request_not_admitted',503);
+  requireActiveNativeRequest(request);
+  requireThat(request.headers.get('Authorization')==='Bearer '+token&&request.headers.get('X-BuriMunsi-Installation')===installation&&
+    request.headers.get('X-BuriMunsi-Device')===device&&request.headers.get('X-BuriMunsi-Profile')===profile&&
+    request.headers.get('X-BuriMunsi-Group')===proof.groupId&&request.headers.get('X-BuriMunsi-Auth')==='phone_pin'&&
+    !request.headers.has('X-BuriMunsi-Collect-Session'),'session_unavailable',401);
+  return snapshot;
+}
+
+// These are identifiers for the transaction's actor reload, not an actor that
+// can authorize data by itself. Bind them to the original request and lease.
+export function phonePinReadIdentity(db,request) {
+  const snapshot=activeReadSnapshot(db);if(!snapshot)return null;
+  requireThat(snapshot.request===request,'request_not_admitted',503);
+  return snapshot.identity;
+}
+
+export function claimPhonePinReadSnapshot(db,groupId) {
+  const snapshot=activeReadSnapshot(db);if(!snapshot)return null;
+  requireThat(!snapshot.claimed&&snapshot.identity.groupId===groupId,'request_not_admitted',503);
+  snapshot.claimed=true;
+  return snapshot.sql;
+}
+
+export function ownsPhonePinReadSnapshot(db,sql) {
+  const snapshot=activeReadSnapshot(db);
+  return snapshot?.claimed===true&&snapshot.sql===sql;
+}
+
 export async function applyPhonePinContext(db,sql,groupId){
   const proof=proofs.get(db);if(!proof)return false;
   requireThat(proof.groupId===groupId,'access_denied',403);
@@ -48,9 +83,9 @@ function requirePinTransition(request,url,{readSession=false}={}){
   requireThat(url.search===''||(readSession&&url.search==='?include=home'),'invalid_query',400);
 }
 
-/** Bounded native phone/PIN authentication. Web Admin continues through GoTrue
- * and its own OTP/CAPTCHA path. No Auth identity, BFF session or MFA proof is
- * created. SQL revalidates approved principals and all opaque proof components.
+/** Bounded native phone/PIN authentication. No Auth identity, browser session
+ * or MFA proof is created. SQL revalidates approved principals and all opaque
+ * proof components.
  */
 export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()=>Date.now(),sessionTtlMs=1800000}){
   requireThat(typeof networkBucket==='function'&&typeof clock==='function'&&Number.isSafeInteger(sessionTtlMs)&&
@@ -72,6 +107,8 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
     const retirement=method==='GET'&&/^\/v1\/burimunsi\/gateway\/replacements\/([a-f0-9-]{36})\/outcome$/.exec(path);
     const readSession=method==='GET'&&path==='/v1/burimunsi/session';
     const renewing=readSession||(method==='POST'&&path==='/v1/burimunsi/session/passcode');
+    const combinedRead=env.BURIMUNSI_PRODUCT_MODE===BURIMUNSI_PRODUCT_MODE&&method==='GET'&&
+      (path==='/v1/burimunsi/payments'||readSession&&url.search==='?include=home');
     const db=env?.DB,work=db?.applicationWork;requirePort(db,['transaction','context','readContext','setClaims']);requirePort(work,['assert']);
     requireThat(!active.has(db),'native_context_busy',503);
     requireThat(request.headers.get('X-BuriMunsi-Auth')==='phone_pin'&&!request.headers.has('X-BuriMunsi-Collect-Session'),'invalid_credentials',401);
@@ -82,14 +119,20 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
     if(login||logout||retirement||renewing)requirePinTransition(request,url,{readSession});
     const owned=async()=>{requireActiveNativeRequest(request);requireThat(db.applicationWork===work,'request_not_admitted',503);await work.assert();
       requireThat(db.applicationWork===work,'request_not_admitted',503);requireActiveNativeRequest(request);};
-    const transaction=async(write,fn)=>db.transaction(async sql=>{
-      await owned();if(write){await db.context(sql);await lockCollectMutation(sql);}
+    const transaction=async(write,fn,consistentRead=false)=>db.transaction(async sql=>{
+      await owned();if(write){
+        if(consistentRead)await sql.unsafe('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ WRITE');
+        await db.context(sql);await lockCollectMutation(sql);
+      }
       else{await sql.unsafe('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');await db.readContext(sql,{isolation:'repeatable read'});}
       const result=await fn(sql);await owned();return result;
     });
     active.add(db);const local={...env};delete local.AUTH_ACTOR;delete local.AUTH_VERIFIED;delete local.ADMIN_AUTH_EXCHANGE;
     try{
-      db.setClaims({});await owned();
+      db.setClaims({});
+      // The combined branch enters the assertion-owning transaction next. No
+      // async work or authority-bearing I/O occurs before that entry check.
+      if(!combinedRead)await owned();
       if(logout){
         // The narrow barrier is allowed even when account access is temporarily
         // suspended. It validates exact device proofs and can only revoke them;
@@ -168,6 +211,30 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
       // No other business command may use an expired proof.
       const requestedGroup=request.headers.get('X-BuriMunsi-Group');
       if(renewing)requireId(requestedGroup);
+      if(combinedRead){
+        let refusal;
+        try{return await transaction(renewing,async sql=>{
+          // Renewal already installs the scoped context and locks the current
+          // authority. Payments install it in the same read-only snapshot.
+          const rows=await sql.unsafe(renewing?PIN_RENEW_SQL:PIN_SET_CONTEXT_SQL,
+            renewing?[...values,requestedGroup,sessionTtlMs]:values);
+          requireThat(rows.length===1,'session_unavailable',401);
+          const p=current(renewing?rows[0]:rows[0].result,installation,profile,clock());
+          requireThat(requestedGroup===p.groupId,'native_scope_changed',403);
+          const identity=Object.freeze({id:p.nativeAccountId,sessionId:p.principalSessionId,
+            installationId:installation,groupId:p.groupId});
+          const snapshot={request,work,identity,sql,claimed:false};
+          proofs.set(db,Object.freeze({groupId:p.groupId,values,snapshot}));
+          const response=await operation(p,local);
+          requireThat(response instanceof Response,'request_not_admitted',503);
+          if(!response.ok){refusal=response;throw new BuriError('read_snapshot_declined',503);}
+          requireThat(snapshot.claimed,'request_not_admitted',503);
+          return response;
+        },true);}catch(error){
+          if(refusal&&error instanceof BuriError&&error.code==='read_snapshot_declined')return refusal;
+          if(error?.code==='42501')throw new BuriError('session_unavailable',401);throw error;
+        }
+      }
       let principal;
       try{principal=await transaction(renewing,async sql=>{
         const rows=await sql.unsafe(renewing?PIN_RENEW_SQL:PIN_CONTEXT_SQL,

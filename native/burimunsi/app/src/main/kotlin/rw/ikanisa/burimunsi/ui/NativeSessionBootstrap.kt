@@ -14,7 +14,8 @@ internal class NativeSessionBootstrap(
 ) {
     class Grant(val operator: Operator, val group: String, val revision: Long,
         val home: Home? = null, val homeSavedAt: Long? = null)
-    class Restored(val grant: Grant?, val navigation: RestorationDecision, val home: Home? = null, val homeSavedAt: Long? = null)
+    class Restored(val grant: Grant?, val navigation: RestorationDecision, val home: Home? = null,
+        val homeSavedAt: Long? = null, val reusedHome: Boolean = false)
 
     sealed interface Recovery {
         data object PasscodePending : Recovery
@@ -70,7 +71,7 @@ internal class NativeSessionBootstrap(
             clock(), receiver, readJournal())
         val acceptHome = navigation.route == Route.HOME && (combined?.reusedHome != true || !navigation.pending)
         return Restored(grant?.takeIf { navigation.route != Route.LOGIN }, navigation,
-            combined?.home?.takeIf { acceptHome }, combined?.homeSavedAt)
+            combined?.home?.takeIf { acceptHome }, combined?.homeSavedAt, combined?.reusedHome == true)
     }
 
     fun login(phone: String, pin: String): Grant = bind(repository.login(phone, pin))

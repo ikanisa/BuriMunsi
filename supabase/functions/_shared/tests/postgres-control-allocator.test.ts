@@ -1,7 +1,7 @@
 // New allocator branches use controlled factories, with native SQL/driver proof
 // separately retained in the exact-bound native qualification receipt.
 const runtime:any=await import('../postgres.js');
-const {reserveDatabaseConnection}=await import('../application-fence.js');
+const {CONTROL_ROLLBACK_ACK,reserveDatabaseConnection}=await import('../application-fence.js');
 const need=(v:unknown)=>{if(!v)throw Error('ALLOCATOR_FAILURE_INVARIANT');};
 const pause=(ms:number)=>new Promise<void>(r=>setTimeout(r,ms));
 async function rejected(p:Promise<any>){try{await p;}catch{return;}throw Error('UNEXPECTED_SUCCESS');}
@@ -52,4 +52,27 @@ Deno.test('shutdown cannot initiate first end during original reservation setup 
  const reserving=rejected(pool.reserve());await rejected(pool.end({timeout:0}));need(ends===0);setup.reject(Error('SYNTHETIC_SETUP_FAILURE'));await reserving;await pause(20);need(ends===1);need(await pool.end()===undefined);need(ends===1);
  let heldEnds=0;const held=runtime.leaseOwnedControlPool(()=>({async reserve(){return {release(){}};},async end(){heldEnds++;}}));
  const tx=await held.reserve();await rejected(held.end({timeout:0}));need(heldEnds===0);tx.release();need(await held.end({timeout:0})===undefined);need(heldEnds===1);
+});
+
+Deno.test('only an acknowledged rollback warms a slot and previous borrowers cannot reach it',async()=>{
+ let created=0,ended=0,borrowed=0,released=0;
+ const pool=runtime.leaseOwnedControlPool(()=>{
+  created++;
+  return {
+   async reserve(){const serial=++borrowed;return {unsafe(){return serial;},release(){released++;}};},
+   async end(){ended++;},
+  };
+ });
+ const first=await pool.reserve(),staleQuery=first.unsafe;
+ need(first.unsafe()===1);
+ first.release(CONTROL_ROLLBACK_ACK);
+ const next=await pool.reserve();
+ need(next.unsafe()===2&&created===1&&ended===0&&released===1);
+ await rejected(Promise.resolve().then(()=>staleQuery()));
+ first.release(CONTROL_ROLLBACK_ACK);
+ need(next.unsafe()===2&&released===1);
+ next.release();await pause(20);need(ended===1&&released===2);
+ const fresh=await pool.reserve();need(created===2&&fresh.unsafe()===3);
+ fresh.release(CONTROL_ROLLBACK_ACK);
+ await pool.end();need(ended===2&&released===3);
 });
