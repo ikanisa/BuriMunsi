@@ -2,6 +2,7 @@
 import {useCallback, useState} from 'react';
 import {Link} from 'react-router';
 import {useSession} from '../../session/SessionProvider';
+import {canDisplaySessionRecords} from '../../session/sessionContext';
 import {Button, Dialog} from '../../ui';
 import {isValidId, type Page} from './contracts';
 import {parseMomoDetail, parseMomoMemberChecks, type MomoDetail, type MomoMemberCheck} from './momoContracts';
@@ -13,8 +14,8 @@ import {useOperationRead} from './useOperationRead';
 
 export function MomoMemberChecks({onClose, onSearch}: {onClose: () => void; onSearch: (reference: string) => void}) {
   const session = useSession(), request = session.request, [offset, setOffset] = useState(0);
-  const permitted = session.status === 'authenticated' && ['payments.read', 'users.read', 'collections.read'].every((permission) => session.user?.permissions.includes(permission));
-  const load = useCallback(async () => parseMomoMemberChecks(await request(`momo/transactions/payment-checks?limit=25&offset=${offset}`), offset), [offset, request]);
+  const permitted = canDisplaySessionRecords(session) && ['payments.read', 'users.read', 'collections.read'].every((permission) => session.user?.permissions.includes(permission));
+  const load = useCallback(async (signal: AbortSignal) => parseMomoMemberChecks(await request(`momo/transactions/payment-checks?limit=25&offset=${offset}`, {signal}), offset), [offset, request]);
   const {result, retry} = useOperationRead(`${session.epoch}:member-checks:${offset}`, permitted, load, momoReadOptions);
   return <Dialog open title="Member payment checks" onClose={onClose} footer={<><Button onClick={retry}>Refresh</Button><Button onClick={onClose}>Close</Button></>}>
     <p>Member-supplied requests. References and notes are unverified; they do not establish a received payment or credit.</p>
@@ -24,8 +25,8 @@ export function MomoMemberChecks({onClose, onSearch}: {onClose: () => void; onSe
 }
 export function MomoPaymentDetail({id, allowActions, allowRecovery, onClose}: {id: string; allowActions: boolean; allowRecovery: boolean; onClose: () => void}) {
   const session = useSession(), request = session.request;
-  const load = useCallback(async () => parseMomoDetail(await request(`momo/transactions/${id}`), id), [id, request]);
-  const {result, retry} = useOperationRead(`${session.epoch}:momo-detail:${id}`, session.status === 'authenticated' && !!session.user?.permissions.includes('payments.read') && isValidId(id), load, momoReadOptions);
+  const load = useCallback(async (signal: AbortSignal) => parseMomoDetail(await request(`momo/transactions/${id}`, {signal}), id), [id, request]);
+  const {result, retry} = useOperationRead(`${session.epoch}:momo-detail:${id}`, canDisplaySessionRecords(session) && !!session.user?.permissions.includes('payments.read') && isValidId(id), load, momoReadOptions);
   return <Dialog open title="Transaction details" onClose={onClose} footer={<Button onClick={onClose}>Close</Button>}><MomoResult result={result} retry={retry} empty={() => false}>{(detail: MomoDetail) => <><Facts items={[
     ['Amount', formatMomoAmount(detail.transaction.amount_minor, detail.transaction.currency)], ['Status', formatStatus(detail.transaction.status)],
     ['Type', detail.transaction.event_kind && formatStatus(detail.transaction.event_kind)], ['MoMo TX ID', detail.transaction.provider_transaction_id],

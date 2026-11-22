@@ -1,5 +1,6 @@
 import {lazy} from 'react';
 import {useLocation, useNavigate} from 'react-router';
+import {OverviewPage} from '../../features/overview/OverviewPage';
 import {canReadRequestHistory} from '../../features/requests/permissions';
 import {canManageOperatorAccess, hasScopedAdminAuthority} from '../../session/ownerIdentity';
 import {useSession} from '../../session/SessionProvider';
@@ -7,7 +8,6 @@ import {verificationPath} from '../../session/returnLocation';
 import {useAccess, useSensitiveAccess} from './access';
 import {requiresPermissions, workspaceRoute} from './routePolicy';
 
-const OverviewPage = lazy(() => import('../../features/overview/OverviewPage').then(m => ({default: m.OverviewPage})));
 const RequestHistoryPage = lazy(() => import('../../features/requests/RequestHistoryPage').then(m => ({default: m.RequestHistoryPage})));
 const SmsReceiptsPage = lazy(() => import('../../features/operations/SmsReceiptPages').then(m => ({default: m.SmsReceiptsPage})));
 const SmsReceiptDetailPage = lazy(() => import('../../features/operations/SmsReceiptPages').then(m => ({default: m.SmsReceiptDetailPage})));
@@ -27,8 +27,9 @@ export const MomoReceiptsPage = lazy(() => import('../../features/operations/Mom
 
 export function OverviewRoute() {
   const access = useAccess();
+  const {verificationMode} = useSession();
   return <OverviewPage key={access.authorityKey} request={access.request} permissions={access.permissions}
-    financialModel={access.financialModel} authorityKey={access.authorityKey} />;
+    financialModel={access.financialModel} authorityKey={access.authorityKey} preferSmsHealth={verificationMode === 'passcode'} />;
 }
 
 function RequestHistoryRoute() {

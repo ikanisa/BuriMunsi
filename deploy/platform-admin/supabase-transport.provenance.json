@@ -1,6 +1,6 @@
 {
   "source": "deploy/platform-admin/src/supabase-transport.js",
-  "source_sha256": "f44ea8fae3ee20404eaeffc4c47b6cbd4b88ee40f2dab4be11455b0a3d1a3723",
+  "source_sha256": "a5cc94e06d5b1c960a4f3e476e8bd4d82fd003731cfa63221c8985987902df82",
   "integration": "Retained Cloudflare same-origin Supabase transport; index.js owns host selection/static fallback. Originless Admin GET/HEAD binds configured origin, explicit Origin remains required for mutations, dispatched Admin outcomes are not replayed, and qualified native Google errors remain token-free.",
   "deployed": false,
   "base_source_sha256": "643a76d0a38e1023cc0edf38e5514e97e4eec565037c43d66b08648f351ba16c",
@@ -246,6 +246,22 @@
       "transport-request.js": "fcc9cc6b3c070ccd5134b0a618b814e9bce24d1bdb0a1c29e5080a58b462bf1f"
     },
     "change": "Admit the BuriMunsi phone-passcode session contract, retire legacy authentication, invitation, login challenge and managed token export routes, and serve the public account deletion support page directly.",
+    "deployed": false
+  },
+  "burimunsi_admin_performance_successor": {
+    "source_sha256s": {
+      "index.js": "9ae4ec38671e12aa2d79bf30a67c97b4f0eaee64faf62d964236fccce2c72962",
+      "supabase-transport.js": "a5cc94e06d5b1c960a4f3e476e8bd4d82fd003731cfa63221c8985987902df82",
+      "transport-request.js": "b19fe1f57a552c11ef168d7439399600f6f7c6d6848ae71276ec3a543e73d363"
+    },
+    "change": "Validate the deployed profile once per configuration, serve anonymous same-origin session reads locally and support a cookie-bound passcode response.",
+    "deployed": false
+  },
+  "burimunsi_session_read_successor": {
+    "source_sha256s": {
+      "transport-request.js": "7bb51219dfb19baaaeb247a468ef34a8677624e9043bc357bf3266c968abe15b"
+    },
+    "change": "Limit the session identity header to the session read for both current and previously installed phone sign-ins.",
     "deployed": false
   }
 }

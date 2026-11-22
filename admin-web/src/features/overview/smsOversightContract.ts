@@ -74,8 +74,8 @@ function parseOperations(value: unknown): Oversight['operations'] {
     gatewayLastSeenAt: timestamp(value.gateway_last_seen_at)};
 }
 
-export function parseSmsOversight(value: unknown): Oversight {
-  if (!isObject(value) || value.contract_version !== 1 || value.scope !== 'admin_operational_health' ||
+export function parseSmsOversight(value: unknown, scope: 'admin_operational_health' | 'admin_sms_health' = 'admin_operational_health'): Oversight {
+  if (!isObject(value) || value.contract_version !== 1 || value.scope !== scope ||
       value.metrics_scope !== 'all_retained_rows' || !['not_recorded','confirmed_dispatch'].includes(String(value.worker_heartbeat)) || value.external_services_checked !== false ||
       typeof value.checked_at !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/.test(value.checked_at) ||
       !Number.isFinite(Date.parse(value.checked_at)) || new Date(value.checked_at).toISOString().slice(0, 19) !== value.checked_at.slice(0, 19) ||

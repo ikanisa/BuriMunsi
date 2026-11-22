@@ -12,7 +12,7 @@ import {useOperationRead} from './useOperationRead';
 export function ReceiverSmsPanel() {
   const session = useSession(), request = session.request;
   const enabled = canDisplaySessionRecords(session) && !!session.user?.permissions.includes('sms.read');
-  const load = useCallback(async () => receiverCollections(await request('momo/observations/collections')), [request]);
+  const load = useCallback(async (signal: AbortSignal) => receiverCollections(await request('momo/observations/collections', {signal})), [request]);
   const {result, retry} = useOperationRead(String(session.epoch), enabled, load, {...momoReadOptions, live:false});
   const [selection, setSelection] = useState('');
   if (!enabled) return null;
@@ -30,10 +30,10 @@ function CollectionReceipts({group}: {group: string}) {
   const session = useSession(), request = session.request, permissions = session.user?.permissions ?? [];
   const [cursors, setCursors] = useState<(string | null)[]>([null]), [source, setSource] = useState<string | null>(null);
   const cursor = cursors.at(-1);
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal: AbortSignal) => {
     const query = new URLSearchParams({collectionId: group, limit: '25', includeProcessing: '1'});
     if (cursor) query.set('cursor', cursor);
-    return receiverPage(await request('momo/observations?' + query), group);
+    return receiverPage(await request('momo/observations?' + query, {signal}), group);
   }, [request, group, cursor]);
   const {result, retry} = useOperationRead(JSON.stringify([session.epoch, group, cursor, permissions]), true, load, {...momoReadOptions, pollMs: 5000, collectionId: group});
   const refresh = () => {setSource(null); setCursors([null]); retry();};

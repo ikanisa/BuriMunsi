@@ -1,7 +1,7 @@
 import {useCallback, useContext, useEffect, useRef, useState} from 'react';
 import {InteractionSuspendedContext} from '../../ui/useFocusScope';
 import {useVisibleOperationsRefresh} from '../operations/useVisibleOperationsRefresh';
-import type {AdminRequest} from '../../api/client';
+import {AdminRequestError, type AdminRequest} from '../../api/client';
 import {Button, Card, ErrorState, LoadingState} from '../../ui';
 import {assistedLabels, nativeLabels, parseSmsOversight, payerLabels, receiptLabels, reasonLabels, type Oversight} from './smsOversightContract';
 
@@ -22,10 +22,11 @@ function QueueCounts<Key extends string>({labels, counts}: {labels: Record<Key, 
 }
 
 /** Metadata only: a stale sample never presents counts as current. */
-export function SmsOversight({request, permissions, authorityKey}: {request: AdminRequest; permissions: readonly string[]; authorityKey: string}) {
+export function SmsOversight({request, permissions, authorityKey, preferSmsHealth}: {request: AdminRequest; permissions: readonly string[]; authorityKey: string; preferSmsHealth?: boolean}) {
   const allowed = permissions.includes('system_health.read'), suspended = useContext(InteractionSuspendedContext);
   const [revision, setRevision] = useState(0), [now, setNow] = useState(Date.now);
   const [state, setState] = useState<{scope: string; access: string; sample: Oversight | null; error: boolean} | null>(null);
+  const legacyAuthority = useRef<string | null>(null);
   const inFlight = useRef<AbortController | null>(null), invalidated = useRef(false);
   const refresh = useCallback((changed: boolean) => {
     setNow(Date.now());
@@ -33,14 +34,27 @@ export function SmsOversight({request, permissions, authorityKey}: {request: Adm
     else setRevision(value => value + 1);
   }, []);
   useVisibleOperationsRefresh(allowed && !suspended, 5000, refresh);
-  const access = JSON.stringify([authorityKey, permissions.includes('sms.read')]), scope = JSON.stringify([access, revision]);
+  const hasSmsRead = permissions.includes('sms.read');
+  const access = JSON.stringify([authorityKey, hasSmsRead]), scope = JSON.stringify([access, revision]);
   const current = state?.scope === scope || (state?.access === access && !state?.error) ? state : null;
   useEffect(() => {
     if (!allowed || suspended) return;
     const controller = new AbortController(); inFlight.current = controller;
     invalidated.current = false;
-    void request('oversight/health?evidenceVersion=2', {authenticated: true, expectedStatus: 200, signal: controller.signal})
-      .then(parseSmsOversight)
+    const options = {authenticated: true, expectedStatus: 200, signal: controller.signal};
+    const read = async () => {
+      if (hasSmsRead) return parseSmsOversight(await request('oversight/health?evidenceVersion=2', options));
+      if (preferSmsHealth && legacyAuthority.current !== authorityKey) {
+        try {return parseSmsOversight(await request('oversight/sms-health', options), 'admin_sms_health');}
+        catch (failure) {
+          if (controller.signal.aborted || !(failure instanceof AdminRequestError) || failure.statusCode !== 404 ||
+              !['oversight_not_found', 'proxy_route_not_allowed'].includes(failure.code ?? '')) throw failure;
+          legacyAuthority.current = authorityKey;
+        }
+      }
+      return parseSmsOversight(await request('oversight/health', options));
+    };
+    void read()
       .then(sample => {if (!controller.signal.aborted) setState({scope, access, sample, error: false});})
       .catch(() => {if (!controller.signal.aborted) setState({scope, access, sample: null, error: true});})
       .finally(() => {
@@ -49,7 +63,7 @@ export function SmsOversight({request, permissions, authorityKey}: {request: Adm
         if (invalidated.current && document.visibilityState === 'visible' && navigator.onLine) setRevision(value => value + 1);
       });
     return () => {controller.abort(); if (inFlight.current === controller) inFlight.current = null;};
-  }, [access, allowed, request, scope, suspended]);
+  }, [access, allowed, authorityKey, hasSmsRead, preferSmsHealth, request, scope, suspended]);
   if (!allowed) return null;
   const sample = current?.sample;
   const checked = sample ? Date.parse(sample.checkedAt) : NaN;

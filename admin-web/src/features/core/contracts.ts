@@ -56,6 +56,9 @@ function isPaymentReference(value: unknown): value is string {
   return typeof value === 'string' && value.length === 12 && /^[0-9]{12}$/.test(value);
 }
 
+const moneyFormat = new Intl.NumberFormat('en-US', {maximumFractionDigits: 0});
+const kigaliDate = new Intl.DateTimeFormat('en-GB', {dateStyle: 'medium', timeStyle: 'short', timeZone: 'Africa/Kigali'});
+
 export function formatMoney(value: unknown, signed = false): string {
   let integer: bigint;
   if (typeof value === 'number' && exactMoney(value, signed)) integer = BigInt(value);
@@ -63,7 +66,7 @@ export function formatMoney(value: unknown, signed = false): string {
     integer = BigInt(value);
     if (integer > BigInt(Number.MAX_SAFE_INTEGER) || integer < -BigInt(Number.MAX_SAFE_INTEGER)) return 'Unavailable';
   } else return 'Unavailable';
-  return `RWF ${new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(integer)}`;
+  return `RWF ${moneyFormat.format(integer)}`;
 }
 
 /** Validate identity, window, visible facts and money before rendering server rows. */
@@ -149,7 +152,7 @@ export function formatField(key: string, value: unknown): string {
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
   if (typeof value === 'number') return Number.isSafeInteger(value) ? String(value) : 'Unavailable';
   if (typeof value === 'string') {
-    if (key.endsWith('_at') && isTimestamp(value)) return new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Africa/Kigali' }).format(new Date(value));
+    if (key.endsWith('_at') && isTimestamp(value)) return kigaliDate.format(new Date(value));
     if (key === 'status' || key.endsWith('_status') || key === 'kind' || key === 'network' || key === 'member_type') return label(value);
     return value;
   }

@@ -1,12 +1,12 @@
 import {lazy} from 'react';
 import {Navigate, useLocation, useNavigate} from 'react-router';
-import {SensitiveEmailVerificationPage} from '../../session/SensitiveEmailVerificationPage';
-import {VerifyPasscodePage} from '../../session/VerifyPasscodePage';
 import {useSession} from '../../session/SessionProvider';
 import {safeAdminVerificationReturnLocation, verificationPath} from '../../session/returnLocation';
 import {workspaceRoute} from './routePolicy';
 
 const AuthenticatorPage = lazy(() => import('../../session/AuthenticatorPage').then(module => ({default: module.AuthenticatorPage})));
+const SensitiveEmailVerificationPage = lazy(() => import('../../session/SensitiveEmailVerificationPage').then(module => ({default: module.SensitiveEmailVerificationPage})));
+const VerifyPasscodePage = lazy(() => import('../../session/VerifyPasscodePage').then(module => ({default: module.VerifyPasscodePage})));
 
 function VerifyEmailRoute() {
   const go = useNavigate(), location = useLocation(), session = useSession();

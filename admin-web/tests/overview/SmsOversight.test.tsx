@@ -1,5 +1,6 @@
-import {act, render, screen, waitFor} from '@testing-library/react';
+import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {describe, expect, it, vi} from 'vitest';
+import {AdminRequestError} from '../../src/api/client';
 import {SmsOversight} from '../../src/features/overview/SmsOversight';
 import {parseSmsOversight} from '../../src/features/overview/smsOversightContract';
 
@@ -25,6 +26,37 @@ describe('SMS oversight', () => {
     rerender(<SmsOversight request={request} permissions={[]} authorityKey="session-b" />);
     expect(screen.queryByText('Queued receipts')).not.toBeInTheDocument();
     expect(request).toHaveBeenCalledTimes(1);
+  });
+  it('reads the narrow SMS contract in one request when enabled', async () => {
+    const request = vi.fn(async (_path: string) => ({...sample(), scope: 'admin_sms_health'}));
+    render(<SmsOversight request={request} permissions={['system_health.read']} authorityKey="session-a" preferSmsHealth />);
+    expect(await screen.findByText('Queued receipts')).toBeVisible();
+    expect(request.mock.calls.map(([path]) => path)).toEqual(['oversight/sms-health']);
+  });
+  it('requests the versioned carrier and scheduler evidence once for an authorized SMS operator', async () => {
+    const request = vi.fn(async (_path: string) => sample());
+    render(<SmsOversight request={request} permissions={['system_health.read', 'sms.read']} authorityKey="operator" preferSmsHealth />);
+    expect(await screen.findByText('Queued receipts')).toBeVisible();
+    expect(request.mock.calls.map(([path]) => path)).toEqual(['oversight/health?evidenceVersion=2']);
+  });
+  it.each(['oversight_not_found', 'proxy_route_not_allowed'])('falls back once from an older route with %s', async code => {
+    const request = vi.fn(async (path: string) => {
+      if (path === 'oversight/sms-health') throw new AdminRequestError('Unavailable route.', {statusCode: 404, code});
+      return sample();
+    });
+    render(<SmsOversight request={request} permissions={['system_health.read']} authorityKey="session-a" preferSmsHealth />);
+    expect(await screen.findByText('Queued receipts')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', {name: 'Refresh SMS oversight'}));
+    await waitFor(() => expect(request.mock.calls.map(([path]) => path)).toEqual(['oversight/sms-health', 'oversight/health', 'oversight/health']));
+  });
+  it('keeps a narrow response or permission failure closed', async () => {
+    const request = vi.fn(async (_path: string) => sample());
+    const {rerender} = render(<SmsOversight request={request} permissions={['system_health.read']} authorityKey="session-a" preferSmsHealth />);
+    expect(await screen.findByText('SMS oversight could not be verified.')).toBeVisible();
+    request.mockRejectedValueOnce(new AdminRequestError('Denied.', {statusCode: 403, code: 'permission_required'}));
+    rerender(<SmsOversight request={request} permissions={['system_health.read']} authorityKey="session-b" preferSmsHealth />);
+    expect(await screen.findByText('SMS oversight could not be verified.')).toBeVisible();
+    expect(request.mock.calls.map(([path]) => path)).toEqual(['oversight/sms-health', 'oversight/sms-health']);
   });
   it('keeps scoped internal credits, gateway acceptance and reported delivery distinct', async () => {
     const value = sample();
