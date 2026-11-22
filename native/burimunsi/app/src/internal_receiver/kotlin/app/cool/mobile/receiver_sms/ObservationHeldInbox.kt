@@ -34,7 +34,13 @@ internal class ObservationHeldInbox(
     private val config: ObservationConfigStore,
 ) {
     private companion object {
-        const val MAX_HELD = 20_000
+        const val MAX_FRESH_HELD = 20_000
+        // The v57/v58 count ceiling was 100,000, but their SecureStore writer
+        // cannot persist plaintext above 2,000,000 UTF-8 bytes. Each genuine
+        // nonfirst digest consumes 67 bytes (comma + quotes + 64 hex digits).
+        const val PREDECESSOR_MAX_BYTES = 2_000_000
+        const val MAX_EXISTING_HELD = PREDECESSOR_MAX_BYTES / 67
+        val heldKey = Regex("[a-f0-9]{64}")
     }
 
     private val cursorStore = SecureStore(app, "observation-cursors")
@@ -86,12 +92,18 @@ internal class ObservationHeldInbox(
         val store=if(legacy)legacyStore(owner.collectionId)else priorCursorStore(owner)
         val existing=store.read()
         if(existing!=null){
+            checkContract(existing.length<=PREDECESSOR_MAX_BYTES&&
+                (existing.all{it.code<128}||existing.toByteArray(Charsets.UTF_8).size<=PREDECESSOR_MAX_BYTES),
+                "observation_cursor_unavailable")
             val value=JSONObject(existing);checkContract(value.keys().asSequence().toSet()==setOf("collectionId","deviceScope","keys")&&
-                value.getString("collectionId")==owner.collectionId&&value.getString("deviceScope")==deviceScope,"observation_cursor_unavailable")
-            val list=value.getJSONArray("keys");checkContract(list.length()<=MAX_HELD,"observation_cursor_unavailable")
-            val keys=(0 until list.length()).map{list.getString(it)}
-            checkContract(keys.toSet().size==keys.size&&keys.all{Regex("[a-f0-9]{64}").matches(it)},"observation_cursor_unavailable")
-            return device to keys.toSet()
+                value.get("collectionId")==owner.collectionId&&value.get("deviceScope")==deviceScope,"observation_cursor_unavailable")
+            val list=value.getJSONArray("keys");checkContract(list.length()<=MAX_EXISTING_HELD,"observation_cursor_unavailable")
+            val keys=linkedSetOf<String>()
+            for(index in 0 until list.length()){
+                val key=list.get(index) as? String
+                checkContract(key!=null&&heldKey.matches(key)&&keys.add(key),"observation_cursor_unavailable")
+            }
+            return device to keys
         }
         if(profile.legacyHold==null)return null
         val prior=if(legacy)null else previousCursor(owner, profile.fingerprint()).scanStart
@@ -108,7 +120,7 @@ internal class ObservationHeldInbox(
                 if(prior!=null&&id>prior&&id !in ambiguous)continue
                 if(it.isNull(dateCol))return null
                 val date=it.getLong(dateCol)
-                checkContract(id>0&&date>0&&keys.size<MAX_HELD,"observation_cursor_unavailable")
+                checkContract(id>0&&date>0&&keys.size<MAX_FRESH_HELD,"observation_cursor_unavailable")
                 checkContract(keys.add(heldInboxSourceKey(device,owner.collectionId,id,date)),"observation_cursor_unavailable")
             }
         }

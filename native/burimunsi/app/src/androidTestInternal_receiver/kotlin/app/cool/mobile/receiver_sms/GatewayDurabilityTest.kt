@@ -280,6 +280,42 @@ class GatewayDurabilityTest {
         assertNull(reopened.profile(ObservationOwner("other-group","synthetic-admin"),now))
         assertNull(reopened.consent(ObservationOwner("synthetic-group","other-admin")))
         assertFalse(File(root,"buri-observation-profile.v1").readBytes().toString(Charsets.ISO_8859_1).contains("synthetic-profile"))
+        // Use the genuine private store, framing, AES and key alias of this
+        // offline qualification package, not predecessor credentials or data.
+        val holder=ObservationHeldInbox(context,reopened)
+        val device=checkNotNull(holder.deviceId())
+        val deviceScope=Values.sha256(listOf("burimunsi-held-device-v1",scope.collectionId,device.lowercase())
+            .joinToString(""){"${it.length}:$it"})
+        val name="observation-legacy-held-"+Values.sha256(scope.collectionId)
+        val heldStore=rw.ikanisa.burimunsi.storage.SecureStore(context,name)
+        val heldFile=File(root,"buri-$name.v1")
+        val approved=checkNotNull(reopened.profile(scope,now))
+        val session=ObservationSessionOwner(scope,1)
+        fun key(index:Int)=index.toString(16).padStart(64,'0')
+        fun snapshotBytes(count:Int)=JSONObject().put("collectionId",scope.collectionId)
+            .put("deviceScope",deviceScope).put("keys",JSONArray().also{a->repeat(count){a.put(key(it))}}).toString()
+        val max=(2_000_000-snapshotBytes(1).length)/67+1
+        assertTrue(snapshotBytes(max).length<=2_000_000)
+        assertTrue(snapshotBytes(max+1).length>2_000_000)
+        for (count in listOf(20_001,max)) {
+            val raw=snapshotBytes(count)
+            heldStore.write(raw)
+            val encrypted=heldFile.readBytes()
+            assertFalse(encrypted.toString(Charsets.ISO_8859_1).contains(key(0)))
+            val start=System.nanoTime()
+            val held=checkNotNull(holder.snapshot(session,approved,consent,reopened.controlState(scope)){false})
+            val elapsedMs=(System.nanoTime()-start)/1_000_000
+            assertEquals(device,held.first)
+            assertEquals(count,held.second.size)
+            assertEquals(key(0),held.second.first())
+            assertEquals(key(count-1),held.second.last())
+            assertEquals(raw,heldStore.read())
+            assertArrayEquals(encrypted,heldFile.readBytes())
+            println("HELD_NATIVE_PROBE count=$count bytes=${encrypted.size} ms=$elapsedMs")
+        }
+        val encrypted=heldFile.readBytes()
+        assertTrue(runCatching{heldStore.write(snapshotBytes(max+1))}.isFailure)
+        assertArrayEquals(encrypted,heldFile.readBytes())
     }
     @Test fun observationPauseIsEncryptedAndSurvivesAnotherAccount() {
         val owner=ObservationOwner("synthetic-group","synthetic-admin")

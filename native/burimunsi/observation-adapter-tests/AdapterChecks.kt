@@ -985,6 +985,70 @@ fun main() {
   result=ObservationCycleResult(false,false);repeat(20){if(!result.completed)result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})}
   check(result.completed&&e.repository.requests.size==211&&e.repository.reconciliationBatches.size>batches)
  }
+ test("v57/v58 held snapshots reopen at the genuine byte ceiling without changing custody") {
+  val e=setup()
+  val config=ObservationConfigStore(e.context)
+  val session=NativeRepository.observationOwner(e.context)!!
+  val approved=config.profile(adminA,time)!!
+  val consent=config.consent(adminA)!!
+  val holder=ObservationHeldInbox(e.context,config)
+  val device=holder.deviceId()!!
+  val deviceScope=Values.sha256(listOf("burimunsi-held-device-v1",adminA.collectionId,device.lowercase())
+   .joinToString(""){"${it.length}:$it"})
+  val collectionName="observation-legacy-held-"+Values.sha256(adminA.collectionId)
+  val cursorName="observation-prior-cursor-held-"+Values.sha256(listOf(adminA.collectionId,adminA.accountId)
+   .joinToString(""){"${it.length}:$it"})
+  fun read()=holder.snapshot(session,approved,consent,config.controlState(adminA)){false}
+  fun key(i:Int)=i.toString(16).padStart(64,'0')
+  fun encoded(n:Int,collection:String=adminA.collectionId,scope:String=deviceScope)=
+   JSONObject().put("collectionId",collection).put("deviceScope",scope)
+    .put("keys",JSONArray().also{a->repeat(n){a.put(key(it))}}).toString()
+  val largest=(2_000_000-encoded(1).length)/67+1
+  check(largest>20_001&&encoded(largest).length<=2_000_000&&encoded(largest+1).length>2_000_000)
+  check(SecureStore.data[cursorName]==null)
+  for(name in listOf(collectionName,cursorName)){
+   for(n in listOf(0,20_000,20_001,largest)){
+    val raw=encoded(n);SecureStore.data[name]=raw
+    val start=System.nanoTime()
+    val held=read()!!
+    val elapsedMillis=(System.nanoTime()-start)/1_000_000
+    check(held.first==device&&held.second.size==n&&SecureStore.data[name]==raw)
+    if(n!=0)check(held.second.first()==key(0)&&held.second.last()==key(n-1))
+    if(n==largest)println("HELD_CAP_PROBE keys=$n bytes=${raw.length} elapsed_ms=$elapsedMillis")
+   }
+   for(raw in listOf(encoded(largest+1),encoded(1,collection="wrong"),encoded(1,scope="0".repeat(64)),
+     "{corrupt",JSONObject(encoded(1)).apply{getJSONArray("keys").put(key(0))}.toString(),
+     JSONObject(encoded(1)).put("keys",JSONArray().put(1234)).toString(),
+     JSONObject(encoded(1)).put("keys",JSONArray().put("g".repeat(64))).toString())){
+    SecureStore.data[name]=raw
+    check(runCatching{read()}.isFailure&&SecureStore.data[name]==raw)
+   }
+   SecureStore.data[name]=encoded(1);SecureStore.unreadable.add(name)
+   check(runCatching{read()}.isFailure&&SecureStore.data[name]==encoded(1))
+   SecureStore.unreadable.remove(name);SecureStore.data.remove(name)
+  }
+  check(e.context.contentResolver.queries==0&&e.repository.requests.isEmpty())
+  // A missing store must not look like a valid empty predecessor snapshot.
+  val unknown=JSONObject(profile().toString()).apply{remove("legacyHold")}
+  config.saveProfile(adminA,unknown,time)
+  val unconfirmed=config.profile(adminA,time)!!
+  check(holder.snapshot(session,unconfirmed,consent,config.controlState(adminA)){false}==null)
+  check(e.context.contentResolver.queries==0&&SecureStore.data[cursorName]==null)
+ }
+ test("fresh held snapshot still rejects row 20,001 without a partial write") {
+  val e=setup()
+  val config=ObservationConfigStore(e.context)
+  val session=NativeRepository.observationOwner(e.context)!!
+  val approved=JSONObject(profile().toString()).put("legacyHold",true)
+  config.saveProfile(adminA,approved,time)
+  val holder=ObservationHeldInbox(e.context,config)
+  e.context.contentResolver.rows=(1L..20_001L).map{row(it)}
+  val heldName="observation-legacy-held-"+Values.sha256(adminA.collectionId)
+  check(runCatching{holder.snapshot(session,config.profile(adminA,time)!!,config.consent(adminA)!!,
+    config.controlState(adminA)){false}}.isFailure)
+  check(e.context.contentResolver.cursorRowsRead==20_001&&e.context.contentResolver.bodyReads==0&&
+    SecureStore.data[heldName]==null&&e.repository.requests.isEmpty())
+ }
  test("a changed audit scope cannot reuse an earlier latest match") {
   val e=setup();android.os.SystemClock.fixed=1_000L;e.context.contentResolver.rows=listOf(row(2200),row(2201))
   check(ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false}).completed)
@@ -1068,6 +1132,25 @@ fun main() {
    val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
    check(result.completed&&e.repository.requests.isEmpty()&&e.repository.reconciliationBatches.flatten().any{it.sourceKey==key})
   }finally{app.cool.mobile.BuildConfig.CLOUD_HOLD_EXISTING_INBOX=false}
+ }
+ test("the oversized predecessor baseline keeps matching or unresolved real-flow entries held") {
+  for(cloudHasMatch in listOf(true,false)){
+   val e=setup();val config=ObservationConfigStore(e.context);val holder=ObservationHeldInbox(e.context,config)
+   val device=holder.deviceId()!!
+   val scope=Values.sha256(listOf("burimunsi-held-device-v1",adminA.collectionId,device.lowercase())
+    .joinToString(""){"${it.length}:$it"})
+   val holdName="observation-legacy-held-"+Values.sha256(adminA.collectionId)
+   val target=cloudKey(adminA,1200)
+   val keys=JSONArray().put(target)
+   repeat(20_000){keys.put(it.toString(16).padStart(64,'0'))}
+   val raw=JSONObject().put("collectionId",adminA.collectionId).put("deviceScope",scope).put("keys",keys).toString()
+   SecureStore.data[holdName]=raw;e.context.contentResolver.rows=listOf(row(1200))
+   if(cloudHasMatch){e.repository.retainedSources[target]="source-held";e.repository.retainedSourceKeys.add(target)}
+   val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
+   check(result.completed==cloudHasMatch)
+   check(SecureStore.data[holdName]==raw&&pending(adminA).isEmpty()&&e.repository.requests.isEmpty())
+   check(e.repository.reconciliationBatches.flatten().any{it.sourceKey==target})
+  }
  }
  test("an unsupported newest approved-provider SMS prevents confirmation") {
   val e=setup();e.context.contentResolver.rows=listOf(row(1300),row(1301,"x".repeat(3001))+("date" to (time+100)))
