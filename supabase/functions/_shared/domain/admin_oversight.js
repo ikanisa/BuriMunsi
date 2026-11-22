@@ -29,8 +29,16 @@ async function read(env,account,permission,sql,args=[]){
 // Fixed aggregate projections: no recipient, raw error, message, token or job
 // identity crosses this endpoint. Counts cover all retained rows; dates are
 // record observations, not a worker heartbeat or an external delivery probe.
+const healthClockSql='SELECT unixepoch() AS observed_seconds';
+const assistedSmsCounts=['queued','claimed','send_started','uncertain'];
+const assistedSmsTimes={oldest_queued_at:'oldest_queued_seconds',oldest_unobserved_send_at:'oldest_unobserved_send_seconds'};
+const assistedSmsCountSql=assistedSmsCounts.map(state=>`count(*) FILTER (WHERE j.state='${state}') AS ${state}`).join(',\n  ');
+const assistedSmsAgeSql=`min(CASE WHEN j.state='queued' THEN unixepoch(j.created_at) END) AS oldest_queued_at,
+  min(CASE WHEN j.state IN('send_started','uncertain') THEN s.started_seconds END) AS oldest_unobserved_send_at`;
+const assistedSmsSourceSql='FROM assisted_sms_jobs j LEFT JOIN assisted_sms_send_starts s ON s.job_id=j.id';
+const nativeSmsHealthSql='SELECT private.burimunsi_admin_sms_health() AS result';
 export const oversightHealthSql=Object.freeze([
- `SELECT unixepoch() AS observed_seconds`,
+ healthClockSql,
  `SELECT
   count(*) FILTER (WHERE state='pending') AS pending,
   count(*) FILTER (WHERE state='retry') AS retry,
@@ -43,19 +51,13 @@ export const oversightHealthSql=Object.freeze([
   min(CASE WHEN state IN('pending','retry') AND available_at<=unixepoch() AND attempt_count<max_attempts THEN available_at
    WHEN state='processing' AND lease_until<=unixepoch() AND attempt_count<max_attempts THEN lease_until END) AS oldest_due_at,
   max(unixepoch(updated_at)) AS last_changed_at FROM momo_processing_jobs`,
- `SELECT
-  count(*) FILTER (WHERE j.state='queued') AS queued,
-  count(*) FILTER (WHERE j.state='claimed') AS claimed,
+ `SELECT ${assistedSmsCountSql},
   count(*) FILTER (WHERE j.state='claimed' AND c.expires_seconds<=unixepoch()) AS expired_claim,
-  count(*) FILTER (WHERE j.state='send_started') AS send_started,
   count(*) FILTER (WHERE j.state='observed_sent') AS observed_sent,
   count(*) FILTER (WHERE j.state='failed_no_send') AS failed_no_send,
-  count(*) FILTER (WHERE j.state='uncertain') AS uncertain,
-  min(CASE WHEN j.state='queued' THEN unixepoch(j.created_at) END) AS oldest_queued_at,
-  min(CASE WHEN j.state IN('send_started','uncertain') THEN s.started_seconds END) AS oldest_unobserved_send_at,
+  ${assistedSmsAgeSql},
   max(unixepoch(j.created_at)) AS last_created_at
-  FROM assisted_sms_jobs j LEFT JOIN assisted_sms_claims c ON c.id=j.active_claim_id
-  LEFT JOIN assisted_sms_send_starts s ON s.job_id=j.id`,
+  ${assistedSmsSourceSql} LEFT JOIN assisted_sms_claims c ON c.id=j.active_claim_id`,
  `SELECT count(*) FILTER (WHERE status='pending') AS pending,
   count(*) FILTER (WHERE status='sent') AS sent,count(*) FILTER (WHERE status='failed') AS failed,
   count(*) FILTER (WHERE status='read') AS read,
@@ -107,18 +109,53 @@ function smsCounters(row,keys,includeAge=false){
  if(includeAge&&row.oldest_pending_seconds!==null&&!nonnegative(row.oldest_pending_seconds))unavailable();
  return row;
 }
-async function nativeSmsHealth(scoped,env,account,actor){
- if(typeof env.DB.adminReadBatch!=='function'||!account.permissions.includes('sms.read')||!actor.permissions.has('sms.read'))return {};
- const [[catalog]]=(await scoped.DB.batch([scoped.DB.prepare(
-  "SELECT to_regprocedure('private.burimunsi_admin_sms_health()') IS NOT NULL AS available")])).map(item=>item.results);
- if(catalog?.available===false)return {};
- if(catalog?.available!==true)unavailable();
- const [sample]=await scoped.DB.batch([scoped.DB.prepare('SELECT private.burimunsi_admin_sms_health() AS result')]);
- const row=sample?.results?.length===1?sample.results[0].result:undefined;
+function canReadNativeSms(env,account,actor){
+ return typeof env.DB.adminReadBatch==='function'&&account.permissions.includes('sms.read')&&actor.permissions.has('sms.read');
+}
+function nativeSmsCounters(row){
  if(row===null)return {};
  if(!row||Object.keys(row).length!==2)unavailable();
  return {burimunsi_sms:smsCounters(row.burimunsi_sms,nativeQueueKeys,true),
   burimunsi_payer_sms:smsCounters(row.burimunsi_payer_sms,payerQueueKeys)};
+}
+async function nativeSmsHealth(scoped,env,account,actor){
+ if(!canReadNativeSms(env,account,actor))return {};
+ const [[catalog]]=(await scoped.DB.batch([scoped.DB.prepare(
+  "SELECT to_regprocedure('private.burimunsi_admin_sms_health()') IS NOT NULL AS available")])).map(item=>item.results);
+ if(catalog?.available===false)return {};
+ if(catalog?.available!==true)unavailable();
+ const [sample]=await scoped.DB.batch([scoped.DB.prepare(nativeSmsHealthSql)]);
+ return nativeSmsCounters(sample?.results?.length===1?sample.results[0].result:undefined);
+}
+function healthRows(result,count){
+ if(!Array.isArray(result)||result.length!==count||result.some(item=>!Array.isArray(item?.results)||item.results.length!==1))unavailable();
+ return result.map(item=>item.results[0]);
+}
+function sampleTime(at){
+ if(!nonnegative(at)||Math.abs(at*1000-Date.now())>120000)unavailable();
+ return new Date(at*1000).toISOString();
+}
+function smsConfiguration(env){
+ const native=env.BURIMUNSI_NATIVE_AUTO_TRANSACTIONS_ENABLED==='true'?'enabled':'disabled';
+ return {momo_processing:env.MOMO_PROCESSING_PAUSED==='false'?'enabled':'paused',native_auto_processing:native,native_sms_ledger:native};
+}
+async function smsHealth(env,account,actor){
+ const scoped=accountReadDatabase(env,account,'system_health.read');
+ const native=canReadNativeSms(env,account,actor);
+ const statements=[healthClockSql,`SELECT ${assistedSmsCountSql}, ${assistedSmsAgeSql} ${assistedSmsSourceSql}`];
+ // The standalone deployment already includes the native health projection.
+ // Its SQL verifies the current SMS grant and approved collection itself.
+ if(native)statements.push(nativeSmsHealthSql);
+ let result;
+ try{result=await scoped.DB.batch(statements.map(sql=>scoped.DB.prepare(sql)));}
+ catch(error){if(error instanceof ApiError)throw error;unavailable();}
+ const [clock,sms,nativeSample]=healthRows(result,statements.length),at=clock.observed_seconds;
+ return {contract_version:1,scope:'admin_sms_health',checked_at:sampleTime(at),
+  metrics_scope:'all_retained_rows',worker_heartbeat:'not_recorded',external_services_checked:false,
+  configuration:smsConfiguration(env),queues:{
+   ...(native?nativeSmsCounters(nativeSample.result):{}),
+   assisted_sms:{...metrics(sms,assistedSmsCounts,assistedSmsTimes,at),automatic_retry:false},
+  }};
 }
 async function health(env,account,actor){
  const scoped=accountReadDatabase(env,account,'system_health.read');
@@ -127,23 +164,19 @@ async function health(env,account,actor){
   result=await scoped.DB.batch(oversightHealthSql.map(sql=>scoped.DB.prepare(sql)));
   nativeSms=await nativeSmsHealth(scoped,env,account,actor);
  }catch(error){if(error instanceof ApiError)throw error;unavailable();}
- if(!Array.isArray(result)||result.length!==oversightHealthSql.length||result.some(item=>!Array.isArray(item?.results)||item.results.length!==1))unavailable();
- const [clock,momo,sms,notifications,email,invitations,delivery]=result.map(item=>item.results[0]),at=clock.observed_seconds;
- if(!nonnegative(at)||Math.abs(at*1000-Date.now())>120000)unavailable();
+ const [clock,momo,sms,notifications,email,invitations,delivery]=healthRows(result,oversightHealthSql.length),at=clock.observed_seconds;
  return {contract_version:1,scope:'admin_operational_health',database:'available',
   storage_binding:env.PRIVATE_MEDIA?'configured':'missing',
   source_revision:/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(env.BUILD_SOURCE_ID??'')?env.BUILD_SOURCE_ID:'unknown',
-  checked_at:new Date(at*1000).toISOString(),external_services_checked:false,
-  configuration:{momo_processing:env.MOMO_PROCESSING_PAUSED==='false'?'enabled':'paused',
-   native_auto_processing:env.BURIMUNSI_NATIVE_AUTO_TRANSACTIONS_ENABLED==='true'?'enabled':'disabled',
-   native_sms_ledger:env.BURIMUNSI_NATIVE_AUTO_TRANSACTIONS_ENABLED==='true'?'enabled':'disabled',
+  checked_at:sampleTime(at),external_services_checked:false,
+  configuration:{...smsConfiguration(env),
    momo_extractor:env.MOMO_AI_ENABLED!=='true'?'disabled':typeof env.AI?.run==='function'?'configured':'missing',
    transactional_email:typeof env.AUTH_EMAIL?.send==='function'?'configured':'missing'},
   metrics_scope:'all_retained_rows',worker_heartbeat:'not_recorded',
   queues:{
    ...nativeSms,
    momo:metrics(momo,['pending','retry','processing','expired_lease','needs_review','source_unresolved','attempt_exhausted','records_with_error'],{oldest_due_at:'oldest_due_seconds',last_changed_at:'last_changed_at'},at),
-   assisted_sms:{...metrics(sms,['queued','claimed','expired_claim','send_started','observed_sent','failed_no_send','uncertain'],{oldest_queued_at:'oldest_queued_seconds',oldest_unobserved_send_at:'oldest_unobserved_send_seconds',last_created_at:'last_created_at'},at),automatic_retry:false},
+   assisted_sms:{...metrics(sms,['queued','claimed','expired_claim','send_started','observed_sent','failed_no_send','uncertain'],{...assistedSmsTimes,last_created_at:'last_created_at'},at),automatic_retry:false},
    notifications:{...metrics(notifications,['pending','sent','failed','read'],{oldest_pending_at:'oldest_pending_seconds',last_created_at:'last_created_at'},at),semantics:'persisted_in_app_events'},
    admin_email:{...metrics(email,['pending','accepted','failed'],{oldest_pending_at:'oldest_pending_seconds',last_changed_at:'last_changed_at'},at),semantics:'legacy_email_records'},
    invitations:{...metrics(invitations,['reserved','dispatching','accepted','rejected','unknown','already_registered'],{oldest_unconfirmed_at:'oldest_unconfirmed_seconds',last_changed_at:'last_changed_at'},at),semantics:'original_invitation_attempts',accepted_means:'provider_accepted'},
@@ -155,9 +188,9 @@ async function health(env,account,actor){
  * session identifiers, payloads and free-text reasons are never selected. */
 export async function adminOversightRead(request,env,account,actor,parts,url=new URL(request.url)){
  if(request.method!=='GET')denied(405,'method_not_allowed','Oversight is read-only.');
- if(parts.length===1&&parts[0]==='health'){
+ if(parts.length===1&&['health','sms-health'].includes(parts[0])){
   fields(url,[]);grants(account,actor,'system_health.read');
-  return health(env,account,actor);
+  return parts[0]==='sms-health'?smsHealth(env,account,actor):health(env,account,actor);
  }
  if(parts.length!==2||parts[0]!=='audit'||!['domain','accounts'].includes(parts[1]))denied(404,'oversight_not_found','This oversight view does not exist.');
  grants(account,actor,'audit.read');

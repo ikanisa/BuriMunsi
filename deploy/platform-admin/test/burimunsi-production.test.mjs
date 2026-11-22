@@ -127,6 +127,24 @@ test('the phone sign-in and passcode verification forms use the dedicated Admin 
   assert.deepEqual(forwarded, routes.map(([method, path]) => [method, vars.SUPABASE_URL + '/functions/v1/admin-api/api/admin/' + path]));
 });
 
+test('SMS oversight uses the protected same-origin GET route and refuses changes', async () => {
+  const path = '/api/admin/oversight/sms-health';
+  let calls = 0;
+  const worker = createAdminWorker({fetchImpl: async upstream => {
+    calls++;
+    assert.equal(upstream.method, 'GET');
+    assert.equal(upstream.url, vars.SUPABASE_URL + '/functions/v1/admin-api' + path);
+    assert.equal(upstream.headers.get('Cookie'), '__Host-collect_admin=fixture');
+    return Response.json({scope: 'admin_sms_health'});
+  }});
+  const response = await worker.fetch(request(path, {headers: {Cookie: BURIMUNSI_ADMIN_COOKIE + '=fixture'}}), env);
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('Cache-Control'), /\bno-store\b/);
+  assert.equal((await worker.fetch(request(path, {method: 'POST', headers: {Origin: BURIMUNSI_ADMIN_ORIGIN}}), env)).status, 404);
+  assert.equal((await worker.fetch(request(path, {headers: {Origin: 'https://collect.ikanisa.com'}}), env)).status, 403);
+  assert.equal(calls, 1);
+});
+
 test('public BuriMunsi deletion support serves only its static document and stylesheet', async () => {
   const worker = createAdminWorker({fetchImpl: unexpected});
   const path = '/privacy/account-deletion';

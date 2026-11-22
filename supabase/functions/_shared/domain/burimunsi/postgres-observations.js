@@ -206,12 +206,15 @@ export class PostgresNativeObservations {
    bytes = await verifyRetainedObject(this.env, r);
    await this.authority.assertOwned();
    check(same(decodeObservationPayload(bytes), payload));
-   await this.authority.write(async (tx) => {
+   const final = await this.authority.write(async (tx) => {
     const current = await this.find(tx, actor, r.requestId, r.fingerprint);
     check(current && same(current, r), 'observation_changed', 409);
     const journal = await this.custody.journal(tx, r.object_key, target(r));
     await this.checkJournal(r, journal);
+    return current;
    });
+   await this.authority.assertOwned();
+   return final;
   } finally {
    bytes?.fill(0);
   }
@@ -281,20 +284,21 @@ export class PostgresNativeObservations {
    }),
   );
   try {
-   let prior = await this.authority.read((tx) => this.find(tx, actor, value.requestId, fingerprint));
-   if (prior) {
-    await this.checkRetained(actor, prior, payload, bodySha);
-    const final = await this.authority.read((tx) => this.find(tx, actor, value.requestId, fingerprint));
-    check(final && same(final, prior), 'observation_changed', 409);
+   const first = await this.authority.read(async (tx) => {
+    const prior = await this.find(tx, actor, value.requestId, fingerprint);
+    return prior ? { prior } : { initial: await this.context(tx, actor) };
+   });
+   if (first.prior) {
+    const retained = await this.checkRetained(actor, first.prior, payload, bodySha);
     return {
      requestId: value.requestId,
-     sourceId: prior.id,
+     sourceId: retained.id,
      bodySha256: bodySha,
      status: 'source_unresolved',
      financialEffects: 0,
     };
    }
-   const initial = await this.authority.read((tx) => this.context(tx, actor));
+   const { initial } = first;
    check(isObservationCandidate(value, initial.profile), 'unsupported_receipt', 422);
    const id = await storageEntity(
     'burimunsi.native.observation.v1',
@@ -379,7 +383,7 @@ export class PostgresNativeObservations {
    } catch (error) {
     // An uncertain transaction outcome is reconciled against the same immutable
     // request, never replayed as a new SMS or acknowledged on a storage PUT.
-    prior = await this.authority.read((tx) => this.find(tx, actor, value.requestId, fingerprint));
+    const prior = await this.authority.read((tx) => this.find(tx, actor, value.requestId, fingerprint));
     if (!prior) {
      if (error instanceof BuriError && error.code === 'observation_upload_unresolved') {
       await this.unresolvedAfterFailure(actor, value, fingerprint, id, initial, objectSha, error);
@@ -388,12 +392,10 @@ export class PostgresNativeObservations {
     }
     committed = prior;
    }
-   await this.checkRetained(actor, committed, payload, bodySha);
-   const final = await this.authority.read((tx) => this.find(tx, actor, value.requestId, fingerprint));
-   check(final && same(final, committed), 'observation_changed', 409);
+   const retained = await this.checkRetained(actor, committed, payload, bodySha);
    return {
     requestId: value.requestId,
-    sourceId: committed.id,
+    sourceId: retained.id,
     bodySha256: bodySha,
     status: 'source_unresolved',
     financialEffects: 0,
