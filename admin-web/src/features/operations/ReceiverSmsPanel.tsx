@@ -44,10 +44,10 @@ function CollectionReceipts({group}: {group: string}) {
   const headings = ['Received by server · Kigali', 'Processing', ...(financial ? ['Payment reference','Payer SMS'] : []), ...(canReveal ? ['Source'] : [])];
   return <><div className="operations-toolbar"><h2>Receiver SMS</h2><Button icon="refresh" onClick={refresh}>Refresh receiver</Button></div>
     <section aria-label="Inbox completeness"><h3>Inbox completeness</h3>
-      <p role="status">{{unknown:'No current receiver evidence',checking:'Checking the inbox',incomplete:'Reconciliation pending',verified:'Inbox matched at the last check'}[check.state]}
+      <p role="status">{{unknown:'Waiting for Admin phone inbox checks',checking:'Checking Admin phone inboxes',incomplete:'Reconciliation pending',verified:'All participating Admin phone inboxes matched'}[check.state]}
         {check.checkedAt && <> · {formatTime(check.checkedAt)} Kigali</>}</p>
-      {check.candidateCount !== null && <p>{check.candidateCount} eligible SMS · {check.missingCount ?? 'Unknown'} missing · {check.pendingCount ?? 'Unknown'} pending</p>}
-      {check.headsMatch !== null && <p>{check.headsMatch ? 'The latest eligible handset SMS and parsed SMS matched.' : 'The latest eligible handset SMS and parsed SMS differed.'}</p>}
+      {check.candidateCount !== null && <p>{check.candidateCount} eligible phone inbox entries · {check.missingCount ?? 'Unknown'} missing · {check.pendingCount ?? 'Unknown'} pending</p>}
+      {check.headsMatch !== null && <p>{check.headsMatch ? 'The latest eligible SMS on each participating phone matched its latest parsed SMS.' : 'At least one phone’s latest eligible SMS differed from its latest parsed SMS.'}</p>}
     </section>
     {page.items.length ? <MomoTable name="Android receiver observations" headings={headings}>{page.items.map(item => <tr key={item.sourceId}>
       <td>{formatTime(item.admittedAt)}</td><td>{processingLabels[item.processing]}</td>
