@@ -191,10 +191,18 @@ test('two Admin receipt sources concurrently reporting the same network transfer
  await peer.connect();await peer.query('SET ROLE postgres');
  const first=nativeActor(group),second={...first,accountId:uuid(71),installationId:uuid(72),grantId:uuid(73),sessionId:uuid(74),principalUserId:'fixture-peer'};
  await f.client.query('UPDATE app.users SET full_name=$1 WHERE id=$2',['EXAMPLE',member]);
- await f.client.query("INSERT INTO private.burimunsi_accounts VALUES($1,$2,true,false,'admin',$3)",[second.accountId,group,second.principalUserId]);
+ await f.client.query("INSERT INTO private.burimunsi_accounts(id,collection_id,active,removed,role,principal_user_id) VALUES($1,$2,true,false,'admin',$3)",[second.accountId,group,second.principalUserId]);
  await f.client.query("INSERT INTO private.burimunsi_device_grants VALUES($1,$2,1,$3,true,'internal_receiver')",[second.grantId,group,second.installationId]);
  await f.client.query('INSERT INTO private.burimunsi_device_accounts VALUES($1,$2,$3)',[second.accountId,second.grantId,group]);
  await f.client.query('INSERT INTO private.burimunsi_observation_consents VALUES($1,$2,$3,$4,1,1,true)',[group,second.accountId,second.installationId,second.grantId]);
+ // Full phone/PIN authentication is exercised by the managed-schema fixture.
+ // The ledger fixture carries these two authenticated origins through posting.
+ for(const actor of [first,second]){
+  await f.client.query("INSERT INTO private.burimunsi_sessions VALUES($1,$2,$3,$4,1,$5,$6,1,'phone_pin',false)",
+   [actor.sessionId,group,actor.installationId,actor.grantId,actor.accountId,actor.principalUserId]);
+  await f.client.query('INSERT INTO private.burimunsi_pin_session_links(native_session_id,collection_id,account_id,principal_user_id,account_version,created_at) VALUES($1,$2,$3,$4,1,1)',
+   [actor.sessionId,group,actor.accountId,actor.principalUserId]);
+ }
  const ctx=(await f.client.query("SELECT current_setting('fixture.native_context')::jsonb ctx")).rows[0].ctx;
  await peer.query("SELECT set_config('fixture.native_actor',$1,false),set_config('fixture.native_context',$2,false),set_config('fixture.native_profile',$3,false),set_config('burimunsi.collection_id',$4,false)",
   [JSON.stringify(second),JSON.stringify({...ctx,...second}),JSON.stringify(testProfile),group]);

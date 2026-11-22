@@ -197,7 +197,13 @@ export async function installHandsetInventory(client){
    profile_version text,profile_json text,evidence_sha256 text);
   CREATE TABLE private.collect_migration_actor_lineage(source_actor_id text,cloud_primary_id text);
   ALTER TABLE private.collect_imported_native_history ADD UNIQUE(source_id);
-  ALTER TABLE private.burimunsi_accounts ADD COLUMN principal_user_id text;`);
+  ALTER TABLE private.burimunsi_accounts ADD COLUMN principal_user_id text,ADD COLUMN phone text,
+   ADD COLUMN capabilities text[] DEFAULT ARRAY['records.read'],ADD COLUMN version bigint DEFAULT 1,ADD COLUMN credential_version bigint DEFAULT 1;
+  ALTER TABLE private.burimunsi_scopes ADD COLUMN version bigint DEFAULT 1;
+  CREATE TABLE private.burimunsi_sessions(id uuid PRIMARY KEY,collection_id text,installation_id uuid,grant_id uuid,grant_version bigint,
+   account_id uuid,principal_user_id text,credential_version bigint,auth_method text,revoked boolean DEFAULT false,created_at bigint DEFAULT 1);
+  CREATE TABLE private.burimunsi_pin_session_links(native_session_id uuid PRIMARY KEY,collection_id text,account_id uuid,
+   principal_user_id text,account_version bigint,created_at bigint,scope_version bigint DEFAULT 1,authority_snapshot jsonb DEFAULT '{}');`);
  await client.query('UPDATE private.burimunsi_accounts SET principal_user_id=$1',[nativePrincipal]);
  await client.query('UPDATE app.momo_receiving_accounts SET profile_version=$1,profile_json=$2',[testProfile.profile_version,testProfile.profile_json]);
  await client.query(routine(await file('20261117190000_burimunsi_legacy_reconcile.sql'),'burimunsi_observation_legacy_candidates'));
@@ -205,4 +211,5 @@ export async function installHandsetInventory(client){
  await client.query(part('CREATE TABLE private.burimunsi_handset_legacy_matches','DO $retention$'));
  await client.query(part('ALTER TABLE private.burimunsi_observation_requests DROP CONSTRAINT','-- Imported history is eligible'));
  await client.query(await file('20261122201000_burimunsi_admin_inbox_coverage.sql'));
+ await client.query(await file('20261122202000_burimunsi_current_admin_inbox_authority.sql'));
 }
