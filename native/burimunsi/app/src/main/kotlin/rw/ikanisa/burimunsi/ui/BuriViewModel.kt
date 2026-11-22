@@ -640,18 +640,23 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             operationLabel="Checking access"
             val (device,source)=try{
                 io{
-                    Values.apiOrigin(BuildConfig.BURI_API_ORIGIN)
-                    val device=DeviceProvisioning(app,GatewayFactory.installationId(app))
-                    val api=ApiClient.phonePin(BuildConfig.BURI_API_ORIGIN,device.installationId,
-                        installationProfile,BuildConfig.BURI_API_PATH_PREFIX,BuildConfig.COLLECT_PUBLISHABLE_KEY,device::registrationToken)
-                    device to NativeRepository(app,api)
+                    var installation:DeviceProvisioning?=null
+                    val records=try{
+                        installation=DeviceProvisioning(app,GatewayFactory.installationId(app))
+                        Values.apiOrigin(BuildConfig.BURI_API_ORIGIN)
+                        val api=ApiClient.phonePin(BuildConfig.BURI_API_ORIGIN,installation.installationId,
+                            installationProfile,BuildConfig.BURI_API_PATH_PREFIX,BuildConfig.COLLECT_PUBLISHABLE_KEY,installation::registrationToken)
+                        NativeRepository(app,api)
+                    }catch(cancelled:CancellationException){throw cancelled}
+                    catch(_:Exception){null}
+                    installation to records
                 }
-            }catch(cancelled:CancellationException){throw cancelled}
-            catch(_:Exception){
-                state=UiState(error="Unable to sign in. Contact admin.",configurationRequired=true,busy=true)
-                return@work
             }finally{initialSetupPending=false}
             install=device
+            if(source==null){
+                state=UiState(error="Unable to sign in. Contact admin.",configurationRequired=true,busy=true)
+                return@work
+            }
             repository=source
             observeProcessSession()
             sessionBootstrap.beginInitialRestore()

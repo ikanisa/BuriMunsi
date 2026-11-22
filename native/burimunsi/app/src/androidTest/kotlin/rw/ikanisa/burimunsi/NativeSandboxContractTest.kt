@@ -8,6 +8,10 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import app.cool.mobile.BuildConfig
 import java.io.ByteArrayOutputStream
 import org.junit.Assert.*
@@ -144,10 +148,13 @@ class NativeSandboxContractTest {
         if(BuildConfig.IS_GATEWAY)assertEquals(supplied,persisted)
         else assertEquals(SecureStore(context,"installation").read(),persisted)
         // Offline sandbox has no API origin, so model never reads a token or starts HTTP.
-        val model=BuriViewModel(context.applicationContext as android.app.Application)
-        assertEquals(persisted,model.installationId)
-        assertEquals(if(BuildConfig.IS_GATEWAY)"internal_receiver" else "staff",model.installationProfile)
-        assertTrue(model.state.configurationRequired)
+        runBlocking(Dispatchers.Main){
+            val model=BuriViewModel(context.applicationContext as android.app.Application)
+            withTimeout(10_000){while(model.state.starting||model.state.busy)delay(16)}
+            assertTrue(model.state.configurationRequired)
+            assertEquals(persisted,model.installationId)
+            assertEquals(if(BuildConfig.IS_GATEWAY)"internal_receiver" else "staff",model.installationProfile)
+        }
     }
     @Test fun localSetupIsEncryptedOutsideBackupAndClearPreservesOtherCustody() {
         val device=DeviceProvisioning(context,GatewayFactory.installationId(context))
