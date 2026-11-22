@@ -1,5 +1,6 @@
 import {AdminRequestError, type AdminRequest} from '../../api/client';
-import {isVerifiedCurrentOwner, type AdminUser} from '../../session/SessionProvider';
+import type {AdminUser} from '../../session/SessionProvider';
+import {canManageOperatorAccess} from '../../session/ownerIdentity';
 import {listPending, type PendingIdentity} from '../core/pendingAttempt';
 import {withPendingFence, type FenceAccess, type FenceLock} from '../operations/pendingFence';
 import {parseBuriProvisioning} from './contracts';
@@ -31,18 +32,20 @@ export function checkNativeAuthority(context: NativeAccessContext) {
   const samePermissions = JSON.stringify([...new Set(user.permissions)].sort()) ===
     JSON.stringify([...new Set(identity.permissions)].sort());
   const expiresAt = Date.parse(user.expiresAt);
-  if (!context.isCurrent() || !isVerifiedCurrentOwner(user) || user.financialModel !== 'canonical_evidence_ledger' ||
+  if (!context.isCurrent() || !canManageOperatorAccess(user) || user.financialModel !== 'canonical_evidence_ledger' ||
+      (user.adminIdentity && user.adminIdentity.collectionId !== collectionId) ||
       !NATIVE_PERMISSIONS.every(permission => user.permissions.includes(permission) && identity.permissions.includes(permission)) ||
       !GROUP.test(collectionId) || identity.id !== user.id || identity.sessionId !== user.sessionId ||
       identity.email !== user.email || identity.role !== user.role || identity.expiresAt !== user.expiresAt ||
       !samePermissions || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
-    throw new Error('Native access is unavailable to this owner session.');
+    throw new Error(user.accountId ? 'Native access is unavailable to this Admin session.' : 'Native access is unavailable to this owner session.');
   }
 }
 
 export async function verifyNativeFresh(context: NativeAccessContext) {
   checkNativeAuthority(context);
   if (!await context.verifyFresh()) {
+    if (context.user.accountId) throw new Error('Your Admin session changed. Sign in again.');
     const method = context.user.authMethod === 'phone_passcode' ? 'passcode' : 'email';
     throw new Error(`Verify your current owner ${method} before continuing.`);
   }

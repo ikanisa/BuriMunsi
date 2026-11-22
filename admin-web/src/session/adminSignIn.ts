@@ -9,7 +9,7 @@ import {parseAdminUser, parseSignInOtpReceipt, type AdminUser, type OtpReceipt} 
 
 // The Google exchange predates policy/owner negotiation: auth/session is the
 // authoritative source for these fields, which can be omitted by the exchange.
-function loginIdentityKey(user: AdminUser): string {return authorityKey({...user, mfaAvailable: false, mfaRequired: false, ownerIdentity: null});}
+function loginIdentityKey(user: AdminUser): string {return authorityKey({...user, mfaAvailable: false, mfaRequired: false, ownerIdentity: null, adminIdentity: null});}
 
 interface SignInSession {
   config: () => AdminClientConfig;
@@ -61,7 +61,7 @@ export class AdminSignIn {
     }, {isCurrent: current, receiveCsrf: () => undefined});
     let expected: AdminUser;
     try {expected = parseAdminUser(body);} catch {throw new AdminRequestError(message, {outcomeUnknown: true});}
-    if (expected.role === 'staff') throw new AdminRequestError(message, {outcomeUnknown: true});
+    if (expected.role === 'staff' && !expected.accountId || expected.accountId && expected.phone !== normalizedPhone) throw new AdminRequestError(message, {outcomeUnknown: true});
     await this.confirmSignIn({
       isCurrent: current,
       matches: user => loginIdentityKey(user) === loginIdentityKey(expected),

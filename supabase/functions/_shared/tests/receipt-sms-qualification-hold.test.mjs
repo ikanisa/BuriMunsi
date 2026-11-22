@@ -12,7 +12,8 @@ const fixtures = {
  export async function adminAccountSession(r,e){if(!globalThis.__hold.account)throw globalThis.__hold.error(401,'unauthenticated');return globalThis.__hold.account;}
  export function accountDatabase(e){return e;}
  export async function adminCanonicalActor(){return globalThis.__hold.actor;}`,
- './admin_email_policy.js': `export function requireFreshAdminEmail(a){if(!globalThis.__hold.fresh)throw globalThis.__hold.error(403,'recent_email_sign_in_required');}
+ './admin_email_policy.js': `export function activePhoneOperator(){return null;}
+ export function requireFreshAdminEmail(a){if(!globalThis.__hold.fresh)throw globalThis.__hold.error(403,'recent_email_sign_in_required');}
  export function adminEmailProofId(){return '50000000-0000-4000-8000-000000000001';}
  export function adminEmailVerifiedAt(){return 1792497600;}`,
  './mutations.js': `export async function retainedResponse(){globalThis.__hold.retainedReads++;return globalThis.__hold.retained??{found:false};}

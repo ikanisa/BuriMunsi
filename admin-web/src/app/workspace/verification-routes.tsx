@@ -11,6 +11,7 @@ const AuthenticatorPage = lazy(() => import('../../session/AuthenticatorPage').t
 function VerifyEmailRoute() {
   const go = useNavigate(), location = useLocation(), session = useSession();
   const requested = new URLSearchParams(location.search).get('returnTo');
+  if (session.user?.accountId && session.verificationMode === 'passcode') return <Navigate to={safeAdminVerificationReturnLocation(requested) ?? '/admin/security'} replace />;
   if (session.verificationMode === 'passcode') return <Navigate to={verificationPath('passcode', requested)} replace />;
   if (session.verificationMode !== 'email') return <Navigate to={verificationPath('authenticator', requested)} replace />;
   const destination = safeAdminVerificationReturnLocation(requested) ?? '/admin';
@@ -21,6 +22,7 @@ function VerifyEmailRoute() {
 function AuthenticatorRoute() {
   const session = useSession(), go = useNavigate(), location = useLocation();
   const requested = new URLSearchParams(location.search).get('returnTo');
+  if (session.user?.accountId && session.verificationMode === 'passcode') return <Navigate to={safeAdminVerificationReturnLocation(requested) ?? '/admin/security'} replace />;
   if (session.verificationMode === 'passcode') return <Navigate to={verificationPath('passcode', requested)} replace />;
   if (session.verificationMode === 'email' && !session.user?.mfaAvailable) return <Navigate to={verificationPath('email', requested)} replace />;
   const destination = safeAdminVerificationReturnLocation(requested) ?? '/admin/security';
@@ -32,6 +34,7 @@ function PasscodeRoute() {
   const requested = new URLSearchParams(location.search).get('returnTo');
   if (session.verificationMode !== 'passcode') return <Navigate to={verificationPath(session.verificationMode, requested)} replace />;
   const destination = safeAdminVerificationReturnLocation(requested) ?? '/admin/security';
+  if (session.user?.accountId) return <Navigate to={destination} replace />;
   return <VerifyPasscodePage key={session.epoch} onDone={() => go(destination, {replace: true})} />;
 }
 

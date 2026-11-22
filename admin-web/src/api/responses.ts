@@ -49,6 +49,13 @@ function safeErrorMessage(status: number, code: string | undefined, mutation: bo
     return 'Check your mobile number and passcode.';
   }
   if (path === 'auth/passcode/verify' && (status === 401 || code === 'invalid_credentials')) return 'Check your four-digit passcode.';
+  if (path === 'auth/passcode/change' && (code === 'invalid_current_pin' || code === 'invalid_credentials')) return 'Check your current four-digit passcode.';
+  if (phonePasscodeOnly && path.startsWith('team/accounts')) {
+    if (code === 'last_admin') return 'Keep at least one active Admin.';
+    if (code === 'own_access') return 'Another Admin must change your access.';
+    if (code === 'account_changed') return 'This account has changed. Refresh the team list.';
+    if (code === 'invalid_account') return 'Check the account name, mobile number and role.';
+  }
   if (code === 'recent_passcode_required' || phonePasscodeOnly && code === 'recent_email_sign_in_required') {
     return 'Verify your passcode before continuing.';
   }

@@ -73,7 +73,7 @@ import rw.ikanisa.burimunsi.core.Role
                         item{FactGroup(listOf(t("Name") to s.operator?.name.orEmpty(),t("Phone number") to s.operator?.phone.orEmpty()),BuriTheme.Group)}
                     }
                     Sheet.PIN->PinPanel(s.busy,s.pending,m::changePin)
-                    Sheet.HELP->Panel(footer={Primary(t("WhatsApp"),onSupport,m.supportPhone!=null&&!s.busy)}){item{Text(m.supportPhone?:t("Unavailable"),fontSize=26.sp,lineHeight=34.sp)}}
+                    Sheet.HELP->Panel(footer={Primary(t("WhatsApp"),onSupport,!s.busy)}){item{Text(BuriMunsiSupport.phone,fontSize=26.sp,lineHeight=34.sp)}}
                     Sheet.ALLOCATE->AllocatePanel(s,m)
                     Sheet.ENROLL->SmartEnrollPanel(s,m,onPickMemberFile,onPreviewMemberFile,onTakeMemberPhoto,onPickMemberPhoto)
                     Sheet.STAFF->Panel{

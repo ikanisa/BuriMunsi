@@ -2,6 +2,7 @@ import {useState, type FormEvent} from 'react';
 import {AdminRequestError} from '../api/client';
 import {Button, Card, Field, PageHeader} from '../ui';
 import {authFailureMessage} from './AuthFrame';
+import {ChangePasscodeForm} from './ChangePasscodeForm';
 import {useSession} from './SessionProvider';
 
 interface AccountSecurityPageProps {
@@ -24,11 +25,11 @@ export function AccountSecurityPage({onVerify, onAuthenticator, onLicenses, onPa
 
   if (session.verificationMode === 'passcode') {
     return <>
-      <PageHeader title="Account security" subtitle="Verify your BuriMunsi account for sensitive changes." />
+      <PageHeader title="Account security" subtitle="Manage your BuriMunsi sign-in." />
       <Card className="admin-security-links">
-        <Button onClick={onVerify}>Verify passcode</Button>
         <Button onClick={onLicenses}>Open-source licenses</Button>
       </Card>
+      {session.user?.accountId && <ChangePasscodeForm onSignIn={onSignIn} />}
     </>;
   }
 

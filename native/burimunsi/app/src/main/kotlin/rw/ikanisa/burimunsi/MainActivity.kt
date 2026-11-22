@@ -27,6 +27,7 @@ import app.cool.mobile.R
 import rw.ikanisa.burimunsi.ui.*
 import rw.ikanisa.burimunsi.core.export.ExportFormat
 import rw.ikanisa.burimunsi.core.Capability
+import rw.ikanisa.burimunsi.core.BuriMunsiSupport
 import rw.ikanisa.burimunsi.core.ScreenGate
 
 class MainActivity:ComponentActivity(){
@@ -142,9 +143,9 @@ class MainActivity:ComponentActivity(){
             runCatching{startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:$packageName")))}
     }
     private fun support(){
-        val contact=model.supportPhone?:return
-        val phone=contact.removePrefix("+")
-        try{startActivity(Intent(Intent.ACTION_VIEW,Uri.parse("https://wa.me/$phone")))}
-        catch(_:Exception){try{startActivity(Intent(Intent.ACTION_DIAL,Uri.parse("tel:$contact")))}catch(_:Exception){android.widget.Toast.makeText(this,contact,android.widget.Toast.LENGTH_LONG).show()}}
+        try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(BuriMunsiSupport.whatsappUrl))) }
+        catch (_: android.content.ActivityNotFoundException) {
+            android.widget.Toast.makeText(this, BuriMunsiSupport.phone, android.widget.Toast.LENGTH_LONG).show()
+        }
     }
 }

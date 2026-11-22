@@ -48,6 +48,7 @@ export function SessionProvider({config, children}: {config: AdminClientConfig; 
     verificationMode: config.phonePasscodeOnly ? 'passcode' : config.backend === 'supabase' ? 'email' : 'authenticator',
     recheckSensitivePasscode: controller.recheckSensitivePasscode,
     verifySensitivePasscode: controller.verifySensitivePasscode,
+    changePasscode: controller.changePasscode,
     requestSensitiveEmailVerification: controller.requestSensitiveEmailVerification,
     verifySensitiveEmailVerification: controller.verifySensitiveEmailVerification,
     recheckEmailVerification: controller.recheckEmailVerification,

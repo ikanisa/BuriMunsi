@@ -350,7 +350,7 @@ export class AdminSessionController {
         await this.confirmedAnonymous();
         return false;
       }
-      if (this.config.phonePasscodeOnly && (user.authMethod !== 'phone_passcode' || user.role === 'staff' || !session.csrfToken)) {
+      if (this.config.phonePasscodeOnly && (user.authMethod !== 'phone_passcode' || user.role === 'staff' && !user.accountId || !session.csrfToken)) {
         if (readback) throw new AdminRequestError(readback.message, {outcomeUnknown: true});
         await this.confirmedAnonymous(current);
         return false;
@@ -485,6 +485,19 @@ export class AdminSessionController {
       throw new AdminRequestError(message, {outcomeUnknown: true});
     }
   };
+  readonly changePasscode = async (current: string, newPin: string, confirm: string): Promise<void> => {
+    const actor = this.user, epoch = this.epoch;
+    if (!actor?.accountId || actor.authMethod !== 'phone_passcode' || !this.isCurrentAuthority(epoch, actor.id, actor.sessionId))
+      throw new AdminRequestError('Sign in with your phone number and passcode.');
+    if (!PASSCODE.test(current) || !PASSCODE.test(newPin) || newPin !== confirm || current === newPin)
+      throw new AdminRequestError('Enter your current passcode and confirm a different four-digit passcode.');
+    const result = await this.request('auth/passcode/change', {body: {current, newPin, confirm}, expectedStatus: 200});
+    const message = 'The passcode change could not be confirmed. Check your session before trying again.';
+    if (result.ok !== true || !this.isCurrentAuthority(epoch, actor.id, actor.sessionId)) throw new AdminRequestError(message, {outcomeUnknown: true});
+    await this.refresh();
+    if (this.snapshot.status !== 'anonymous') throw new AdminRequestError(message, {outcomeUnknown: true});
+  };
+
   readonly changePassword = async (currentPassword: string, newPassword: string): Promise<PasswordChangeOutcome> => {
     const actor = this.user;
     if (!actor || this.snapshot.status !== 'authenticated' || !actor.permissions.includes('account.manage')) throw new AdminRequestError('Your account cannot change this password.');
