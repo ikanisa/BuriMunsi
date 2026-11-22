@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 const legacy=new URL('../domain/admin_accounts_legacy.js',import.meta.url).href;
 registerHooks({resolve(specifier,context,next){
  if(context.parentURL?.endsWith('/domain/admin_burimunsi_observations.js')&&specifier==='./admin_accounts.js')
-  return {url:'data:text/javascript,'+encodeURIComponent(`export {accountDatabase} from ${JSON.stringify(legacy)};
+  return {url:'data:text/javascript,'+encodeURIComponent(`export {accountDatabase,accountReadDatabase} from ${JSON.stringify(legacy)};
    export async function adminAccountSession(){return globalThis.__observationAdminFixture.latest;}
    export async function adminCanonicalActor(){return globalThis.__observationAdminFixture.currentActor;}`),shortCircuit:true};
  return next(specifier,context);
@@ -55,16 +55,16 @@ async function fixture(){
   const answers=statements.map(s=>{
    if(s.sql.includes('burimunsi_observation_admin_collections()'))return {results:[{result:[...f.allowed].map(collectionId=>({collectionId,label:'Synthetic group'}))}]};
    if(s.sql.includes('burimunsi_observation_admin_page(')){
-    const [collectionId,limit,offset]=s.args;if(!f.allowed.has(collectionId))throw denied();
-    return {results:[{result:{collectionId,totalCount:f.rows.length,revision:f.revision,items:f.rows.slice(offset,offset+limit)}}]};
-   }
-   if(s.sql.startsWith('SELECT private.burimunsi_admin_observation_outcomes(')){
-    const [group,ids,financial]=s.args;if(!f.allowed.has(group))throw denied();
-    return {results:[{result:JSON.parse(ids).map(sourceId=>({sourceId,processing:'posted',paymentReference:financial?'100000000001':null,
-      payerStatus:financial?'delivered':null,payerReason:null}))}]};
-   }
-   if(s.sql.startsWith('SELECT private.burimunsi_observation_admin_inbox_check(')){
-    if(!f.allowed.has(s.args[0]))throw denied();return {results:[{result:f.check}]};
+    const [collectionId,limit,offset,financial]=s.args;if(!f.allowed.has(collectionId))throw denied();
+    const items=f.rows.slice(offset,offset+limit);
+    const result={collectionId,totalCount:f.rows.length,revision:f.revision,items};
+    if(s.sql.includes('burimunsi_admin_observation_outcomes(')){
+     assert.ok(s.sql.includes('burimunsi_observation_admin_inbox_check('));
+     result.outcomes=items.map(({sourceId})=>({sourceId,processing:'posted',paymentReference:financial?'100000000001':null,
+       payerStatus:financial?'delivered':null,payerReason:null}));
+     result.inboxCheck=f.check;
+    }
+    return {results:[{result}]};
    }
    if(s.sql.startsWith('SELECT private.burimunsi_observation_admin_hint_profile(')){
     if(!f.allowed.has(s.args[0]))throw denied();return {results:[{result:f.hintProfile?structuredClone(f.hintProfile):null}]};
@@ -191,8 +191,16 @@ test('legacy Admin reveal omits the optional hint field even when hinting is ena
 
 test('receiver list returns the scoped posting, reported payer delivery and full inbox check without exposing private content',async()=>{
  const f=await fixture();f.check={state:'verified',checkedAt:Date.now(),candidateCount:1,missingCount:0,pendingCount:0,headsMatch:true};
+ const readChecks=[];
+ f.env.DB.adminReadBatch=async(_context,authority,statements)=>{
+  assert.ok(authority.args.includes('sms.read'));
+  assert.equal(statements.length,1);
+  readChecks.push(authority);
+  return f.env.DB.batch(statements);
+ };
  const endpoint='observations?collectionId='+gid+'&includeProcessing=1';
  const redacted=await(await call(f,endpoint)).json();
+ assert.equal(readChecks.length,1);
  assert.equal(redacted.items[0].paymentReference,null);assert.equal(redacted.items[0].payerStatus,null);
  f.actor.permissions.add('payments.read');
  const page=await(await call(f,endpoint)).json();
