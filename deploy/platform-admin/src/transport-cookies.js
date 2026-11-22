@@ -1,5 +1,5 @@
 import {refuse} from './transport-failure.js';
-import {ADMIN_COOKIE, MANAGED_ADMIN_COOKIE} from './admin-session-realm.js';
+import {ADMIN_COOKIE} from './admin-session-realm.js';
 
 function cookiesOf(headers) {
   // Workers exposes getAll(Set-Cookie); Node exposes getSetCookie. Never use
@@ -39,23 +39,23 @@ function validateCookie(cookie, route) {
       !attrs.has('httponly') || attrs.get('httponly') !== null || attrs.get('path') !== '/' ||
       !['strict', 'lax'].includes(attrs.get('samesite'))) refuse(502, 'proxy_cookie_invalid');
 }
-export function managedBrowserCookies(headers, route) {
+export function managedBrowserCookies(headers, route, browserAdminCookie) {
   const cookies = (headers.get('Cookie') ?? '').split(';').map(cookie => cookie.trim());
   headers.delete('Cookie');
   if (route.functionName !== 'admin-api') return;
-  const managed = cookies.filter(cookie => cookie.startsWith(MANAGED_ADMIN_COOKIE + '='));
+  const managed = cookies.filter(cookie => cookie.startsWith(browserAdminCookie + '='));
   if (!managed.length) return;
-  const value = managed[0].slice(MANAGED_ADMIN_COOKIE.length + 1);
+  const value = managed[0].slice(browserAdminCookie.length + 1);
   if (managed.length !== 1 || !/^[A-Za-z0-9_-]{1,4096}$/.test(value)) refuse(400, 'proxy_cookie_invalid');
   headers.set('Cookie', ADMIN_COOKIE + '=' + value);
 }
 
-export function forwardResponseCookie(upstream, headers, route, isolateAdminSession) {
+export function forwardResponseCookie(upstream, headers, route, browserAdminCookie) {
   const cookies = cookiesOf(upstream.headers).filter(cookie => !gatewayCookie(cookie));
   if (cookies.length > 1) refuse(502, 'proxy_cookie_invalid');
   for (const cookie of cookies) {
     validateCookie(cookie, route);
-    const value = isolateAdminSession ? MANAGED_ADMIN_COOKIE + cookie.slice(ADMIN_COOKIE.length) : cookie;
+    const value = browserAdminCookie ? browserAdminCookie + cookie.slice(ADMIN_COOKIE.length) : cookie;
     headers.append('Set-Cookie', value);
   }
 }

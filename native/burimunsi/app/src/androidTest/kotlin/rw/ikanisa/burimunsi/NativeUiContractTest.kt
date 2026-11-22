@@ -7,6 +7,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.test.platform.app.InstrumentationRegistry
 import android.graphics.Bitmap
+import android.os.Build
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.cool.mobile.BuildConfig
@@ -16,6 +17,8 @@ import org.junit.runner.RunWith
 import rw.ikanisa.burimunsi.core.*
 import rw.ikanisa.burimunsi.core.export.ExportFormat
 import rw.ikanisa.burimunsi.ui.*
+import kotlin.math.ceil
+import kotlin.math.floor
 
 /** Original handoff routes/panels exercised with synthetic records only.
  * These tests prove UI action wiring; server/device authorization is separately tested. */
@@ -41,6 +44,26 @@ class NativeUiContractTest {
         InstrumentationRegistry.getInstrumentation().targetContext.cacheDir.resolve("prototype-sign-in.png").outputStream().use{
             check(image.compress(Bitmap.CompressFormat.PNG,100,it))
         }
+    }
+
+    private fun capturePanel(panel: SemanticsNodeInteraction): Bitmap {
+        panel.assertIsDisplayed()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) return panel.captureToImage().asAndroidBitmap()
+
+        // Compose cannot capture a dialog window before API 28. Crop the rendered screen to the panel.
+        val node = panel.fetchSemanticsNode()
+        val bounds = ui.runOnIdle {
+            node.boundsInRoot.translate(node.positionOnScreen - node.positionInRoot)
+        }
+        val screenshot = checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()) {
+            "Unable to capture the dialog on screen"
+        }
+        val left = floor(bounds.left).toInt().coerceIn(0, screenshot.width)
+        val top = floor(bounds.top).toInt().coerceIn(0, screenshot.height)
+        val right = ceil(bounds.right).toInt().coerceIn(0, screenshot.width)
+        val bottom = ceil(bounds.bottom).toInt().coerceIn(0, screenshot.height)
+        check(left < right && top < bottom) { "Dialog has no visible area on screen: $bounds" }
+        return Bitmap.createBitmap(screenshot, left, top, right - left, bottom - top)
     }
 
     @Test fun freshEntryIsOriginalPhoneAndFourDigitPasscode(){
@@ -142,7 +165,7 @@ class NativeUiContractTest {
         val c=FakeController(Route.MEMBERS);c.state=c.state.copy(sheet=Sheet.ENROLL);var picks=0;var captures=0;var photos=0;val previews=mutableListOf<String>()
         ui.setContent{BuriContent(languageTag="en",reduceMotion=true){BuriApp(c,{},{},{},{},onPickMemberFile={picks++},onPreviewMemberFile={previews.add(it)},onTakeMemberPhoto={captures++},onPickMemberPhoto={photos++})}}
         ui.onNodeWithText("How would you like to add members?").assertExists()
-        val screenshot=ui.onNode(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.PaneTitle,"Add member")).captureToImage().asAndroidBitmap()
+        val screenshot=capturePanel(ui.onNode(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.PaneTitle,"Add member")))
         InstrumentationRegistry.getInstrumentation().targetContext.cacheDir.resolve("smart-onboarding-options.png").outputStream().use{
             check(screenshot.compress(Bitmap.CompressFormat.PNG,100,it))
         }
@@ -276,8 +299,17 @@ class NativeUiContractTest {
     }
     @Test fun passcodeConfirmationImeDoesNotChangeCredentialUntilSave(){
         val c=FakeController(Route.HOME);c.state=c.state.copy(sheet=Sheet.PIN);show(c)
-        field("Current passcode").performScrollTo().performTextInput("2468");field("New passcode").performScrollTo().performTextInput("8642");field("Confirm passcode").performScrollTo().performTextInput("8642");field("Confirm passcode").performImeAction()
-        ui.runOnIdle{check(c.pinChangeCalls==0)};button("Save").performClick();ui.runOnIdle{check(c.pinChangeCalls==1)}
+        val panelTitle = "Change passcode"
+        panelList(panelTitle).performScrollToNode(hasContentDescription("Current passcode"))
+        field("Current passcode").assertIsDisplayed().performTextInput("2468")
+        field("Current passcode").assertIsFocused().performImeAction()
+        field("New passcode").assertIsFocused().performTextInput("8642")
+        field("New passcode").performImeAction()
+        field("Confirm passcode").assertIsFocused().performTextInput("8642")
+        field("Confirm passcode").performImeAction()
+        ui.runOnIdle { check(c.pinChangeCalls == 0) }
+        panelButton(panelTitle, "Save").assertIsEnabled().performClick()
+        ui.runOnIdle { check(c.pinChangeCalls == 1) }
     }
     @Test fun rawReceiptOpensDirectlyAndLinksToItsContribution(){
         val c=FakeController(Route.PAYMENT);show(c)

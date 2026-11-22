@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const templatePath = path.resolve(here, '../../scripts/templates/admin_pwa_service_worker.js');
 export const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
-export const expectedIconHash = 'cae23ce3562e8aac2e248e7b22f7feed194f4fcfd2b57725ec1026f064bb0ad9';
 
 export async function filesUnder(root, directory = root) {
   const files = [];

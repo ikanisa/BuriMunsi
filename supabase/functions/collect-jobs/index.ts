@@ -1,3 +1,3 @@
-import {scheduledHandler} from '../_shared/edge-jobs-handler.js';
+import {createScheduledHandler} from '../_shared/edge-jobs-handler.js';
 
-Deno.serve(scheduledHandler);
+Deno.serve(createScheduledHandler(undefined, undefined, undefined, {standalone: true}));

@@ -2,7 +2,8 @@ import {verifyDeploymentProfile} from './deployment-profile.js';
 
 // Read-only before admission. A valid public profile cannot accidentally run
 // against another deployment's database even if its connection is reachable.
-export async function assertRuntimeDeployment(sql,env){
+/** @param {string} [standaloneCollectionId] */
+export async function assertRuntimeDeployment(sql,env,standaloneCollectionId=undefined){
  // Legacy unbound deployments retain their old behavior. Every explicit
  // profile, including managed production, must match this database's immutable
  // identity before the application fence or any provider work is opened.
@@ -12,5 +13,9 @@ export async function assertRuntimeDeployment(sql,env){
   await tx`SET LOCAL ROLE collect_runtime`;
   const rows=await tx`SELECT private.collect_assert_deployment(${env.COLLECT_DEPLOYMENT_PROFILE_SHA256}::text) AS allowed`;
   if(rows.length!==1||rows[0].allowed!==true)throw new Error('deployment_identity_mismatch');
+  if(standaloneCollectionId!==undefined){
+   const collections=await tx`SELECT id FROM app.collections LIMIT 2`;
+   if(collections.length!==1||collections[0].id!==standaloneCollectionId)throw new Error('burimunsi_collection_mismatch');
+  }
  });
 }

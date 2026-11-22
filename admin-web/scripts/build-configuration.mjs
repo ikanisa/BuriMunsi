@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { MANAGED_SUPABASE_ORIGIN } from '../../supabase/functions/_shared/deployment-profile.js';
+import { BURIMUNSI_ADMIN_PROFILE_ID } from '../../deploy/platform-admin/src/admin-session-realm.js';
 import { sha256 } from './pwa-assets.mjs';
 
 export function publicConfiguration(root, mode) {
@@ -31,10 +32,12 @@ export function publicConfiguration(root, mode) {
     throw new Error('Supply the reviewed Admin origin, Supabase project, public key and security settings.');
   }
   const [settings, metadata] = validated;
+  const burimunsi = metadata.deployment_profile?.id === BURIMUNSI_ADMIN_PROFILE_ID;
   const defines = {
     VITE_ADMIN_EXPECTED_ORIGIN: settings.ADMIN_APP_URL, VITE_ADMIN_BACKEND: 'supabase',
     VITE_ADMIN_CAPTCHA_ENABLED: settings.AUTH_CAPTCHA_ENABLED, VITE_ADMIN_GOOGLE_ENABLED: settings.GOOGLE_AUTH_ENABLED,
     VITE_SUPABASE_PUBLISHABLE_KEY: settings.SUPABASE_PUBLISHABLE_KEY, VITE_SUPABASE_PROJECT_ORIGIN: settings.SUPABASE_URL,
+    ...(burimunsi ? { VITE_ADMIN_PRODUCT: 'burimunsi' } : {}),
   };
   return {
     defines,

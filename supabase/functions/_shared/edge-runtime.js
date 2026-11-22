@@ -10,10 +10,11 @@ export class EdgeRuntimeWork {
   stage = 'environment';
   work;
 
-  async initializeDatabase(env) {
+  /** @param {string} [standaloneCollectionId] */
+  async initializeDatabase(env, standaloneCollectionId = undefined) {
     this.stage = 'database_initialization';
     env.DB = new PostgresDatabase(connection(env.COLLECT_DATABASE_URL, env));
-    await assertRuntimeDeployment(env.DB.sql, env);
+    await assertRuntimeDeployment(env.DB.sql, env, standaloneCollectionId);
   }
 
   async admit(env, openWork, kind, signal) {

@@ -1,7 +1,8 @@
 import tempfile
 import unittest
 from pathlib import Path
-from .admin_build_config import BASELINE, PROJECT_ORIGIN, QUALIFICATION_ORIGIN, configuration
+from .admin_build_config import (BASELINE, BURIMUNSI_ADMIN_ORIGIN, PROJECT_ORIGIN,
+                                 QUALIFICATION_ORIGIN, burimunsi_admin_profile, configuration)
 from .deployment_profile import canonical_profile, legacy_profile, profile_sha256
 
 class AdminBuildConfigurationTests(unittest.TestCase):
@@ -45,6 +46,31 @@ class AdminBuildConfigurationTests(unittest.TestCase):
         self.assertFalse(metadata["supabase_qualification_complete"])
         self.assertNotIn("SUPABASE_SERVICE_ROLE_KEY", defines)
         self.assertNotIn("SUPABASE_SERVICE_ROLE_KEY", metadata)
+
+    def test_burimunsi_build_uses_exact_profile_and_same_origin(self):
+        profile = burimunsi_admin_profile()
+        env = self.explicit_cloud_environment(**profile)
+        defines, metadata = configuration(env, self.root)
+        self.assertEqual(metadata["deployment_profile"], profile)
+        self.assertEqual(defines["SUPABASE_URL"], PROJECT_ORIGIN)
+        for key in ("APP_PUBLIC_URL", "ADMIN_APP_URL", "SUPABASE_API_URL", "SUPABASE_ADMIN_API_URL"):
+            self.assertEqual(defines[key], BURIMUNSI_ADMIN_ORIGIN)
+        self.assertEqual(defines["GOOGLE_AUTH_ENABLED"], "false")
+
+    def test_burimunsi_rejects_other_origins_and_legacy_fallback(self):
+        profile = burimunsi_admin_profile()
+        env = self.explicit_cloud_environment(**profile)
+        for change in ({"APP_PUBLIC_URL": "https://collect.ikanisa.com"},
+                       {"SUPABASE_ADMIN_API_URL": PROJECT_ORIGIN},
+                       {"GOOGLE_AUTH_ENABLED": "true"}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                configuration(env | change, self.root)
+        for change in ({"member_api_origin": "https://collect.ikanisa.com"},
+                       {"id": "collect-managed-production"}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                configuration(self.explicit_cloud_environment(**(profile | change)), self.root)
+        with self.assertRaises(ValueError):
+            configuration(self.env | {"ADMIN_APP_URL": BURIMUNSI_ADMIN_ORIGIN}, self.root)
 
     def test_explicit_cloud_disagreement_and_missing_or_changed_identity_fail_closed(self):
         for changes in ({"COLLECT_DEPLOYMENT_PROFILE_SHA256": "0" * 64},

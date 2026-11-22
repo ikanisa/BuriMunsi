@@ -87,6 +87,8 @@ analyze_out.txt
 update_profile.dart
 package-lock.json
 !/admin-web/package-lock.json
+!/deploy/platform-admin/package-lock.json
+!/scripts/supabase/package-lock.json
 !tools/public-photography/package-lock.json
 !deploy/admin-api/package-lock.json
 !deploy/platform-api/package-lock.json

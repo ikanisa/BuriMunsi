@@ -1,3 +1,4 @@
+import {adminBrand} from '../../branding';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router';
 import {featureAuthorityKey} from '../../app/authority';
@@ -38,7 +39,7 @@ function ReadUnavailable({model, id}: {model: string | undefined; id: string}) {
 }
 export function LedgerAccountDetailPage({allowMutations = false}: {allowMutations?: boolean}) {
   const {id = ''} = useParams(), {session, model, canRead, state, refresh} = useAccount(id), user = session.user;
-  const header = <><PageHeader eyebrow="Collect Admin / Finance" title="Ledger account" subtitle="Review the account and its current status." /><p><Link className="ledger-account-link" to="/admin/ledgers">← Back to ledgers</Link></p></>;
+  const header = <><PageHeader eyebrow={`${adminBrand.name} / Finance`} title="Ledger account" subtitle="Review the account and its current status." /><p><Link className="ledger-account-link" to="/admin/ledgers">← Back to ledgers</Link></p></>;
   if (!canRead) return <>{header}<ReadUnavailable model={model} id={id} /></>;
   if (!state) return <>{header}<LoadingState label="Loading ledger account" /></>;
   if (state.error || !state.detail) return <>{header}<ErrorState message="The ledger account could not be verified." onRetry={refresh} /></>;
@@ -55,7 +56,7 @@ export function LedgerAccountEditPage({allowMutations = false}: {allowMutations?
   const actorId = user?.id, sessionId = user?.sessionId, email = user?.email, role = user?.role, expiresAt = user?.expiresAt;
   const permissionKey = JSON.stringify([...(user?.permissions ?? [])].sort());
   const identity = useMemo<PendingIdentity | null>(() => actorId && sessionId && email && role && expiresAt ? {id: actorId, sessionId, email, role, expiresAt, permissions: JSON.parse(permissionKey) as string[]} : null, [actorId, sessionId, email, role, expiresAt, permissionKey]);
-  const header = <><PageHeader eyebrow="Collect Admin / Finance" title="Edit ledger account" subtitle="Review the account name and status before recording a change." /><p><Link className="ledger-account-link" to={`/admin/ledger-accounts/${id}`}>← Back to account</Link></p></>;
+  const header = <><PageHeader eyebrow={`${adminBrand.name} / Finance`} title="Edit ledger account" subtitle="Review the account name and status before recording a change." /><p><Link className="ledger-account-link" to={`/admin/ledger-accounts/${id}`}>← Back to account</Link></p></>;
   if (!canRead) return <>{header}<ReadUnavailable model={model} id={id} /></>;
   if (!state) return <>{header}<LoadingState label="Loading ledger account" /></>;
   if (state.error || !state.detail) return <>{header}<ErrorState message="The ledger account could not be verified." onRetry={refresh} /></>;

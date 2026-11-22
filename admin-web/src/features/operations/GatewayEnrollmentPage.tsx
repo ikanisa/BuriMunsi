@@ -1,3 +1,4 @@
+import {adminBrand} from '../../branding';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { useSession } from '../../session/SessionProvider';
@@ -30,7 +31,7 @@ export function GatewayEnrollmentPage({allowActions = false}: {allowActions?: bo
       () => {if (live && context.isCurrent()) {setLoadedScope(scope); setMessage('Recovery data could not be verified. Check the original request before continuing.');}});
     return () => {live = false;};
   }, [allowed, context, scope]);
-  const header = <><PageHeader eyebrow="Collect Admin / Operations" title="Enroll gateway device" subtitle="Use the public identity exported by the handset. Keep its private key on the device." /><p><Link className="operations-link" to="/admin/gateway">← Back to devices</Link></p></>;
+  const header = <><PageHeader eyebrow={`${adminBrand.name} / Operations`} title="Enroll gateway device" subtitle="Use the public identity exported by the handset. Keep its private key on the device." /><p><Link className="operations-link" to="/admin/gateway">← Back to devices</Link></p></>;
   if (!identity || !model || !allowed) return <>{header}<ErrorState title="Access unavailable" message="Your current account cannot enroll or recover a gateway device." /></>;
   if (loadedScope !== scope) return <>{header}<LoadingState label="Checking enrollment recovery" /></>;
   const state = loadedScope === scope ? attempt : null;

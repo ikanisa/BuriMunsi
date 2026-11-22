@@ -1,0 +1,37 @@
+SHELL := /bin/bash
+.DEFAULT_GOAL := help
+export NATIVE_OUTPUT
+
+.PHONY: help check-source test-backend test-admin admin-fixture admin-web-build native-build
+
+help:
+	@printf '%s\n' 'BuriMunsi commands' \
+	  '  make check-source       Verify shared contracts, schema and public profile' \
+	  '  make test-backend       Run locked Edge type checks and source tests' \
+	  '  make test-admin         Run React and Admin Worker tests' \
+	  '  make admin-fixture      Build the local browser test fixture' \
+	  '  make admin-web-build    Build the dedicated production Admin artifact' \
+	  '  make native-build NATIVE_OUTPUT=/absolute/evidence/path'
+
+check-source:
+	@python3 scripts/generate_ui_copy.py --check
+	@python3 scripts/generate_burimunsi_wire.py --check
+	@python3 supabase/schema-src/generate_baseline.py --check
+	@python3 -m unittest scripts.supabase.test_admin_build_config
+
+test-backend:
+	@cd supabase/functions && deno task check && deno task test
+
+test-admin:
+	@cd admin-web && npm run typecheck && npm run lint && npm test
+	@cd deploy/platform-admin && npm test
+
+admin-fixture:
+	@./scripts/admin_pwa_release_build.sh --fixture
+
+admin-web-build:
+	@python3 scripts/build_burimunsi_admin.py
+
+native-build:
+	@test -n "$$NATIVE_OUTPUT" || { printf '%s\n' 'Set NATIVE_OUTPUT to a fresh absolute evidence path.' >&2; exit 2; }
+	@python3 native/burimunsi/scripts/native_pipeline.py build --output "$$NATIVE_OUTPUT"

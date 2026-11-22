@@ -1,5 +1,6 @@
 import {ApiError} from './domain/core.js';
 import {MANAGED_SUPABASE_ORIGIN} from './deployment-profile.js';
+import {BURIMUNSI_ADMIN_ORIGIN, BURIMUNSI_PRODUCT_MODE, isManagedProductionProfile} from './burimunsi-standalone.js';
 
 export const LEGACY_ADMIN_OWNER_EMAIL = 'info@ikanisa.com';
 
@@ -12,16 +13,15 @@ export function adminCookieToken(request) {
   return /^[a-f0-9]{64}$/.test(token) ? token : null;
 }
 
-// These two Workers terminate their own host-only Admin cookies. The immutable
+// These Workers terminate their own host-only Admin cookies. The immutable
 // managed profile still identifies the database, member API and provider callbacks.
-const managedAdminProfile='55ea350d7bf9ddef3e98022952bfe179da6216d52051ae0f4d6457d884ed1c61';
 const managedBrowsers=['https://platform-admin.collect.ikanisa.com','https://admin-supabase-qa.collect.ikanisa.com'];
-function hasManagedBrowserHosts(env){
- return env.COLLECT_DEPLOYMENT_PROFILE_SHA256===managedAdminProfile&&typeof env.COLLECT_DEPLOYMENT_PROFILE==='string'&&
-  env.APP_ENVIRONMENT==='production'&&env.SUPABASE_URL===MANAGED_SUPABASE_ORIGIN&&env.ADMIN_ORIGIN===MANAGED_SUPABASE_ORIGIN;
+function managedBrowserHosts(env){
+ if(!isManagedProductionProfile(env)||env.ADMIN_ORIGIN!==MANAGED_SUPABASE_ORIGIN)return [];
+ return env.BURIMUNSI_PRODUCT_MODE===BURIMUNSI_PRODUCT_MODE?[...managedBrowsers,BURIMUNSI_ADMIN_ORIGIN]:managedBrowsers;
 }
 export function isManagedAdminBrowserOrigin(env,origin){
- return hasManagedBrowserHosts(env)&&managedBrowsers.includes(origin);
+ return managedBrowserHosts(env).includes(origin);
 }
 // A challenge embedded by an Admin host is the only member-side document
 // that may receive that host as its parent. Other member routes keep their profile.
@@ -35,7 +35,8 @@ export function managedAdminChallengeParent(request,env){
 }
 export function adminBrowserOrigins(env){
  const configured=(env.ADMIN_ORIGINS??env.ADMIN_ORIGIN??'').split(',').map(v=>v.trim()).filter(Boolean);
- return hasManagedBrowserHosts(env)?[...new Set([...configured,...managedBrowsers])]:configured;
+ const managed=managedBrowserHosts(env);
+ return managed.length?[...new Set([...configured,...managed])]:configured;
 }
 export function adminSessionOriginMatches(request,env,profile,account){
  const origin=request.headers.get('Origin');

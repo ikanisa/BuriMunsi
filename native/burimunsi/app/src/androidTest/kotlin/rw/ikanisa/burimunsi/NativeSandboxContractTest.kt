@@ -3,9 +3,13 @@ package rw.ikanisa.burimunsi
 import android.content.ComponentName
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import app.cool.mobile.BuildConfig
+import java.io.ByteArrayOutputStream
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -45,25 +49,54 @@ class NativeSandboxContractTest {
         }finally{assertTrue(files.remove(file.name))}
     }
 
-    @Test fun memberPhotoPreparationResizesRotatesAndWipesInput(){
-        val original=android.graphics.Bitmap.createBitmap(3200,1800,android.graphics.Bitmap.Config.ARGB_8888)
-        val source=java.io.ByteArrayOutputStream().use{out->original.compress(android.graphics.Bitmap.CompressFormat.JPEG,95,out);out.toByteArray()}
-        original.recycle()
-        val result=prepareMemberPhoto(source)
-        assertTrue(source.all{it==0.toByte()});assertTrue(result.size in 1..5*1024*1024)
-        val bitmap=android.graphics.BitmapFactory.decodeByteArray(result,0,result.size)
-        try{assertTrue(maxOf(bitmap.width,bitmap.height)<=2560)}finally{bitmap.recycle();result.fill(0)}
-        val files=MemberPhotoFiles(context.cacheDir);val capture=files.create()
-        try{
-            val portrait=android.graphics.Bitmap.createBitmap(72,120,android.graphics.Bitmap.Config.ARGB_8888)
-            capture.outputStream().use{portrait.compress(android.graphics.Bitmap.CompressFormat.JPEG,90,it)};portrait.recycle()
-            android.media.ExifInterface(capture.absolutePath).apply{
-                setAttribute(android.media.ExifInterface.TAG_ORIENTATION,android.media.ExifInterface.ORIENTATION_ROTATE_90.toString());saveAttributes()
+    @Test fun memberPhotoPreparationResizesRotatesAndWipesInput() {
+        val original = Bitmap.createBitmap(3200, 1800, Bitmap.Config.ARGB_8888)
+        val formats = listOf(Bitmap.CompressFormat.JPEG, Bitmap.CompressFormat.PNG)
+        val sources = try {
+            formats.map { format ->
+                ByteArrayOutputStream().use { output ->
+                    assertTrue(original.compress(format, 95, output))
+                    output.toByteArray()
+                }
             }
-            val upright=prepareMemberPhoto(capture.readBytes())
-            val rotated=android.graphics.BitmapFactory.decodeByteArray(upright,0,upright.size)
-            try{assertEquals(120,rotated.width);assertEquals(72,rotated.height)}finally{rotated.recycle();upright.fill(0)}
-        }finally{assertTrue(files.remove(capture.name))}
+        } finally {
+            original.recycle()
+        }
+        for (source in sources) {
+            val result = prepareMemberPhoto(source)
+            try {
+                assertTrue(source.all { it == 0.toByte() })
+                assertTrue(result.size in 1..5 * 1024 * 1024)
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(result, 0, result.size, bounds)
+                assertEquals("image/jpeg", bounds.outMimeType)
+                assertTrue(bounds.outWidth > 0 && bounds.outHeight > 0)
+                assertTrue(maxOf(bounds.outWidth, bounds.outHeight) <= 2560)
+            } finally {
+                result.fill(0)
+            }
+        }
+
+        // The JPEG has EXIF orientation 6 and exceeds Oreo's 5,000-byte format probe.
+        val portrait = InstrumentationRegistry.getInstrumentation().context.assets
+            .open("member-photo-portrait-rotate-90.jpg").use { it.readBytes() }
+        val upright = prepareMemberPhoto(portrait)
+        try {
+            assertTrue(portrait.all { it == 0.toByte() })
+            val rotated = requireNotNull(BitmapFactory.decodeByteArray(upright, 0, upright.size))
+            try {
+                assertEquals(120, rotated.width)
+                assertEquals(72, rotated.height)
+                val left = rotated.getPixel(24, 36)
+                val right = rotated.getPixel(96, 36)
+                assertTrue(Color.blue(left) > Color.red(left))
+                assertTrue(Color.red(right) > Color.blue(right))
+            } finally {
+                rotated.recycle()
+            }
+        } finally {
+            upright.fill(0)
+        }
     }
 
     @Test fun concurrentSecureStoreInstancesShareOneAtomicFileSafely() {

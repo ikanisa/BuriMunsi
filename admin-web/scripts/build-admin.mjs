@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util';
 import { packagePwa, verifyPwaPackage } from './package-pwa.mjs';
 import { artifactIdentity, readBuildFile, sourceIdentity } from './build-identity.mjs';
 import { publicConfiguration } from './build-configuration.mjs';
+import { burimunsiAdminBrand } from '../src/product-brand.mjs';
 
 const root = await fs.realpath(fileURLToPath(new URL('../../', import.meta.url)));
 const packageRoot = join(root, 'admin-web');
@@ -52,14 +53,20 @@ async function build(output, mode) {
     npm(['run', 'notices', '--', '--check']);
     npm(['exec', '--no', '--', 'vite', 'build', '--outDir', raw],
       { ...env, ...defines, NODE_ENV: 'production', ADMIN_ASSET_BASE: './' });
+    const burimunsi = defines.VITE_ADMIN_PRODUCT === 'burimunsi';
+    if (burimunsi) {
+      await fs.copyFile(join(packageRoot, 'src/ui/assets/burimunsi-432.png'), join(raw, burimunsiAdminBrand.icon));
+    }
     if (JSON.stringify(await sourceIdentity(root)) !== JSON.stringify(source)) {
       throw new Error('React Admin sources changed during compilation.');
     }
     const staged = join(staging, 'site');
     await packagePwa(raw, staged, { publicBuild: metadata });
-    await fs.mkdir(join(staged, '.well-known'));
-    for (const name of associationFiles) {
-      await fs.copyFile(join(root, 'web', '.well-known', name), join(staged, '.well-known', name));
+    if (!burimunsi) {
+      await fs.mkdir(join(staged, '.well-known'));
+      for (const name of associationFiles) {
+        await fs.copyFile(join(root, 'web', '.well-known', name), join(staged, '.well-known', name));
+      }
     }
     const receipt = {
       format: 'collect.react-admin.build.v1', source, backend: metadata?.backend ?? 'unconfigured',

@@ -3,10 +3,11 @@ import {boundedBytes, fetchWithinDeadline} from './transport-body.js';
 import {failure, ProxyFailure, refuse} from './transport-failure.js';
 import {admitRequest, FRONTENDS, transportOrigin, upstreamRequest} from './transport-request.js';
 import {qualifyResponse} from './transport-response.js';
+import {BURIMUNSI_ADMIN_COOKIE, MANAGED_ADMIN_COOKIE} from './admin-session-realm.js';
 
 export {routeCollectTarget, SUPABASE_ORIGIN} from './transport-request.js';
 
-export function createCollectTransport({frontendOrigin, isolateAdminSession = false,
+export function createCollectTransport({frontendOrigin, isolateAdminSession = false, burimunsi = false,
   allowedFrontendOrigins = [...FRONTENDS], fetchImpl = (request, init) => globalThis.fetch(request, init),
   timeoutMs = 30000, maxRequestBytes = 16 * 1024 * 1024, maxResponseBytes = 16 * 1024 * 1024} = {}) {
   const allowedFrontends = new Set(allowedFrontendOrigins.map(origin => transportOrigin(origin)));
@@ -14,6 +15,7 @@ export function createCollectTransport({frontendOrigin, isolateAdminSession = fa
       !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60000 ||
       !Number.isSafeInteger(maxRequestBytes) || maxRequestBytes < 1 ||
       !Number.isSafeInteger(maxResponseBytes) || maxResponseBytes < 1) throw new TypeError('Invalid static-host proxy configuration');
+  const browserAdminCookie = burimunsi ? BURIMUNSI_ADMIN_COOKIE : isolateAdminSession ? MANAGED_ADMIN_COOKIE : null;
   // null selects the existing static host. rawTarget is only for hosts that expose the original path.
   return async function handle(request, {rawTarget} = {}) {
     let attempted = false;
@@ -22,7 +24,7 @@ export function createCollectTransport({frontendOrigin, isolateAdminSession = fa
     let abortListener;
     const controller = new AbortController();
     try {
-      const admission = admitRequest(request, rawTarget, frontendOrigin, isolateAdminSession);
+      const admission = admitRequest(request, rawTarget, frontendOrigin, {browserAdminCookie, burimunsi});
       if (!admission) return null;
       effectful = admission.effectful;
 
@@ -36,12 +38,12 @@ export function createCollectTransport({frontendOrigin, isolateAdminSession = fa
       timer = setTimeout(abortListener, timeoutMs);
       const signal = controller.signal;
       const bytes = await boundedBytes(request.body, maxRequestBytes, signal, 413, 'proxy_request_too_large');
-      const outgoing = upstreamRequest(request, admission, bytes, signal, frontendOrigin, isolateAdminSession);
+      const outgoing = upstreamRequest(request, admission, bytes, signal, frontendOrigin, browserAdminCookie);
       if (signal.aborted) refuse(504, 'proxy_deadline');
       attempted = true;
       const upstream = await fetchWithinDeadline(outgoing, signal, fetchImpl);
       return await qualifyResponse(upstream, {
-        route: admission.route, method: request.method, signal, maxResponseBytes, isolateAdminSession,
+        route: admission.route, method: request.method, signal, maxResponseBytes, browserAdminCookie,
         frontendOrigin, allowedFrontends,
       });
     } catch (error) {

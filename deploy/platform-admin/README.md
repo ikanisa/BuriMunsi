@@ -1,4 +1,28 @@
-# Collect Admin frontend transport
+# Admin frontend transport
+
+## BuriMunsi release profile
+
+`wrangler.burimunsi.jsonc` binds the `burimunsi-admin` Worker to
+`https://burimunsi-admin.ikanisa.com` and the retained Supabase project
+`rrlduytparvsjfmegalh`. The Worker verifies the complete dedicated profile
+before returning the shell or handling requests. Its browser API routes are
+the same-origin Admin API, security challenge and the retained account
+privacy workflow. The native and receiving-device clients use their
+separate managed API routes.
+
+Build `build/admin-web` with the exact public profile and security settings
+in the reviewed release input. A BuriMunsi build has its own title, launcher
+mark and installation manifest. The Worker translates its host-only session
+cookie to the existing upstream name on Admin routes. Sign in again on the
+dedicated hostname and reconcile earlier requests at their original origin.
+
+Use the pinned Wrangler version to verify the artifact and Worker bundle
+locally. Hosted release requires readback of the dedicated Cloudflare
+domain, approved challenge and email settings at that origin, and matching
+Edge admission. Verify the served assets with `admin-web/scripts/verify-live.mjs`
+and exercise the actual owner, Admin and Staff workflows.
+
+## Retained compatibility profiles
 
 The production and QA React panels use the managed Supabase project `rrlduytparvsjfmegalh`. The Worker in this directory serves the browser panel and forwards its requests. BuriMunsi Staff and Admin Sync ship as separate native Android applications. The Sync app owns the SMS permissions.
 

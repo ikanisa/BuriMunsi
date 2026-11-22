@@ -8,16 +8,29 @@ import re
 from urllib.parse import urlsplit
 
 try:
-    from .deployment_profile import resolve_profile, public_profile_defines
+    from .deployment_profile import legacy_profile, resolve_profile, public_profile_defines
 except ImportError:
-    from deployment_profile import resolve_profile, public_profile_defines
+    from deployment_profile import legacy_profile, resolve_profile, public_profile_defines
 
 PROJECT = "rrlduytparvsjfmegalh"
 PROJECT_ORIGIN = f"https://{PROJECT}.supabase.co"
 PUBLIC_ORIGIN = "https://collect.ikanisa.com"
 ADMIN_ORIGINS = {"https://admin.collect.ikanisa.com", "https://platform-admin.collect.ikanisa.com"}
 QUALIFICATION_ORIGIN = "https://admin-supabase-qa.collect.ikanisa.com"
+BURIMUNSI_ADMIN_ORIGIN = "https://burimunsi-admin.ikanisa.com"
+BURIMUNSI_ADMIN_PROFILE_ID = "burimunsi-admin-production"
 BASELINE = "20261020134444_collect_curated_platform_baseline.sql"
+
+
+def burimunsi_admin_profile() -> dict[str, str]:
+    return legacy_profile() | {
+        "id": BURIMUNSI_ADMIN_PROFILE_ID,
+        "admin_origin": BURIMUNSI_ADMIN_ORIGIN,
+        "member_api_origin": BURIMUNSI_ADMIN_ORIGIN,
+        "public_origin": BURIMUNSI_ADMIN_ORIGIN,
+        "google_callback_origin": BURIMUNSI_ADMIN_ORIGIN,
+    }
+
 
 def migration_chain(root: Path) -> list[dict[str, str]]:
     folder = root / 'supabase/migrations'
@@ -38,6 +51,9 @@ def origin(value: str) -> str:
 def configuration(env: dict[str, str], root: Path, *, qualification: bool = False) -> tuple[dict, dict]:
     profile = resolve_profile(env, qualification=qualification)
     explicit_profile = "COLLECT_DEPLOYMENT_PROFILE" in env or "COLLECT_DEPLOYMENT_PROFILE_SHA256" in env
+    burimunsi_admin = profile["id"] == BURIMUNSI_ADMIN_PROFILE_ID
+    if burimunsi_admin and profile != burimunsi_admin_profile():
+        raise ValueError("BuriMunsi Admin requires its exact production deployment profile")
     if env.get("COLLECT_BACKEND", "supabase") != "supabase":
         raise ValueError("React Admin requires the Supabase backend")
     public = origin(env.get("APP_PUBLIC_URL", profile["public_origin"]))
@@ -77,16 +93,20 @@ def configuration(env: dict[str, str], root: Path, *, qualification: bool = Fals
     google = env.get("GOOGLE_AUTH_ENABLED", "false")
     if google not in ("true", "false"):
         raise ValueError("GOOGLE_AUTH_ENABLED must be true or false")
+    if burimunsi_admin and google != "false":
+        raise ValueError("BuriMunsi Admin uses the approved email sign-in flow")
     defines["GOOGLE_AUTH_ENABLED"] = google
-    allowed_admin_origins = {QUALIFICATION_ORIGIN} if qualification else ADMIN_ORIGINS
-    if (public != PUBLIC_ORIGIN or public != profile["public_origin"] or admin not in allowed_admin_origins
+    public_origin = BURIMUNSI_ADMIN_ORIGIN if burimunsi_admin else PUBLIC_ORIGIN
+    allowed_admin_origins = ({BURIMUNSI_ADMIN_ORIGIN} if burimunsi_admin else
+                             {QUALIFICATION_ORIGIN} if qualification else ADMIN_ORIGINS)
+    if (public != public_origin or public != profile["public_origin"] or admin not in allowed_admin_origins
             or explicit_profile and admin != profile["admin_origin"]):
         raise ValueError("Supabase release must use approved Collect frontend origins")
     project = origin(env.get("SUPABASE_URL", profile["supabase_origin"] if explicit_profile else ""))
     api = origin(env.get("SUPABASE_API_URL", profile["member_api_origin"] if explicit_profile else admin))
     admin_api = origin(env.get("SUPABASE_ADMIN_API_URL", admin))
     key = env.get("SUPABASE_PUBLISHABLE_KEY", "")
-    allowed_api_origins = allowed_admin_origins if qualification else allowed_admin_origins | {PUBLIC_ORIGIN}
+    allowed_api_origins = allowed_admin_origins if qualification else allowed_admin_origins | {public_origin}
     if (project != PROJECT_ORIGIN or project != profile["supabase_origin"]
             or api not in allowed_api_origins or api != (profile["member_api_origin"] if explicit_profile else admin)
             or admin_api != admin):

@@ -80,17 +80,17 @@ function documentPolicy(document, text, upstreamPolicy, frontendOrigin, allowedF
   return policy;
 }
 
-function responseHeaders(upstream, route, isolateAdminSession) {
+function responseHeaders(upstream, route, browserAdminCookie) {
   const headers = new Headers();
   for (const [name, value] of upstream.headers) {
     if (name === 'set-cookie' || DROP_RESPONSE.has(name)) continue;
     headers.append(name, value);
   }
-  forwardResponseCookie(upstream, headers, route, isolateAdminSession);
+  forwardResponseCookie(upstream, headers, route, browserAdminCookie);
   return protectedHeaders(headers);
 }
 
-export async function qualifyResponse(upstream, {route, method, signal, maxResponseBytes, isolateAdminSession, frontendOrigin, allowedFrontends}) {
+export async function qualifyResponse(upstream, {route, method, signal, maxResponseBytes, browserAdminCookie, frontendOrigin, allowedFrontends}) {
   const nativeCallback = nativeGoogleRedirect(upstream, route, method);
   if (!nativeCallback && (upstream.status >= 300 && upstream.status < 400 || upstream.headers.has('location'))) {
     cancelObserved(upstream.body); refuse(502, 'proxy_redirect_denied');
@@ -104,7 +104,7 @@ export async function qualifyResponse(upstream, {route, method, signal, maxRespo
     cancelObserved(upstream.body); refuse(502, 'proxy_response_too_large');
   }
   const output = await boundedBytes(upstream.body, maxResponseBytes, signal, 502, 'proxy_response_too_large');
-  const response = responseHeaders(upstream, route, isolateAdminSession);
+  const response = responseHeaders(upstream, route, browserAdminCookie);
   const mime = upstream.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
   const document = DOCUMENTS.get(route.logicalPath);
   if (upstream.ok && document) {

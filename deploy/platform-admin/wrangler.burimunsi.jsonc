@@ -1,0 +1,35 @@
+{
+  "name": "burimunsi-admin",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-14",
+  "account_id": "2209b915a85b1c11cee79b7806c6e73b",
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "ADMIN_ORIGIN": "https://burimunsi-admin.ikanisa.com",
+    "APP_ENVIRONMENT": "production",
+    "COLLECT_BACKEND": "supabase",
+    "SUPABASE_URL": "https://rrlduytparvsjfmegalh.supabase.co",
+    "COLLECT_DEPLOYMENT_PROFILE": "{\"admin_origin\":\"https://burimunsi-admin.ikanisa.com\",\"environment\":\"production\",\"format\":\"collect.deployment.v1\",\"google_callback_origin\":\"https://burimunsi-admin.ikanisa.com\",\"id\":\"burimunsi-admin-production\",\"member_api_origin\":\"https://burimunsi-admin.ikanisa.com\",\"mode\":\"managed\",\"public_origin\":\"https://burimunsi-admin.ikanisa.com\",\"supabase_origin\":\"https://rrlduytparvsjfmegalh.supabase.co\"}",
+    "COLLECT_DEPLOYMENT_PROFILE_SHA256": "fc309cb17a703f6fa1c523552745740e641fda83249bd0d35daea1a801c5298c"
+  },
+  "assets": {
+    "directory": "../../build/admin-web",
+    "binding": "ASSETS",
+    "html_handling": "none",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+  "routes": [
+    {
+      "pattern": "burimunsi-admin.ikanisa.com",
+      "custom_domain": true
+    }
+  ],
+  "compatibility_flags": [
+    "enable_request_signal"
+  ]
+}

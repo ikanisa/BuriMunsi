@@ -148,11 +148,15 @@ export async function startOtp(env, body, { nativeAdmission = null } = {}) {
     delivery_status: outcome,
   };
 }
-export async function verifyOtp(env, body, { project = true } = {}) {
+export async function verifyOtp(env, body, { project = true, phoneOnly = false } = {}) {
+  const phoneScope = phoneOnly
+    ? "AND pending.identity_type='phone' AND pending.registration_allowed=0 AND pending.identity_value=?"
+    : "";
+  const identity = phoneOnly ? [body.phone] : [];
   const challenge = await env.DB.prepare(
     `UPDATE private.supabase_otp_challenges pending SET attempts=pending.attempts+1 WHERE pending.id=? AND pending.consumed_at IS NULL AND pending.expires_at>? AND pending.attempts<5 AND pending.delivery_status IN('accepted','unknown') AND pending.surface=?
-  AND NOT EXISTS(SELECT 1 FROM private.supabase_otp_challenges newer WHERE newer.identity_hash=pending.identity_hash AND newer.surface=pending.surface AND newer.created_at>pending.created_at) RETURNING pending.*`,
-  ).bind(uuid(body.challenge_id, "challenge_id"), unix(), body.surface ?? "member").first();
+  AND NOT EXISTS(SELECT 1 FROM private.supabase_otp_challenges newer WHERE newer.identity_hash=pending.identity_hash AND newer.surface=pending.surface AND newer.created_at>pending.created_at) ${phoneScope} RETURNING pending.*`,
+  ).bind(uuid(body.challenge_id, "challenge_id"), unix(), body.surface ?? "member", ...identity).first();
   if (!challenge || typeof body.code !== "string" || !/^\d{6,10}$/.test(body.code)) {
     fail("invalid_credentials");
   }

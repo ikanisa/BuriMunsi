@@ -1,3 +1,4 @@
+import {adminBrand} from '../branding';
 import {useEffect, useState, type FormEvent} from 'react';
 import {AdminRequestError} from '../api/client';
 import {Button, Field} from '../ui';
@@ -61,7 +62,7 @@ export function LoginPage({onSignedIn, onForgotPassword}: {onSignedIn: () => voi
     }).finally(() => {setBusy(false); setGooglePending(false);});
   }
   function submit(event: FormEvent<HTMLFormElement>) {event.preventDefault(); void (receipt ? verify() : send());}
-  return <AuthFrame title={receipt ? 'Check your email' : 'Welcome to Collect'} subtitle={receipt ? `Enter the 6-digit code for ${email}.` : 'Enter your team email to sign in to your admin workspace.'}>
+  return <AuthFrame title={receipt ? 'Check your email' : `Welcome to ${adminBrand.product}`} subtitle={receipt ? `Enter the 6-digit code for ${email}.` : 'Enter your team email to sign in to your admin workspace.'}>
     <form className="admin-auth-form" onSubmit={submit}>
       {!receipt ? <Field label="Email" htmlFor="admin-email"><input className="admin-input" id="admin-email" type="email" autoComplete="username" required value={email} onChange={(event) => setEmail(event.target.value)} disabled={busy || needsSessionCheck} /></Field> : <Field label="6-digit code" htmlFor="admin-code"><input className="admin-input" id="admin-code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} required value={code} onChange={(event) => setCode(event.target.value.replace(/[^0-9]/g, ''))} disabled={busy || needsSessionCheck} /></Field>}
       {(feedback || (status === 'error' && session.error)) && <p className="admin-auth-feedback" role="status">{feedback || session.error}</p>}

@@ -2,7 +2,7 @@ import {renderLocalChallengeDocument} from './local-challenge.mjs';
 import {createCollectTransport, SUPABASE_ORIGIN} from './supabase-transport.js';
 import {verifyDeploymentProfile} from '../../../supabase/functions/_shared/deployment-profile.js';
 import {versionedStatic} from './static-recovery.js';
-import {PRODUCTION_ADMIN_ORIGIN} from './admin-session-realm.js';
+import {BURIMUNSI_ADMIN_ORIGIN, BURIMUNSI_ADMIN_PROFILE_ID, PRODUCTION_ADMIN_ORIGIN} from './admin-session-realm.js';
 
 const API_ROOT = '/api';
 const MANAGED_ROOTS = [API_ROOT, '/v1', '/functions', '/privacy/account-deletion'];
@@ -20,15 +20,21 @@ function hasRoot(path, root) {
 
 async function managedHost(env, fetchImpl, explicitProfile) {
   const profile = await verifyDeploymentProfile(env);
+  const burimunsi = env.ADMIN_ORIGIN === BURIMUNSI_ADMIN_ORIGIN;
+  const burimunsiProfile = profile.id === BURIMUNSI_ADMIN_PROFILE_ID;
   if (env.SUPABASE_URL !== profile.supabase_origin || env.SUPABASE_INTERNAL_URL !== undefined ||
       explicitProfile && (env.ADMIN_ORIGIN !== profile.admin_origin ||
-        env.APP_ENVIRONMENT !== undefined && env.APP_ENVIRONMENT !== profile.environment)) {
+        env.APP_ENVIRONMENT !== undefined && env.APP_ENVIRONMENT !== profile.environment) ||
+      burimunsi !== burimunsiProfile ||
+      burimunsi && (!explicitProfile || profile.environment !== 'production' ||
+        [profile.member_api_origin, profile.public_origin, profile.google_callback_origin].some(origin => origin !== BURIMUNSI_ADMIN_ORIGIN))) {
     throw new Error('Backend profile mismatch');
   }
   return {
     transport: createCollectTransport({
       frontendOrigin: env.ADMIN_ORIGIN,
       isolateAdminSession: env.ADMIN_ORIGIN === PRODUCTION_ADMIN_ORIGIN && profile.supabase_origin === SUPABASE_ORIGIN,
+      burimunsi,
       ...(explicitProfile ? {allowedFrontendOrigins: [profile.public_origin, profile.member_api_origin, profile.admin_origin]} : {}),
       fetchImpl,
     }),
@@ -75,7 +81,7 @@ export function createAdminWorker({fetchImpl = (request, init) => globalThis.fet
       const backend = env.COLLECT_BACKEND ?? 'supabase';
       const managed = backend === 'supabase';
       const explicitProfile = env.COLLECT_DEPLOYMENT_PROFILE !== undefined || env.COLLECT_DEPLOYMENT_PROFILE_SHA256 !== undefined;
-      if (!managed && (backend !== 'cloudflare' || explicitProfile)) {
+      if (!managed && (backend !== 'cloudflare' || explicitProfile || env.ADMIN_ORIGIN === BURIMUNSI_ADMIN_ORIGIN)) {
         return failure(503, 'backend_configuration_invalid', 'The workspace backend is unavailable.');
       }
       if (managed) {
@@ -87,6 +93,9 @@ export function createAdminWorker({fetchImpl = (request, init) => globalThis.fet
         }
         const parent = renderLocalChallengeDocument(request, host.challenge);
         if (parent) return parent;
+        if (env.ADMIN_ORIGIN === BURIMUNSI_ADMIN_ORIGIN && hasRoot(url.pathname, '/.well-known')) {
+          return failure(404, 'not_found', 'This service route is unavailable.');
+        }
         if (MANAGED_ROOTS.some(root => hasRoot(url.pathname, root))) {
           return await host.transport(request) ?? failure(404, 'not_found', 'This service route is unavailable.');
         }

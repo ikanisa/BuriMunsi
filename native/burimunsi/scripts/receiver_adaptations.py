@@ -47,6 +47,13 @@ def _adapt_momo_gateway_policy(text: str) -> str:
     return text
 
 
+def _adapt_sms_capture_journal(text: str) -> str:
+    # SQLiteOpenHelper only implements AutoCloseable from API 29.
+    declaration = '''internal class SmsCaptureJournal(context: Context) : SQLiteOpenHelper(context,
+    File(context.noBackupFilesDir, "collect_sms_capture_journal.db").absolutePath, null, 1)'''
+    return replace_once(text, declaration + ' {', declaration + ', java.io.Closeable {')
+
+
 def _adapt_sms_queue_store(text: str) -> str:
     text = replace_once(text, '            val envelopeId = envelope.optString("id", "")', '''            val envelopeId = envelope.optString("id", "")
             if (envelopeId.isBlank() || envelope.opt("raw_body") !is String || envelope.optString("raw_body").isBlank())
@@ -314,6 +321,7 @@ def _adapt_momo_gateway_http(text: str) -> str:
 
 _SOURCE_ADAPTATIONS = {
     'MomoGatewayPolicy.kt': _adapt_momo_gateway_policy,
+    'SmsCaptureJournal.kt': _adapt_sms_capture_journal,
     'SmsQueueStore.kt': _adapt_sms_queue_store,
     'ReceiptAckPolicy.kt': _adapt_receipt_ack_policy,
     'MomoGatewayStore.kt': _adapt_momo_gateway_store,

@@ -1,9 +1,12 @@
 import {MANAGED_SUPABASE_ORIGIN} from '../../../supabase/functions/_shared/deployment-profile.js';
+import {standalonePrivacyRoute} from '../../../supabase/functions/_shared/burimunsi-standalone.js';
 import {managedBrowserCookies} from './transport-cookies.js';
 import {refuse} from './transport-failure.js';
 
 export const SUPABASE_ORIGIN = MANAGED_SUPABASE_ORIGIN;
 export const GOOGLE_CALLBACK = '/v1/auth/google/callback';
+const CHALLENGE = '/v1/security/challenge';
+const PRIVACY = '/privacy/account-deletion';
 export const FRONTENDS = new Set(['https://collect.ikanisa.com', 'https://admin.collect.ikanisa.com', 'https://platform-admin.collect.ikanisa.com', 'https://admin-supabase-qa.collect.ikanisa.com']);
 const METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
 const FORWARD_HEADERS = new Set([
@@ -36,7 +39,7 @@ export function routeCollectTarget(rawTarget) {
   }
   if (path.startsWith('/functions/') && !functionName) refuse(404, 'proxy_route_not_allowed');
   if (functionName === 'admin-api' && !logicalPath.startsWith('/api/admin/')) refuse(404, 'proxy_route_not_allowed');
-  const memberRoute = logicalPath.startsWith('/v1/') || logicalPath === '/privacy/account-deletion' || logicalPath.startsWith('/privacy/account-deletion/');
+  const memberRoute = logicalPath.startsWith('/v1/') || logicalPath === PRIVACY || logicalPath.startsWith(PRIVACY + '/');
   if (functionName === 'collect-api' && !memberRoute) refuse(404, 'proxy_route_not_allowed');
   if (!functionName) {
     if (path.startsWith('/api/admin/')) functionName = 'admin-api';
@@ -55,7 +58,7 @@ export function transportOrigin(value) {
   return value;
 }
 
-export function admitRequest(request, rawTarget, frontendOrigin, isolateAdminSession) {
+export function admitRequest(request, rawTarget, frontendOrigin, {browserAdminCookie, burimunsi}) {
   const url = new URL(request.url);
   if (url.origin !== frontendOrigin || url.username || url.password || url.hash) refuse(421, 'proxy_origin_invalid');
   const host = request.headers.get('host');
@@ -66,9 +69,13 @@ export function admitRequest(request, rawTarget, frontendOrigin, isolateAdminSes
   if (!route) return null;
   // An old Flutter form cannot submit to a newly signed-in managed account.
   const adminRoute = route.functionName === 'admin-api';
-  if (isolateAdminSession && adminRoute && route.path !== route.logicalPath) refuse(410, 'admin_realm_retired');
+  if (browserAdminCookie && adminRoute && route.path !== route.logicalPath) refuse(410, 'admin_realm_retired');
   if (route.path + route.query !== canonical) refuse(400, 'proxy_path_invalid');
   if (!METHODS.has(request.method)) refuse(405, 'proxy_method_invalid');
+  const method = request.method === 'OPTIONS' ? request.headers.get('Access-Control-Request-Method') : request.method;
+  if (burimunsi && !adminRoute &&
+      !(route.logicalPath === CHALLENGE && ['GET', 'HEAD'].includes(method)) &&
+      !standalonePrivacyRoute(method, route.logicalPath)) refuse(404, 'proxy_route_not_allowed');
   for (const name of SPOOFED_AUTHORITY) if (request.headers.has(name)) refuse(400, 'proxy_authority_invalid');
 
   const callback = route.functionName === 'collect-api' && route.logicalPath === GOOGLE_CALLBACK && request.method === 'GET';
@@ -83,7 +90,7 @@ export function admitRequest(request, rawTarget, frontendOrigin, isolateAdminSes
   // A same-origin Admin read can omit Origin. Sibling origins cannot inherit it.
   if (adminRead && !origin && ![null, 'none', 'same-origin'].includes(browserSite)) refuse(403, 'proxy_origin_denied');
   if (adminRoute && !read && request.method !== 'OPTIONS' && origin !== frontendOrigin) refuse(403, 'proxy_origin_denied');
-  if (route.logicalPath === '/v1/security/challenge') {
+  if (route.logicalPath === CHALLENGE) {
     for (const key of ['attempt_id', 'parent_origin', 'theme']) {
       if (url.searchParams.getAll(key).length > 1) refuse(400, 'proxy_path_invalid');
     }
@@ -95,11 +102,11 @@ export function admitRequest(request, rawTarget, frontendOrigin, isolateAdminSes
   return {route, effectful, inferOrigin: adminRead && !origin, read};
 }
 
-export function upstreamRequest(request, admission, bytes, signal, frontendOrigin, isolateAdminSession) {
+export function upstreamRequest(request, admission, bytes, signal, frontendOrigin, browserAdminCookie) {
   const {route, inferOrigin, read} = admission;
   const headers = new Headers();
   for (const [name, value] of request.headers) if (FORWARD_HEADERS.has(name)) headers.set(name, value);
-  if (isolateAdminSession) managedBrowserCookies(headers, route);
+  if (browserAdminCookie) managedBrowserCookies(headers, route, browserAdminCookie);
 
   // Owner metadata opt-in and native device proof are restricted to their consumers.
   if (route.functionName === 'admin-api' && route.logicalPath === '/api/admin/auth/session' && request.method === 'GET' &&

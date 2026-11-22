@@ -2,6 +2,7 @@ import {ApiError,json,readJson,first,now,id,digest,stableJson,uuid,integer,text}
 import {encrypt,decrypt} from './encryption.js';
 import {storageEntity,verifyRetainedObject} from '../storage-identity.js';
 import {gatewayUploadHeld,isGatewayIngest,nativeGatewayUploadsEnabled} from '../gateway-upload-hold.js';
+import {BURIMUNSI_PRODUCT_MODE} from '../burimunsi-standalone.js';
 import {processingInsert} from './momo_pipeline.js';
 import {classifyGatewayPair,NON_BURIMUNSI_PAIR_CONDITION} from './burimunsi/postgres-gateway-classification.js';
 import {createCanonicalGatewayPair} from './burimunsi/postgres-collect-gateway.js';
@@ -34,7 +35,12 @@ export function bindingJson(row){let subscription=null;try{subscription=JSON.par
  subscription_id:subscription,created_at:row.binding_created_at};}
 async function authenticate(request,env){const raw=request.headers.get('Authorization')??'';if(!/^Bearer [a-f0-9]{64}$/.test(raw))fail(401,'gateway_unauthorized','Pair this incoming gateway again.');
  const sha=await digest(raw.slice(7)),row=await first(env,credentialSql,sha);if(!row)fail(401,'gateway_unauthorized','This gateway is no longer authorized.');return {...row,token_sha256:sha};}
-function guarded(env,c,statements){const gate=momoGuard(env,activeCondition,[c.id,c.token_sha256]);return env.DB.batch([gate[0],...statements,gate[1]]);}
+function gatewayAccessGuard(env,c){
+ const args=[c.id,c.token_sha256];
+ if(env.BURIMUNSI_PRODUCT_MODE!==BURIMUNSI_PRODUCT_MODE)return momoGuard(env,activeCondition,args);
+ const ownScope=`private.burimunsi_gateway_pair_classify(?) = jsonb_build_object('kind','burimunsi','collectionId',?::text)`;
+ return momoGuard(env,`(${activeCondition}) AND (${ownScope})`,[...args,c.pairing_code_sha256,env.BURIMUNSI_COLLECTION_ID]);
+}
 function legacyPairGuard(env,condition,args,sha){
  // Reclassify inside the SAME mutation-lock transaction as claim/token return.
  // Initial route classification alone cannot prevent a concurrent scope change.
@@ -85,6 +91,7 @@ async function pair(body,env){
   const target=await classifyGatewayPair({env,codeHash:sha});
   if(target.kind==='burimunsi')return await createCanonicalGatewayPair({env,groupId:target.collectionId})
    ({pairing_code:code,installation_id:installation});
+  if(env.BURIMUNSI_PRODUCT_MODE===BURIMUNSI_PRODUCT_MODE)fail(401,'pairing_unavailable','This pairing code is unavailable or has expired.');
   return await legacyPair(installation,sha,env);
  }catch(error){
   if(error instanceof ApiError)throw error;
@@ -136,6 +143,13 @@ export async function momoGatewayRoute(request,env){const path=new URL(request.u
  }
  if(path==='/v1/momo/gateway/pair'&&request.method==='POST')return json(await pair(await readJson(request,2048),env));
  const c=await authenticate(request,env);
+ const standalone=env.BURIMUNSI_PRODUCT_MODE===BURIMUNSI_PRODUCT_MODE;
+ let target;
+ if(standalone){
+  try{target=await classifyGatewayPair({env,codeHash:c.pairing_code_sha256});}
+  catch(error){throw new ApiError(error.status??503,error.code??'gateway_classification_unavailable','This receiving scope could not be confirmed.');}
+  if(target.kind!=='burimunsi')fail(401,'gateway_unauthorized','This gateway is no longer authorized.');
+ }
  if(path==='/v1/momo/gateway/profile'&&request.method==='GET'){
   if(new URL(request.url).search)fail(400,'invalid_query','This receiving profile does not accept query parameters.');
   if(!nativeGatewayUploadsEnabled(env))throw gatewayUploadHeld();
@@ -145,12 +159,13 @@ export async function momoGatewayRoute(request,env){const path=new URL(request.u
  if(path==='/v1/momo/gateway/status'&&request.method==='GET'){
   let binding=bindingJson(c);
   if(env.BURIMUNSI_NATIVE_ENABLED==='true'){
-   let target;try{target=await classifyGatewayPair({env,codeHash:c.pairing_code_sha256});}catch(error){
+   try{target??=await classifyGatewayPair({env,codeHash:c.pairing_code_sha256});}catch(error){
     throw new ApiError(error.status??503,error.code??'gateway_classification_unavailable','This receiving scope could not be confirmed.');}
    if(target.kind==='burimunsi')binding={...binding,collection_id:target.collectionId};
   }
-  const gate=momoGuard(env,activeCondition,[c.id,c.token_sha256]);const result=await env.DB.batch([gate[0],env.DB.prepare(`SELECT count(*) AS n FROM momo_processing_jobs WHERE binding_id=? AND state IN('pending','processing','retry')`).bind(c.binding_id),env.DB.prepare('UPDATE momo_gateway_credentials SET last_contact_at=? WHERE id=?').bind(now(),c.id),gate[1]]);
+  const gate=gatewayAccessGuard(env,c);const result=await env.DB.batch([gate[0],env.DB.prepare(`SELECT count(*) AS n FROM momo_processing_jobs WHERE binding_id=? AND state IN('pending','processing','retry')`).bind(c.binding_id),env.DB.prepare('UPDATE momo_gateway_credentials SET last_contact_at=? WHERE id=?').bind(now(),c.id),gate[1]]);
   return json({binding,pending_processing:result[1].results[0].n,last_contact_at:now(),last_sms_at:c.last_sms_at});}
  if(path==='/v1/momo/gateway/heartbeat'&&request.method==='POST'){const body=await readJson(request,2048),pending=integer(body.pending_count,'pending_count',0,1000000),oldest=date(body.oldest_pending_at,'oldest pending time',{nullable:true}),last=date(body.last_sms_at,'last capture time',{nullable:true});
-  await guarded(env,c,[env.DB.prepare('UPDATE momo_gateway_credentials SET last_contact_at=?,pending_count=?,oldest_pending_at=?,last_sms_at=coalesce(?,last_sms_at) WHERE id=?').bind(now(),pending,oldest,last,c.id)]);return json({ok:true});}
+  const gate=gatewayAccessGuard(env,c);
+  await env.DB.batch([gate[0],env.DB.prepare('UPDATE momo_gateway_credentials SET last_contact_at=?,pending_count=?,oldest_pending_at=?,last_sms_at=coalesce(?,last_sms_at) WHERE id=?').bind(now(),pending,oldest,last,c.id),gate[1]]);return json({ok:true});}
  fail(404,'not_found','This incoming gateway operation is unavailable.');}

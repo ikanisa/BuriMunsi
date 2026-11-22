@@ -4,6 +4,7 @@ import {consumeNativeIngressNonce} from '../_shared/native-ingress-nonce.js';
 import {admitDirectSupabaseNativeIngress} from '../_shared/native-direct-supabase-ingress.js';
 
 Deno.serve(createHandler('collect-api', undefined, {
+  standalone: true,
   admitDirectSupabaseNativeIngress,
   verifyNativeIngress,
   claimNativeIngress,

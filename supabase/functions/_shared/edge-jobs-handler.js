@@ -1,4 +1,5 @@
 import {verifyDeploymentProfile} from './deployment-profile.js';
+import {requireStandaloneDeployment} from './burimunsi-standalone.js';
 import {normalizeRuntimeEnv} from './runtime-env.js';
 import {openApplicationWork} from './application-fence.js';
 import {cleanupExpiredGoogleFlows} from './auth-cleanup.js';
@@ -41,6 +42,7 @@ export function createScheduledHandler(
     processCanonical = runCollectNativeScheduledCycle,
     processNativeFinancialWork = scheduledNativeFinancialWork,
     jobDispatch = cloudJobDispatch,
+    standalone = false,
   } = {},
 ) {
   const workers = {
@@ -75,9 +77,10 @@ export function createScheduledHandler(
 
       runtime.stage = 'normalization';
       await verifyDeploymentProfile(input);
+      const collectionId = standalone ? requireStandaloneDeployment(input) : undefined;
       env = normalizeRuntimeEnv(input);
       env.MOMO_PROCESSING_PAUSED ??= 'true';
-      await runtime.initializeDatabase(env);
+      await runtime.initializeDatabase(env, collectionId);
       await runtime.admit(env, openWork, 'jobs');
       if (!await jobDispatch.claim(env.DB, input, payload, token)) return unauthenticated();
 

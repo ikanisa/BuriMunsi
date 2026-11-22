@@ -1,3 +1,4 @@
+import {adminBrand} from '../branding';
 import {useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {Button, Card, EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge} from '../ui';
 import {CloudflareTeamPanel} from './CloudflareTeamPanel';
@@ -133,7 +134,7 @@ function TeamWorkspace({
     current: () => isDirectoryCurrent() && hasCurrentTeamVerification(session, actor),
   };
   return <>
-    <PageHeader title="Team access" subtitle="Admins and staff who can use the Collect workspace."
+    <PageHeader title="Team access" subtitle={`Admins and staff who can use the ${adminBrand.product} workspace.`}
       actions={<Button icon="refresh" onClick={refresh} disabled={displayed === null}>Refresh</Button>} />
     {actionMessage && <p role="status">{actionMessage}</p>}
     {showVerification && (isOwnerManager || legacyRecovery) && <p><Button onClick={onVerify}>

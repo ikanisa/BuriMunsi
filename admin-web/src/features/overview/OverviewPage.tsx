@@ -1,3 +1,4 @@
+import {adminBrand} from '../../branding';
 import {useEffect, useState} from 'react';
 import type {AdminRequest} from '../../api/client';
 import {Button, Card, ErrorState, Icon, LoadingState, PageHeader} from '../../ui';
@@ -42,7 +43,7 @@ export function OverviewPage({request, permissions, financialModel, authorityKey
   const data = current?.data;
   const metrics = data ? preferred.flatMap((key) => data.metrics.filter((metric) => metric.key === key)) : [];
   return <>
-    <PageHeader eyebrow="Collect Admin / Workspace" title="Operations overview"
+    <PageHeader eyebrow={`${adminBrand.name} / Workspace`} title="Operations overview"
       subtitle="Review recorded activity and open the work your account can access."
       actions={<Button icon="refresh" disabled={loading} onClick={() => setGeneration((value) => value + 1)}>Refresh overview</Button>} />
     {loading ? <LoadingState label="Loading workspace totals" /> : current?.error ?

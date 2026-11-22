@@ -193,7 +193,8 @@ test('integrated transport bytes retain the recorded current source identity', a
   const provenance = JSON.parse(await readFile(new URL('../supabase-transport.provenance.json', import.meta.url), 'utf8'));
   const source = new URL('../src/', import.meta.url);
   const files = {...provenance.request_boundary_refactor.source_sha256s,
-    ...provenance.frontend_session_realm_successor.source_sha256s};
+    ...provenance.frontend_session_realm_successor.source_sha256s,
+    ...provenance.burimunsi_admin_successor.source_sha256s};
   const expected = (await readdir(source))
     .filter(name => /^(?:index|admin-session-realm|supabase-transport|transport-[\w-]+)\.js$/.test(name)).sort();
   assert.deepEqual(Object.keys(files).sort(), expected);

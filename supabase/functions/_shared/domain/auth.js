@@ -2,6 +2,7 @@ import { ApiError, json, readJson } from "./core.js";
 import { authRequest } from "../auth-http.js";
 import { handleGoogleAuth } from "./google_auth.js";
 import { handleGuestAuth } from "./anonymous_auth.js";
+import { BURIMUNSI_PRODUCT_MODE, standalonePrivacyPhoneBody } from "../burimunsi-standalone.js";
 import { startOtp, verifyOtp } from "./member_auth/otp.js";
 import {
   currentAuthUser,
@@ -29,12 +30,15 @@ export async function handleAuth(request, env) {
   }
   if (request.method !== "POST") throw new ApiError(405, "method_not_allowed", "Use POST.");
   const body = await readJson(request, 16384);
+  if (env.BURIMUNSI_PRODUCT_MODE === BURIMUNSI_PRODUCT_MODE && !standalonePrivacyPhoneBody(path, body)) {
+    throw new ApiError(404, "not_found", "This identity operation does not exist.");
+  }
   const guest = await handleGuestAuth(request, env, body, projectSession);
   if (guest) return guest;
   if (path === "/v1/auth/otp") return json(await startOtp(env, body));
   if (path === "/v1/auth/verify") {
     if (body.surface === "admin") fail("admin_cookie_required", 403);
-    return json(await verifyOtp(env, body));
+    return json(await verifyOtp(env, body, { phoneOnly: env.BURIMUNSI_PRODUCT_MODE === BURIMUNSI_PRODUCT_MODE }));
   }
   if (path === "/v1/auth/refresh") {
     const data = await authRequest(env, "/token?grant_type=refresh_token", {

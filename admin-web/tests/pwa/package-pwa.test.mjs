@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { packagePwa, verifyPwaPackage } from '../../scripts/package-pwa.mjs';
 import {sourceIdentity} from '../../scripts/build-identity.mjs';
+import {burimunsiAdminBrand, collectAdminBrand} from '../../src/product-brand.mjs';
 
 const icon = fileURLToPath(new URL('../../public/icons/collect-web-512.png', import.meta.url));
 
@@ -57,6 +58,32 @@ test('packages exact versioned assets with a static-only, unqualified worker', a
   assert.doesNotMatch(worker, /\bskipWaiting\s*\(|\bclients\.claim\s*\(/);
   assert.deepEqual(await verifyPwaPackage(output), { cacheEntries: 7 });
   await assert.rejects(packagePwa(input, output), { code: 'EEXIST' });
+});
+
+test('the BuriMunsi PWA binds its own identity and excludes Collect app associations', async (t) => {
+  const { input, output } = await fixture(t);
+  const htmlPath = path.join(input, 'index.html');
+  const brand = burimunsiAdminBrand;
+  await fs.writeFile(htmlPath, (await fs.readFile(htmlPath, 'utf8'))
+    .replace(collectAdminBrand.name, brand.name)
+    .replace(collectAdminBrand.description, brand.description)
+    .replace(collectAdminBrand.icon, brand.icon));
+  await fs.copyFile(new URL('../../src/ui/assets/burimunsi-432.png', import.meta.url), path.join(input, brand.icon));
+  const {assetId} = await packagePwa(input, output, {publicBuild: {
+    deployment_profile: {id: 'burimunsi-admin-production'},
+    backend: 'supabase', public_build_config_sha256: 'a'.repeat(64),
+  }});
+  const manifest = JSON.parse(await fs.readFile(path.join(output, 'manifest.json'), 'utf8'));
+  assert.equal(manifest.name, brand.name);
+  assert.equal(manifest.icons[0].src, `./_build/${assetId}/${brand.icon}`);
+  assert.equal(manifest.icons[0].sizes, '432x432');
+  assert.equal(manifest.icons[0].purpose, 'any');
+  assert.doesNotMatch(await fs.readFile(path.join(output, '_headers'), 'utf8'), /api\.collect\.ikanisa\.com/);
+  await assert.rejects(fs.access(path.join(output, '_build', assetId, collectAdminBrand.icon)), {code: 'ENOENT'});
+  const associations = path.join(output, '.well-known');
+  await fs.mkdir(associations);
+  for (const name of ['assetlinks.json', 'apple-app-site-association']) await fs.writeFile(path.join(associations, name), '{}');
+  await assert.rejects(verifyPwaPackage(output), /includes assets for the Collect app/);
 });
 
 test('rejects a changed packaged asset and reserved API files', async (t) => {

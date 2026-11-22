@@ -1,6 +1,6 @@
 {
   "source": "deploy/platform-admin/src/supabase-transport.js",
-  "source_sha256": "4f0211064fac0692b0473431f1a69b9537cc5ea72c1a2e66078a6610464d41c7",
+  "source_sha256": "f44ea8fae3ee20404eaeffc4c47b6cbd4b88ee40f2dab4be11455b0a3d1a3723",
   "integration": "Retained Cloudflare same-origin Supabase transport; index.js owns host selection/static fallback. Originless Admin GET/HEAD binds configured origin, explicit Origin remains required for mutations, dispatched Admin outcomes are not replayed, and qualified native Google errors remain token-free.",
   "deployed": false,
   "base_source_sha256": "643a76d0a38e1023cc0edf38e5514e97e4eec565037c43d66b08648f351ba16c",
@@ -218,6 +218,19 @@
       "transport-cookies.js": "af29d934da0a4655fec865846108ff6ca5b41790bf0c30b85a7ae4e431a3b19f"
     },
     "change": "The Admin worker and both local operator clients share the production and qualification cookie realm names.",
+    "deployed": false
+  },
+  "burimunsi_admin_successor": {
+    "previous_source_sha256": "4f0211064fac0692b0473431f1a69b9537cc5ea72c1a2e66078a6610464d41c7",
+    "source_sha256s": {
+      "admin-session-realm.js": "e15e0cae12732e60f5daecb40fa9e8d0710d1f35e0a61110f93f9cb399349b6c",
+      "index.js": "37b45a132cdd40ca0a7f7d1f2898183ac4b77f11663e318b9def7f169384cc3b",
+      "supabase-transport.js": "f44ea8fae3ee20404eaeffc4c47b6cbd4b88ee40f2dab4be11455b0a3d1a3723",
+      "transport-cookies.js": "c17476c1a1457f680da6ebae8cd010fc7f92be51097af724b18085323496c246",
+      "transport-request.js": "23baaf87846a1327ebf9466380565bcb22e3193640b89cf5bf2a46ead988cbbe",
+      "transport-response.js": "4b79478b1f4b19593e4ccdae41620a23b994b5e6e371cad8c3adf741e8f7f3b6"
+    },
+    "change": "Bind the dedicated BuriMunsi Admin origin, explicit production profile and host-only cookie. Admit only the Admin APIs, the security challenge and the existing privacy routes on this host.",
     "deployed": false
   }
 }

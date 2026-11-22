@@ -1,4 +1,19 @@
-# Collect React Admin
+# React Admin
+
+## BuriMunsi release
+
+The dedicated release binds the canonical `burimunsi-admin-production`
+profile to `https://burimunsi-admin.ikanisa.com`. Its Admin shell and
+installable PWA use BuriMunsi's existing marks. It reuses the permissioned
+operator, member, payment, reconciliation and SMS workflows. The dedicated
+PWA omits Collect mobile-app association files.
+
+Build with the reviewed public Supabase key and the hosted profile's
+security settings. Verify the build receipt against the final source. Use
+the dedicated Worker configuration for a hosting candidate. See the
+[frontend transport](../deploy/platform-admin/README.md).
+
+## Retained workspace
 
 This package owns the Collect browser Admin, including its routes, permissions
 presentation, and installable app shell. The Supabase Admin API owns session

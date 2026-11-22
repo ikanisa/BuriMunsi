@@ -41,6 +41,10 @@ export const hostingHeaders = `/*
 
 export const robotsRules = 'User-agent: *\nDisallow: /\n';
 
+export const burimunsiHostingHeaders = hostingHeaders.replace(
+  "frame-src 'self' https://api.collect.ikanisa.com;", "frame-src 'self';",
+);
+
 export function faviconRedirect(icon) {
   return `/favicon.ico /${icon} 302\n`;
 }

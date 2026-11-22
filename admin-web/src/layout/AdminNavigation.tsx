@@ -1,6 +1,8 @@
 import type {KeyboardEvent, ReactNode, RefObject} from 'react';
 import {Icon} from '../ui/Icon';
 import collectLogo from '../ui/assets/collect-logo.png';
+import burimunsiWordmark from '../ui/assets/burimunsi-wordmark.png';
+import {adminBrand, isBuriMunsiAdmin} from '../branding';
 
 export interface AdminNavItem {
   label: string;
@@ -32,9 +34,11 @@ interface AdminNavigationProps {
 export function AdminNavigation({sidebar, sections, groups, pathname, selected, status, onClose, onSectionKeyDown}: AdminNavigationProps) {
   return <aside ref={sidebar} className="admin-sidebar" id="admin-navigation" aria-label="Primary admin navigation" tabIndex={-1}>
     <div className="admin-brand">
-      <img className="admin-brand-mark" src={collectLogo} alt="" />
+      {isBuriMunsiAdmin
+        ? <img className="admin-brand-wordmark" src={burimunsiWordmark} alt={adminBrand.product} />
+        : <img className="admin-brand-mark" src={collectLogo} alt="" />}
       <div className="admin-brand-copy">
-        <span className="admin-brand-title">Collect</span>
+        {!isBuriMunsiAdmin && <span className="admin-brand-title">{adminBrand.product}</span>}
         <span className="admin-brand-caption">Admin workspace</span>
       </div>
       <button type="button" className="admin-icon-button admin-sidebar-close" onClick={onClose} aria-label="Close navigation">

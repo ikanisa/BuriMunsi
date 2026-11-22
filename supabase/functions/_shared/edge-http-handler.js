@@ -1,4 +1,5 @@
 import {verifyDeploymentProfile} from './deployment-profile.js';
+import {BURIMUNSI_ADMIN_ORIGIN, requireStandaloneDeployment, standaloneHttpRoute, standalonePrivacyRoute} from './burimunsi-standalone.js';
 import {managedAdminChallengeParent} from './admin-security.js';
 import {configurePublicRuntimeEnv, normalizeRuntimeEnv} from './runtime-env.js';
 import {openApplicationWork} from './application-fence.js';
@@ -20,6 +21,7 @@ function assertNotCancelled(signal) {
  * @param {string} functionName
  * @param {()=>Record<string, unknown>} [envReader]
  * @param {object} [options]
+ * @param {boolean} [options.standalone]
  * @param {typeof openApplicationWork} [options.openWork]
  * @param {typeof recordPlatformHealth} [options.reportHealth]
  * @param {(request:Request,env:Record<string,unknown>)=>Promise<{request:Request,networkBucket:(request:Request)=>Promise<string>|string}>} [options.admitDirectSupabaseNativeIngress]
@@ -30,6 +32,7 @@ function assertNotCancelled(signal) {
 export function createHandler(functionName, envReader = () => Deno.env.toObject(), {
   openWork = openApplicationWork, reportHealth = recordPlatformHealth,
   admitDirectSupabaseNativeIngress, verifyNativeIngress, claimNativeIngress, consumeNativeIngressNonce,
+  standalone = false,
 } = {}) {
   const admin = functionName === 'admin-api';
   const collect = functionName === 'collect-api';
@@ -42,6 +45,7 @@ export function createHandler(functionName, envReader = () => Deno.env.toObject(
     try {
       env = configurePublicRuntimeEnv(envReader());
       await verifyDeploymentProfile(env);
+      const collectionId = standalone ? requireStandaloneDeployment(env) : undefined;
       mergeCollectOrigins(env);
 
       let logical = logicalRequest(request, functionName);
@@ -50,7 +54,12 @@ export function createHandler(functionName, envReader = () => Deno.env.toObject(
       if (admin ? !path.startsWith('/api/admin/') : path.startsWith('/api/admin')) {
         return json({code: 'not_found'}, 404);
       }
-      const headers = browserCors(env, logical, admin, challengeParent);
+      if (standalone && !standaloneHttpRoute(functionName, logical)) return json({code: 'not_found'}, 404);
+      const browserMethod = logical.method === 'OPTIONS' ? logical.headers.get('Access-Control-Request-Method') : logical.method;
+      const privacyOrigin = standalone && collect && standalonePrivacyRoute(browserMethod, path) &&
+        logical.headers.get('Origin') === BURIMUNSI_ADMIN_ORIGIN ? BURIMUNSI_ADMIN_ORIGIN : null;
+      const approvedBrowserOrigin = challengeParent ?? privacyOrigin;
+      const headers = browserCors(env, logical, admin, approvedBrowserOrigin);
       if (headers === null) return json({code: 'origin_denied'}, 403);
       cors = headers;
       if (request.method === 'OPTIONS') return new Response(null, {status: 204, headers: cors});
@@ -78,9 +87,14 @@ export function createHandler(functionName, envReader = () => Deno.env.toObject(
 
       runtime.stage = 'normalization';
       env = normalizeRuntimeEnv(env);
+      if (standalone) {
+        env.AUTH_MEMBER_REGISTRATION_ENABLED = 'false';
+        env.AUTH_ANONYMOUS_ENABLED = 'false';
+        env.GOOGLE_AUTH_ENABLED = 'false';
+      }
       env.MOMO_PROCESSING_PAUSED ??= 'true';
       env.AUTH_MEMBER_REGISTRATION_ENABLED ??= 'false';
-      await runtime.initializeDatabase(env);
+      await runtime.initializeDatabase(env, collectionId);
       const work = await runtime.admit(env, openWork, admin ? 'http_admin' : 'http_collect', request.signal);
       assertNotCancelled(request.signal);
 
@@ -104,8 +118,8 @@ export function createHandler(functionName, envReader = () => Deno.env.toObject(
 
       runtime.stage = 'dispatch';
       assertNotCancelled(request.signal);
-      const documentEnv = challengeParent ? {...env, ALLOWED_ORIGINS: challengeParent} : env;
-      const response = await worker.fetch(logical, documentEnv, {waitUntil: promise => runtime.waitUntil(promise)});
+      const routeEnv = approvedBrowserOrigin ? {...env, ALLOWED_ORIGINS: approvedBrowserOrigin} : env;
+      const response = await worker.fetch(logical, routeEnv, {waitUntil: promise => runtime.waitUntil(promise)});
       return await edgeHttpResponse(response, logical, {functionName, path, admin, cors});
     } catch (error) {
       const health = {

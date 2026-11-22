@@ -1,3 +1,4 @@
+import {adminBrand} from '../../branding';
 /* eslint-disable no-control-regex -- Reject control characters in user-supplied filters. */
 import { useCallback, useMemo, useRef, type ReactNode } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router';
@@ -93,7 +94,7 @@ export function RecordsPage<T>({title, subtitle, permission, statuses = [], sear
     changeParams({search: '', status: '', offset: 0, ...Object.fromEntries(filters.map(({key}) => [key, '']))});
   }}>Clear filters</Button> : undefined;
 
-  return <><PageHeader eyebrow="Collect Admin / Operations" title={title} subtitle={subtitle} />
+  return <><PageHeader eyebrow={`${adminBrand.name} / Operations`} title={title} subtitle={subtitle} />
     {canRead && (typeof extra === 'function' ? extra(retry) : extra)}
     {!canRead ? <ErrorState title="Access unavailable" message="Your current account cannot open these records." /> : <Card className="operations-records">
       <div className="operations-toolbar"><h2>{title}</h2>
@@ -148,7 +149,7 @@ export function DetailPage<T>({title, subtitle, permission, back, resourceKey, v
   const {result, retry} = useOperationRead(`${session.epoch}:${actor?.id ?? ''}:${resourceKey}:${offset}`, canRead && valid, loadDetail);
   const candidate = safeAdminReturnLocation(params.get('returnTo'));
   const returnPath = candidate && [back, ...additionalReturns].includes(new URL(candidate, 'https://admin.invalid').pathname) ? candidate : back;
-  return <><PageHeader eyebrow="Collect Admin / Operations" title={title} subtitle={subtitle} /><p><Link className="operations-link" to={returnPath}>← Back to records</Link></p>
+  return <><PageHeader eyebrow={`${adminBrand.name} / Operations`} title={title} subtitle={subtitle} /><p><Link className="operations-link" to={returnPath}>← Back to records</Link></p>
     {!canRead ? <ErrorState title="Access unavailable" message="Your current account cannot open this record." /> : !valid ? <ErrorState title="Record unavailable" message="Select a valid record." /> : !result ? <LoadingState label="Loading record" /> : result.status === 'error' ? <ErrorState message={result.message} onRetry={retry} /> : render(result.value, offset, setOffset, retry, returnPath)}
   </>;
 }

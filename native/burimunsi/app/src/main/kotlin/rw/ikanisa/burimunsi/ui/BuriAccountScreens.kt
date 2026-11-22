@@ -116,8 +116,23 @@ import rw.ikanisa.burimunsi.core.Role
     val ready=runCatching{Values.pin(current);Values.pin(next);require(next==confirm)}.isSuccess
     val nextFocus=remember{FocusRequester()};val confirmFocus=remember{FocusRequester()}
     Panel(footer={Primary(t("Save"),{save(current,next,confirm);current="";next="";confirm=""},ready&&!busy&&!pending,working=busy)}){
-        item{Entry(t("Current passcode"),current,{current=it.filter{ch->ch in '0'..'9'}.take(4)},pin=true,enabled=!busy,nextFocus=nextFocus)}
-        item{Entry(t("New passcode"),next,{next=it.filter{ch->ch in '0'..'9'}.take(4)},pin=true,enabled=!busy,fieldFocus=nextFocus,nextFocus=confirmFocus)}
-        item{Entry(t("Confirm passcode"),confirm,{confirm=it.filter{ch->ch in '0'..'9'}.take(4)},pin=true,enabled=!busy,imeAction=ImeAction.Done,fieldFocus=confirmFocus,errorText=if(confirm.isNotEmpty()&&confirm!=next)"Passcodes do not match."else null)}
+        item {
+            // Keep the IME focus targets composed when the keyboard reduces the sheet height.
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                Entry(
+                    t("Current passcode"), current, { current = it.filter { ch -> ch in '0'..'9' }.take(4) },
+                    pin = true, enabled = !busy, nextFocus = nextFocus,
+                )
+                Entry(
+                    t("New passcode"), next, { next = it.filter { ch -> ch in '0'..'9' }.take(4) },
+                    pin = true, enabled = !busy, fieldFocus = nextFocus, nextFocus = confirmFocus,
+                )
+                Entry(
+                    t("Confirm passcode"), confirm, { confirm = it.filter { ch -> ch in '0'..'9' }.take(4) },
+                    pin = true, enabled = !busy, imeAction = ImeAction.Done, fieldFocus = confirmFocus,
+                    errorText = if (confirm.isNotEmpty() && confirm != next) "Passcodes do not match." else null,
+                )
+            }
+        }
     }
 }

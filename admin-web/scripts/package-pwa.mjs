@@ -1,7 +1,13 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { cacheAsset, expectedIconHash, filesUnder, renderWorker, sha256, templatePath, versionedAssetHash } from './pwa-assets.mjs';
-import { faviconRedirect, hostingHeaders, robotsRules } from './pwa-hosting.mjs';
+import { cacheAsset, filesUnder, renderWorker, sha256, templatePath, versionedAssetHash } from './pwa-assets.mjs';
+import { burimunsiHostingHeaders, faviconRedirect, hostingHeaders, robotsRules } from './pwa-hosting.mjs';
+import { burimunsiAdminBrand, collectAdminBrand } from '../src/product-brand.mjs';
+import { BURIMUNSI_ADMIN_PROFILE_ID } from '../../deploy/platform-admin/src/admin-session-realm.js';
+
+function brandForBuild(publicBuild) {
+  return publicBuild?.deployment_profile?.id === BURIMUNSI_ADMIN_PROFILE_ID ? burimunsiAdminBrand : collectAdminBrand;
+}
 
 /**
  * Package a Vite build created with ADMIN_ASSET_BASE=./ as an unqualified
@@ -16,14 +22,16 @@ export async function packagePwa(inputDirectory, outputDirectory, { publicBuild 
   const stat = await fs.lstat(input);
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Invalid Vite build directory');
   const all = await filesUnder(input);
-  if (!all.includes('index.html') || !all.includes('icons/collect-web-512.png') ||
+  const brand = brandForBuild(publicBuild);
+  if (!all.includes('index.html') || !all.includes(brand.icon) ||
       !all.includes('assets/admin-entry.js')) {
-    throw new Error('Vite build must contain the Admin shell, JavaScript and Collect icon');
+    throw new Error('Vite build must contain the Admin shell, JavaScript and product icon');
   }
-  if (sha256(await fs.readFile(path.join(input, 'icons/collect-web-512.png'))) !== expectedIconHash) {
-    throw new Error('Collect Admin icon does not match the approved asset');
+  if (sha256(await fs.readFile(path.join(input, brand.icon))) !== brand.iconSha256) {
+    throw new Error('Admin icon does not match the approved asset');
   }
-  const runtime = all.filter((name) => name !== 'index.html');
+  const runtime = all.filter((name) => name !== 'index.html' &&
+    !(brand === burimunsiAdminBrand && name === collectAdminBrand.icon));
   if (runtime.some((name) =>
     /^(?:api|v1|functions|privacy|account-deletion)(?:\/|$)/.test(name) ||
     /^(?:custom-sw\.js|manifest\.json|version\.json|_headers|_redirects)$/.test(name) ||
@@ -36,10 +44,10 @@ export async function packagePwa(inputDirectory, outputDirectory, { publicBuild 
   const assetId = versionedAssetHash(runtime.map(name => [name, fileHashes[name]]));
   const assetPrefix = `_build/${assetId}/`;
   let index = await fs.readFile(path.join(input, 'index.html'), 'utf8');
-  if (!index.includes('<title>Collect Admin</title>') ||
-      !index.includes('Collect platform operations console.') ||
+  if (!index.includes(`<title>${brand.name}</title>`) ||
+      !index.includes(brand.description) || !index.includes(`./${brand.icon}`) ||
       !/src=["']\.\/assets\/admin-entry\.js["']/.test(index)) {
-    throw new Error('Build must use the Collect Admin shell and relative Vite asset base');
+    throw new Error('Build must use its product Admin shell and relative Vite asset base');
   }
   // The same shell serves legacy path-style deep links as well as '/'. Rooted
   // asset URLs must resolve before the application can normalize those routes.
@@ -57,7 +65,7 @@ export async function packagePwa(inputDirectory, outputDirectory, { publicBuild 
   }
   const version = {
     ...publicBuild,
-    app_name: 'collect-admin',
+    app_name: brand.id,
     frontend: 'react-vite',
     asset_manifest_sha256: assetId,
     backend: publicBuild?.backend ?? 'unconfigured',
@@ -65,16 +73,16 @@ export async function packagePwa(inputDirectory, outputDirectory, { publicBuild 
     shipping_candidate: false,
   };
   const manifest = {
-    name: 'Collect Admin', short_name: 'Collect Admin',
-    description: 'Collect platform operations console.', display: 'standalone',
+    name: brand.name, short_name: brand.name,
+    description: brand.description, display: 'standalone',
     start_url: '.', scope: '.', background_color: '#ffffff', theme_color: '#171b20',
     shortcuts: [
       { name: 'Operations overview', short_name: 'Overview', url: './#/admin' },
       { name: 'SMS receipts', short_name: 'Receipts', url: './#/admin/sms-receipts' },
       { name: 'Reconciliations', short_name: 'Reconcile', url: './#/admin/reconciliations' },
     ],
-    icons: [{ src: `./${assetPrefix}icons/collect-web-512.png`, sizes: '512x512',
-      type: 'image/png', purpose: 'any maskable' }],
+    icons: [{ src: `./${assetPrefix}${brand.icon}`, sizes: brand.iconSize,
+      type: 'image/png', purpose: brand.iconPurpose }],
   };
   const template = await fs.readFile(templatePath, 'utf8');
   await fs.mkdir(output); // Fails rather than overwriting any earlier candidate.
@@ -87,8 +95,8 @@ export async function packagePwa(inputDirectory, outputDirectory, { publicBuild 
     await fs.writeFile(path.join(output, 'index.html'), index, { flag: 'wx' });
     await fs.writeFile(path.join(output, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, { flag: 'wx' });
     await fs.writeFile(path.join(output, 'version.json'), `${JSON.stringify(version, null, 2)}\n`, { flag: 'wx' });
-    await fs.writeFile(path.join(output, '_headers'), hostingHeaders, { flag: 'wx' });
-    await fs.writeFile(path.join(output, '_redirects'), faviconRedirect(assetPrefix + 'icons/collect-web-512.png'), { flag: 'wx' });
+    await fs.writeFile(path.join(output, '_headers'), brand === burimunsiAdminBrand ? burimunsiHostingHeaders : hostingHeaders, { flag: 'wx' });
+    await fs.writeFile(path.join(output, '_redirects'), faviconRedirect(assetPrefix + brand.icon), { flag: 'wx' });
     await fs.writeFile(path.join(output, 'robots.txt'), robotsRules, { flag: 'wx' });
 
     const urls = ['./', './manifest.json', './version.json', ...runtime.map((name) => `./${assetPrefix}${name}`)];
@@ -109,6 +117,7 @@ export async function packagePwa(inputDirectory, outputDirectory, { publicBuild 
 export async function verifyPwaPackage(directory) {
   const root = path.resolve(directory);
   const version = JSON.parse(await fs.readFile(path.join(root, 'version.json'), 'utf8'));
+  const brand = brandForBuild(version);
   const worker = await fs.readFile(path.join(root, 'custom-sw.js'), 'utf8');
   const urlMatch = worker.match(/const CACHE_URLS = (\[[^\n]*\]);/);
   const hashMatch = worker.match(/const CACHE_HASHES = (\{[^\n]*\});/);
@@ -122,6 +131,10 @@ export async function verifyPwaPackage(directory) {
   const files = await filesUnder(root);
   const assets = files.filter(name => name.startsWith(prefix));
   const expectedUrls = ['./', './manifest.json', './version.json', ...assets.map(name => `./${name}`)];
+  if (brand === burimunsiAdminBrand &&
+      (files.some(name => name.startsWith('.well-known/')) || assets.includes(prefix + collectAdminBrand.icon))) {
+    throw new Error('BuriMunsi Admin includes assets for the Collect app');
+  }
   if (!rootFiles.every(name => files.includes(name)) || (files.some(name => name.startsWith('.well-known/')) &&
       !associations.every(name => files.includes(name))) ||
       files.some(name => !rootFiles.includes(name) && !associations.includes(name) && !name.startsWith(prefix)) ||
@@ -144,16 +157,20 @@ export async function verifyPwaPackage(directory) {
   const assetId = versionedAssetHash(assets.map(name => [name.slice(prefix.length), hashes['./' + name]]));
   const index = await fs.readFile(path.join(root, 'index.html'), 'utf8');
   const manifest = JSON.parse(await fs.readFile(path.join(root, 'manifest.json'), 'utf8'));
-  const icon = `${prefix}icons/collect-web-512.png`;
+  const icon = prefix + brand.icon;
   if (assetId !== version.asset_manifest_sha256 || !assets.includes(prefix + 'assets/admin-entry.js') ||
       !['"', "'"].some(quote => index.includes(`src=${quote}/${prefix}assets/admin-entry.js${quote}`)) ||
-      hashes['./' + icon] !== expectedIconHash ||
+      hashes['./' + icon] !== brand.iconSha256 || version.app_name !== brand.id ||
+      !index.includes(`<title>${brand.name}</title>`) || !index.includes(`/${icon}`) ||
+      manifest.name !== brand.name || manifest.short_name !== brand.name || manifest.description !== brand.description ||
       manifest.start_url !== '.' || manifest.scope !== '.' || manifest.display !== 'standalone' ||
-      manifest.icons?.length !== 1 || manifest.icons[0]?.src !== './' + icon) {
+      manifest.icons?.length !== 1 || manifest.icons[0]?.src !== './' + icon ||
+      manifest.icons[0]?.sizes !== brand.iconSize || manifest.icons[0]?.purpose !== brand.iconPurpose) {
     throw new Error('Admin entry and cache differ from the asset version');
   }
   const text = (name) => fs.readFile(path.join(root, name), 'utf8');
-  if (await text('_headers') !== hostingHeaders || await text('robots.txt') !== robotsRules ||
+  const headers = brand === burimunsiAdminBrand ? burimunsiHostingHeaders : hostingHeaders;
+  if (await text('_headers') !== headers || await text('robots.txt') !== robotsRules ||
       await text('_redirects') !== faviconRedirect(icon)) {
     throw new Error('Admin hosting rules or robots policy differ from the package contract');
   }

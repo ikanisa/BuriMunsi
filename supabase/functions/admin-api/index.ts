@@ -1,3 +1,3 @@
 import {createHandler} from '../_shared/edge-http-handler.js';
 
-Deno.serve(createHandler('admin-api'));
+Deno.serve(createHandler('admin-api', undefined, {standalone: true}));

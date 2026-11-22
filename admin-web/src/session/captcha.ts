@@ -1,4 +1,5 @@
 /* eslint-disable no-control-regex -- Reject ASCII control characters in challenge tokens. */
+import {adminBrand} from '../branding';
 import {AdminRequestError} from '../api/client';
 
 const ENDPOINT = '/functions/v1/collect-api/v1/security/challenge';
@@ -32,7 +33,7 @@ export async function acquireSameOriginCaptcha(environment: CaptchaEnvironment =
   dialog.setAttribute('aria-label', 'Verify your sign-in');
   dialog.className = 'admin-challenge-dialog';
   const frame = doc.createElement('iframe');
-  frame.title = 'Collect security verification';
+  frame.title = `${adminBrand.product} security verification`;
   frame.src = url.href;
   frame.referrerPolicy = 'no-referrer';
   frame.setAttribute('sandbox', 'allow-scripts allow-same-origin');
