@@ -17,16 +17,16 @@ function configuredConnection(url,control,env) {
     types: {numeric: {to:1700,from:[1700],serialize:String,parse:value=>{const n=Number(value);if(!/^-?\d+(?:\.0+)?$/.test(value)||!Number.isSafeInteger(n))throw new Error('integer_out_of_range');return n;}},bigint: {to: 20, from: [20], serialize: String, parse: value => {
       const n = Number(value); if (!Number.isSafeInteger(n)) throw new Error('integer_out_of_range'); return n;
     }}}, onnotice: () => {}};
-    pools.set(poolKey,control?leaseOwnedControlPool(()=>postgres(url,options)):postgres(url,options));
+    pools.set(poolKey,control?leaseOwnedControlPool(()=>postgres(url,options),{reuse:true,capacity:4}):postgres(url,options));
   }
   return pools.get(poolKey);
 }
 
 // Eight local slots include connection setup, WORK, original cleanup and
 // quarantined pools. A settled admission does not free this separate bound.
-// Control sockets have one lease owner and no retained warm idle lifetime.
-export function leaseOwnedControlPool(createPool) {
-  const capacity=8,waiting=[],owned=new Set();let occupied=0,ending=false;
+// A control socket can serve a later request only after its confirmed rollback.
+export function leaseOwnedControlPool(createPool,{reuse=false,capacity=8}={}) {
+  const waiting=[],owned=new Set(),idle=[];let occupied=0,ending=false;
   const unavailable=()=>new Error('collect_fence_unavailable');
   function pump(){
     while(!ending&&occupied<capacity&&waiting.length){
@@ -47,10 +47,15 @@ export function leaseOwnedControlPool(createPool) {
   async function acquire(){
     let entry;
     try{
-      entry={pool:createPool(),returned:false,retirement:null};owned.add(entry);
+      entry=idle.pop()??{pool:createPool(),retirement:null};owned.add(entry);
+      let returned=false;
       const tx=await entry.pool.reserve();
       return new Proxy(tx,{get(target,key){
-        if(key==='release')return()=>{if(entry.returned)return;entry.returned=true;target.release();void retire(entry);};
+        if(key==='release')return()=>{
+          if(returned)return;returned=true;target.release();
+          if(reuse&&!ending){idle.push(entry);occupied--;pump();}
+          else void retire(entry);
+        };
         return Reflect.get(target,key,target);
       }});
     }catch(error){if(entry)void retire(entry);else{occupied--;pump();}throw error;}
@@ -70,6 +75,7 @@ export function leaseOwnedControlPool(createPool) {
       ending=true;for(const waiter of waiting.splice(0)){clearTimeout(waiter.timer);waiter.reject(unavailable());}
       // Shutdown cannot initiate end for setup, WORK or an unacknowledged
       // rollback. Only original release/setup failure may start retirement.
+      for(const entry of idle.splice(0)){occupied++;void retire(entry);}
       const entries=[...owned];if(entries.some(entry=>!entry.retirement))throw unavailable();
       const completion=Promise.all(entries.map(entry=>entry.retirement));let timer;
       try{await Promise.race([completion,new Promise((_,reject)=>{timer=setTimeout(()=>reject(unavailable()),FENCE_IO_TIMEOUT_MS);})]);}finally{clearTimeout(timer);}

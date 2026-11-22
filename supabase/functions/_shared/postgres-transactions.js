@@ -8,6 +8,7 @@ const runtimeSetup = "SET LOCAL ROLE collect_runtime; SET LOCAL statement_timeou
 // The compatibility adapter translates SQL dialects and statement results.
 export class PostgresTransactions {
   #browserPasscode = null;
+  #nativeRead = null;
 
   constructor(sql, claims = {}, work = null) {
     this.sql = sql;
@@ -28,6 +29,11 @@ export class PostgresTransactions {
     const proof = adminPasscodeProof(account);
     if (!proof || this.applicationWork?.kind !== 'http_admin') throw new Error('browser_passcode_admission_required');
     this.#browserPasscode = Object.freeze([proof.collectionId, account.token_hash, account.origin]);
+  }
+
+  hasBrowserPasscodeContext(statement) {
+    return this.#browserPasscode!==null && statement.sql==='SELECT private.burimunsi_browser_pin_set_context(?,?,?) AS result' &&
+      statement.values.length===3 && statement.values.every((value,index)=>value===this.#browserPasscode[index]);
   }
 
   async #applyBrowserPasscode(tx) {
@@ -87,7 +93,30 @@ export class PostgresTransactions {
     await this.#applyBrowserPasscode(tx);
   }
 
+  // Only the read-only native entry point installs this connection. Reuse is
+  // limited to the lifetime of one request, one admission and one SQL snapshot.
+  async withNativeReadSnapshot(operation) {
+    if (this.#nativeRead) return operation(this.#nativeRead);
+    return this.#transaction(async tx => {
+      await tx.unsafe('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
+      await this.readContext(tx);
+      this.#nativeRead = tx;
+      try {
+        const result = await operation(tx);
+        await this.applicationWork.assert();
+        return result;
+      } finally {
+        this.#nativeRead = null;
+      }
+    });
+  }
+
+  ownsNativeRead(tx) {
+    return this.#nativeRead !== null && this.#nativeRead === tx;
+  }
+
   transaction(fn) {
+    if (this.#nativeRead) throw new Error('read_snapshot_cannot_write');
     return this.#transaction(fn);
   }
 

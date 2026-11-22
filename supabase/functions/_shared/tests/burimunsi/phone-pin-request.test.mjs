@@ -49,7 +49,7 @@ function fixture(){
    if(!s||args[1]!==installation||args[2]!==device||args[3]!=='internal_receiver'||args[4]!==s.groupId)return [{result:null}];
    state.revoked=true;return [{result:{accountId:s.accountId,collectionId:s.groupId}}];
   }
-  if(text===PIN_SET_CONTEXT_SQL){const rows=row(await sha256(args[0]),args[1],args[2],args[3]);state.current=rows[0];return rows.map(r=>({result:{collection_id:r.collection_id}}));}
+  if(text===PIN_SET_CONTEXT_SQL){const rows=row(await sha256(args[0]),args[1],args[2],args[3]);state.current=rows[0];return rows.map(r=>({result:r}));}
   if(text.includes('FROM private.burimunsi_pin_context()'))return state.current?[{...state.current,now_ms:now}]:[];
   return [];
  }};
@@ -338,3 +338,31 @@ for(const edit of [v=>({...v,installationId:id(88)}),v=>({...v,requestId:id(88)}
  test('limited SQL receipt cannot publish inconsistent or secret-bearing ACK',async()=>{
   const f=retirementFixture();f.state.outcome=edit(f.state.outcome);await assert.rejects(f.invoke(f.retirementRequest()));assert.equal(hasPhonePinContext(f.db),false);
  });
+
+test('a current session shares one read snapshot without a writer; a near expiry session renews once',async()=>{
+ const f=fixture(),login=await f.login();let active=false,reads=0;
+ f.db.withNativeReadSnapshot=async fn=>{active=true;reads++;try{return await fn(f.sql);}finally{active=false;}};
+ f.db.ownsNativeRead=tx=>active&&tx===f.sql;
+ const request=()=>f.request({login:false,path:'/session',token:login.token});
+ const read=async(principal)=>{
+  assert.equal(principal.nativeAccountId,login.profile.id);
+  return new Response('ok');
+ };
+ assert.equal((await f.invoke(request(),read)).status,200);
+ assert.equal(reads,1);assert.equal(f.state.calls.filter(x=>x.text===PIN_RENEW_SQL).length,0);
+ f.state.time=login.expiresAt-30000;
+ assert.equal((await f.invoke(request(),read)).status,200);
+ assert.equal(f.state.calls.filter(x=>x.text===PIN_RENEW_SQL).length,1);
+ f.state.revoked=true;await assert.rejects(f.invoke(request(),read),{code:'session_unavailable'});
+});
+test('login with Home returns the new token even when its optional projection is unavailable',async()=>{
+ const f=fixture();
+ const response=await f.invoke(f.request({query:'?include=home'}),async(principal,env,req)=>{
+  assert.equal(new URL(req.url).search,'?include=home');
+  assert.equal(req.method,'GET');assert.equal(req.headers.get('X-BuriMunsi-Group'),principal.groupId);
+  return new Response('',{status:503});
+ });
+ const data=(await response.json()).data;
+ assert.match(data.token,/^[a-f0-9]{64}$/);assert.equal(data.home,null);
+ assert.equal(f.state.sessions.size,1);
+});

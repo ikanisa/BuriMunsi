@@ -34,9 +34,13 @@ const leaseSetupSql = "SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout=
  runtimeRoleSql + '; SELECT pg_catalog.pg_advisory_xact_lock_shared(7346371,1)';
 async function runtimeRole(tx){await tx.unsafe(runtimeRoleSql);}
 async function result(tx,name,values){const rows=await tx.unsafe('SELECT '+signatures[name]+' AS result',values);need(rows.length===1&&rows[0].result&&typeof rows[0].result==='object');return rows[0].result;}
-export function sqlFenceBackend(businessSql,controlSql){
+export function sqlFenceBackend(businessSql,controlSql,verifyAdmission=undefined){
  need(typeof businessSql?.begin==='function'&&typeof controlSql?.reserve==='function');
- const rawCall=(name,values)=>businessSql.begin('ISOLATION LEVEL READ COMMITTED',async tx=>{await runtimeRole(tx);return result(tx,name,values);});
+ const rawCall=(name,values)=>businessSql.begin('ISOLATION LEVEL READ COMMITTED',async tx=>{
+  await runtimeRole(tx);
+  if(name==='register'&&verifyAdmission)await verifyAdmission(tx);
+  return result(tx,name,values);
+ });
  const call=(name,values)=>bounded(rawCall(name,values));
  const register=(id,source,kind)=>{const original=Promise.resolve(rawCall('register',[id,source,kind])),observation=bounded(original);registrationCompletions.set(observation,original);return observation;};
  return Object.freeze({register,close:(id,epoch,source,outcome,reason,dispatches,uncertain)=>call('close',[id,epoch,source,outcome,reason,dispatches,uncertain]),status:id=>call('status',[id]),
@@ -186,6 +190,10 @@ class ApplicationWork{
  }
 }
 
+export function assertWorkOwner(work){
+ if(!contexts.has(work)||!(work instanceof ApplicationWork))return work.assert();
+ work.assertLocal();need(!work.lost);
+}
 export function applicationWork(env){const work=env?.COLLECT_FENCE_WORK;need(contexts.has(work));return work;}
 export function applicationWorkTuple(work){need(contexts.has(work));return work.tuple();}
 function guardedResponse(response,work,label,onUnknown=()=>work.unknown(label)){

@@ -100,7 +100,7 @@ export function createHandler(functionName, envReader = () => Deno.env.toObject(
       }
       env.MOMO_PROCESSING_PAUSED ??= 'true';
       env.AUTH_MEMBER_REGISTRATION_ENABLED ??= 'false';
-      await runtime.initializeDatabase(env, collectionId);
+      await runtime.initializeDatabase(env, collectionId, standalone && openWork === openApplicationWork);
       const work = await runtime.admit(env, openWork, admin ? 'http_admin' : 'http_collect', request.signal);
       assertNotCancelled(request.signal);
 

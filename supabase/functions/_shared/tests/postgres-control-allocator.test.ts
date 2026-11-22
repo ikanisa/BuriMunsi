@@ -53,3 +53,14 @@ Deno.test('shutdown cannot initiate first end during original reservation setup 
  let heldEnds=0;const held=runtime.leaseOwnedControlPool(()=>({async reserve(){return {release(){}};},async end(){heldEnds++;}}));
  const tx=await held.reserve();await rejected(held.end({timeout:0}));need(heldEnds===0);tx.release();need(await held.end({timeout:0})===undefined);need(heldEnds===1);
 });
+
+Deno.test('confirmed release reuses one warm socket while an occupied connection stays private',async()=>{
+ let created=0,ended=0,releases=0;
+ const pool=runtime.leaseOwnedControlPool(()=>{const sequence=++created;return {
+  async reserve(){return {sequence,release(){releases++;}};},async end(){ended++;}
+ };},{reuse:true,capacity:2});
+ const first=await pool.reserve(),other=await pool.reserve();
+ const queued=pool.reserve();first.release();const next=await queued;
+ need(first.sequence===next.sequence&&other.sequence!==next.sequence&&created===2);
+ next.release();other.release();await pool.end();need(ended===2&&releases===3);
+});

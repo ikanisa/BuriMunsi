@@ -11,11 +11,18 @@ export async function assertRuntimeDeployment(sql,env,standaloneCollectionId=und
  await verifyDeploymentProfile(env);
  await sql.begin(async tx=>{
   await tx`SET LOCAL ROLE collect_runtime`;
-  const rows=await tx`SELECT private.collect_assert_deployment(${env.COLLECT_DEPLOYMENT_PROFILE_SHA256}::text) AS allowed`;
-  if(rows.length!==1||rows[0].allowed!==true)throw new Error('deployment_identity_mismatch');
-  if(standaloneCollectionId!==undefined){
-   const collections=await tx`SELECT id FROM app.collections LIMIT 2`;
-   if(collections.length!==1||collections[0].id!==standaloneCollectionId)throw new Error('burimunsi_collection_mismatch');
-  }
+  await assertDatabaseIdentity(tx,env,standaloneCollectionId);
  });
+}
+
+export async function assertDatabaseIdentity(tx,env,standaloneCollectionId){
+ const digest=env.COLLECT_DEPLOYMENT_PROFILE_SHA256;
+ const rows=standaloneCollectionId===undefined
+  ? await tx`SELECT private.collect_assert_deployment(${digest}::text) AS allowed`
+  : await tx`SELECT private.collect_assert_deployment(${digest}::text) AS allowed,
+      ARRAY(SELECT id FROM app.collections LIMIT 2) AS collections`;
+ if(rows.length!==1||rows[0].allowed!==true)throw new Error('deployment_identity_mismatch');
+ if(standaloneCollectionId!==undefined&&
+    (rows[0].collections?.length!==1||rows[0].collections[0]!==standaloneCollectionId))
+  throw new Error('burimunsi_collection_mismatch');
 }

@@ -1,3 +1,4 @@
+import {assertWorkOwner} from '../../application-fence.js';
 import {BuriError,requireThat,requirePort} from './errors.js';
 import {normalizePhone,requirePin,requireId,requireRequestId,sha256,exactKeys} from './values.js';
 import {PinHasher,newBearer,PIN_ITERATIONS} from './pin.js';
@@ -20,9 +21,15 @@ export const RETIREMENT_OUTCOME_SQL='SELECT private.burimunsi_gateway_retirement
 // This applies only after the database has independently validated the session.
 export const PIN_CLOCK_SKEW_MS=5000;
 export function hasPhonePinContext(db){return proofs.has(db);}
+export function phonePinReadSelector(db){return proofs.get(db)?.selector??null;}
+export function snapshotPhonePinProof(db,tx){
+  const proof=proofs.get(db);
+  return proof?.snapshot===tx && db.ownsNativeRead?.(tx) ? proof.row : null;
+}
 export async function applyPhonePinContext(db,sql,groupId){
   const proof=proofs.get(db);if(!proof)return false;
   requireThat(proof.groupId===groupId,'access_denied',403);
+  if(snapshotPhonePinProof(db,sql))return true;
   let rows;
   try{rows=await sql.unsafe(PIN_SET_CONTEXT_SQL,proof.values);}
   catch(error){if(error?.code==='42501')throw new BuriError('session_unavailable',401);throw error;}
@@ -79,8 +86,10 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
       profile=request.headers.get('X-BuriMunsi-Profile'),device=request.headers.get('X-BuriMunsi-Device');
     requireThat(['staff','internal_receiver'].includes(profile)&&/^[a-f0-9]{64}$/.test(device??''),'invalid_credentials',401);
     if(login)requireThat(!request.headers.has('X-BuriMunsi-Group')&&!request.headers.has('authorization'),'invalid_credentials',401);
-    if(login||logout||retirement||renewing)requirePinTransition(request,url,{readSession});
-    const owned=async()=>{requireActiveNativeRequest(request);requireThat(db.applicationWork===work,'request_not_admitted',503);await work.assert();
+    if(login||logout||retirement||renewing)requirePinTransition(request,url,{readSession:readSession||login});
+    const shareRead = method==='GET' && typeof db.withNativeReadSnapshot==='function' &&
+      /^\/v1\/burimunsi\/(?:session|home|payments(?:\/[A-Za-z0-9_-]+(?:\/history)?)?|members(?:\/[A-Za-z0-9_-]+)?|ledger|staff|audit)$/.test(path);
+    const owned=async()=>{requireActiveNativeRequest(request);requireThat(db.applicationWork===work,'request_not_admitted',503);await assertWorkOwner(work);
       requireThat(db.applicationWork===work,'request_not_admitted',503);requireActiveNativeRequest(request);};
     const transaction=async(write,fn)=>db.transaction(async sql=>{
       await owned();if(write){await db.context(sql);await lockCollectMutation(sql);}
@@ -158,7 +167,36 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
         const binding=requestBinding(request,installation,account.groupId);binding.actorId=account.id;
         const data={groupId:account.groupId,token,expiresAt:integer(created.expiresAt),profile:{id:account.id,name:account.name,phone:account.phone,
           role:account.role,capabilities:[...account.capabilities]}};
-        return new Response(JSON.stringify(bindNativeResponse({operation:'login'},binding,body,data)),{status:200,headers:headers()});
+        const includeHome=url.search==='?include=home';
+        if(includeHome){
+          const values=Object.freeze([token,installation,device,profile]);
+          const readHome=async tx=>{
+            const row=(await tx.unsafe(PIN_SET_CONTEXT_SQL,values))[0]?.result;
+            const principal=current(row,installation,profile,clock());
+            requireThat(principal.groupId===account.groupId&&principal.nativeAccountId===account.id,'session_unavailable',401);
+            proofs.set(db,{groupId:account.groupId,values,snapshot:tx,row,
+              selector:Object.freeze({id:account.id,sessionId:principal.principalSessionId,groupId:account.groupId})});
+            const authHeaders=new Headers(request.headers);
+            authHeaders.delete('Content-Length');authHeaders.delete('Content-Type');
+            authHeaders.set('Authorization','Bearer '+token);authHeaders.set('X-BuriMunsi-Group',account.groupId);
+            const read=new Request(new URL('/v1/burimunsi/session?include=home',origin),{headers:authHeaders,signal:request.signal});
+            const response=await operation(principal,local,read);
+            if(response.status>=500)return null;
+            requireThat(response.ok,'session_unavailable',401);
+            const envelope=await response.json();
+            requireThat(envelope.ok===true&&envelope.binding?.actorId===account.id&&envelope.binding?.groupId===account.groupId&&
+              envelope.binding?.installationId===installation&&envelope.data?.profile?.id===account.id,'session_unavailable',401);
+            return envelope.data.home;
+          };
+          try{data.home=typeof db.withNativeReadSnapshot==='function' ? await db.withNativeReadSnapshot(readHome) : await transaction(false,readHome);}
+          catch(error){
+            if(error?.code==='42501')throw new BuriError('session_unavailable',401);
+            if(['application_fenced','application_fence_unavailable'].includes(error?.code))throw error;
+            if(error instanceof BuriError && error.status<500)throw error;
+            data.home=null;
+          }
+        }
+        return new Response(JSON.stringify(bindNativeResponse({operation:'login',includeHome},binding,body,data)),{status:200,headers:headers()});
       }
       const token=(request.headers.get('authorization')??'').match(/^Bearer ([a-f0-9]{64})$/)?.[1];
       requireThat(token,'session_unavailable',401);const values=Object.freeze([token,installation,device,profile]);
@@ -168,16 +206,36 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
       // No other business command may use an expired proof.
       const requestedGroup=request.headers.get('X-BuriMunsi-Group');
       if(renewing)requireId(requestedGroup);
-      let principal;
-      try{principal=await transaction(renewing,async sql=>{
+      const serve=async(row,snapshot=null)=>{
+        const principal=current(row,installation,profile,clock());
+        requireThat(requestedGroup===principal.groupId,'native_scope_changed',403);
+        const selector=Object.freeze({id:principal.nativeAccountId,sessionId:principal.principalSessionId,groupId:principal.groupId});
+        proofs.set(db,{groupId:principal.groupId,values,selector,snapshot,row});
+        return operation(principal,local);
+      };
+      if(shareRead){
+        const needsRenewal=Symbol('renew');
+        const response=await db.withNativeReadSnapshot(async tx=>{
+          let row;
+          try{row=(await tx.unsafe(PIN_SET_CONTEXT_SQL,values))[0]?.result;}
+          catch(error){if(error?.code!=='42501')throw error;
+            if(readSession)return needsRenewal;
+            throw new BuriError('session_unavailable',401);}
+          // The existing SQL renewal rule is one minute. Early revalidation
+          // remains read-only. Expired and nearly expired sessions use the
+          // normal guarded renewal outside this repeatable-read transaction.
+          if(readSession&&(!row||integer(row.expires_at)<=clock()+60000))return needsRenewal;
+          return serve(row,tx);
+        });
+        if(response!==needsRenewal)return response;
+      }
+      let row;
+      try{row=await transaction(renewing,async sql=>{
         const rows=await sql.unsafe(renewing?PIN_RENEW_SQL:PIN_CONTEXT_SQL,
           renewing?[...values,requestedGroup,sessionTtlMs]:values);
-        requireThat(rows.length===1,'session_unavailable',401);
-        return current(rows[0],installation,profile,clock());
+        requireThat(rows.length===1,'session_unavailable',401);return rows[0];
       });}catch(error){if(error?.code==='42501')throw new BuriError('session_unavailable',401);throw error;}
-      requireThat(request.headers.get('X-BuriMunsi-Group')===principal.groupId,'native_scope_changed',403);
-      proofs.set(db,Object.freeze({groupId:principal.groupId,values}));
-      const result=await operation(principal,local);await owned();return result;
+      const result=await serve(row);await owned();return result;
     }finally{proofs.delete(db);try{db.setClaims({});}finally{active.delete(db);}}
   };
 }

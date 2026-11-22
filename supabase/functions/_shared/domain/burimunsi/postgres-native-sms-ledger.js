@@ -213,15 +213,23 @@ export class PostgresNativeSmsLedger {
 export async function drainNativeSmsLedger(env,{limit=1}={}){
  if(env?.BURIMUNSI_NATIVE_AUTO_TRANSACTIONS_ENABLED!=='true')return {status:'disabled',processed:0,results:[]};
  const db=env.DB,work=db?.applicationWork;
- check(limit===1&&work?.kind==='jobs'&&typeof work.assert==='function'&&typeof db?.transaction==='function'&&typeof db.context==='function');
+ check(Number.isInteger(limit)&&limit>=1&&limit<=4&&work?.kind==='jobs'&&typeof work.assert==='function'&&typeof db?.transaction==='function'&&typeof db.context==='function');
  await work.assert();
  const selected=await db.transaction(async tx=>{
   check(db.applicationWork===work);await db.context(tx);
-  const rows=await tx.unsafe('SELECT private.burimunsi_native_sms_post_candidates($1) AS result',[1]);
-  await work.assert();check(rows.length===1&&Array.isArray(rows[0].result)&&rows[0].result.length<=1);return rows[0].result;
+  const rows=await tx.unsafe('SELECT private.burimunsi_native_sms_post_candidates($1) AS result',[limit]);
+  await work.assert();check(rows.length===1&&Array.isArray(rows[0].result)&&rows[0].result.length<=limit);return rows[0].result;
  });
- if(!selected.length)return {status:'complete',processed:0,results:[]};
- const {groupId,sourceId}=selected[0];requireId(groupId);requireRequestId(sourceId);
- const result=await new PostgresNativeSmsLedger({env,groupId}).process(sourceId);
- check(safeStates.has(result.state));return {status:'complete',processed:1,results:[{state:result.state}]};
+ const results=[];
+ let usedExtraction=false;
+ for(const {groupId,sourceId,needsFacts} of selected){
+  requireId(groupId);requireRequestId(sourceId);
+  if(limit>1)check(typeof needsFacts==='boolean');
+  // The approved dispatch can pay for one further extraction in this lane.
+  if(usedExtraction&&needsFacts)break;
+  if(needsFacts)usedExtraction=true;
+  const result=await new PostgresNativeSmsLedger({env,groupId}).process(sourceId);
+  check(safeStates.has(result.state));results.push({state:result.state});
+ }
+ return {status:'complete',processed:results.length,results};
 }

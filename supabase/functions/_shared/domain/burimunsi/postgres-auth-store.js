@@ -3,7 +3,7 @@ import {authorize} from './policy.js';
 import {requireId,requireRequestId,canonicalJson,sha256} from './values.js';
 import {pgInteger} from './postgres-values.js';
 import {PostgresNativeAuthority} from './postgres-authority.js';
-import {hasPhonePinContext,PIN_CLOCK_SKEW_MS} from './phone-pin-request.js';
+import {hasPhonePinContext,snapshotPhonePinProof,PIN_CLOCK_SKEW_MS} from './phone-pin-request.js';
 import {readRecoveryProof} from './postgres-operation-recovery.js';
 import {retainPhoneBoundPin} from './pin.js';
 import {requireOriginDigest,projectRecoveredOutcome,cancelledStaffOperation,originalStaffOperation} from './operation-recovery.js';
@@ -36,6 +36,24 @@ export class PostgresNativeAuthStore extends PostgresNativeAuthority {
     if(id!==null)requireRequestId(id);
     if(installationId!==null)requireRequestId(installationId);
     requireThat(Number.isSafeInteger(now)&&now>=0,'invalid_session_clock',503);
+    const proof=snapshotPhonePinProof(this.db,tx);
+    if(proof){
+      if(proof.collection_id!==this.groupId || (id!==null&&id!==proof.native_session_id) ||
+          (installationId!==null&&installationId!==proof.installation_id) || Number(proof.expires_at)<=now)return null;
+      // The bound SQL session has already checked device, grant, active staff,
+      // credential version and expiry in this exact read-only transaction.
+      const [account]=await tx.unsafe(`SELECT a.name,a.phone
+        FROM private.burimunsi_accounts a JOIN private.burimunsi_sessions s ON s.account_id=a.id AND s.collection_id=a.collection_id
+        WHERE a.collection_id=$1 AND a.id=$2::uuid AND s.id=$3::uuid AND ($4::text IS NULL OR s.token_hash=$4)
+          AND private.burimunsi_operator_is_current(a.collection_id,a.principal_user_id,a.phone,a.role,a.capabilities)`,
+        [this.groupId,proof.account_id,proof.native_session_id,tokenHash]);
+      if(!account)return null;
+      return {id:proof.account_id,principalUserId:proof.principal_user_id,sessionId:proof.native_session_id,
+        principalSessionId:proof.native_session_id,authMethod:'phone_pin',phone:account.phone,name:account.name,
+        groupId:this.groupId,role:proof.role,capabilities:proof.capabilities,active:true,revoked:false,
+        expiresAt:pgInteger(proof.expires_at,{minimum:now+1,code:'session_unavailable'}),
+        installationId:proof.installation_id,installationProfile:proof.profile};
+    }
     // Phone/PIN requests get their current short lease only from the
     // independently revalidated, device-bound SQL context. The immutable
     // original expiry remains authoritative for managed-email sessions. Only a
