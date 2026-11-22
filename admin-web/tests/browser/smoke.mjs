@@ -82,11 +82,28 @@ try {
     return { context, page };
   }
 
+  const starterNotice = 'If this page does not finish opening, reopen it while online.';
+  const startup = await open({ width: 390, height: 844 }, 'block');
+  const entryPath = /^\/_build\/[0-9a-f]{64}\/assets\/admin-entry\.js$/;
+  await startup.page.route(url => url.origin === origin && entryPath.test(url.pathname), route =>
+    route.fulfill({ status: 404, contentType: 'text/plain', headers: { 'Cache-Control': 'no-store' },
+      body: 'Synthetic missing Admin entry' }));
+  const failedEntry = startup.page.waitForResponse(response => entryPath.test(new URL(response.url()).pathname));
+  const shell = await startup.page.goto(origin + '/');
+  assert.equal(shell.status(), 200);
+  assert.equal((await failedEntry).status(), 404);
+  await startup.page.getByRole('main').getByRole('heading', { name: 'BuriMunsi Admin', exact: true }).waitFor();
+  await startup.page.getByRole('main').getByText(starterNotice, { exact: true }).waitFor();
+  assert.equal(await startup.page.getByRole('heading', { name: 'Welcome to BuriMunsi' }).count(), 0);
+  assert.equal((await startup.context.cookies()).length, 0);
+  await startup.context.close();
+
   const desktop = await open({ width: 1440, height: 900 }, 'block');
   const { page } = desktop;
   await page.goto(origin + '/admin/forgot-password');
   await page.getByRole('heading', { name: 'Welcome to BuriMunsi' }).waitFor();
   assert.equal(new URL(page.url()).hash, '#/admin/login');
+  assert.equal(await page.getByText(starterNotice, { exact: true }).count(), 0);
   await page.goto(origin + '/admin');
   await page.getByRole('heading', { name: 'Welcome to BuriMunsi' }).waitFor();
   assert.equal(await page.getByLabel('Email', { exact: true }).count(), 0);
@@ -259,7 +276,7 @@ try {
   assert.deepEqual(denied, []);
   assert.deepEqual(unexpectedAuth, []);
   assert.deepEqual(incorrectIdentityHeaders, []);
-  const checks = ['obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'confirmed_sign_in_opens_overview_without_another_session_read', 'reload_restores_session', 'retired_passcode_bookmark_returns_to_overview', 'keyboard_receipt_navigation', 'sms_read_failure_retry',
+  const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'confirmed_sign_in_opens_overview_without_another_session_read', 'reload_restores_session', 'retired_passcode_bookmark_returns_to_overview', 'keyboard_receipt_navigation', 'sms_read_failure_retry',
       'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
       'retired_authenticator_bookmark_preserves_safe_destination', 'missing_scoped_admin_identity_removes_controls', 'session_failure_and_recovery_require_server_authority', 'expired_request_and_history_return_require_sign_in',
       'mobile_drawer_traps_and_restores_focus_and_reflows', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, 'no_verification_or_otp_request', 'identity_version_only_on_session_get'];
