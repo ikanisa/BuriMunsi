@@ -1,5 +1,5 @@
 import {createAdminReadDatabase} from './admin_read_database.js';
-import {adminEmailArguments,adminPasscodeProof,requireFreshAdminEmail} from './admin_email_policy.js';
+import {activePhoneOperator,adminEmailArguments,adminPasscodeProof,requireFreshAdminEmail} from './admin_email_policy.js';
 import {ApiError,digest} from './core.js';
 import {validateAdminOrigin,adminCookieToken,LEGACY_ADMIN_OWNER_EMAIL} from '../admin-security.js';
 export {validateAdminOrigin};
@@ -38,14 +38,30 @@ export const adminPublicUser=user=>user?{id:user.id,email:user.email,role:user.r
 // writes. An intervening account/password/role/session change cannot authorize a
 // canonical-domain mutation through a previously resolved actor.
 function accountAssertion(env,account,permission,{owner=false,mfa=false,fresh=false}={},lockGrant=false){
+ if(adminPasscodeProof(account)){
+  const operator=activePhoneOperator(account);
+  if(!operator || operator.collectionId!==env.BURIMUNSI_COLLECTION_ID)expired();
+  // Read the same fenced, cookie-bound database projection as sign-in. The
+  // effective permission list accounts for both native role and personal grants.
+  const predicate=`EXISTS(
+   SELECT 1 FROM private.burimunsi_browser_pin_session(?,?,?) AS resolved(session_value)
+   WHERE session_value->>'accountId'=? AND session_value->>'adminId'=? AND session_value->>'principalId'=?
+     AND session_value->>'sessionId'=? AND session_value->>'publicId'=? AND session_value->>'collectionId'=?
+     AND session_value->>'storageRole'=? AND session_value->>'operatorRole'=? AND (session_value->>'authVersion')::bigint=?
+     AND (?=0 OR session_value->>'operatorRole'='admin')
+     AND (?::text IS NULL OR (jsonb_exists(session_value->'permissions',?::text) AND EXISTS(
+        SELECT 1 FROM admin_grants g WHERE g.user_id=? AND g.permission=?${lockGrant?' FOR SHARE OF g':''}))))`;
+  return {predicate,args:[operator.collectionId,account.token_hash,account.origin,operator.accountId,account.id,
+   account.principal_id,account.auth_session_id,account.public_id,operator.collectionId,account.role,operator.operatorRole,
+   account.auth_version,Number(owner),permission,permission,account.principal_id,permission]};
+ }
  if(mfa||fresh)requireFreshAdminEmail(account);
  // The separately gated protected singleton is part of this same guarded
  // mutation transaction. The legacy predicate remains exact until the new
  // database migration and every owner mutation path are qualified together.
- const passcode=adminPasscodeProof(account);
- const dynamicOwner=Boolean(passcode)||env.COLLECT_ADMIN_DYNAMIC_OWNER_AUTH_ENABLED==='true';
+ const dynamicOwner=env.COLLECT_ADMIN_DYNAMIC_OWNER_AUTH_ENABLED==='true';
  const ownerPredicate=dynamicOwner?"(a.role='owner' AND private.collect_owner_is(a.id,l.user_id,a.email))":"(a.role='owner' AND a.email=?)";
- const freshPredicate=passcode?'private.burimunsi_browser_pin_is_fresh(300)':'(private.assert_admin_email_context(300)).id IS NOT NULL';
+ const freshPredicate='(private.assert_admin_email_context(300)).id IS NOT NULL';
  const predicate=`EXISTS(
  SELECT 1 FROM admin_sessions s JOIN admin_users a ON a.id=s.user_id JOIN admin_principal_links l ON l.admin_user_id=a.id
  JOIN users u ON u.id=l.user_id JOIN auth_sessions ss ON ss.id=s.auth_session_id AND ss.user_id=u.id
@@ -77,18 +93,19 @@ function adminSessionContext(db,account){
   .bind(passcode.collectionId,account.token_hash,account.origin);
  return db.prepare('SELECT private.set_admin_email_context(?::text,?::text,?::text,?::text) AS result').bind(...adminEmailArguments(account));
 }
-function accountError(error){
+function accountError(error,account){
+ if(adminPasscodeProof(account) && /recent_passcode_required|recent_email_(?:verification|sign_in)_required|session_changed/.test(String(error?.message??error)))expired();
  if(/recent_passcode_required/.test(String(error?.message??error)))fail(403,'recent_passcode_required','Confirm your passcode to continue.');
  if(error?.code==='42501'&&/\bmfa_required\b/.test(String(error?.message??error)))fail(403,'mfa_required','Verify your authenticator before continuing.');
  if(/recent_email_(?:verification|sign_in)_required/.test(String(error?.message??error)))fail(403,'recent_email_sign_in_required','Verify your current Admin email before continuing.');
- if(String(error).match(/admin_account_guards|admin_account_authority|admin_email_denied/))fail(403,'admin_access_changed','Your account access changed. Sign in and verify again.');
+ if(String(error).match(/admin_account_guards|admin_account_authority|admin_email_denied/))fail(403,'admin_access_changed','Your account access changed. Sign in again.');
  throw error;
 }
 export function accountDatabase(env,account,permission=null,options={}){
  const wrap=db=>new Proxy(db,{get(target,key){
   if(key==='batch')return async statements=>{const gate=accountGuard({...env,DB:target},account,permission,options);
    try{return(await target.batch([adminSessionContext(target,account),gate.statement,...statements,gate.remove])).slice(2,-1);}
-   catch(error){accountError(error);}};
+   catch(error){accountError(error,account);}};
   // D1DatabaseSession has no withSession method. Preserve that capability
   // boundary so nested auth reads keep the selected, guarded session.
   if(key==='withSession')return typeof target.withSession==='function'?(...args)=>wrap(target.withSession(...args)):undefined;
@@ -102,8 +119,8 @@ export function accountReadDatabase(env,account,permission){
  const {predicate,args}=accountAssertion(env,account,permission,{},true);
  const context=adminSessionContext(db,account),check=db.prepare(`SELECT ${predicate} AS allowed`).bind(...args);
  return {...env,ADMIN_ACCOUNT:account,DB:createAdminReadDatabase(db,context,check,error=>{
-  if(error?.code==='40001')fail(403,'admin_access_changed','Your account access changed. Sign in and verify again.');
-  accountError(error);
+  if(error?.code==='40001')fail(403,'admin_access_changed','Your account access changed. Sign in again.');
+  accountError(error,account);
  })};
 }
 

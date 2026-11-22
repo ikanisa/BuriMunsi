@@ -1,4 +1,5 @@
 import {ApiError} from './core.js';
+import {BURIMUNSI_ADMIN_ORIGIN} from '../burimunsi-standalone.js';
 
 // Only the BFF resolver installs this attestation after a current SQL lookup.
 // Neither an AAL value nor a caller-supplied actor timestamp is email evidence.
@@ -48,15 +49,29 @@ export function bindAdminEmailActor(actor,account){
  attestations.set(actor,proof);return actor;
 }
 export function adminPasscodeProof(subject){return current(subject)?.passcode??null;}
+/** The browser session and its native operator binding were read together by
+ * the BuriMunsi database resolver. Keep the role and session lifetime bound
+ * to that result even when an authenticated actor is passed downstream. */
+export function activePhoneOperator(subject){
+ const attestation=current(subject),proof=attestation?.passcode;
+ if(!proof)return null;
+ const {account}=attestation;
+ if(!['admin','staff'].includes(proof.operatorRole) || !['admin','staff','owner'].includes(account.role) ||
+    proof.storageRole!==account.role || !uuid.test(proof.accountId??'') ||
+    account.origin!==BURIMUNSI_ADMIN_ORIGIN || proof.expiresAt!==account.expires_at ||
+    !Number.isSafeInteger(proof.expiresAt) || proof.expiresAt<=epoch())return null;
+ return proof;
+}
 export function adminEmailVerifiedAt(subject){const proof=current(subject);return proof?.passcode?null:proof?.at??null;}
 export function adminEmailProofId(subject){return current(subject)?.proofId??null;}
 export function hasFreshAdminEmail(subject,maxAge=300){
  const proof=current(subject),at=proof?.at,now=epoch();
+ if(proof?.passcode)return Boolean(activePhoneOperator(subject));
  return Number.isSafeInteger(maxAge)&&maxAge>0&&maxAge<=300&&Number.isSafeInteger(at)&&at>0&&at<=now&&now-at<=maxAge;
 }
 export function requireFreshAdminEmail(subject,maxAge=300){
  if(!hasFreshAdminEmail(subject,maxAge)){
-  if(adminPasscodeProof(subject))throw new ApiError(403,'recent_passcode_required','Confirm your passcode to continue.');
+  if(adminPasscodeProof(subject))throw new ApiError(401,'unauthenticated','Your session has ended. Sign in again.');
   throw denied();
  }
  return current(subject);

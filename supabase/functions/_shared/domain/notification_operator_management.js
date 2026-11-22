@@ -1,4 +1,4 @@
-import {requireFreshAdminEmail} from './admin_email_policy.js';
+import {activePhoneOperator,requireFreshAdminEmail} from './admin_email_policy.js';
 import {ApiError,json,readJson,uuid,integer,id,digest,stableJson,now} from './core.js';
 import {adminAccountSession,adminCanonicalActor,accountDatabase,validateAdminOrigin} from './admin_accounts.js';
 import {preliminaryCurrentOwner} from './admin_owner_precheck.js';
@@ -11,7 +11,7 @@ const options={permission:'assisted_sms.manage',minimumAssurance:2,freshSeconds:
 async function owner(request,base,permission='assisted_sms.manage'){
  base={...base,DB:base.DB.withSession?base.DB.withSession('first-primary'):base.DB};
  validateAdminOrigin(request,base);const account=await adminAccountSession(request,base);
- if(!await preliminaryCurrentOwner(base,account))throw new ApiError(403,'owner_required','Only the main administrator can configure receipt SMS.');
+ if(!await preliminaryCurrentOwner(base,account))throw new ApiError(403,activePhoneOperator(account)?'admin_required':'owner_required','An administrator with receipt SMS access can configure this service.');
  if(!account.permissions.includes(permission))throw new ApiError(403,'permission_required','Receipt SMS configuration is unavailable.');
  requireFreshAdminEmail(account);
  const env=accountDatabase(base,account,permission,{owner:true,mfa:true,fresh:true}),actor=await adminCanonicalActor(request,env,account,permission);return {env,actor,account};
