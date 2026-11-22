@@ -38,6 +38,9 @@ using the [BuriMunsi Admin Worker](../deploy/platform-admin/README.md).
 
 ## Installed updates
 
+Signed-in Admin shows a notice when a verified update is waiting. Tabs with an
+older installed build need to reopen Admin once using the steps below.
+
 Finish or explicitly discard unsaved form edits in their current tabs. When a
 new worker is waiting, enter `about:blank` in each open Admin tab. After the last
 tab has left Admin, return online to Admin in those same tabs. Keep an installed

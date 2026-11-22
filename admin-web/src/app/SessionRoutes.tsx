@@ -4,6 +4,7 @@ import {LoginPage} from '../session/LoginPage';
 import {publicSessionPaths, safeAdminReturnLocation} from '../session/returnLocation';
 import {useSession, type SessionContextValue} from '../session/SessionProvider';
 import {AdminShell, type AdminNavItem} from '../layout/AdminShell';
+import {AdminUpdateNotice} from '../layout/AdminUpdateNotice';
 import {Button, ErrorState, LoadingState} from '../ui';
 import {InteractionSuspendedContext} from '../ui/useFocusScope';
 import {canOpenAdminPath} from './route-access';
@@ -45,6 +46,7 @@ export function ProtectedShell({navigation}: {navigation: readonly AdminNavItem[
       <AdminShell navigation={permitted} currentPath={`${location.pathname}${location.search}`}
         identity={{name: session.verificationMode === 'passcode' ? user.displayName ?? user.phone ?? 'BuriMunsi account' : user.email,
           role: user.role === 'owner' ? 'Owner' : user.role === 'admin' ? 'Admin' : 'Staff'}} onSignOut={signOut}>
+        {!rechecking && <AdminUpdateNotice />}
         {canOpenAdminPath(location.pathname, user) ? <ScreenBoundary key={location.pathname}><Suspense fallback={<LoadingState label="Opening workspace" />}><Outlet /></Suspense></ScreenBoundary> : <ErrorState title="Access unavailable"
           message="Your account cannot open this page." />}
       </AdminShell>
