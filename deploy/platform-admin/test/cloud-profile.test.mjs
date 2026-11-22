@@ -25,17 +25,36 @@ test('Cloud Admin binds the verified profile and preserves same-origin cookie au
   assert.equal(calls,1);
 });
 
-test('Cloud mutation keeps same-origin CSRF and request bytes',async()=>{
-  let calls=0;
-  const worker=createAdminWorker({fetchImpl:async upstream=>{
-    calls++;assert.equal(upstream.url,profile.supabase_origin+'/functions/v1/admin-api/api/admin/team');
-    assert.equal(upstream.headers.get('origin'),profile.admin_origin);
-    assert.equal(upstream.headers.get('x-collect-csrf'),'same-session-csrf');
-    assert.deepEqual(await upstream.json(),{request_id:'original'});
-    return Response.json({ok:true});
+test('dedicated Team mutations preserve same-origin CSRF, request identity and exact bytes', async () => {
+  const id = '482d2b4b-9ad8-4708-ac59-38982fe4a4ef';
+  const path = '/api/admin/team/accounts/' + id + '/access';
+  const requestId = '9f34a000-5ec2-4255-851c-b4e530ee5000';
+  const body = JSON.stringify({requestId, expectedVersion: 1, active: true, role: 'admin'}, null, 2);
+  const csrf = 'same-session-csrf', receipt = {applied: true, id, version: 2};
+  let calls = 0;
+  const worker = createAdminWorker({fetchImpl: async upstream => {
+    calls++;
+    assert.equal(upstream.url, profile.supabase_origin + '/functions/v1/admin-api' + path);
+    assert.equal(upstream.headers.get('origin'), profile.admin_origin);
+    assert.equal(upstream.headers.get('cookie'), '__Host-collect_admin=fixture');
+    assert.equal(upstream.headers.get('idempotency-key'), requestId);
+    assert.equal(await upstream.text(), body);
+    if (upstream.headers.get('x-collect-csrf') !== csrf) return Response.json({error: {code: 'csrf_invalid'}}, {status: 403});
+    return Response.json(receipt);
   }});
-  const response=await worker.fetch(request('/api/admin/team',{method:'POST',headers:{Origin:profile.admin_origin,'X-Collect-CSRF':'same-session-csrf','Content-Type':'application/json'},body:JSON.stringify({request_id:'original'})}),env);
-  assert.equal(response.status,200);assert.equal(calls,1);
+  const post = headers => worker.fetch(request(path, {method: 'POST', body, headers: {'Content-Type': 'application/json',
+    Cookie: '__Host-burimunsi_admin_rrlduytparvsjfmegalh=fixture', 'Idempotency-Key': requestId, ...headers}}), env);
+  for (const headers of [{'X-Collect-CSRF': csrf}, {Origin: 'https://other.example.test', 'X-Collect-CSRF': csrf}]) {
+    assert.equal((await post(headers)).status, 403);
+  }
+  assert.equal(calls, 0);
+  const missing = await post({Origin: profile.admin_origin});
+  assert.equal(missing.status, 403);
+  assert.deepEqual(await missing.json(), {error: {code: 'csrf_invalid'}});
+  const accepted = await post({Origin: profile.admin_origin, 'X-Collect-CSRF': csrf});
+  assert.equal(accepted.status, 200);
+  assert.deepEqual(await accepted.json(), receipt);
+  assert.equal(calls, 2);
 });
 
 test('profile hash, environment, public origin, and upstream override all fail before dispatch',async()=>{
