@@ -7,8 +7,9 @@ export const momoReadOptions = {invalidResponse: 'The MoMo records could not be 
 
 const momoAmount = new Intl.NumberFormat('en-RW', {maximumFractionDigits: 0});
 
-export function formatMomoAmount(value: number) {
-  return `RWF ${momoAmount.format(value)}`;
+export function formatMomoAmount(value: number | null, currency: 'RWF' | null = 'RWF') {
+  if (value === null) return 'Not recorded';
+  return currency === null ? `${momoAmount.format(value)} minor units · currency not recorded` : `RWF ${momoAmount.format(value)}`;
 }
 
 export function MomoPager<T>({page, change}: {page: Page<T>; change: (offset: number) => void}) {

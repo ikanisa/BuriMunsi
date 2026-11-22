@@ -1,5 +1,5 @@
 import {AdminApiClient, AdminRequestError, type AdminClientConfig, type AdminRequest} from '../api/client';
-import {isJsonObject, isVerificationUuid} from '../api/contracts';
+import {AdminTransportError, isJsonObject, isVerificationUuid} from '../api/contracts';
 import {bindPendingIdentity} from '../features/core/pendingAttempt';
 import {AdminSignIn} from './adminSignIn';
 import {ManagedAuthenticator, hasStoredAuthenticatorTransition} from './managedAuthenticator';
@@ -20,18 +20,36 @@ import {SensitiveEmailVerification} from './sensitiveEmailVerification';
 const LOGOUT_UNCONFIRMED = 'Sign-out was not confirmed. Try again.';
 const AUTHENTICATOR_UNCONFIRMED = 'Authenticator verification is unconfirmed. Recheck the session or sign out.';
 const VERIFY_AUTHENTICATOR_RESULT = 'Verification could not be confirmed. Recheck your session.';
+const SESSION_REFRESH_MS = 60_000;
+const PHONE_SESSION_REFRESH_MS = 120_000;
+const SESSION_RETRY_DELAYS_MS = [2_000, 8_000, 20_000] as const;
+const SESSION_RECOVERY_WINDOW_MS = 45_000;
+const SESSION_RECHECK_FAILED = 'Account access could not be rechecked. Try again.';
+
+interface BackgroundSessionCheck {
+  deadline: number;
+  retryIndex: number;
+}
+
+function isTemporarySessionFailure(error: unknown) {
+  if (error instanceof AdminTransportError) return true;
+  if (!(error instanceof AdminRequestError) || error.statusCode === undefined) return false;
+  return error.statusCode === 408 || (error.statusCode >= 500 && error.statusCode <= 599);
+}
 
 export class AdminSessionController {
   private user: AdminUser | null = null;
   private lastAuthority: string | null = null;
   private csrfToken: string | null = null;
   private epoch = 0;
+  private transportGeneration = 0;
   private readRevision = 0;
   private listeners = new Set<() => void>();
   private snapshot: SessionSnapshot = {status: 'loading', user: null, logoutUnconfirmed: false, mfaRecoveryPending: false, epoch: 0};
   private readonly api: AdminApiClient;
   private expiryTimer: ReturnType<typeof setTimeout> | undefined;
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  private recoveryTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly signInFlow = new AdminSignIn({
     config: () => this.config,
     request: (...args) => this.api.request(...args),
@@ -48,7 +66,7 @@ export class AdminSessionController {
     authorityKey,
     request: (...args) => this.request(...args),
     updateProof: (proof) => {
-      if (!this.user) return;
+      if (!this.user || this.snapshot.status !== 'authenticated') return;
       // Discard a refresh that read the proof before this transition.
       this.readRevision++;
       this.user = {...this.user, emailVerifiedAt: proof};
@@ -80,7 +98,8 @@ export class AdminSessionController {
     this.api = new AdminApiClient(config, () => {
       this.fencePendingLogout();
       if (!this.logoutBusy) this.fencePendingMfa();
-      return {epoch: this.epoch, key: this.user ? authorityKey(this.user) : null, csrfToken: this.csrfToken};
+      const key = this.user && this.snapshot.status !== 'rechecking' ? `${this.transportGeneration}:${authorityKey(this.user)}` : null;
+      return {epoch: this.epoch, key, csrfToken: this.csrfToken};
     }, (token) => {this.csrfToken = token;}, () => this.unauthorized());
   }
 
@@ -125,14 +144,17 @@ export class AdminSessionController {
   };
   readonly getSnapshot = () => this.snapshot;
   private emit(status: SessionSnapshot['status'], error?: string, logoutUnconfirmed = this.snapshot.logoutUnconfirmed, mfaRecoveryPending = false) {
-    this.snapshot = {status, user: status === 'authenticated' ? this.user : null, error, logoutUnconfirmed, mfaRecoveryPending, epoch: this.epoch};
+    const user = status === 'authenticated' || status === 'rechecking' ? this.user : null;
+    this.snapshot = {status, user, error, logoutUnconfirmed, mfaRecoveryPending, epoch: this.epoch};
     this.listeners.forEach((listener) => listener());
   }
   private stopTimers() {
     clearTimeout(this.expiryTimer);
     clearTimeout(this.refreshTimer);
+    clearTimeout(this.recoveryTimer);
     this.expiryTimer = undefined;
     this.refreshTimer = undefined;
+    this.recoveryTimer = undefined;
   }
 
   /** Retire all current transport responses and readbacks. */
@@ -223,6 +245,7 @@ export class AdminSessionController {
     if (options.authenticated ?? true) {
       const expired = this.user !== null && Date.parse(this.user.expiresAt) <= Date.now();
       if (expired) this.unauthorized();
+      if (this.snapshot.status === 'rechecking') throw new AdminRequestError('Rechecking account access. Try again shortly.');
       if (expired || this.snapshot.status !== 'authenticated' || !this.user) throw new AdminRequestError('Sign in again to continue.');
     }
     return this.api.request(path, options);
@@ -249,13 +272,14 @@ export class AdminSessionController {
     };
     checkExpiry();
     if (this.epoch !== epoch || !this.user) return;
-    const refreshMs = this.config.phonePasscodeOnly ? 120_000 : 60_000;
+    const refreshMs = this.config.phonePasscodeOnly ? PHONE_SESSION_REFRESH_MS : SESSION_REFRESH_MS;
     const tick = () => {
       if (this.config.phonePasscodeOnly && (document.visibilityState === 'hidden' || !navigator.onLine)) {
         this.refreshTimer = setTimeout(tick, refreshMs);
         return;
       }
-      void this.refresh().catch(() => undefined);
+      const background = {deadline: Date.now() + SESSION_REFRESH_MS, retryIndex: 0};
+      void this.restoreSession(undefined, background).catch(() => undefined);
     };
     this.refreshTimer = setTimeout(tick, refreshMs);
     if (!unchanged) this.emit('authenticated', undefined, false);
@@ -271,7 +295,40 @@ export class AdminSessionController {
 
   readonly refresh = async (): Promise<void> => {await this.restoreSession();};
 
-  private async restoreSession(readback?: SessionReadback): Promise<boolean> {
+  private closeUnavailableSession(message: string) {
+    this.invalidateAuthority();
+    this.user = null;
+    this.csrfToken = null;
+    this.emit('error', message);
+  }
+
+  private retryBackgroundSession(check: BackgroundSessionCheck, current: () => boolean): boolean {
+    const delay = SESSION_RETRY_DELAYS_MS[check.retryIndex];
+    const now = Date.now(), deadline = Math.min(check.deadline, now + SESSION_RECOVERY_WINDOW_MS);
+    if (delay === undefined || now + delay >= deadline || !this.user) return false;
+    if (this.snapshot.status !== 'authenticated' && this.snapshot.status !== 'rechecking') return false;
+    if (Date.parse(this.user.expiresAt) <= now) {this.unauthorized(); return true;}
+
+    // Keep the last screen mounted, with protected reads and writes suspended.
+    // The separate deadline also covers a slow or stalled session GET.
+    if (this.snapshot.status !== 'rechecking') {
+      // Old protected responses must stay retired even if the same user returns.
+      this.transportGeneration++;
+      const epoch = this.epoch;
+      this.recoveryTimer = setTimeout(() => {
+        if (this.epoch === epoch && this.snapshot.status === 'rechecking') this.closeUnavailableSession(SESSION_RECHECK_FAILED);
+      }, deadline - now);
+    }
+    this.refreshTimer = setTimeout(() => {
+      if (!current()) return;
+      if (Date.now() >= deadline) {this.closeUnavailableSession(SESSION_RECHECK_FAILED); return;}
+      void this.restoreSession(undefined, {deadline, retryIndex: check.retryIndex + 1}).catch(() => undefined);
+    }, delay);
+    this.emit('rechecking');
+    return true;
+  }
+
+  private async restoreSession(readback?: SessionReadback, background?: BackgroundSessionCheck): Promise<boolean> {
     if (readback?.isCurrent && !readback.isCurrent()) return false;
     this.observeRetainedSessions();
     if (this.fencePendingLogout()) throw new AdminRequestError('Sign-out is not confirmed. Complete sign-out before signing in again.', {outcomeUnknown: true});
@@ -299,6 +356,14 @@ export class AdminSessionController {
     try {
       const session = await readAdminSession(this.api.request, this.config.backend, current);
       if (!session || !current()) return false;
+      if (background && this.user && Date.parse(this.user.expiresAt) <= Date.now()) {
+        this.unauthorized();
+        return false;
+      }
+      if (background && this.snapshot.status === 'rechecking' && Date.now() >= background.deadline) {
+        this.closeUnavailableSession(SESSION_RECHECK_FAILED);
+        return false;
+      }
       let user = session.user;
       if (user === null) {
         if (readback) throw new AdminRequestError(readback.message, {outcomeUnknown: true});
@@ -330,11 +395,12 @@ export class AdminSessionController {
       return await this.publishSession(user, session.csrfToken, current);
     } catch (failure) {
       if (!current()) return false;
-      this.epoch++;
-      this.user = null;
-      this.csrfToken = null;
-      this.stopTimers();
-      this.emit('error', failure instanceof Error ? failure.message : 'Account access could not be checked.');
+      if (background && isTemporarySessionFailure(failure)) {
+        if (this.retryBackgroundSession(background, current)) return false;
+        this.closeUnavailableSession(SESSION_RECHECK_FAILED);
+      } else {
+        this.closeUnavailableSession(failure instanceof Error ? failure.message : 'Account access could not be checked.');
+      }
       throw failure;
     }
   };

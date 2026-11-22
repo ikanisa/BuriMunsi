@@ -3,9 +3,11 @@ import userEvent from '@testing-library/user-event';
 import { StrictMode } from 'react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AdminRequestError } from '../../src/api/client';
 import { parseMomoDetail, parseMomoMemberChecks, parseMomoPage, parseMomoSources, type MomoFilters } from '../../src/features/operations/momoContracts';
+import { formatMomoAmount } from '../../src/features/operations/MomoRecordViews';
 
-const mock = vi.hoisted(() => ({request: vi.fn(), session: {status: 'authenticated', epoch: 1, user: {id: '11111111-1111-1111-1111-111111111111', role: 'admin', permissions: ['payments.read'] as string[]}}}));
+const mock = vi.hoisted(() => ({request: vi.fn(), session: {status: 'authenticated', epoch: 1, isCurrentAuthority: vi.fn(() => true), user: {id: '11111111-1111-1111-1111-111111111111', sessionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', role: 'admin', permissions: ['payments.read'] as string[]}}}));
 vi.mock('../../src/session/SessionProvider', async (importOriginal) => ({...await importOriginal<typeof import('../../src/session/SessionProvider')>(), useSession: () => ({...mock.session, request: mock.request})}));
 import { MomoReceiptsPage } from '../../src/features/operations/MomoReceiptsPage';
 
@@ -16,10 +18,24 @@ const page = {contract_version: 1, currency: 'RWF', date_basis: 'provider_transa
 const filters: MomoFilters = {search: '', status: '', account: '', group: '', from: '', to: ''};
 const source = {raw_sms_id: smsId, relation: 'accepted', outcome: 'accepted', parser_version: 'v1', created_at: time};
 const detail = {transaction: tx, sources: [source], conflicting_attempt_ids: []};
+const nativeId = '33333333-3333-4333-8333-333333333333', attempt = '44444444-4444-4444-8444-444444444444';
+const nativeFacts = {
+  event_kind: 'outgoing', provider_transaction_id: null, amount_minor: null, currency: null, currency_scale: null,
+  payer_name: null, payer_last3: null, transaction_at: null,
+};
+const nativeTx = {
+  ...tx, ...nativeFacts, id: nativeId, native_group_id: account, group_id: account, parse_attempt_id: attempt,
+  receiving_account_id: null, public_code: null, recipient_name: null, status: 'recorded', allocation_state: 'not_applicable',
+  receiving_context: {account_id: null, identifier_raw: null, identifier_kind: null, recipient_name: null, basis: 'unestablished'},
+  receipt_facts: {...nativeFacts, contract_version: 1, kind: 'automatic_momo_extraction', transaction_id: nativeId,
+    capture_id: smsId, parse_attempt_id: attempt, source_body_sha256: 'a'.repeat(64), parser_version: 'native.v1',
+    profile_version: 'runtime.v1', parsed_at: time, provider_confirmation: false, settlement_status: 'not_asserted'},
+};
+const nativeSource = {...source, attempt_id: attempt, parser_version: nativeTx.receipt_facts.parser_version};
 const checkRow = {id, member_id: account, group_id: smsId, intent_id: id, member_public_id: '123456', member_name: 'Synthetic member', group_name: 'Synthetic group', expected_amount_minor: 5000, currency: 'RWF', requested_at: time, request_status: 'received', provider_reference: 'MOMO-SYNTHETIC-001', evidence_note: 'Please review', source: 'member_request', provider_reference_verified: false, financial_effects: 0};
 const checks = {contract_version: 1, rows: [checkRow], total: 1, offset: 0, limit: 25, next_offset: null};
 const job = {raw_sms_id: smsId, state: 'needs_review', binding_id: null, receiving_account_id: null, received_at: time, last_error: 'schema_mismatch'};
-afterEach(() => {mock.request.mockReset(); mock.session.user.permissions = ['payments.read'];});
+afterEach(() => {mock.request.mockReset(); mock.session.isCurrentAuthority.mockReset().mockReturnValue(true); mock.session.user.permissions = ['payments.read'];});
 
 describe('incoming SMS refresh', () => {
   const emptyPage = {rows: [], total: 0, offset: 0, limit: 25, next_offset: null};
@@ -71,6 +87,38 @@ describe('incoming SMS refresh', () => {
 });
 
 describe('MoMo read contracts', () => {
+  it('accepts all native event kinds, mixed pages and recorded filters with preserved scope', () => {
+    for (const event_kind of ['incoming_receipt', 'outgoing', 'reversal', 'failed', 'pending', 'other', 'unknown']) {
+      const row = {...nativeTx, event_kind, receipt_facts: {...nativeTx.receipt_facts, event_kind}};
+      expect(parseMomoPage({...page, rows: [tx, row], total: 27, offset: 25}, 25, filters).rows).toHaveLength(2);
+      expect(parseMomoPage({...page, rows: [row]}, 0, {...filters, status: 'recorded', group: account}).rows[0].amount_minor).toBeNull();
+      expect(() => parseMomoPage({...page, rows: [row]}, 0, {...filters, account})).toThrow();
+    }
+    const recordedMoney = {amount_minor: 5000, currency: 'RWF', currency_scale: 0, event_kind: 'incoming_receipt'};
+    const credited = {...nativeTx, ...recordedMoney, payment_id: id, credited_amount_minor: 5000, status: 'credited',
+      receipt_facts: {...nativeTx.receipt_facts, ...recordedMoney}};
+    expect(parseMomoDetail({transaction: credited, sources: [nativeSource]}, nativeId).transaction.amount_minor).toBe(5000);
+    expect(() => parseMomoDetail({transaction: credited, sources: [{...nativeSource, raw_sms_id: account}]}, nativeId)).toThrow();
+  });
+  it('retains a known native minor amount without assigning an unrecorded currency', () => {
+    const row = {...nativeTx, amount_minor: 85, receipt_facts: {...nativeTx.receipt_facts, amount_minor: 85}};
+    const payment = parseMomoDetail({transaction: row, sources: [nativeSource]}, nativeId).transaction;
+    expect(formatMomoAmount(payment.amount_minor, payment.currency)).toBe('85 minor units · currency not recorded');
+    expect(() => parseMomoPage({...page, rows: [{...row, credited_amount_minor: 85, payment_id: id, status: 'credited'}]}, 0, filters)).toThrow();
+  });
+  it('rejects unsupported source, destination, money, group and settlement claims for native transactions', () => {
+    for (const row of [
+      {...tx, receiving_account_id: null}, {...nativeTx, native_group_id: null}, {...nativeTx, receiving_account_id: account},
+      {...nativeTx, group_id: smsId}, {...nativeTx, amount_minor: 8}, {...nativeTx, status: 'credited', payment_id: id},
+      {...nativeTx, currency_scale: 0, receipt_facts: {...nativeTx.receipt_facts, currency_scale: 0}},
+      {...nativeTx, receipt_facts: undefined}, {...nativeTx, receipt_facts: {...nativeTx.receipt_facts, kind: 'validated_momo_extraction'}},
+      {...nativeTx, receipt_facts: {...nativeTx.receipt_facts, transaction_id: id}},
+      {...nativeTx, receipt_facts: {...nativeTx.receipt_facts, parse_attempt_id: id}},
+      {...nativeTx, receipt_facts: {...nativeTx.receipt_facts, capture_id: 'bad-id'}},
+      {...nativeTx, receipt_facts: {...nativeTx.receipt_facts, provider_confirmation: true}},
+      {...nativeTx, receiving_context: {...nativeTx.receiving_context, basis: 'recorded_receiving_account'}},
+    ]) expect(() => parseMomoPage({...page, rows: [row]}, 0, filters)).toThrow();
+  });
   it('validates totals, filtered scope, currency, statuses and receipt identity', () => {
     expect(parseMomoPage(page, 0, filters).rows[0].id).toBe(id);
     expect(() => parseMomoPage({...page, totals: {...page.totals, credited_minor: 5001}}, 0, filters)).toThrow();
@@ -98,6 +146,89 @@ describe('MoMo read contracts', () => {
 });
 
 describe('MoMo receipts page', () => {
+  it('opens a native transaction without a provider reference and shows its recorded source and missing facts', async () => {
+    mock.session.user.permissions = ['payments.read', 'sms.read', 'payments.write'];
+    mock.request.mockImplementation(async (path: string) => {
+      if (path.startsWith('sms/receipts?')) return {rows: [], total: 0, offset: 0, limit: 25, next_offset: null};
+      if (path.startsWith('momo/transactions?')) return {...page, rows: [tx, nativeTx], total: 2};
+      if (path === `momo/transactions/${nativeId}`) return {transaction: nativeTx, sources: [nativeSource]};
+      throw new Error('Unexpected read');
+    });
+    const user = userEvent.setup();
+    render(<MemoryRouter><MomoReceiptsPage allowActions allowRecovery /></MemoryRouter>);
+    await user.click(await screen.findByRole('button', {name: 'Transactions'}));
+    const open = await screen.findByRole('button', {name: `View transaction ${nativeId}`});
+    const row = within(open.closest('tr')!);
+    expect(row.getByText('Outgoing')).toBeVisible();
+    expect(row.getByText('Recorded')).toBeVisible();
+    expect(row.queryByText('RWF 0')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', {name: tx.provider_transaction_id})).toBeVisible();
+    await user.click(open);
+    const dialog = within(screen.getByRole('dialog', {name: 'Transaction details'}));
+    expect(await dialog.findByText(smsId)).toBeVisible();
+    expect(dialog.getByText('Amount').nextElementSibling).toHaveTextContent('Not recorded');
+    expect(dialog.getByText('MoMo TX ID').nextElementSibling).toHaveTextContent('Not recorded');
+    expect(dialog.getByText('Receiving account').nextElementSibling).toHaveTextContent('Not recorded');
+    expect(dialog.queryByText('Beneficiary assignment')).not.toBeInTheDocument();
+    expect(mock.request).toHaveBeenLastCalledWith(`momo/transactions/${nativeId}`, {signal: expect.any(AbortSignal)});
+  });
+  it('retries one transient service error on the same authorized list read', async () => {
+    const transient = new AdminRequestError('Unavailable', {statusCode: 503, code: 'service_unavailable'});
+    mock.request.mockRejectedValueOnce(transient).mockResolvedValue(page);
+    render(<StrictMode><MemoryRouter><MomoReceiptsPage /></MemoryRouter></StrictMode>);
+    expect(await screen.findByRole('button', {name: tx.provider_transaction_id})).toBeVisible();
+    expect(mock.request).toHaveBeenCalledTimes(2);
+    const [path, options] = mock.request.mock.calls[0];
+    expect(options).toEqual({signal: expect.any(AbortSignal)});
+    expect(mock.request).toHaveBeenLastCalledWith(path, {signal: expect.any(AbortSignal)});
+    expect(mock.request.mock.calls[1][1].signal).toBe(options.signal);
+    expect(mock.session.isCurrentAuthority).toHaveBeenCalledWith(mock.session.epoch, mock.session.user.id, mock.session.user.sessionId);
+  });
+  it.each([
+    [new AdminRequestError('Invalid source', {statusCode: 503, code: 'invalid_source_data'}), true, 1],
+    [new AdminRequestError('Access denied', {statusCode: 403, code: 'permission_required'}), true, 1],
+    [new AdminRequestError('Unavailable', {statusCode: 503, code: 'service_unavailable'}), false, 1],
+    [new AdminRequestError('Unavailable', {statusCode: 503, code: 'service_unavailable'}), true, 2],
+  ] as const)('bounds repeated reads for %s with current authority %s', async (error, current, attempts) => {
+    mock.request.mockRejectedValue(error); mock.session.isCurrentAuthority.mockReturnValue(current);
+    render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
+    expect(await screen.findByText(error.message)).toBeVisible();
+    expect(mock.request).toHaveBeenCalledTimes(attempts);
+  });
+  it('does not retry after the operator leaves the list during a transient failure', async () => {
+    let rejectRead!: (error: Error) => void;
+    mock.request.mockImplementationOnce(() => new Promise((_, reject) => {rejectRead = reject;}));
+    const view = render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
+    view.unmount();
+    await act(async () => rejectRead(new AdminRequestError('Unavailable', {statusCode: 503, code: 'service_unavailable'})));
+    expect(mock.request).toHaveBeenCalledTimes(1);
+  });
+  it.each(['unmount', 'refresh'])('cancels an in-flight retry on %s', async (action) => {
+    let secondSignal: AbortSignal | undefined;
+    mock.request.mockRejectedValueOnce(new AdminRequestError('Unavailable', {statusCode: 503, code: 'service_unavailable'}))
+      .mockImplementationOnce((_path: string, {signal}: {signal: AbortSignal}) => new Promise((_, reject) => {
+        secondSignal = signal;
+        signal.addEventListener('abort', () => reject(signal.reason), {once: true});
+      })).mockResolvedValueOnce(page);
+    const view = render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
+    await vi.waitFor(() => expect(secondSignal?.aborted).toBe(false));
+    if (action === 'unmount') view.unmount();
+    else {
+      await userEvent.setup().click(screen.getByRole('button', {name: 'Refresh'}));
+      expect(await screen.findByRole('button', {name: tx.provider_transaction_id})).toBeVisible();
+    }
+    await vi.waitFor(() => expect(secondSignal?.aborted).toBe(true));
+    expect(mock.request).toHaveBeenCalledTimes(action === 'unmount' ? 2 : 3);
+  });
+  it('discards an earlier transient failure when a manual refresh has started', async () => {
+    let failFirst!: (error: Error) => void;
+    mock.request.mockImplementationOnce(() => new Promise((_, reject) => {failFirst = reject;})).mockResolvedValue(page);
+    render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
+    await userEvent.setup().click(screen.getByRole('button', {name: 'Refresh'}));
+    expect(await screen.findByRole('button', {name: tx.provider_transaction_id})).toBeVisible();
+    await act(async () => failFirst(new AdminRequestError('Unavailable', {statusCode: 503, code: 'service_unavailable'})));
+    expect(mock.request).toHaveBeenCalledTimes(2);
+  });
   it('can open the transaction view first and can restrict the route to transactions', async () => {
     mock.session.user.permissions = ['payments.read', 'sms.read']; mock.request.mockResolvedValue(page);
     const view = render(<MemoryRouter><MomoReceiptsPage initialView="transactions" transactionsOnly /></MemoryRouter>);
@@ -124,10 +255,10 @@ describe('MoMo receipts page', () => {
     expect(screen.queryByRole('button', {name: 'Incoming SMS'})).not.toBeInTheDocument();
     expect(screen.queryByRole('button', {name: 'Member checks'})).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', {name: 'MOMO-SYNTHETIC-001'}));
-    const dialog = await screen.findByRole('dialog', {name: 'Payment details'});
+    const dialog = await screen.findByRole('dialog', {name: 'Transaction details'});
     expect(await within(dialog).findByText(smsId)).toBeVisible();
     expect(within(dialog).getByText('Parsing does not confirm provider API settlement.')).toBeVisible();
-    expect(mock.request).toHaveBeenLastCalledWith(`momo/transactions/${id}`);
+    expect(mock.request).toHaveBeenLastCalledWith(`momo/transactions/${id}`, {signal: expect.any(AbortSignal)});
   });
   it('never requests payments without permission or renders invalid data', async () => {
     mock.session.user.permissions = [];
@@ -139,6 +270,7 @@ describe('MoMo receipts page', () => {
     mock.request.mockResolvedValue({...page, rows: [{...tx, has_conflict: 3}]});
     render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
     expect(await screen.findByText('The MoMo records could not be verified.')).toBeVisible();
+    expect(mock.request).toHaveBeenCalledTimes(1);
     expect(screen.queryByText('MOMO-SYNTHETIC-001')).not.toBeInTheDocument();
   });
   it('shows captured SMS with an explicit return to MoMo when payment access is absent', async () => {
@@ -190,10 +322,10 @@ describe('MoMo receipts page', () => {
     const dialog = await screen.findByRole('dialog', {name: 'Member payment checks'});
     expect(await within(dialog).findByText('Synthetic member')).toBeVisible();
     expect(within(dialog).getByText(/References and notes are unverified/)).toBeVisible();
-    expect(mock.request).toHaveBeenLastCalledWith('momo/transactions/payment-checks?limit=25&offset=0');
+    expect(mock.request).toHaveBeenLastCalledWith('momo/transactions/payment-checks?limit=25&offset=0', {signal: expect.any(AbortSignal)});
     await user.click(within(dialog).getByRole('button', {name: 'Search reference'}));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Search MoMo TX ID or payer')).toHaveValue('MOMO-SYNTHETIC-001');
+    expect(screen.getByLabelText('Search MoMo TX ID or counterparty')).toHaveValue('MOMO-SYNTHETIC-001');
     await vi.waitFor(() => expect(mock.request.mock.calls.some(([path]) => typeof path === 'string' && path.includes('search=MOMO-SYNTHETIC-001'))).toBe(true));
   });
   it('applies inclusive Kigali date boundaries to the transaction endpoint', async () => {

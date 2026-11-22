@@ -30,15 +30,24 @@ describe('SMS oversight', () => {
     const value = sample();
     const payer = {pending: 0, gateway_accepted: 3, sent: 2, delivered: 1, failed: 0, unknown: 2, suppressed: 0};
     const payload = {...value, queues: {...value.queues,
-      burimunsi_sms: {pending: 2, retrying: 1, blocked: 0, unmatched: 1, posted: 7, oldest_pending_seconds: 90},
+      burimunsi_sms: {pending: 0, retrying: 0, blocked: 0, unmatched: 1, posted: 7, oldest_pending_seconds: 90},
       burimunsi_payer_sms: payer,
     }};
     render(<SmsOversight request={vi.fn(async () => payload)} permissions={['system_health.read', 'sms.read']} authorityKey="session-a" />);
     expect(await screen.findByRole('heading', {name: 'BuriMunsi payer receipts'})).toBeVisible();
     expect(screen.getByText('Internally credited')).toBeVisible();
+    expect(screen.getByText(/the oldest pending, retrying or unmatched item was 1 min old/i)).toBeVisible();
     expect(screen.getByText('Gateway accepted')).toBeVisible();
     expect(screen.getByText('Reported delivered')).toBeVisible();
     expect(() => parseSmsOversight({...payload, queues: {...payload.queues, burimunsi_payer_sms: {...payer, delivered: -1}}})).toThrow();
+  });
+  it('reports an empty age when only blocked or posted SMS work remains', async () => {
+    const value = sample();
+    const payload = {...value, queues: {...value.queues,
+      burimunsi_sms: {pending: 0, retrying: 0, blocked: 1, unmatched: 0, posted: 4, oldest_pending_seconds: null},
+    }};
+    render(<SmsOversight request={vi.fn(async () => payload)} permissions={['system_health.read', 'sms.read']} authorityKey="session-a" />);
+    expect(await screen.findByText(/No age was recorded for pending, retrying or unmatched items/i)).toBeVisible();
   });
   it('does not show stale counts as current', async () => {
     const request = vi.fn(async () => sample(new Date(Date.now() - 65_000).toISOString()));

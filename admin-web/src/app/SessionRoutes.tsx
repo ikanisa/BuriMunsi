@@ -5,6 +5,7 @@ import {publicSessionPaths, safeAdminReturnLocation} from '../session/returnLoca
 import {useSession, type SessionContextValue} from '../session/SessionProvider';
 import {AdminShell, type AdminNavItem} from '../layout/AdminShell';
 import {Button, ErrorState, LoadingState} from '../ui';
+import {InteractionSuspendedContext} from '../ui/useFocusScope';
 import {canOpenAdminPath} from './route-access';
 
 export function SessionProblem({session}: {session: Pick<SessionContextValue, 'logoutUnconfirmed' | 'mfaRecoveryPending' | 'error' | 'signOut' | 'refresh'>}) {
@@ -34,13 +35,21 @@ export function ProtectedShell({navigation}: {navigation: readonly AdminNavItem[
   }
   const user = session.user;
   const permitted = navigation.filter(item => canOpenAdminPath(item.path, user));
-  return <AdminShell navigation={permitted} currentPath={`${location.pathname}${location.search}`}
-    identity={{name: session.verificationMode === 'passcode' ? user.displayName ?? user.phone ?? 'BuriMunsi account' : user.email,
-      role: user.role === 'owner' ? 'Owner' : user.role === 'admin' ? 'Admin' : 'Staff'}}
-    onSignOut={() => {void session.signOut().catch(() => undefined);}}>
-    {canOpenAdminPath(location.pathname, user) ? <ScreenBoundary key={location.pathname}><Suspense fallback={<LoadingState label="Opening workspace" />}><Outlet /></Suspense></ScreenBoundary> : <ErrorState title="Access unavailable"
-      message="Your account cannot open this page." />}
-  </AdminShell>;
+  const rechecking = session.status === 'rechecking';
+  const signOut = () => {void session.signOut().catch(() => undefined);};
+  return <>
+    {rechecking && <div className="admin-card admin-session-recheck">
+      <span role="status">Rechecking account access…</span><Button onClick={signOut}>Sign out</Button>
+    </div>}
+    <InteractionSuspendedContext.Provider value={rechecking}><div inert={rechecking}>
+      <AdminShell navigation={permitted} currentPath={`${location.pathname}${location.search}`}
+        identity={{name: session.verificationMode === 'passcode' ? user.displayName ?? user.phone ?? 'BuriMunsi account' : user.email,
+          role: user.role === 'owner' ? 'Owner' : user.role === 'admin' ? 'Admin' : 'Staff'}} onSignOut={signOut}>
+        {canOpenAdminPath(location.pathname, user) ? <ScreenBoundary key={location.pathname}><Suspense fallback={<LoadingState label="Opening workspace" />}><Outlet /></Suspense></ScreenBoundary> : <ErrorState title="Access unavailable"
+          message="Your account cannot open this page." />}
+      </AdminShell>
+    </div></InteractionSuspendedContext.Provider>
+  </>;
 }
 
 function SessionState({children}: {children: ReactNode}) {

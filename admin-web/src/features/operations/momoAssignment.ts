@@ -57,6 +57,7 @@ function verifyAttempt(attempt: PendingAttempt, context: MomoAssignmentContext) 
   return parseMomoAssignmentIntent(attempt.intent);
 }
 function acceptedSource(detail: MomoDetail) {
+  if (detail.transaction.native_group_id != null) fail('Native receipts use their collection assignment workflow.');
   const accepted = detail.sources.filter((source) => source.relation === 'accepted' && source.outcome === 'accepted');
   if (accepted.length !== 1) fail('The accepted source evidence could not be verified.');
   return accepted[0];

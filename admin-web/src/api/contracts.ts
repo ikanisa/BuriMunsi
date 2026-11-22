@@ -65,3 +65,8 @@ export class AdminRequestError extends Error {
     this.otpReceiptBody = details.otpReceiptBody;
   }
 }
+
+/** The connection failed before headers or while reading the response stream. */
+export class AdminTransportError extends AdminRequestError {
+  constructor(message: string, statusCode?: number) { super(message, {statusCode, outcomeUnknown: true}); }
+}

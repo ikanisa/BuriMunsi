@@ -1,5 +1,6 @@
 import {useCallback, useState} from 'react';
 import {useSession} from '../../session/SessionProvider';
+import {canDisplaySessionRecords} from '../../session/sessionContext';
 import {Button, Card, Dialog} from '../../ui';
 import type {Page} from './contracts';
 import {parseMomoSources, sourceStatuses, type MomoSourceJob, type SourceStatus} from './momoContracts';
@@ -13,8 +14,8 @@ import {useOperationRead} from './useOperationRead';
 export function MomoSourceReview({allowActions, allowRecovery}: {allowActions: boolean; allowRecovery: boolean}) {
   const session = useSession(), request = session.request, [status, setStatus] = useState<SourceStatus>('needs_review'), [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<{source: MomoSourceJob; epoch: number} | null>(null);
-  const load = useCallback(async () => parseMomoSources(await request(`momo/sources?${new URLSearchParams({status, limit: '25', offset: String(offset)})}`), offset, status), [request, offset, status]);
-  const {result, retry} = useOperationRead(`${session.epoch}:momo-sources:${status}:${offset}`, session.status === 'authenticated' && !!session.user?.permissions.includes('sms.read'), load, momoReadOptions);
+  const load = useCallback(async (signal: AbortSignal) => parseMomoSources(await request(`momo/sources?${new URLSearchParams({status, limit: '25', offset: String(offset)})}`, {signal}), offset, status), [request, offset, status]);
+  const {result, retry} = useOperationRead(`${session.epoch}:momo-sources:${status}:${offset}`, canDisplaySessionRecords(session) && !!session.user?.permissions.includes('sms.read'), load, momoReadOptions);
   return <Card className="operations-detail"><h2>Source messages needing attention</h2><p>Unresolved source messages are not validated payments. This view uses separate source filters and excludes transaction totals.</p><label className="operations-filter">Source state<select className="admin-input" value={status} onChange={(event) => {setStatus(event.target.value as SourceStatus); setOffset(0);}}>{sourceStatuses.map((value) => <option key={value} value={value}>{formatStatus(value)}</option>)}</select></label>
     <MomoResult result={result} retry={retry} empty={(page: Page<MomoSourceJob>) => page.rows.length === 0 && page.offset === 0}>{(page) => <>{page.rows.length > 0 && <MomoTable name="MoMo source messages" headings={['SMS reference', 'State', 'Received · Kigali', 'Processing issue', 'Receiving account', 'Binding']}>
       {page.rows.map((row) => <tr key={row.raw_sms_id}><td><button type="button" className="operations-link" onClick={() => setSelected({source: row, epoch: session.epoch})}>{row.raw_sms_id}</button></td><td>{formatStatus(row.state)}</td><td>{formatTime(row.received_at)}</td><td>{row.last_error ?? formatStatus(row.state)}</td><td>{row.receiving_account_id ?? 'Unassigned'}</td><td>{row.binding_id ?? 'Unassigned'}</td></tr>)}</MomoTable>}<MomoPager page={page} change={setOffset} /></>}</MomoResult>

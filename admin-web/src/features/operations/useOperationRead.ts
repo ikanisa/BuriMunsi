@@ -1,5 +1,6 @@
-import {useCallback, useEffect, useRef, useState} from 'react';
+import {useCallback, useContext, useEffect, useRef, useState} from 'react';
 import {AdminRequestError} from '../../api/client';
+import {InteractionSuspendedContext} from '../../ui/useFocusScope';
 
 export type OperationReadState<T> =
   | {key: string; status: 'success'; value: T; receivedAt: number}
@@ -12,6 +13,7 @@ export function useOperationRead<T>(
   load: (signal: AbortSignal) => Promise<T>,
   {pollMs, invalidResponse = 'The workspace response could not be verified.'}: {pollMs?: number; invalidResponse?: string} = {},
 ) {
+  const suspended = useContext(InteractionSuspendedContext);
   const [read, setRead] = useState<{scope: string; result: OperationReadState<T>} | null>(null);
   const [attempt, setAttempt] = useState(0);
   const flight = useRef<{key: string; promise: Promise<T>; controller: AbortController; readers: number} | null>(null);
@@ -19,6 +21,11 @@ export function useOperationRead<T>(
   const attemptKey = `${key}:${attempt}`;
 
   useEffect(() => {
+    if (suspended) {
+      flight.current?.controller.abort();
+      flight.current = null;
+      return;
+    }
     if (!enabled) return;
     let pending = flight.current;
     if (!pending || pending.key !== attemptKey || pending.controller.signal.aborted) {
@@ -49,14 +56,14 @@ export function useOperationRead<T>(
       // React's development replay attaches again before this microtask.
       queueMicrotask(() => {if (!current.readers) current.controller.abort();});
     };
-  }, [attemptKey, enabled, invalidResponse, key, load]);
+  }, [attemptKey, enabled, invalidResponse, key, load, suspended]);
 
   const retry = useCallback(() => {
-    if (!pollMs || !flight.current) setAttempt(value => value + 1);
-  }, [pollMs]);
+    if (!suspended && (!pollMs || !flight.current)) setAttempt(value => value + 1);
+  }, [pollMs, suspended]);
 
   useEffect(() => {
-    if (!enabled || !pollMs) return;
+    if (!enabled || suspended || !pollMs) return;
     const refreshVisible = () => {
       if (document.visibilityState === 'visible' && navigator.onLine && Date.now() - lastStarted.current >= pollMs) retry();
     };
@@ -70,7 +77,7 @@ export function useOperationRead<T>(
       window.removeEventListener('focus', refreshVisible);
       window.removeEventListener('online', refreshVisible);
     };
-  }, [enabled, pollMs, retry]);
+  }, [enabled, pollMs, retry, suspended]);
 
   const result = enabled && (read?.result.key === attemptKey ||
     pollMs && read?.scope === key && read.result.status === 'success') ? read?.result ?? null : null;
