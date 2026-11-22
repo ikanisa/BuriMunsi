@@ -2,6 +2,9 @@ import {applicationWorkTuple,fenceFailure,reserveDatabaseConnection} from './app
 import {adminPasscodeProof} from './domain/admin_email_policy.js';
 import {ApiError} from './domain/core.js';
 
+const beginWrite = 'BEGIN ISOLATION LEVEL READ COMMITTED';
+const beginNativeRead = 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY';
+const beginLockedRead = 'BEGIN ISOLATION LEVEL REPEATABLE READ READ WRITE';
 const runtimeSetup = "SET LOCAL ROLE collect_runtime; SET LOCAL statement_timeout='15s'; SET LOCAL lock_timeout='5s'";
 
 // Request-scoped PostgreSQL transactions share the original admission and claims.
@@ -57,14 +60,28 @@ export class PostgresTransactions {
     await this.#readContext(tx, isolation, 'on');
   }
 
-  async #readContext(tx, isolation, readOnly) {
+  async #readContext(tx, isolation, readOnly, native = false) {
     const work = this.applicationWork;
     if (!work) throw fenceFailure(null);
     await work.assert();
     const [mode] = await tx.unsafe("SELECT pg_catalog.current_setting('transaction_read_only') AS transaction_read_only,pg_catalog.current_setting('transaction_isolation') AS transaction_isolation");
     if (mode?.transaction_read_only !== readOnly || mode?.transaction_isolation !== isolation) throw fenceFailure(null);
-    await tx.unsafe(runtimeSetup);
     const claims = JSON.stringify(this.claims);
+    if (native && work.kind === 'http_collect') {
+      // The mode check above must finish before installing any scope. These
+      // transaction-local settings need one acknowledgement before reading.
+      const [setup] = await tx`SELECT
+        pg_catalog.set_config('role','collect_runtime',true) AS runtime_role,
+        pg_catalog.set_config('statement_timeout','15s',true),
+        pg_catalog.set_config('lock_timeout','5s',true),
+        pg_catalog.set_config('search_path','app,public,pg_catalog',true),
+        pg_catalog.set_config('request.jwt.claims',${claims},true),
+        pg_catalog.set_config('collect.edge_verified','true',true)`;
+      if (setup?.runtime_role !== 'collect_runtime') throw fenceFailure(null);
+      await this.#applyBrowserPasscode(tx);
+      return;
+    }
+    await tx.unsafe(runtimeSetup);
     if (work.kind === 'http_admin') {
       const [id, epoch, source] = applicationWorkTuple(work);
       await tx`select pg_catalog.set_config('search_path','app,public,pg_catalog',true),pg_catalog.set_config('request.jwt.claims',${claims},true),pg_catalog.set_config('collect.edge_verified','true',true),pg_catalog.set_config('collect.fence_admission_id',${id},true),pg_catalog.set_config('collect.fence_epoch',${String(epoch)},true),pg_catalog.set_config('collect.fence_source_sha256',${source},true)`;
@@ -98,8 +115,7 @@ export class PostgresTransactions {
   async withNativeReadSnapshot(operation) {
     if (this.#nativeRead) return operation(this.#nativeRead);
     return this.#transaction(async tx => {
-      await tx.unsafe('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
-      await this.readContext(tx);
+      await this.#readContext(tx, 'repeatable read', 'on', true);
       this.#nativeRead = tx;
       try {
         const result = await operation(tx);
@@ -108,7 +124,7 @@ export class PostgresTransactions {
       } finally {
         this.#nativeRead = null;
       }
-    });
+    }, beginNativeRead);
   }
 
   ownsNativeRead(tx) {
@@ -120,7 +136,8 @@ export class PostgresTransactions {
     return this.#transaction(fn);
   }
 
-  #transaction(fn, lockReadSnapshot = false) {
+  #transaction(fn, begin = beginWrite) {
+    const lockReadSnapshot = begin === beginLockedRead;
     const work = this.applicationWork;
     if (!work) throw fenceFailure(null);
     return work.waitUntil((async () => {
@@ -128,9 +145,7 @@ export class PostgresTransactions {
       const tx = await reserveDatabaseConnection(this.sql);
       let idleConfirmed = false;
       try {
-        await tx.unsafe(lockReadSnapshot
-          ? 'BEGIN ISOLATION LEVEL REPEATABLE READ READ WRITE'
-          : 'BEGIN ISOLATION LEVEL READ COMMITTED');
+        await tx.unsafe(begin);
         const result = await fn(tx);
         if (!lockReadSnapshot) {
           await tx.unsafe('COMMIT');
@@ -165,6 +180,6 @@ export class PostgresTransactions {
       await work.assert();
       if (this.applicationWork !== work) throw fenceFailure(null);
       return result;
-    }, true);
+    }, beginLockedRead);
   }
 }
