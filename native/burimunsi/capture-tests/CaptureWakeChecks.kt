@@ -17,6 +17,8 @@ fun main(){
     ck("full queue does not falsely schedule a new capture",CaptureFixture.queue.size==1&&CaptureFixture.signalCalls==1)
     CaptureFixture.reset();CaptureFixture.retain=false;receiver.onReceive(context,sms)
     ck("unapproved source is neither retained nor scheduled",CaptureFixture.queue.isEmpty()&&CaptureFixture.signalCalls==0)
+    CaptureFixture.reset();CaptureFixture.admin=false;receiver.onReceive(context,sms)
+    ck("a Staff session cannot acquire a new receipt through an older active gateway",CaptureFixture.queue.isEmpty()&&CaptureFixture.signalCalls==0&&CaptureFixture.finished==1)
     CaptureFixture.reset();CaptureFixture.scheduleFailure=true;receiver.onReceive(context,sms)
     ck("scheduler failure preserves the already retained capture",CaptureFixture.queue.size==1&&CaptureFixture.signalCalls==1&&CaptureFixture.finished==1)
     CaptureFixture.reset();CaptureFixture.metadataFailure=true;receiver.onReceive(context,sms)

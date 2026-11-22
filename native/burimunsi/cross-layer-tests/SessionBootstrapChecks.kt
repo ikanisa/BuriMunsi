@@ -260,7 +260,7 @@ private suspend fun renewedDeadlineKeepsScope() {
 private suspend fun equalProfileRefresh() {
     val scenario = SessionScenario()
     scenario.sessionDeadline = System.currentTimeMillis() + 3_600_000
-    scenario.capabilities = if (BuildConfig.IS_GATEWAY) listOf(Capability.READ, Capability.GATEWAY) else listOf(Capability.READ)
+    scenario.capabilities = listOf(Capability.READ)
     scenario.signIn(scenario.repository())
     val model = BuriViewModel(scenario.app)
     try {

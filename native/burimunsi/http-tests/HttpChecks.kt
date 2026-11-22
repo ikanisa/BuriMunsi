@@ -170,6 +170,12 @@ fun main(){
   respond(JSONObject().put("groupId","group-1").put("hasPending",false).put("hasRecorded",true).put("recordedCount",1)
     .put("hasUnmatchedCanonical",false).put("revision","f".repeat(64)))
   ck("real ApiClient reads scoped reconciliation status without a body",call("reconcile-status").getInt("recordedCount")==1&&Wire.last!!.written.size()==0)
+  fun verified(scopeName:String)=JSONObject().put("groupId","group-1").put("hasPending",false).put("hasRecorded",false)
+    .put("recordedCount",0).put("hasUnmatchedCanonical",false).put("revision","f".repeat(64)).put("scope",scopeName)
+  respond(verified("verified_installation"));ck("the handset verifies its own inventory scope",
+   call("reconcile-verified-status?scope=installation").getString("scope")=="verified_installation")
+  respond(verified("verified_collection"));ck("a collection inventory cannot certify an individual handset",
+   runCatching{call("reconcile-verified-status?scope=installation")}.isFailure)
   val opened=Wire.opened
   ck("the reconciliation contract refuses raw message text before transport",
     runCatching{call("reconcile",item(first).put("rawBody","synthetic private message"))}.isFailure&&Wire.opened==opened)
@@ -513,6 +519,14 @@ fun main(){
  val missingHome=runCatching{native.call("POST",bundledLogin,body=loginBody,contractContext=loginContext)}.exceptionOrNull() as ApiFailure
  ck("missing requested Home is an uncertain contract failure",missingHome.uncertain&&missingHome.code=="contract_context")
  val cloud="https://rrlduytparvsjfmegalh.supabase.co";val publishable="sb_publishable_"+"p".repeat(24)
+ val otherInstall="00000000-0000-4000-8000-000000000088"
+ val secondAdminPhone=ApiClient.phonePin("https://test.invalid",otherInstall,"internal_receiver","/functions/v1/collect-api"){"e".repeat(64)}
+ Wire.reply=Reply(transform={v->v.put("data",v.getJSONObject("data").put("groupId","group-1"))})
+ val secondLogin=JSONObject(secondAdminPhone.call("POST","/v1/burimunsi/session/login",
+  body=JSONObject().put("phone","+250780000001").put("pin","2468"),contractContext=mapOf("generation" to "28")))
+ ck("a second independently keyed phone uses the same ordinary Admin login and server scope",
+  secondLogin.getString("groupId")=="group-1"&&Wire.last?.getRequestProperty("X-BuriMunsi-Installation")==otherInstall&&
+   Wire.last?.getRequestProperty("X-BuriMunsi-Profile")=="internal_receiver"&&Wire.last?.getRequestProperty("X-BuriMunsi-Group")==null)
  val cloudClient=ApiClient.phonePin(cloud,nativeInstall,"staff","/functions/v1/collect-api",publishable){"d".repeat(64)}
  cloudClient.call("POST","/v1/burimunsi/session/login",body=JSONObject().put("phone","+250780000001").put("pin","2468"),contractContext=mapOf("generation" to "18"))
  ck("cloud login sends the public project key without inventing an authorization token",Wire.last?.getRequestProperty("apikey")==publishable&&Wire.last?.getRequestProperty("Authorization")==null)

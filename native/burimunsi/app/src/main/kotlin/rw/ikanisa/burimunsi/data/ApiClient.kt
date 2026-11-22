@@ -140,7 +140,8 @@ class ApiClient private constructor(origin: String, val installationId: String,
             val b=requestData as? Map<*, *>
             val expected=(if(bootstrap)contractContext-"groupId" else contractContext) + mapOf("installationId" to installationId,"generation" to generation,
                 "requestId" to correlation,"recordId" to route?.second,"now" to System.currentTimeMillis(),
-                "includeHome" to (query["include"]=="home")) +
+                "includeHome" to (query["include"]=="home"),
+                "verifiedScope" to if(query["scope"]=="installation") "verified_installation" else "verified_collection") +
                 (b?.get("phone")?.let{mapOf("phone" to it)} ?: emptyMap()) +
                 (b?.get("memberId")?.let{mapOf("memberId" to it)} ?: emptyMap()) +
                 (b?.get("id")?.let{mapOf("staffId" to it)} ?: emptyMap()) +

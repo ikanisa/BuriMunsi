@@ -33,6 +33,7 @@ class NativeRepository() {
  val reconciliationRequests=mutableListOf<ObservationReconcileRequest>()
  val retainedSourceKeys=mutableSetOf<String>()
  val retainedSources=linkedMapOf<String,String>();var distinctSourceIds=true
+ val foreignInstallationSources=mutableListOf<String>()
  val cloudOnlySources=mutableListOf<String>();var pageRevision="fixture"
  var pendingReservation=false;var unmatchedCanonical=false;var statusFailure:Exception?=null;var statusRevisionOverride:String?=null;var statusCalls=0
  var afterStatus:((Int)->Unit)?=null
@@ -93,7 +94,7 @@ class NativeRepository() {
  fun observationPage(q:String="",cursor:String?=null,limit:Int?=null):Page<ObservationListRow> {
   pageCalls++;pageCursors.add(cursor);val action=afterPage;afterPage=null;action?.invoke();pageFailure?.let{throw it}
   if(cursor!=null)cursorFailure?.let{throw it}
-  val all=retainedSources.values.toList()+cloudOnlySources
+  val all=retainedSources.values.toList()+cloudOnlySources+foreignInstallationSources
   val count=pageCountOverride?:all.size;val offset=cursor?.toInt()?:0;val size=limit?:100
   val items=all.drop(offset).take(size).map{ObservationListRow(SmsSourceRef.Observation(it),"group-1","2026-11-17T00:00:00Z")}
   val next=if(offset+items.size<count&&items.isNotEmpty())(offset+items.size).toString() else null

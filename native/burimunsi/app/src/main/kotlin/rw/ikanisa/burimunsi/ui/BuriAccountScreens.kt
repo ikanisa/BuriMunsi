@@ -13,6 +13,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.platform.LocalFocusManager
@@ -28,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.cool.mobile.BuildConfig
 import app.cool.mobile.R
+import rw.ikanisa.burimunsi.AdminReceiverEntry
 import rw.ikanisa.burimunsi.core.*
 import rw.ikanisa.burimunsi.core.Role
 
@@ -50,8 +52,24 @@ import rw.ikanisa.burimunsi.core.Role
             if(m.allows(Capability.STAFF)){SettingRow(R.drawable.ic_members,t("Staff access"),s.staff?.totalCount?.let{t("%1\$d accounts",it)},enabled=!s.busy,click={m.openSheet(Sheet.STAFF)});HorizontalDivider(color=Color.White.copy(alpha=.08f))}
             if(BuildConfig.IS_GATEWAY&&s.operator?.role==Role.ADMIN){SettingRow(R.drawable.ic_device,t("Gateway"),s.gateway?.let{t(GatewayHealth.describe(it).title)},enabled=!s.busy,click={m.openSheet(Sheet.GATEWAY)});HorizontalDivider(color=Color.White.copy(alpha=.08f))}
             if(m.allows(Capability.STAFF)){SettingRow(R.drawable.ic_history,t("Activity"),enabled=!s.busy,click={m.openSheet(Sheet.AUDIT)});HorizontalDivider(color=Color.White.copy(alpha=.08f))}
-            val canManageSms=BuildConfig.IS_GATEWAY&&s.operator?.role==Role.ADMIN&&m.allows(Capability.GATEWAY)
-            SettingRow(R.drawable.ic_sms,t("SMS permission"),t(if(!canManageSms)"Unavailable" else if(m.smsAccessGranted)"Granted" else "Required"),enabled=canManageSms&&!s.busy,click={if(m.smsAccessGranted)onPhoneSettings()else onPermissions()});HorizontalDivider(color=Color.White.copy(alpha=.08f))
+            val canManageSms=BuildConfig.IS_GATEWAY&&s.operator?.role==Role.ADMIN
+            if (!BuildConfig.IS_GATEWAY && s.operator?.role == Role.ADMIN) {
+                val context = LocalContext.current
+                if (AdminReceiverEntry.intent(context) != null) {
+                    SettingRow(R.drawable.ic_sms, t("Open BuriMunsi Admin"), t("Receive payment SMS"),
+                        enabled = !s.busy, click = { AdminReceiverEntry.open(context,s.operator?.role) })
+                } else {
+                    Column(Modifier.fillMaxWidth().padding(vertical=16.dp)) {
+                        Text(t("Receive payment SMS"), fontSize=19.sp, lineHeight=27.sp)
+                        Spacer(Modifier.height(5.dp))
+                        Text(t("Install the signed BuriMunsi Admin app provided by your organization, then sign in with your mobile number and passcode."),
+                            fontSize=14.sp, color=BuriTheme.Muted, lineHeight=22.sp)
+                    }
+                }
+            } else {
+                SettingRow(R.drawable.ic_sms,t("SMS permission"),t(if(!canManageSms)"Unavailable" else if(m.smsAccessGranted)"Granted" else "Required"),enabled=canManageSms&&!s.busy,click={if(m.smsAccessGranted)onPhoneSettings()else onPermissions()})
+            }
+            HorizontalDivider(color=Color.White.copy(alpha=.08f))
             if(canManageSms){
                 SettingRow(R.drawable.ic_sms,t("Sync notifications"),t(when(m.notificationAccessGranted){true->"Allowed";false->"Required";else->"Checking access"}),enabled=!s.busy,click=onNotifications);HorizontalDivider(color=Color.White.copy(alpha=.08f))
                 SettingRow(R.drawable.ic_device,t("Battery optimization"),t(when(m.batteryExemptionGranted){true->"Unrestricted";false->"Optimized";else->"Checking access"}),enabled=!s.busy,click=onBatteryOptimization);HorizontalDivider(color=Color.White.copy(alpha=.08f))

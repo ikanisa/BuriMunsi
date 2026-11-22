@@ -10,13 +10,12 @@ internal class NativeSmsData(
     private val installationProfile: () -> String?,
     private val recordReadOwner: Any,
 ) : NativeSessionRequests by session {
-    private fun observationSession():SessionWitness {
+    private fun observationSession(protectedListing:Boolean=false):SessionWitness {
         val witness=ownedSession()
         return authority.withCurrent(witness){
             val who=operator?:throw ApiFailure("session_unavailable",401)
             checkContract(installationProfile()=="internal_receiver"&&who.role==Role.ADMIN&&
-                who.expiresAt>System.currentTimeMillis()&&
-                setOf(Capability.SMS.key,Capability.GATEWAY.key).all{it in who.capabilities},"access_denied")
+                who.expiresAt>System.currentTimeMillis()&&(!protectedListing||Capability.SMS.key in who.capabilities),"access_denied")
             witness
         }
     }
@@ -103,11 +102,11 @@ internal class NativeSmsData(
         checkContract(count in 0..100_000&&recorded==(count>0)&&Regex("[a-f0-9]{64}").matches(revision),"invalid_observation_reconciliation")
         ObservationReconcileStatus(value.getBoolean("hasPending"),recorded,count,revision,value.getBoolean("hasUnmatchedCanonical"))
     }
-    fun verifiedObservationStatus(): ObservationReconcileStatus = readObservationProof("GET", "reconcile-verified-status") { value ->
+    fun verifiedObservationStatus(): ObservationReconcileStatus = readObservationProof("GET", "reconcile-verified-status?scope=installation") { value ->
         val count = value.getInt("recordedCount")
         val recorded = value.getBoolean("hasRecorded")
         val revision = value.getString("revision")
-        checkContract(value.getString("scope") == "verified_collection" && count in 0..100_000 &&
+        checkContract(value.getString("scope") == "verified_installation" && count in 0..100_000 &&
             recorded == (count > 0) && Regex("[a-f0-9]{64}").matches(revision), "invalid_observation_reconciliation")
         ObservationReconcileStatus(value.getBoolean("hasPending"), recorded, count, revision, value.getBoolean("hasUnmatchedCanonical"))
     }
@@ -124,7 +123,7 @@ internal class NativeSmsData(
     }
     /** A quarantine page is a distinct source stream, never a canonical SMS/payment page. */
     fun observationPage(q:String="",cursor:String?=null,limit:Int?=null):Page<ObservationListRow> {
-        val witness = observationSession()
+        val witness = observationSession(protectedListing=true)
         val path = "/sms/observations" + query(
             mapOf("q" to q, "cursor" to cursor, "limit" to limit?.coerceIn(1, 100)?.toString()),
         )
@@ -138,7 +137,7 @@ internal class NativeSmsData(
         limit: Int,
     ): Page<ObservationListRow> {
         val path = listingPath("/sms/observations", ListingTarget.OBSERVATIONS, listing, cursor, limit = limit)
-        val witness = observationSession()
+        val witness = observationSession(protectedListing=true)
         val data = scope?.read(recordReadOwner, path) ?: requestOwned(witness, "GET", path)
         return authority.withCurrent(witness) { decodeObservationPage(data) }
     }
@@ -164,7 +163,7 @@ internal class NativeSmsData(
     }
     fun retryObservation(source:SmsSourceRef.Observation,requestId:String):String{
         val id=Values.id(source.id)
-        val value=JSONObject(requestOwned(observationSession(),"POST","/sms/observations/$id/retry",JSONObject().put("requestId",requestId)))
+        val value=JSONObject(requestOwned(observationSession(protectedListing=true),"POST","/sms/observations/$id/retry",JSONObject().put("requestId",requestId)))
         checkContract(value.getString("groupId")==groupId&&value.getString("sourceId")==id&&value.getString("requestId")==requestId&&
             value.getString("result") in setOf("scheduled","not_eligible"),"invalid_observation_source")
         return value.getString("result")
@@ -173,7 +172,7 @@ internal class NativeSmsData(
     fun revealObservation(source:SmsSourceRef.Observation,reason:String):ObservationDisclosure {
         val normalized=RawDisclosureInput.reason(reason)?:throw ApiFailure("reason_required",400)
         val id=Values.id(source.id)
-        val row=JSONObject(requestOwned(observationSession(),"POST","/sms/observations/$id/reveal",JSONObject().put("reason",normalized).put("displayHintsVersion",1)))
+        val row=JSONObject(requestOwned(observationSession(protectedListing=true),"POST","/sms/observations/$id/reveal",JSONObject().put("reason",normalized).put("displayHintsVersion",1)))
         checkedDto("observationReveal.data",row)
         checkContract(row.getString("sourceKind")=="observation"&&row.getString("sourceId")==id&&row.getString("groupId")==groupId&&
             row.getString("status")=="source_unresolved"&&row.counter("financialEffects")==0L,"invalid_observation_source")

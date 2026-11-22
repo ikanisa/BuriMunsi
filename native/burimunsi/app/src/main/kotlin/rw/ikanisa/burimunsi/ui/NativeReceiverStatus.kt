@@ -115,11 +115,12 @@ internal class NativeReceiverStatus(
         return !current(snapshot.first) || snapshot.second.any { !granted(it) }
     }
 
-    fun launchPermissions(show: (Array<String>) -> Unit) {
+    fun launchPermissions(automatic: Boolean, show: (Array<String>) -> Unit) {
         val ticket = request() ?: return
-        if (!Access.allows(ticket.operator, Capability.GATEWAY, clock(), receiver)) return
         scope.launch {
-            val names = try { withContext(Dispatchers.IO) { gateway.requiredPermissions() } }
+            val names = try { withContext(Dispatchers.IO) {
+                if (automatic && !gateway.canOfferReceivingPermissions()) emptyArray() else gateway.requiredPermissions()
+            } }
                 catch (e: CancellationException) { throw e }
                 catch (_: Exception) { return@launch }
             if (names.isNotEmpty()) current(ticket) { show(names) }
@@ -145,11 +146,11 @@ internal class NativeReceiverStatus(
     }
 
     suspend fun sync(publish: (GatewayStatus) -> Unit) {
-        controlAndRead(requireControlTicket(), gateway::sync, publish)
+        controlAndRead(request() ?: throw ApiFailure("access_denied",403), gateway::sync, publish)
     }
 
     suspend fun setPaused(paused: Boolean, publish: (GatewayStatus) -> Unit) {
-        val ticket = requireControlTicket()
+        val ticket = request() ?: throw ApiFailure("access_denied",403)
         // The operator can resume capture. The receiver can still stop itself when its authority changes.
         if (paused) throw ApiFailure("gateway_action_unavailable", 409)
         var resumable = false
@@ -173,7 +174,7 @@ internal class NativeReceiverStatus(
     }
 
     fun startReceiver() {
-        if (!receiver) return
+        if (!receiver || screen().operator?.role == Role.STAFF) return
         if (startJob?.isActive == true) {
             startQueued = true
             return
@@ -214,12 +215,12 @@ internal class NativeReceiverStatus(
     fun takePermissionRefresh(): Request? {
         val ticket = pendingPermissions ?: return null
         pendingPermissions = null
-        return ticket.takeIf { current(it) && Access.allows(it.operator, Capability.GATEWAY, clock(), receiver) }
+        return ticket.takeIf { current(it) }
     }
 
     fun refreshHealth() {
         val ticket = request()
-        if (ticket == null || ticket.route != Route.SETTINGS || !Access.allows(ticket.operator, Capability.GATEWAY, clock(), receiver)) {
+        if (ticket == null || ticket.route != Route.SETTINGS) {
             health = null
             return
         }

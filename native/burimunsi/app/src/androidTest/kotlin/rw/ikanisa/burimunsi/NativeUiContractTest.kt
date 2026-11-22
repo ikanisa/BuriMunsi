@@ -459,7 +459,7 @@ class NativeUiContractTest {
     }
     @Test fun staffViewsHaveNoInventedPreferencesOrAdminGatewayControls(){
         val c=FakeController(Route.SETTINGS,Role.STAFF);show(c)
-        for(extra in listOf("Language","Reduce screen motion","Staff access","Gateway","Activity"))ui.onNodeWithText(extra).assertDoesNotExist()
+        for(extra in listOf("Language","Reduce screen motion","Staff access","Gateway","Activity","Open BuriMunsi Admin","Receive payment SMS"))ui.onNodeWithText(extra).assertDoesNotExist()
         ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Change passcode"));ui.onNodeWithText("Change passcode").assertExists()
         ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Help"));ui.onNodeWithText("Help").assertExists()
         ui.runOnIdle{c.state=c.state.copy(route=Route.HOME)};assertReceiverControlsAbsent(c)
@@ -467,16 +467,35 @@ class NativeUiContractTest {
     @Test fun settingsSmsPermissionUsesTheAvailableAndroidAction(){
         val c=FakeController(Route.SETTINGS,Role.ADMIN);var requests=0;var settings=0
         show(c,onPermissions={requests++},onPhoneSettings={settings++})
-        ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("SMS permission") and hasClickAction())
         val row=button("SMS permission")
         if(BuildConfig.IS_GATEWAY){
+            ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("SMS permission") and hasClickAction())
             row.assertIsEnabled().assert(hasText("Required")).performClick()
             ui.runOnIdle{check(requests==1&&settings==0);c.smsAccessGranted=true}
             row.assertIsEnabled().assert(hasText("Granted")).performClick()
             ui.runOnIdle{check(requests==1&&settings==1);c.state=c.state.copy(operator=c.operator.copy(role=Role.STAFF))}
             row.assertIsNotEnabled().assert(hasText("Unavailable"))
         }else{
+            val target = InstrumentationRegistry.getInstrumentation().targetContext
+            var opened: android.content.Intent? = null
+            val recording = object : android.content.ContextWrapper(target) {
+                override fun startActivity(intent: android.content.Intent) { opened = intent }
+            }
+            check(!AdminReceiverEntry.open(recording,Role.STAFF) && opened == null)
+            if (AdminReceiverEntry.intent(target) == null) {
+                ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Receive payment SMS"))
+                ui.onNodeWithText("Install the signed BuriMunsi Admin app provided by your organization, then sign in with your mobile number and passcode.").assertExists()
+                check(!AdminReceiverEntry.open(recording,Role.ADMIN))
+            } else {
+                ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Open BuriMunsi Admin") and hasClickAction())
+                button("Open BuriMunsi Admin").assertIsEnabled()
+                check(AdminReceiverEntry.open(recording,Role.ADMIN) && opened?.component?.packageName == "rw.ikanisa.burimunsi.gateway.cloud.nativeTest")
+                check(opened?.data == null && opened?.extras == null)
+            }
+            ui.runOnIdle{c.state=c.state.copy(operator=c.operator.copy(role=Role.STAFF))}
+            ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("SMS permission") and hasClickAction())
             row.assertIsNotEnabled().assert(hasText("Unavailable"))
+            ui.onNodeWithText("Open BuriMunsi Admin").assertDoesNotExist()
             ui.runOnIdle{check(requests==0&&settings==0)}
         }
     }

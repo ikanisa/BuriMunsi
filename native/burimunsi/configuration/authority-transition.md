@@ -16,13 +16,8 @@ Before live use, complete and verify the following for each installation:
 1. Reconcile the cloud database, authentication, functions, Admin access and
    existing group and financial history. Preserve every uncertain outcome; do
    not replay an unknown effect against the cloud project.
-2. Stop the former receiver and reconcile its outstanding commands and queues
-   without replaying uncertain effects. Preserve the original evidence; the new
-   apps cannot read it. Establish the single Cloud receiver and an accountable
-   procedure for messages held at first scan.
-3. Authenticate the existing approved operator and have the Cloud service issue
-   a new installation-bound grant and session. Check role, collection and device
-   scope; never copy a previous device credential into the new package.
+2. Reconcile outstanding commands from earlier app packages under their original receipt identities. A previously paired gateway retains its own queue and recovery credentials.
+3. Sign in to Admin Sync on each supported Android phone using the registered Admin mobile number and passcode. The server authenticates the Admin and registers the new installation automatically. Android asks for SMS and phone permissions on that handset. Subsequent eligible receipts and backlog reconciliation run automatically. A second signed-in Admin handset can receive at the same time. Each handset verifies its own inbox, while payment references and credits remain scoped to the collection. Staff accounts have no access to the receiver.
 4. Preserve unresolved obligations and original source identities. Verify that
    a crash, retry, reinstall or account change cannot create duplicate credits.
 5. Qualify the hosted routes, Admin and Staff access, SMS permission separation,

@@ -82,6 +82,16 @@ fun main() = runBlocking {
         withTimeout(5_000) { while(model.state.gateway == null) delay(5) }
         model.navigate(Route.SETTINGS)
         idle(model)
+        GatewayFixture.mayOfferPermissions=false
+        val pausedOffer=java.util.concurrent.atomic.AtomicBoolean(false)
+        model.requestReceivingPermissions(automatic=true) { pausedOffer.set(true) }
+        withContext(model.viewModelScope.coroutineContext.minusKey(kotlinx.coroutines.Job)) { }
+        check(!pausedOffer.get())
+        GatewayFixture.mayOfferPermissions=true
+        val newAdmin=kotlinx.coroutines.CompletableDeferred<Array<String>>()
+        model.requestReceivingPermissions(automatic=true) { newAdmin.complete(it) }
+        check(withTimeout(5_000){newAdmin.await()}.contains(android.Manifest.permission.RECEIVE_SMS))
+        println("PASS a new authenticated Admin can receive automatically and local pause suppresses the Android prompt")
         val permissionEntered = CountDownLatch(1)
         val permissionRelease = CountDownLatch(1)
         GatewayFixture.permissionsEntered = permissionEntered

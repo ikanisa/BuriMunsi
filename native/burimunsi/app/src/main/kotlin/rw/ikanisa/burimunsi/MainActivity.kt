@@ -20,6 +20,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.lifecycleScope
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.activity.viewModels
 import kotlinx.coroutines.launch
 import app.cool.mobile.BuildConfig
@@ -29,15 +30,47 @@ import rw.ikanisa.burimunsi.core.export.ExportFormat
 import rw.ikanisa.burimunsi.core.Capability
 import rw.ikanisa.burimunsi.core.BuriMunsiSupport
 import rw.ikanisa.burimunsi.core.ScreenGate
+import rw.ikanisa.burimunsi.core.Role
+import rw.ikanisa.burimunsi.core.Route
 
 class MainActivity:ComponentActivity(){
-    private var notificationsRequested=false
     private val model:BuriViewModel by viewModels()
     private val permissions=registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()){
         model.permissionsChanged();refreshSystemPolicy()
     }
+    private val receivingPrompt by lazy { getSharedPreferences("receiver-permission-prompt", MODE_PRIVATE) }
+
+    private fun offerReceivingPermissions(automatic: Boolean) {
+        if (!BuildConfig.IS_GATEWAY) return
+        model.requestReceivingPermissions(automatic) { required ->
+            val missing = required.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+            if (missing.isEmpty()) {
+                if (automatic) offerSyncNotificationPermission()
+                return@requestReceivingPermissions
+            }
+            val previouslyAsked = receivingPrompt.getBoolean("asked", false)
+            val previouslyDenied = missing.any(::shouldShowRequestPermissionRationale)
+            if (automatic && (previouslyAsked || previouslyDenied)) {
+                if (previouslyDenied) receivingPrompt.edit().putBoolean("asked",true).apply()
+                return@requestReceivingPermissions
+            }
+            if (!automatic && previouslyAsked && !previouslyDenied) {
+                startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+            } else {
+                receivingPrompt.edit().putBoolean("asked", true).apply()
+                permissions.launch(missing.toTypedArray())
+            }
+        }
+    }
     private val notifications=registerForActivityResult(ActivityResultContracts.RequestPermission()){
         refreshSystemPolicy();model.permissionsChanged()
+    }
+    private fun offerSyncNotificationPermission() {
+        if (Build.VERSION.SDK_INT < 33 || receivingPrompt.getBoolean("notification-asked",false) ||
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED ||
+            shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) return
+        receivingPrompt.edit().putBoolean("notification-asked",true).apply()
+        notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
     // Keep the v33 CSV slot registered solely to drain an unbound legacy result.
     // It must never read, write, delete, or change the current download binding.
@@ -58,6 +91,7 @@ class MainActivity:ComponentActivity(){
         if(!BuildConfig.DEBUG)window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         setContent {
             var visible by remember{mutableStateOf(false)}
+            var adminEntryOffered by rememberSaveable { mutableStateOf(false) }
             ReportDrawnWhen {
                 visible && !model.state.starting && !model.state.busy &&
                     model.screenGate == ScreenGate.OPEN
@@ -72,6 +106,19 @@ class MainActivity:ComponentActivity(){
                 model.state.onboarding.photoPreviewPending,model.state.onboarding.documentRequestId){
                 if(visible&&model.state.onboarding.photoPreviewPending&&!model.state.busy&&!model.state.offline&&!model.state.pending&&model.allows(Capability.ENROLL))
                     model.state.onboarding.documentRequestId?.let(memberInputs::previewCapturedPhoto)
+            }
+            val actor = model.state.operator
+            LaunchedEffect(visible, actor?.id, actor?.role, model.state.busy, model.screenGate, model.smsAccessGranted) {
+                if (actor?.role != Role.ADMIN) {
+                    adminEntryOffered = false
+                } else if (visible && !model.state.busy && model.screenGate == ScreenGate.OPEN) {
+                    if (BuildConfig.IS_GATEWAY) {
+                        offerReceivingPermissions(automatic = true)
+                    } else if (!adminEntryOffered) {
+                        adminEntryOffered = true
+                        if (!AdminReceiverEntry.open(this@MainActivity,actor.role)) model.navigate(Route.SETTINGS)
+                    }
+                }
             }
             val download=model.downloadRequest
             LaunchedEffect(download?.id,visible,model.state.busy){
@@ -91,7 +138,7 @@ class MainActivity:ComponentActivity(){
             }
             BuriContent {
                 if(visible)BuriApp(model,onSupport=::support,
-                    onPermissions={model.requestReceivingPermissions { names -> permissions.launch(names) }},
+                    onPermissions={offerReceivingPermissions(automatic = false)},
                     onExport=model::prepareDownload,
                     onPhoneSettings={startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:$packageName")))},
                     onPickMemberFile=memberInputs::pickDocument,
@@ -121,9 +168,10 @@ class MainActivity:ComponentActivity(){
         model.systemPolicyChanged(allowed,exempt)
     }
     private fun notificationAccess(){
-        if(!BuildConfig.IS_GATEWAY||!model.allows(Capability.GATEWAY))return
-        if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED&&!notificationsRequested){
-            notificationsRequested=true
+        if(!BuildConfig.IS_GATEWAY || model.screenGate != ScreenGate.OPEN || model.state.operator?.role != Role.ADMIN) return
+        if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED&&
+            (!receivingPrompt.getBoolean("notification-asked",false)||shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS))){
+            receivingPrompt.edit().putBoolean("notification-asked",true).apply()
             notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }else{
             val manager=getSystemService(NotificationManager::class.java)
@@ -135,7 +183,7 @@ class MainActivity:ComponentActivity(){
         }
     }
     private fun batteryOptimization(){
-        if(!BuildConfig.IS_GATEWAY||!model.allows(Capability.GATEWAY))return
+        if(!BuildConfig.IS_GATEWAY || model.screenGate != ScreenGate.OPEN || model.state.operator?.role != Role.ADMIN) return
         val exempt=getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(packageName)==true
         val target=if(exempt)Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
             else Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,Uri.parse("package:$packageName"))

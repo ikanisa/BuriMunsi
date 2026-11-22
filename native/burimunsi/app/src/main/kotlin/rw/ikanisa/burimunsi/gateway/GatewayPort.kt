@@ -24,6 +24,8 @@ interface GatewayPort {
     fun retirementPending():Boolean
     fun recoverRetirement():ReceiverRetirementAck?
     fun requiredPermissions():Array<String>
+    /** A foreground Admin can be invited once on this installation unless they paused the local receiver. */
+    fun canOfferReceivingPermissions():Boolean = false
     fun queuedObservations(query:String):QueuedObservationSnapshot?
     /** Publish only while the same session, permission and queue revision remain current. */
     fun publishQueued(snapshot:QueuedObservationSnapshot,publish:()->Unit):Boolean

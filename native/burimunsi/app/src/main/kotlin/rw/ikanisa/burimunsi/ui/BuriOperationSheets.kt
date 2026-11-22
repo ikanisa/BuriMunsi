@@ -87,7 +87,7 @@ import rw.ikanisa.burimunsi.core.*
         return
     }
     Panel{
-        item{Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Glyph(R.drawable.ic_device,null,BuriTheme.Text,32);Spacer(Modifier.width(14.dp));Column{Text(t("Receiving phone"),fontSize=24.sp,fontWeight=FontWeight.SemiBold);Text(t("One active receiver"),fontSize=14.sp,color=BuriTheme.Muted)}}}
+        item{Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Glyph(R.drawable.ic_device,null,BuriTheme.Text,32);Spacer(Modifier.width(14.dp));Text(t("Receiving phone"),fontSize=24.sp,fontWeight=FontWeight.SemiBold)}}
         item{FactGroup(listOf(
             t("Paired receiving code") to (g.pairedReceivingCode?:t("Unavailable")),
             t("Sender") to (g.approvedSenders?.joinToString(", ")?:t("Unavailable")),

@@ -17,6 +17,15 @@ import java.time.Instant
 
 /** Local status and scheduling only; no SIM, wallet or payment is asserted. */
 internal object ObservationGateway {
+    fun <T> withCaptureAdmin(context: Context, collection: String?, action: () -> T): T? =
+        NativeRepository.withObservationOwner(context) { group, account ->
+            if (group == collection && !ObservationConfigStore(context).paused(ObservationOwner(group, account))) action() else null
+        }
+
+    fun canOfferPermissions(context: Context): Boolean = NativeRepository.withObservationOwner(context) { group, account ->
+        !ObservationConfigStore(context).paused(ObservationOwner(group, account))
+    } == true
+
     private fun permitted(context:Context)=listOf(Manifest.permission.RECEIVE_SMS,Manifest.permission.READ_SMS).all{
         context.checkSelfPermission(it)==PackageManager.PERMISSION_GRANTED
     }

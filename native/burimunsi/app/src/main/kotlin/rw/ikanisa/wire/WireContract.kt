@@ -333,6 +333,8 @@ class WireContract(private val product: String, private val version: String,
                         items[i].containsKey("processingStatus") != (expected["includeProcessing"] == true && matched)
                 })reject("CONTRACT_IDENTITY")
             }
+            if(operation=="observationReconcileVerifiedStatus" && d["scope"] != (expected["verifiedScope"] ?: "verified_collection"))
+                reject("CONTRACT_IDENTITY")
             if(operation in listOf("observationReconcileStatus", "observationReconcileVerifiedStatus")&&
                 (d["hasRecorded"]==true)!=((d["recordedCount"] as Number).toLong()>0L))reject("CONTRACT_STATE")
             if (operation == "observationReveal") {

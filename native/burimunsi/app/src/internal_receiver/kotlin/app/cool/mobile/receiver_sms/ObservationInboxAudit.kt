@@ -41,11 +41,9 @@ internal class ObservationInboxAudit(
         val consent:ObservationConsentState,val control:ObservationConfigStore.Control,val deviceScope:String,val heldScope:String,val revision:Long,val uncertainLegacy:Boolean)
     private data class AuditProgress(val scope:AuditScope,val last:Long,val unconfirmed:Boolean,val startedAt:Long,
         val collectionRevision:String,val recordedCount:Int,
-        val sourceIds:Set<String> = emptySet(),val phoneComplete:Boolean=false,val cloudCursor:String?=null,
-        val cloudRevision:String?=null,val cloudTotal:Int?=null,val cloudIds:Set<String> = emptySet(),val cursors:Set<String> = emptySet(),
-        val cloudComplete:Boolean=false,
+        val sourceIds:Set<String> = emptySet(),val phoneComplete:Boolean=false,
         val runId:String=UUID.randomUUID().toString(),val pageSize:Int=OBSERVATION_RECONCILE_MAX_ITEMS,val repairTail:Boolean=false,val candidates:Int=0,val missing:Int=0,val pending:Int=0,
-        val phoneHead:Head?=null,val parsedHead:Head?=null,val queuedRepair:Boolean=false,val hasGateway:Boolean=false,val parserPending:Boolean=false,
+        val phoneHead:Head?=null,val parsedHead:Head?=null,val queuedRepair:Boolean=false,val parserPending:Boolean=false,
         val awaiting:Pair<List<ObservationReconcileRequest>,List<ObservationReconcileReply?>>?=null)
     private data class Head(val received:Long,val rowId:Long,val key:String) {
         override fun toString()="Head(redacted)"
@@ -147,7 +145,7 @@ internal class ObservationInboxAudit(
             auditProgress=AuditProgress(scope,resume,scope.uncertainLegacy || status.hasPending || status.hasUnmatchedCanonical,clock,status.revision,status.recordedCount,runId=runId,repairTail=resume>0)
             return@synchronized Audit.MORE
         }
-        if(progress.cloudComplete){
+        if(progress.phoneComplete){
             if(stopped())return@synchronized interrupted()
             val status=repo.verifiedObservationStatus()
             if(try{auditAuthority(localStop)?.scope!=scope}catch(_:Exception){true})return@synchronized interrupted()
@@ -158,7 +156,6 @@ internal class ObservationInboxAudit(
                 return@synchronized Audit.RETRY
             }
             if(status.hasRecorded!=(status.recordedCount>0)||progress.sourceIds.size!=status.recordedCount||
-                (!progress.hasGateway&&(progress.cloudTotal!=status.recordedCount||progress.cloudIds!=progress.sourceIds))||
                 progress.candidates!=progress.sourceIds.size||progress.phoneHead!=progress.parsedHead){
                 if(!stopped())repo.reportInboxCheck(progress.check("incomplete"))
                 return@synchronized Audit.UNCONFIRMED
@@ -167,37 +164,6 @@ internal class ObservationInboxAudit(
             completedAuditStart=progress.startedAt
             completedAuditRevision=progress.collectionRevision
             return@synchronized Audit.COMPLETE
-        }
-        if(progress.phoneComplete){
-            if(stopped()||try{auditAuthority(stopped)?.scope!=scope}catch(_:Exception){true}){
-                return@synchronized interrupted()
-            }
-            val page=try{repo.observationPage(cursor=progress.cloudCursor,limit=100)}catch(error:ApiFailure){
-                if(error.code in setOf("cursor_scope_changed","cursor_expired","invalid_cursor")){
-                    auditProgress=null;return@synchronized Audit.RETRY
-                }
-                throw error
-            }
-            val after=try{auditAuthority(localStop)}catch(_:Exception){null}
-            if(after?.scope!=scope)return@synchronized interrupted()
-            val ids=page.items.map{it.source.id};val total=page.totalCount
-            if(total !in 0..100_000||ids.size>100||ids.toSet().size!=ids.size||ids.any{it in progress.cloudIds}||
-                (progress.cloudRevision!=null&&page.revision!=progress.cloudRevision)||
-                (progress.cloudTotal!=null&&total!=progress.cloudTotal)||
-                page.items.any{it.groupId!=owner.collectionId}){
-                auditProgress=null;return@synchronized Audit.UNCONFIRMED
-            }
-            val collected=progress.cloudIds+ids
-            if(collected.size>total){auditProgress=null;return@synchronized Audit.UNCONFIRMED}
-            val next=page.nextCursor
-            if(next!=null){
-                if(next in progress.cursors||ids.isEmpty()||collected.size>=total){auditProgress=null;return@synchronized Audit.UNCONFIRMED}
-                auditProgress=progress.copy(cloudCursor=next,cloudRevision=page.revision,cloudTotal=total,cloudIds=collected,
-                    cursors=progress.cursors+next)
-                return@synchronized Audit.MORE
-            }
-            auditProgress=progress.copy(cloudRevision=page.revision,cloudTotal=total,cloudIds=collected,cloudComplete=true)
-            return@synchronized Audit.MORE
         }
         fun open() = queryObservationInbox(app, progress.last, authority.profile.receipt.senders)
         fun takePage(checkStop:()->Boolean=stopped):List<AuditRow>? {
@@ -343,7 +309,7 @@ internal class ObservationInboxAudit(
         }
         if(try{auditAuthority(localStop)?.scope!=scope}catch(_:Exception){true})return@synchronized interrupted()
         val page=progress.copy(last=rows.lastOrNull()?.id?:progress.last,unconfirmed=uncertain,sourceIds=sourceIds,
-            awaiting=null,parserPending=parserPending,candidates=candidates,missing=missing,pending=pending,hasGateway=progress.hasGateway||requests.any{it.gatewayEnvelopeId!=null},phoneHead=phoneHead,parsedHead=parsedHead,queuedRepair=queuedRepair)
+            awaiting=null,parserPending=parserPending,candidates=candidates,missing=missing,pending=pending,phoneHead=phoneHead,parsedHead=parsedHead,queuedRepair=queuedRepair)
         savePosition(scope,if(rows.size<progress.pageSize)0 else page.last,progress.repairTail && rows.size==progress.pageSize)
         if(progress.repairTail && rows.size<progress.pageSize){
             if(stopped())return@synchronized interrupted()
@@ -357,7 +323,7 @@ internal class ObservationInboxAudit(
             auditProgress=null
             return@synchronized when{queuedRepair->Audit.REPAIRED;parserPending->Audit.AWAITING_PARSER;else->Audit.UNCONFIRMED}
         }
-        auditProgress=page.copy(phoneComplete=rows.size<progress.pageSize,cloudComplete=rows.size<progress.pageSize&&page.hasGateway)
+        auditProgress=page.copy(phoneComplete=rows.size<progress.pageSize)
         Audit.MORE
     }
 }

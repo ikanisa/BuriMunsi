@@ -9,6 +9,7 @@ object GatewayFixture{
  @Volatile var healthRelease:java.util.concurrent.CountDownLatch?=null
  val healthReadFinished=java.util.concurrent.CountDownLatch(1)
  var snapshot=GatewayStatus(true,false,1,0,null,null,null,"uploads_on_hold")
+ var mayOfferPermissions=true
  var failStatus=false;var changes=0;var statusReads=0;var retired=false
  @Volatile var uploadStarts=0
  @Volatile var lastStartThreadId=0L
@@ -51,6 +52,7 @@ class FixtureGateway(private val app:Application,private val pairer:(String,Bool
  override fun retirementPending()=pending()&&!GatewayFixture.retired
  override fun recoverRetirement():ReceiverRetirementAck?=recover()?.let(::park)
  override fun sync(){}
+ override fun canOfferReceivingPermissions()=GatewayFixture.mayOfferPermissions
  override fun requiredPermissions():Array<String>{
   GatewayFixture.permissionsRelease?.let { release ->
    GatewayFixture.permissionsEntered?.countDown()

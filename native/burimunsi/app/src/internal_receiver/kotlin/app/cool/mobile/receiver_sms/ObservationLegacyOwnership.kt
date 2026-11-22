@@ -23,7 +23,7 @@ internal object ObservationLegacyOwnership {
             val verified=current.optJSONObject("binding")?:return@withCurrentBinding Decision.HOLD
             val profile=BuriReceiverProfile.current(verified)?:return@withCurrentBinding Decision.HOLD
             when(BuriCapturePolicy.route(context,verified,subscription)){
-                BuriReceiverReliability.Route.OTHER_SIM->Decision.OTHER_SIM
+                BuriReceiverReliability.Route.OTHER_SIM->ObservationReceivingSim.classify(context,owner,subscription)
                 BuriReceiverReliability.Route.HOLD_SIM,BuriReceiverReliability.Route.HOLD_PROFILE->Decision.HOLD
                 BuriReceiverReliability.Route.ACCEPT->{
                     if(!ReceiptCandidate.accepts(sender,body,profile))return@withCurrentBinding Decision.UNOWNED

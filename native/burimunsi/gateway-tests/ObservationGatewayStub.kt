@@ -16,6 +16,7 @@ class ObservationConfigStore(context:Context){
  }
 }
 object ObservationGateway{
+ fun canOfferPermissions(context:Context)=!ReceiverFixture.observationPaused
  fun queued(context:Context,query:String):QueuedObservationSnapshot?=null
  fun publishQueued(context:Context,snapshot:QueuedObservationSnapshot,publish:()->Unit)=false
  fun start(context:Context){}

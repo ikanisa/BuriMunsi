@@ -15,7 +15,7 @@ object GatewayHealth {
         if(problem=="qualification_offline")return GatewayDiagnosis("qualification","Offline qualification",
             "This build cannot pair or upload receipts. Use it only for the documented offline checks.")
         if(problem=="authorization_required")return GatewayDiagnosis("reauthorize","Authorization required",
-            "Ask your administrator to reauthorize this installation. Retained receipts must keep their original source binding.",canPause=pause)
+            "Sign in with an Admin account to resume receiving payment SMS.",canPause=pause)
         if(g.pending<0||problem=="queue_unavailable")return GatewayDiagnosis("queue","Queue unavailable",
             "The retained-receipt count is unknown. Do not clear app data or reinstall to resolve this; contact the administrator.",canPause=pause)
         if(g.observationMode){
@@ -31,7 +31,7 @@ object GatewayHealth {
         if(!g.authorized)return GatewayDiagnosis("pair","Pair receiving phone",
             "Use an administrator-issued pairing code for the approved business wallet and receiving phone. Pairing does not credit a member.",canPair=true)
         if(problem=="permission_required")return GatewayDiagnosis("permissions","SMS access required",
-            "Review the requested Android permissions. Grant access only on the approved receiving phone, then refresh this status.",needsPermission=true,canPause=pause)
+            "Allow the requested Android SMS and phone permissions to receive payments automatically.",needsPermission=true,canPause=pause)
         if(g.subscriptionId==null||g.subscriptionId<0)return GatewayDiagnosis("source","SIM source not verified",
             "The bound Android subscription is unavailable. Ask the administrator to verify the business SIM; do not relabel retained receipts.",canPause=pause)
         if(problem!=null&&problem!="uploads_on_hold")return GatewayDiagnosis("attention","Receiving needs attention",

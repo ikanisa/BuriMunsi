@@ -7,7 +7,7 @@ TMP="$(mktemp -d)";trap 'rm -rf "$TMP"' EXIT
 SOURCES=(); while IFS= read -r -d '' source; do SOURCES+=("$source"); done < <(find "$HERE/core/src/main/kotlin" "$HERE/repository-tests" -name '*.kt' -print0)
 source "$HERE/scripts/repository_sources.sh"
 kotlinc "${SOURCES[@]}" "${BURI_REPOSITORY_SOURCES[@]}" \
-    "$HERE/app/src/main/kotlin/rw/ikanisa/burimunsi/storage/AndroidNavigationCheckpointStore.kt" \
+    "$HERE/viewmodel-tests/BuildConfigStub.kt" "$HERE/app/src/main/kotlin/rw/ikanisa/burimunsi/storage/AndroidNavigationCheckpointStore.kt" \
     -include-runtime -d "$TMP/checks.jar"
 java -cp "$TMP/checks.jar" rw.ikanisa.burimunsi.repositorytests.RepositoryChecksKt
 java -cp "$TMP/checks.jar" rw.ikanisa.burimunsi.observationownershiptests.ObservationOwnershipChecksKt

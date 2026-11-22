@@ -76,6 +76,13 @@ private class CollectGateway(private val context:Context,private val managedColl
             s?.optString("last_sms_at")?.ifBlank{null},s?.optString("last_upload_at")?.ifBlank{null},reason,pairedReceivingCode(b),
             BuriReceiverProfile.current(b)?.senders?.sorted())
     }
+    override fun canOfferReceivingPermissions():Boolean {
+        if (BuildConfig.IS_QUALIFICATION || retirementPending()) return false
+        val legacy = store.read()
+        if (legacy?.has("control_transition") == true || legacy?.optBoolean("receiver_retired") == true) return false
+        if (legacy?.has("binding") == true && (!bound() || !(legacy.optBoolean("capture_enabled") || legacy.optBoolean("auto_resume_pending")))) return false
+        return ObservationGateway.canOfferPermissions(context)
+    }
     override fun requiredPermissions()=arrayOf(Manifest.permission.RECEIVE_SMS,Manifest.permission.READ_SMS,Manifest.permission.READ_PHONE_STATE)
     override fun start(){
         HeldRecoveryJournal.maintain(context)

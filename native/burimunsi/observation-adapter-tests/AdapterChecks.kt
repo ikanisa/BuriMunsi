@@ -763,7 +763,7 @@ fun main(args:Array<String>) {
   val e=setup()
   val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
   val diagnostic=ObservationSyncDiagnostics.snapshot()!!
-  check(result.completed&&e.repository.requests.isEmpty()&&e.repository.pageCalls==1)
+  check(result.completed&&e.repository.requests.isEmpty()&&e.repository.pageCalls==0)
   check(diagnostic.outcome==ObservationSyncDiagnostics.Outcome.COMPLETED&&diagnostic.coordinator==ObservationSyncDiagnostics.Outcome.COMPLETED)
   check(diagnostic.queueRead&&diagnostic.queued==0&&diagnostic.attempts==0&&diagnostic.acknowledged==0)
   check(diagnostic.fence==ObservationSyncDiagnostics.Fence.NONE&&diagnostic.stop==ObservationSyncDiagnostics.Stop.NONE)
@@ -811,15 +811,15 @@ fun main(args:Array<String>) {
   e.repository.parserStates[older]="duplicate"
   check(cycle().completed&&e.repository.requests.size==2)
  }
- test("a pinned receiving SIM excludes another SIM and an unidentified subscription keeps the check open") {
+ test("an Admin phone accepts both actual active receiving SIMs and holds an unidentified subscription") {
   val e=setup();e.context.contentResolver.rows=listOf(row(31));ObservationRecovery(e.context).scan()
   ReceiverFixture.subscriptions=setOf(3,4)
   e.context.contentResolver.rows=listOf(row(31),row(32)+("sub_id" to 4)+("date" to time+5))
   var cycle=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
-  check(cycle.completed&&e.repository.requests.size==1&&e.repository.reports.last().candidateCount==1)
+  check(cycle.completed&&e.repository.requests.size==2&&e.repository.reports.last().candidateCount==2)
   e.context.contentResolver.rows=e.context.contentResolver.rows+listOf(row(33)+("sub_id" to null));ObservationInboxRevision.changed()
   cycle=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
-  check(!cycle.completed&&e.repository.requests.size==1&&e.repository.reports.last().pendingCount==1)
+  check(!cycle.completed&&e.repository.requests.size==2&&e.repository.reports.last().pendingCount==1)
  }
  test("first authorized historical sources are automatically retained under their original consent and held for review") {
   val e=setup();app.cool.mobile.BuildConfig.CLOUD_HOLD_EXISTING_INBOX=true
@@ -1055,13 +1055,11 @@ fun main(args:Array<String>) {
   val second=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
   check(second.completed&&e.repository.statusCalls==4&&e.repository.reconciliationBatches.size==1)
  }
- test("a last Cloud page completed after the deadline is not fetched twice") {
-  val e=setup();android.os.SystemClock.fixed=1_000L;e.context.contentResolver.rows=listOf(row(2120))
-  e.repository.afterPage={android.os.SystemClock.fixed=61_000L}
-  val first=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
-  check(!first.completed&&first.more&&first.progress&&e.repository.pageCalls==1&&e.repository.statusCalls==1)
-  val second=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
-  check(second.completed&&e.repository.pageCalls==1&&e.repository.statusCalls==4)
+ test("the receiver compares its own inventory without downloading another handset's private receipts") {
+  val e=setup();e.context.contentResolver.rows=listOf(row(2120))
+  e.repository.foreignInstallationSources.add("different-handset")
+  val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
+  check(result.completed&&e.repository.pageCalls==0&&e.repository.reports.last().candidateCount==1)
  }
  test("latest comparison resumes each successful late response without repeating it") {
   for(late in listOf("status","source","final")){
@@ -1287,18 +1285,20 @@ fun main(args:Array<String>) {
   val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
   check(!result.completed&&e.repository.statusCalls==3&&e.repository.reconciliationRequests.isEmpty())
  }
- test("a changed Cloud pagination cursor restarts the audit") {
-  val e=setup();e.context.contentResolver.rows=(1801L..1901L).map{row(it)}
-  for(id in 1801L..1901L)e.repository.retainedSources[cloudKey(adminA,id)]="source-$id"
-  val recovery=ObservationRecovery(e.context);recovery.resetAudit()
-  repeat(50){if(e.repository.pageCalls==0)check(recovery.auditPage(e.repository)==ObservationRecovery.Audit.MORE)}
-  check(e.repository.pageCalls==1)
-  e.repository.cursorFailure=rw.ikanisa.burimunsi.data.ApiFailure("cursor_scope_changed",409)
-  check(recovery.auditPage(e.repository)==ObservationRecovery.Audit.RETRY)
-  e.repository.cursorFailure=null;val batches=e.repository.reconciliationBatches.size
-  check(recovery.auditPage(e.repository)==ObservationRecovery.Audit.MORE)
-  check(recovery.auditPage(e.repository)==ObservationRecovery.Audit.MORE&&e.repository.reconciliationBatches.size>batches)
-  check(e.repository.reconciliationBatches[batches].first().sourceKey==cloudKey(adminA,1801))
+ test("two independent Admin installations verify their own head and catch up the same SMS safely") {
+  val phones=listOf("1234567890abcdea","1234567890abcdeb")
+  val heads=mutableSetOf<String>();val uploaded=mutableListOf<SmsObservation>()
+  for((index,id) in phones.withIndex()){
+   val e=setup();Settings.Secure.testId=id
+   val first=row(5001);val local=row(5002L+index)+("date" to time+index+1L)
+   e.context.contentResolver.rows=listOf(first,local)
+   e.repository.foreignInstallationSources.add("previous-installation")
+   repeat(2){check(ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false}).completed)}
+   val check=e.repository.reports.last();check(check.candidateCount==2&&check.missingCount==0&&check.phoneLatestKey==check.parsedLatestKey)
+   heads.add(checkNotNull(check.phoneLatestKey));check(e.repository.requests.size==2&&e.repository.pageCalls==0)
+   uploaded.add(e.repository.requests.first())
+  }
+  check(heads.size==2&&uploaded[0].sourceKey!=uploaded[1].sourceKey&&uploaded[0].rawBody==uploaded[1].rawBody)
  }
  test("diagnostic identifies missing owner and owner loss during consent by their exact fence") {
   for(missing in listOf(true,false)){
