@@ -447,15 +447,18 @@ class NativeUiContractTest {
         panelButton("Edit staff","Save changes").assertIsEnabled().performClick()
         ui.runOnIdle{check(c.staffSaveCalls==1&&c.lastStaffPhone=="+250780000002"&&c.lastStaffPin.isEmpty())}
         ui.runOnIdle{c.state=c.state.copy(sheetId=null,selectedStaff=null,draft=mapOf("name" to "Example Staff","phone" to "+250780000002"))}
-        ui.onNodeWithText("Passcode",useUnmergedTree=true).assertDoesNotExist()
-        ui.onNodeWithText("New passcode",useUnmergedTree=true).assertDoesNotExist()
+        field("Passcode").assertDoesNotExist()
+        field("New passcode").assertDoesNotExist()
         panelButton("Add staff","Create staff").assertIsEnabled().performClick()
         ui.runOnIdle{check(c.staffSaveCalls==2&&c.lastStaffPin.isEmpty())}
-        field("Passcode").performScrollTo().performTextInput("26")
-        panelButton("Add staff","Create staff").assertIsNotEnabled()
-        field("Passcode").performTextInput("84")
-        panelButton("Add staff","Create staff").assertIsEnabled().performClick()
-        ui.runOnIdle{check(c.staffSaveCalls==3&&c.lastStaffPin=="2684")}
+        // Only the edit flow accepts an explicit passcode. Validate it there.
+        ui.runOnIdle{c.state=c.state.copy(sheetId=account.id,selectedStaff=account,draft=mapOf("name" to account.name,"phone" to account.phone))}
+        panelList("Edit staff").performScrollToNode(hasContentDescription("New passcode"))
+        field("New passcode").performTextInput("26")
+        panelButton("Edit staff","Save changes").assertIsNotEnabled()
+        field("New passcode").performTextInput("84")
+        panelButton("Edit staff","Save changes").assertIsEnabled().performClick()
+        ui.runOnIdle{check(c.staffSaveCalls==3&&c.lastStaffPhone==account.phone&&c.lastStaffPin=="2684")}
     }
     @Test fun staffViewsHaveNoInventedPreferencesOrAdminGatewayControls(){
         val c=FakeController(Route.SETTINGS,Role.STAFF);show(c)
