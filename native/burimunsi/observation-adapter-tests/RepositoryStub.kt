@@ -25,6 +25,8 @@ class NativeRepository() {
  var reconcileFailure:Exception?=null;var reconcileOverride:ObservationReconcileReply?=null;var afterReconcile:(()->Unit)?=null
  var batchFailure:Exception?=null;var poisonSourceKeys:Set<String> = emptySet();var afterBatch:(()->Unit)?=null
  var batchReplyOverride:((List<ObservationReconcileRequest>)->List<ObservationReconcileReply>)?=null
+ var combinedProcessing=true
+ var processingReads=0
  val reconciliationBatches=mutableListOf<List<ObservationReconcileRequest>>()
  var pageFailure:Exception?=null;var pageCountOverride:Int?=null;var afterPage:(()->Unit)?=null;var pageCalls=0
  var cursorFailure:Exception?=null;val pageCursors=mutableListOf<String?>()
@@ -48,7 +50,9 @@ class NativeRepository() {
  var reportFailure:Exception?=null
  fun verifiedObservationStatus()=observationReconcileStatus()
  fun reportInboxCheck(check:ObservationInboxCheck){reportFailure?.let{throw it};reports.add(check)}
- fun observationProcessing(ids:List<SmsSourceRef.Observation>)=ids.associateWith{ObservationProcessing(parserStates[it.id]?:"parsed",false)}
+ fun observationProcessing(ids:List<SmsSourceRef.Observation>):Map<SmsSourceRef.Observation,ObservationProcessing>{
+  processingReads++;return ids.associateWith{ObservationProcessing(parserStates[it.id]?:"parsed",false)}
+ }
  fun observationConsent():ObservationConsentRevision{consentFailure?.let{throw it};val value=consent;val action=afterConsentRead;afterConsentRead=null;action?.invoke();return value}
  fun setObservationConsent(value:ObservationConsentRevision):ObservationConsentRevision{val action=duringConsentSet;duringConsentSet=null;action?.invoke();consent=value;return value}
  fun observationProfile():JSONObject {profileFailure?.let{throw it};val action=afterProfileRead;afterProfileRead=null;action?.invoke();return profile}
@@ -69,14 +73,15 @@ class NativeRepository() {
   return reconcileOverride?:if(existing!=null)ObservationReconcileReply(value.sourceKey,"matched",existing,newest)
    else ObservationReconcileReply(value.sourceKey,"missing",null,newest)
  }
- fun reconcileObservations(values:List<ObservationReconcileRequest>,runId:String?=null):List<ObservationReconcileReply> {
+ fun reconcileObservations(values:List<ObservationReconcileRequest>,runId:String?=null,includeProcessing:Boolean=false):List<ObservationReconcileReply> {
   reconciliationBatches.add(values.toList());val action=afterBatch;afterBatch=null;action?.invoke()
   batchFailure?.let{throw it}
   if(values.any{it.sourceKey in poisonSourceKeys})throw ApiFailure("observation_item_conflict",409)
   batchReplyOverride?.let{return it(values)}
   return values.map{value->
    val source=retainedSources[value.sourceKey]
-   ObservationReconcileReply(value.sourceKey,if(source==null)"missing" else "matched",source,null)
+   ObservationReconcileReply(value.sourceKey,if(source==null)"missing" else "matched",source,null,
+    if(includeProcessing && combinedProcessing && source!=null)parserStates[source]?:"parsed" else null)
   }
  }
  fun observationReconcileStatus():ObservationReconcileStatus {

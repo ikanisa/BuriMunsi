@@ -80,7 +80,7 @@ data class ObservationReconcileRequest(
     override fun toString()="ObservationReconcileRequest(redacted)"
 }
 
-data class ObservationReconcileReply(val sourceKey:String,val state:String,val sourceId:String?,val latestRecordedSourceId:String?) {
+data class ObservationReconcileReply(val sourceKey:String,val state:String,val sourceId:String?,val latestRecordedSourceId:String?,val processingStatus:String?=null) {
     override fun toString()="ObservationReconcileReply(redacted)"
 }
 data class ObservationReconcileStatus(val hasPending:Boolean,val hasRecorded:Boolean,val recordedCount:Int,val revision:String,

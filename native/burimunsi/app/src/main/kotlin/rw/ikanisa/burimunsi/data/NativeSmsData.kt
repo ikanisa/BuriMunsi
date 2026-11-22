@@ -48,13 +48,17 @@ internal class NativeSmsData(
         checkContract(ObservationAcknowledgement.matches(observation,ack),"invalid_observation_ack")
         return ack
     }
-    private fun reconcileReply(key:String,row:JSONObject,latest:String?=null):ObservationReconcileReply {
+    private fun reconcileReply(key:String,row:JSONObject,latest:String?=null,includeProcessing:Boolean=false):ObservationReconcileReply {
         val state=row.getString("state")
         val source=row.nullString("sourceId")
         checkContract(row.getString("sourceKey")==key&&state in setOf("matched","missing")&&(state=="matched")==(source!=null)&&
             (source==null||runCatching{Values.requestId(source)==source}.getOrDefault(false))&&
             (latest==null||runCatching{Values.requestId(latest)==latest}.getOrDefault(false)),"invalid_observation_reconciliation")
-        return ObservationReconcileReply(key,state,source,latest)
+        val needsStatus = includeProcessing && source != null
+        checkContract(row.has("processingStatus") == needsStatus, "invalid_observation_reconciliation")
+        val status = if (needsStatus) row.getString("processingStatus") else null
+        checkContract(status == null || status in ObservationProcessing.statuses, "invalid_observation_reconciliation")
+        return ObservationReconcileReply(key,state,source,latest,status)
     }
     /** Compare scoped receipt identities; these requests carry no message bodies and cannot acknowledge or post a receipt. */
     private fun <T> readObservationProof(method:String,path:String,body:JSONObject?=null,decode:(JSONObject)->T):T {
@@ -69,17 +73,29 @@ internal class NativeSmsData(
         readObservationProof("POST","reconcile",reconciliationItem(request)){value->
             reconcileReply(request.sourceKey,value,value.nullString("latestRecordedSourceId"))
         }
-    fun reconcileObservations(requests:List<ObservationReconcileRequest>,runId:String?=null):List<ObservationReconcileReply> {
-        checkContract(requests.size in 1..20&&requests.map{it.sourceKey}.distinct().size==requests.size,"invalid_observation_reconciliation")
-        val items=JSONArray()
-        requests.forEach{items.put(reconciliationItem(it))}
-        val body=JSONObject().put("items",items)
-        runId?.let{body.put("runId",Values.requestId(it))}
-        checkContract(body.toString().toByteArray(Charsets.UTF_8).size<=8192,"invalid_observation_reconciliation")
-        return readObservationProof("POST","reconcile-batch",body){value->
-            val rows=value.getJSONArray("items")
-            checkContract(rows.length()==requests.size,"invalid_observation_reconciliation")
-            requests.mapIndexed{index,request->reconcileReply(request.sourceKey,rows.getJSONObject(index))}
+    @Volatile private var combinedReconciliationAvailable = true
+
+    fun reconcileObservations(requests:List<ObservationReconcileRequest>,runId:String?=null,includeProcessing:Boolean=false):List<ObservationReconcileReply> {
+        checkContract(requests.size in 1..OBSERVATION_RECONCILE_MAX_ITEMS && requests.map { it.sourceKey }.distinct().size == requests.size,
+            "invalid_observation_reconciliation")
+        fun read(combined: Boolean): List<ObservationReconcileReply> {
+            val body = reconciliationBatchBody(requests, runId, combined)
+            checkContract(body.toString().toByteArray(Charsets.UTF_8).size <= OBSERVATION_RECONCILE_MAX_BYTES,
+                "invalid_observation_reconciliation")
+            return readObservationProof("POST", "reconcile-batch", body) { value ->
+                val rows = value.getJSONArray("items")
+                checkContract(rows.length() == requests.size, "invalid_observation_reconciliation")
+                requests.mapIndexed { index, request -> reconcileReply(request.sourceKey, rows.getJSONObject(index), includeProcessing = combined) }
+            }
+        }
+        if (!includeProcessing || !combinedReconciliationAvailable) return read(false)
+        return try {
+            read(true)
+        } catch (error: ApiFailure) {
+            if (error.status != 400 || error.code !in setOf("contract_unknown_field", "invalid_request")) throw error
+            // Old servers reject the option before running the page. The fallback still
+            // binds every source and requires a separate authenticated parser-status read.
+            read(false).also { combinedReconciliationAvailable = false }
         }
     }
     fun observationReconcileStatus():ObservationReconcileStatus = readObservationProof("GET","reconcile-status"){value->
@@ -141,7 +157,7 @@ internal class NativeSmsData(
         checkContract(value.getString("groupId")==groupId&&rows.length()==sources.size,"invalid_observation_source")
         return sources.mapIndexed{index,source->
             val row=rows.getJSONObject(index);val status=row.getString("status");val retry=row.getBoolean("canRetry")
-            checkContract(row.getString("sourceId")==source.id&&status in setOf("pending","retrying","parsed","needs_review","conflict","duplicate","security","historical","unknown")&&
+            checkContract(row.getString("sourceId")==source.id&&status in ObservationProcessing.statuses&&
                 (!retry||status in setOf("retrying","needs_review")),"invalid_observation_source")
             source to ObservationProcessing(status,retry)
         }.toMap()

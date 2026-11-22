@@ -167,8 +167,8 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
     fun reconcileObservation(request: ObservationReconcileRequest): ObservationReconcileReply =
         smsData.reconcileObservation(request)
 
-    fun reconcileObservations(requests: List<ObservationReconcileRequest>, runId: String? = null): List<ObservationReconcileReply> =
-        smsData.reconcileObservations(requests, runId)
+    fun reconcileObservations(requests: List<ObservationReconcileRequest>, runId: String? = null, includeProcessing: Boolean = false): List<ObservationReconcileReply> =
+        smsData.reconcileObservations(requests, runId, includeProcessing)
 
     fun verifiedObservationStatus(): ObservationReconcileStatus = smsData.verifiedObservationStatus()
 

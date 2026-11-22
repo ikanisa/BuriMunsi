@@ -87,15 +87,52 @@ export function validateQuota(q, now=Date.now()) {
     q.included-q.used>=50000 && Date.parse(q.period?.[0])<=now && Date.parse(q.period?.[1])>now,'fresh_invocation_quota_required');
   return q.included-q.used;
 }
+export function verifyNativeSourceHistory(from, target, rows) {
+  must(digest.test(from) && digest.test(target) && Array.isArray(rows) && rows.length<=50,'native_source_history_invalid');
+  const seen=new Set([from]);
+  let source=from, lastEpoch=0;
+  for(const row of rows){
+    must(row.previous===source && digest.test(row.source) && !seen.has(row.source) &&
+      Number.isSafeInteger(row.epoch) && row.epoch>lastEpoch && row.next_epoch===row.epoch+1 &&
+      digest.test(row.qualification) && digest.test(row.deployment) && row.signed_dispatch===true,
+      'native_source_history_invalid');
+    source=row.source;lastEpoch=row.epoch;seen.add(source);
+  }
+  must(source===target,'native_source_history_incomplete');
+  return rows;
+}
+async function nativeSourceHistory(previous,s) {
+  if(previous.sourceSha256===s.old_source) return [];
+  // Each retained upgrade must have run the same scoped, signed native contract
+  // afterwards. A release receipt alone carries no provider authorization.
+  const rows=await sql(`WITH RECURSIVE path AS (
+    SELECT u.*,1 AS depth,ARRAY[u.old_source_sha256,u.new_source_sha256] AS visited
+    FROM private.collect_fence_source_upgrades u WHERE u.project_ref=$1 AND u.old_source_sha256=$2
+    UNION ALL
+    SELECT u.*,p.depth+1,p.visited||u.new_source_sha256 FROM path p
+    JOIN private.collect_fence_source_upgrades u ON u.project_ref=$1 AND u.old_source_sha256=p.new_source_sha256
+      AND u.old_epoch>p.new_epoch AND NOT u.new_source_sha256=ANY(p.visited)
+    WHERE p.new_source_sha256<>$3 AND p.depth<50)
+    SELECT p.old_source_sha256 AS previous,p.new_source_sha256 AS source,p.old_epoch::int AS epoch,p.new_epoch::int AS next_epoch,
+      p.qualification_sha256 AS qualification,p.deployment_readback_sha256 AS deployment,
+      EXISTS(SELECT 1 FROM collect_ops.jobs_dispatches d JOIN private.collect_managed_job_tickets t ON t.dispatch_id=d.id
+        WHERE d.state='confirmed' AND d.http_status=200 AND d.created_at>=p.recorded_at AND t.completed_at IS NOT NULL
+          AND t.source_sha256=p.new_source_sha256 AND t.response_sha256=d.response_sha256
+          AND d.native_contract=jsonb_build_object('contract','collect.native-sms-automation.v1','model_id',$4::text,
+            'approval_sha256',$5::text,'source_sha256',p.new_source_sha256,'batch_limit',1)) AS signed_dispatch
+    FROM path p ORDER BY p.old_epoch LIMIT 51`,[PROJECT,previous.sourceSha256,s.old_source,s.model,s.approval]);
+  return verifyNativeSourceHistory(previous.sourceSha256,s.old_source,rows);
+}
 async function prepare(p, [priorFile,bundlesFile,gatewayFile,quotaFile]) {
   const previous=read(priorFile), bundles=read(bundlesFile), gateway=read(gatewayFile), quota=read(quotaFile);
   const x=await live(), s=x.state;
   checkIdle(s); checkSettings(x); validateQuota(quota);
   must(previous.format==='collect.native-sms.owner-approval.v1' && previous.project===PROJECT &&
-    previous.sourceSha256===s.old_source && sha(readFileSync(priorFile))===s.approval &&
+    digest.test(previous.sourceSha256) && sha(readFileSync(priorFile))===s.approval &&
     previous.model===s.model && (previous.applicationLimit??null)===s.cap &&
     (previous.applicationDeadline??null)===(s.deadline??null) && x.keys.get('COLLECT_JOB_NATIVE_SMS_APPROVAL_SHA256')===sha(s.approval),
     'prior_native_authorization_changed');
+  const nativeSourceTransitions=await nativeSourceHistory(previous,s);
   must(bundles.project===PROJECT && bundles.sourceSha256===s.source_sha256 && bundles.checked?.status==='passed' &&
     bundles.checked.sourceSha256===s.source_sha256 && bundles.staged?.length===3 &&
     ['collect-api','admin-api','collect-jobs'].every(name=>bundles.staged.some(b=>b.slug===name && b.status===201 &&
@@ -115,7 +152,7 @@ async function prepare(p, [priorFile,bundlesFile,gatewayFile,quotaFile]) {
   must(guards.length>=14 && guards.every(g=>g.owner==='postgres') && journal.every(r=>r.reviewed),'runtime_or_dispatch_evidence_incomplete');
   const qualification={project:PROJECT,at:timestamp(),bundlesSha256:sha(readFileSync(bundlesFile)),
     gatewayApprovalSha256:sha(readFileSync(gatewayFile)),gatewayReleaseSha256:gateway.gatewayReleaseSha256,
-    functions:sorted(x.functions),state:s,dbRoutines:guards,previousDispatches:journal,
+    functions:sorted(x.functions),state:s,dbRoutines:guards,previousDispatches:journal,nativeSourceTransitions,
     copyInventorySha256:sha(copyInventory),quota,sourceSha256:s.source_sha256};
   const reuse=s.source_sha256===s.old_source;
   p.put('qualification',qualification);

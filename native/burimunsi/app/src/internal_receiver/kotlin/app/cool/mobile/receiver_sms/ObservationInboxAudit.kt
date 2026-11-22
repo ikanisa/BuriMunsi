@@ -13,6 +13,9 @@ import rw.ikanisa.burimunsi.core.SmsSourceRef
 import rw.ikanisa.burimunsi.core.ObservationInboxCheck
 import java.util.UUID
 import org.json.JSONObject
+import rw.ikanisa.burimunsi.data.OBSERVATION_RECONCILE_MAX_BYTES
+import rw.ikanisa.burimunsi.data.OBSERVATION_RECONCILE_MAX_ITEMS
+import rw.ikanisa.burimunsi.data.reconciliationBatchBody
 import rw.ikanisa.burimunsi.storage.SecureStore
 import rw.ikanisa.burimunsi.core.Values
 import rw.ikanisa.burimunsi.core.checkContract
@@ -28,7 +31,6 @@ internal class ObservationInboxAudit(
     private val lock: Any,
 ) {
     companion object {
-        private const val AUDIT_PAGE = 4
         private var auditProgress:AuditProgress?=null
         private var completedAuditStart:Long?=null
         private var completedAuditRevision:String?=null
@@ -42,7 +44,7 @@ internal class ObservationInboxAudit(
         val sourceIds:Set<String> = emptySet(),val phoneComplete:Boolean=false,val cloudCursor:String?=null,
         val cloudRevision:String?=null,val cloudTotal:Int?=null,val cloudIds:Set<String> = emptySet(),val cursors:Set<String> = emptySet(),
         val cloudComplete:Boolean=false,
-        val runId:String=UUID.randomUUID().toString(),val repairTail:Boolean=false,val candidates:Int=0,val missing:Int=0,val pending:Int=0,
+        val runId:String=UUID.randomUUID().toString(),val pageSize:Int=OBSERVATION_RECONCILE_MAX_ITEMS,val repairTail:Boolean=false,val candidates:Int=0,val missing:Int=0,val pending:Int=0,
         val phoneHead:Head?=null,val parsedHead:Head?=null,val queuedRepair:Boolean=false,val hasGateway:Boolean=false,val parserPending:Boolean=false,
         val awaiting:Pair<List<ObservationReconcileRequest>,List<ObservationReconcileReply?>>?=null)
     private data class Head(val received:Long,val rowId:Long,val key:String) {
@@ -204,7 +206,7 @@ internal class ObservationInboxAudit(
                 val id=it.getColumnIndexOrThrow("_id");val date=it.getColumnIndexOrThrow("date")
                 val sender=it.getColumnIndexOrThrow("address");val body=it.getColumnIndexOrThrow("body")
                 val sent=it.getColumnIndex("date_sent");val sub=it.getColumnIndex("sub_id")
-                while(rows.size<AUDIT_PAGE&&it.moveToNext()){
+                while(rows.size<progress.pageSize&&it.moveToNext()){
                     if(checkStop()||it.isNull(id)||it.isNull(date))return null
                     val rowId=it.getLong(id);val received=it.getLong(date)
                     if(rowId<=previous||received<=0)return null
@@ -245,27 +247,44 @@ internal class ObservationInboxAudit(
             requests.add(ObservationReconcileRequest(key,Values.sha256(row.body),row.sender,
                 row.sent?.let{Instant.ofEpochMilli(it).toString()},Instant.ofEpochMilli(row.received).toString(),row.sub,gateway))
         }
+        val serverRun = progress.runId.takeUnless { progress.repairTail }
+        // Use the same JSON and UTF-8 limit as the wire request. Narrowing the phone page
+        // keeps its durable cursor, server traversal order and parser checkpoint together.
+        if (reconciliationBatchBody(requests, serverRun, includeProcessing = true).toString().toByteArray(Charsets.UTF_8).size > OBSERVATION_RECONCILE_MAX_BYTES) {
+            checkContract(rows.size > 1, "invalid_observation_reconciliation")
+            auditProgress = progress.copy(pageSize = rows.size / 2, awaiting = null)
+            return@synchronized Audit.MORE
+        }
         fun verify(items:List<ObservationReconcileRequest>):List<ObservationReconcileReply?> {
             if(items.isEmpty())return emptyList()
             if(stopped())throw InterruptedException()
             if(try{auditAuthority(stopped)?.scope!=scope}catch(_:Exception){true})throw AuditAuthorityChanged()
             return try{
-                val replies=repo.reconcileObservations(items,progress.runId.takeUnless{progress.repairTail})
+                val replies=repo.reconcileObservations(items,serverRun,includeProcessing = true)
                 checkContract(replies.size==items.size&&replies.indices.all{i->replies[i].sourceKey==items[i].sourceKey&&
                     replies[i].state in setOf("matched","missing")&&(replies[i].state=="matched")==(replies[i].sourceId!=null)},
                     "invalid_observation_reconciliation")
                 replies
             }catch(error:ApiFailure){
                 if(error.code !in setOf("observation_item_conflict","observation_item_unavailable"))throw error
-                if(items.size==1)listOf(null) else items.flatMap{verify(listOf(it))}
+                if (items.size == 1) listOf(null) else {
+                    val middle = items.size / 2
+                    verify(items.subList(0, middle)) + verify(items.subList(middle, items.size))
+                }
             }
         }
-        val states=try{progress.awaiting?.takeIf{it.first==requests}?.second ?: requests.chunked(4).flatMap{verify(it)}}catch(error:Exception){
+        val states=try{progress.awaiting?.takeIf{it.first==requests}?.second ?: verify(requests)}catch(error:Exception){
+            // The managed endpoint can exceed the transport deadline when historical custody
+            // checks are slow. Resume from exactly the same row with a smaller bounded page.
+            if (error is ApiFailure && (error.status == 0 || error.status in 500..599) && rows.size > 1)
+                auditProgress = progress.copy(pageSize = maxOf(1, rows.size / 2), awaiting = null)
             if(stopped()||error is AuditAuthorityChanged)return@synchronized interrupted()
             throw error
         }
         val sourceIds=progress.sourceIds.toMutableSet()
-        val ids=states.mapNotNull{it?.sourceId}.distinct().map{SmsSourceRef.Observation(it)}
+        // Current servers bind parser status to the same snapshot as the source identity.
+        // A page from an older server still needs the independent parser read for every matched ID.
+        val ids=states.mapNotNull{ it?.takeIf { reply -> reply.processingStatus == null }?.sourceId }.distinct().map{SmsSourceRef.Observation(it)}
         val outcomes=if(ids.isEmpty())emptyMap() else {
             if(stopped()){
                 if(budgetExpired()&&try{auditAuthority(localStop)?.scope==scope&&takePage(localStop)==rows}catch(_:Exception){false})
@@ -316,7 +335,7 @@ internal class ObservationInboxAudit(
             val source=reply.sourceId
             if(source==null||!sourceIds.add(source)){uncertain=true;pending++;continue}
             if(sourceIds.size>100_000){auditProgress=null;return@synchronized Audit.UNCONFIRMED}
-            val parser=outcomes[SmsSourceRef.Observation(source)]?.status
+            val parser=reply.processingStatus ?: outcomes[SmsSourceRef.Observation(source)]?.status
             if(parser in setOf("pending","retrying"))parserPending=true
             if(parser in setOf("parsed","duplicate")){
                 parsedHead=newest(parsedHead,Head(row.received,row.id,key))
@@ -325,20 +344,20 @@ internal class ObservationInboxAudit(
         if(try{auditAuthority(localStop)?.scope!=scope}catch(_:Exception){true})return@synchronized interrupted()
         val page=progress.copy(last=rows.lastOrNull()?.id?:progress.last,unconfirmed=uncertain,sourceIds=sourceIds,
             awaiting=null,parserPending=parserPending,candidates=candidates,missing=missing,pending=pending,hasGateway=progress.hasGateway||requests.any{it.gatewayEnvelopeId!=null},phoneHead=phoneHead,parsedHead=parsedHead,queuedRepair=queuedRepair)
-        savePosition(scope,if(rows.size<AUDIT_PAGE)0 else page.last,progress.repairTail && rows.size==AUDIT_PAGE)
-        if(progress.repairTail && rows.size<AUDIT_PAGE){
+        savePosition(scope,if(rows.size<progress.pageSize)0 else page.last,progress.repairTail && rows.size==progress.pageSize)
+        if(progress.repairTail && rows.size<progress.pageSize){
             if(stopped())return@synchronized interrupted()
             repo.reportInboxCheck(page.check("incomplete"))
             auditProgress=null
             return@synchronized Audit.RETRY
         }
-        if(rows.size<AUDIT_PAGE && uncertain){
+        if(rows.size<progress.pageSize && uncertain){
             if(stopped())return@synchronized interrupted()
             repo.reportInboxCheck(page.check("incomplete"))
             auditProgress=null
             return@synchronized when{queuedRepair->Audit.REPAIRED;parserPending->Audit.AWAITING_PARSER;else->Audit.UNCONFIRMED}
         }
-        auditProgress=page.copy(phoneComplete=rows.size<AUDIT_PAGE,cloudComplete=rows.size<AUDIT_PAGE&&page.hasGateway)
+        auditProgress=page.copy(phoneComplete=rows.size<progress.pageSize,cloudComplete=rows.size<progress.pageSize&&page.hasGateway)
         Audit.MORE
     }
 }
