@@ -30,6 +30,7 @@ BEGIN
   END IF;
 END;
 $check$;
+GRANT EXECUTE ON FUNCTION pg_temp.assert_sms_hidden(text,text) TO collect_runtime;
 
 DO $cases$
 DECLARE
