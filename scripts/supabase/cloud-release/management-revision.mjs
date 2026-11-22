@@ -2,7 +2,7 @@
 // https://supabase.com/docs/reference/api/v1-run-a-query
 import {management, PROJECT, record, sha} from './access.mjs';
 import {body as migrationBody} from './migrations.mjs';
-import {requireRevisionSchedulerReady, requireSecretPreimages, reviseRuntime} from './revise-runtime.mjs';
+import {MAX_REVISION_MIGRATIONS, requireRevisionSchedulerReady, requireSecretPreimages, reviseRuntime} from './revise-runtime.mjs';
 
 const identity = "SELECT session_user,current_user,current_database(),current_setting('server_version_num')::int AS version,current_setting('transaction_isolation') AS isolation,(SELECT project_ref FROM private.collect_fence_control WHERE singleton) AS project";
 const fence = 'SELECT mode,epoch,operation_id,source_sha256 FROM private.collect_fence_control WHERE singleton';
@@ -152,7 +152,7 @@ const settingDigests = settings =>
 export async function reviseRuntimeViaManagement(input, {api = management, ...dependencies} = {}) {
   const {migrations = [], resumeFencedRevision, acceptAncillaryRequalification,
     expectedBefore, expectedFunctions, expectedSecretPreimages, testEvidence, smsBinding} = input;
-  if (!Array.isArray(migrations) || migrations.length > 5 ||
+  if (!Array.isArray(migrations) || migrations.length > MAX_REVISION_MIGRATIONS ||
       migrations.some(entry => !/^\d{14}_[a-z0-9_]+\.sql$/.test(entry?.file) ||
         typeof entry.sql !== 'string' || sha(entry.sql) !== entry.sha256) ||
       migrations.some((entry, i) => i > 0 && migrations[i - 1].file.slice(0, 14) >= entry.file.slice(0, 14)) ||

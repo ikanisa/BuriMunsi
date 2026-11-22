@@ -151,14 +151,14 @@ test('Management transport refuses unreviewed migration, resume and unbound stan
 });
 
 test('sequential reviewed management migrations bind each step to the last confirmed history', async () => {
-  const migrations = [1, 2, 3, 4, 5].map(i => {
+  const migrations = [1, 2, 3, 4, 5, 6].map(i => {
     const sql = 'BEGIN;\nSELECT ' + i + ';\nCOMMIT;\n';
     return {file:'20261122000' + i + '00_candidate.sql', sql, sha256:sha(sql)};
   });
   const f = fixture({sms:true, migrations});
   const done = await reviseRuntimeViaManagement({...f.input, migrations}, f.dependencies);
   assert.equal(done.status, 'revision_deployed_live');
-  assert.equal(f.queries.filter(q=>q.query.startsWith('DO $release_')).length, 5);
+  assert.equal(f.queries.filter(q=>q.query.startsWith('DO $release_')).length, 6);
   for (const invalid of [migrations.toReversed(), [...migrations, migrations[0]], [migrations[0], migrations[0]]]) {
     await assert.rejects(reviseRuntimeViaManagement({...f.input, migrations:invalid}, {
       api() { assert.fail('invalid migration order reached provider'); },

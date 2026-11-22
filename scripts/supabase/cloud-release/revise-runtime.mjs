@@ -214,6 +214,9 @@ async function requireUpgradeReceipt(c,prior,sourceSha,readback,current){
     r.deployment_readback_sha256!==readback.sha256)throw Error('fenced_revision_upgrade_evidence_changed');
 }
 
+// One qualified revision can include the six related gateway, receiver and operator migrations.
+export const MAX_REVISION_MIGRATIONS=6;
+
 export async function reviseRuntime({label,testEvidence,migrations=[],resumeFencedRevision=null,expectedBefore=null,expectedFunctions=null,
  requireChangedBundles=false,expectedSecretPreimages=null,acceptAncillaryRequalification=false},{
  captureSnapshot=captureRuntimeSnapshot,check=checkSnapshot,open=connect,api=management,save=record,
@@ -221,7 +224,7 @@ export async function reviseRuntime({label,testEvidence,migrations=[],resumeFenc
  refreshAncillaryAfterSourceSecret=null
 }={}){
  if(!/^[a-z][a-z0-9-]{3,60}$/.test(label)||!testEvidence||testEvidence.passed!==true)throw Error('reviewed_revision_required');
- if(!Array.isArray(migrations)||migrations.length>5)throw Error('reviewed_migrations_required');
+ if(!Array.isArray(migrations)||migrations.length>MAX_REVISION_MIGRATIONS)throw Error('reviewed_migrations_required');
  if(typeof requireChangedBundles!=='boolean'||typeof acceptAncillaryRequalification!=='boolean')throw Error('reviewed_revision_required');
  const expectedSecrets=secretPreimages(expectedSecretPreimages);
  if(expectedFunctions!==null&&expectedBefore===null)throw Error('runtime_revision_preimage_changed');
