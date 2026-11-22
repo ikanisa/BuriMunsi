@@ -45,7 +45,7 @@ function batchWitnessFailure(error) {
 const processingStates = new Set(['pending','retrying','parsed','needs_review','conflict','duplicate','security','historical','unknown']);
 
 export async function readObservationProcessingStatus(tx, groupId, sourceIds) {
-  const rows = await tx.unsafe('SELECT private.burimunsi_observation_processing_status($1::jsonb) AS result', [JSON.stringify(sourceIds)]);
+  const rows = await tx.unsafe('SELECT private.burimunsi_observation_processing_status($1::text::jsonb) AS result', [JSON.stringify(sourceIds)]);
   const value = rows[0]?.result;
   check(rows.length === 1 && value?.groupId === groupId && Array.isArray(value.statuses) && value.statuses.length === sourceIds.length);
   value.statuses.forEach((item, i) => check(item?.sourceId === sourceIds[i] && processingStates.has(item.status) &&
@@ -340,7 +340,7 @@ export class PostgresObservationReconciliation {
         if (runId) {
           const page = values.map((v, i) => ({key: v.sourceKey, sourceId: matches[i]?.id ?? null,
             bodySha256: v.bodySha256, inboxReceivedAt: v.inboxReceivedAt}));
-          const saved = await tx.unsafe('SELECT private.burimunsi_observation_inbox_page($1::uuid,$2::jsonb) AS saved',
+          const saved = await tx.unsafe('SELECT private.burimunsi_observation_inbox_page($1::uuid,$2::text::jsonb) AS saved',
             [runId, JSON.stringify(page)]);
           check(saved.length === 1 && saved[0].saved === true);
         }

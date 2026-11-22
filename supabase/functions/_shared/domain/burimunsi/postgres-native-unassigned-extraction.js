@@ -112,7 +112,7 @@ export class PostgresNativeUnassignedExtraction {
    const attempt=crypto.randomUUID();
    return await o.authority.write(async tx=>{
     await this.verify(tx,actor,sourceId,initial,binding);
-    const rows=await tx.unsafe('SELECT private.burimunsi_native_parse_finish($1,$2::uuid,$3,$4::uuid,$5,$6::jsonb,$7::jsonb,$8) AS result',
+    const rows=await tx.unsafe('SELECT private.burimunsi_native_parse_finish($1,$2::uuid,$3,$4::uuid,$5,$6::text::jsonb,$7::text::jsonb,$8) AS result',
      [sourceId,lease,profileSha,attempt,o.env.MOMO_AI_MODEL,output===null?null:JSON.stringify(output),JSON.stringify(errors),unknown]);
     check(rows.length===1&&rows[0].result?.sourceId===sourceId&&rows[0].result.state==='needs_review'&&
      rows[0].result.financialEffects===0);return rows[0].result;

@@ -93,7 +93,7 @@ async function page(env,account,actor,url){
  if(includeProcessing==='1'){
   const finances=actor.permissions.has('payments.read');
   const sourceIds=items.map(v=>v.sourceId);
-  const result=await select(scoped,'SELECT private.burimunsi_admin_observation_outcomes(?,ARRAY(SELECT jsonb_array_elements_text(?::jsonb)),?::boolean) AS result',collectionId,JSON.stringify(sourceIds),finances);
+  const result=await select(scoped,'SELECT private.burimunsi_admin_observation_outcomes(?,ARRAY(SELECT jsonb_array_elements_text(?::text::jsonb)),?::boolean) AS result',collectionId,JSON.stringify(sourceIds),finances);
   if(!Array.isArray(result)||result.length!==items.length)bad();
   const indexed=new Map();
   for(const row of result){

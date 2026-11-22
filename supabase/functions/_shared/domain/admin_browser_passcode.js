@@ -172,7 +172,7 @@ export async function handleBrowserPasscode(request, env, path) {
     if (candidate.id !== proof.accountId) throw signedOut();
     const hash = await nativePinHasher(env).hash(proof.phone, body.newPin);
     const changed = await changeSession(env,
-      'SELECT private.burimunsi_browser_pin_change(?,?,?,?::uuid,?,?,?::jsonb) AS result',
+      'SELECT private.burimunsi_browser_pin_change(?,?,?,?::uuid,?,?,?::text::jsonb) AS result',
       group, account.token_hash, origin, candidate.id, candidate.credentialVersion, candidate.version, JSON.stringify(hash));
     if (changed !== true) throw signedOut();
     return json({ok:true}, 200, {'Set-Cookie':adminCookie()});
