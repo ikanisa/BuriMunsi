@@ -28,7 +28,7 @@ const ctx=()=>({collectionId:group,accountId:account,principalUserId:principal,s
 const sqlError=(code,message='synthetic database refusal')=>Object.assign(new Error(message),{code});
 
 function fixture(){
- const state={enabled:true,generation:1,row:null,rows:new Map(),sourceKeys:new Map(),requests:new Map(),media:new Map(),legacySources:[],puts:0,commits:0,audits:[],revealGranted:true,active:true,allowLegacyFixture:true};
+ const state={enabled:true,generation:1,row:null,rows:new Map(),sourceKeys:new Map(),requests:new Map(),media:new Map(),legacySources:[],puts:0,commits:0,audits:[],revealGranted:true,active:true,allowLegacyFixture:true,reads:0,writes:0};
  const work={assert:async()=>{if(!state.active)throw new Error('synthetic lease revoked');}};
  let env;
  const allowed=()=>{if(!state.active||!state.enabled)throw sqlError('42501');};
@@ -164,7 +164,8 @@ function fixture(){
    if(state.onPut)await state.onPut();
   },get:async key=>{if(state.onGet)await state.onGet();const x=state.media.get(key);return x?{text:async()=>x.sealed}:null;}};
  env={DB:db,PRIVATE_MEDIA:media,DATA_KEY_ID:'synthetic-key',DATA_ENCRYPTION_KEY:Buffer.alloc(32,7).toString('base64')};
- const authority={db,groupId:group,read:fn=>fn(sql),write:async fn=>{
+ const authority={db,groupId:group,read:fn=>{state.reads++;return fn(sql);},write:async fn=>{
+   state.writes++;
    const result=await fn(sql);if(state.lostAudit&&state.audits.length){state.lostAudit=false;throw sqlError('08006');}return result;
   },session:async()=>state.active?{...structuredClone(actor),sessionId:state.liveSessionId??session}:null,assertOwned:work.assert};
  const custody={namespace:{origin:'https://example.invalid',bucket:'collect-evidence'},
@@ -281,7 +282,11 @@ test('consent echo and single approved profile use current native proof',async()
 
 test('encrypted capture retries reconcile the same request and reject changed content',async()=>{
  const f=fixture();await f.run(async adapter=>{
-  const first=await adapter.observe(actor,incoming),second=await adapter.observe(actor,incoming);
+  const first=await adapter.observe(actor,incoming);
+  const initial={reads:f.state.reads,writes:f.state.writes};
+  const second=await adapter.observe(actor,incoming);
+  const replay={reads:f.state.reads-initial.reads,writes:f.state.writes-initial.writes};
+  assert.deepEqual({initial,replay},{initial:{reads:1,writes:4},replay:{reads:1,writes:1}});
   assert.deepEqual(second,first);assert.equal(first.status,'source_unresolved');assert.equal(first.financialEffects,0);
   assert.equal(first.bodySha256,await sha256(incoming.rawBody));assert.equal(f.state.commits,1);assert.equal(f.state.puts,1);
   assert.equal([...f.state.media.values()][0].sealed.includes(incoming.rawBody),false);
@@ -828,13 +833,24 @@ test('a multiline sender message is retained and revealed without changing its b
 test('a lost commit reply reconciles instead of writing or sending twice',async()=>{
  const f=fixture();f.state.lostCommit=true;
  await f.run(async adapter=>{const result=await adapter.observe(actor,incoming);assert.equal(result.requestId,incoming.requestId);
-  assert.equal(f.state.commits,1);assert.equal(f.state.puts,1);});
+  assert.equal(f.state.commits,1);assert.equal(f.state.puts,1);
+  assert.deepEqual({reads:f.state.reads,writes:f.state.writes},{reads:2,writes:4});});
 });
 
 test('revoking consent after storage prevents commit and acknowledgment',async()=>{
  const f=fixture();f.state.onPut=async()=>{f.state.enabled=false;f.state.generation=2;};
  await f.run(async adapter=>await assert.rejects(adapter.observe(actor,incoming),e=>e.status===403));
  assert.equal(f.state.puts,1);assert.equal(f.state.commits,0);assert.equal(f.state.row,null);
+});
+
+for(const [label,change,status] of [
+ ['consent',state=>{state.enabled=false;state.generation++;},403],
+ ['session',state=>{state.liveSessionId=id(90);},403],
+ ['receipt',state=>{state.row.createdAt++;},409],
+])test(`retained acknowledgment rechecks changed ${label} after reading encrypted storage`,async()=>{
+ const f=fixture();f.state.onGet=()=>change(f.state);
+ await f.run(async adapter=>await assert.rejects(adapter.observe(actor,incoming),error=>error.status===status));
+ assert.equal(f.state.puts,1);assert.equal(f.state.commits,1);
 });
 
 test('unconfirmed uploads have a bounded per-owner admission and exact retries reuse it',async()=>{

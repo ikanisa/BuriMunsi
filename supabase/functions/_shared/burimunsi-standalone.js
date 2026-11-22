@@ -52,6 +52,7 @@ export function standalonePrivacyRoute(method, path) {
 
 export function standaloneAdminRoute(method, path) {
   if (!path.startsWith('/api/admin/')) return false;
+  if (path === '/api/admin/oversight/sms-health') return method === 'GET';
   if (path === '/api/admin/auth' || path.startsWith('/api/admin/auth/')) {
     return adminAuthMethods.has(path) && adminAuthMethods.get(path) === method;
   }
