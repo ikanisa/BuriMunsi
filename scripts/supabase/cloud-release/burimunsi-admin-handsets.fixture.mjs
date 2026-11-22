@@ -2,6 +2,8 @@
 import assert from 'node:assert/strict';
 import {createHash,randomUUID,randomBytes} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
+import {execFileSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import '../../../supabase/functions/_shared/tests/helpers/node-postgres-import.mjs';
 import {ownedFixturePool} from '../../../supabase/tests/burimunsi/postgres-fixture-pool.mjs';
 import {PostgresDatabase} from '../../../supabase/functions/_shared/postgres.js';
@@ -38,7 +40,7 @@ export async function verifyAdminHandsets({owner,admin,database,fixtureRoot}){
   CREATE TABLE IF NOT EXISTS collect_sms.devices(last_seen_at text,ready bigint,revoked_at text,allowed_kinds text);
   ALTER TABLE collect_sms.messages OWNER TO postgres;ALTER TABLE collect_sms.devices OWNER TO postgres;
   GRANT USAGE ON SCHEMA collect_sms TO postgres`);
- const source=await migrate(['20261117180000_burimunsi_observation_reconcile_status.sql','20261117190000_burimunsi_legacy_reconcile.sql',
+ const fenceSource=await migrate(['20261117180000_burimunsi_observation_reconcile_status.sql','20261117190000_burimunsi_legacy_reconcile.sql',
   '20261122191000_burimunsi_sms_completeness.sql','20261122191100_burimunsi_payment_sms_obligations.sql','20261122191200_burimunsi_known_device_login_budget.sql',
   '20261122200000_burimunsi_admin_handset_intake.sql','20261122201000_burimunsi_admin_inbox_coverage.sql']);
  const pool=await ownedFixturePool({root:fixtureRoot,socket,port:Number(port),database,user:'postgres',clusterName:target.cluster});
@@ -48,7 +50,7 @@ export async function verifyAdminHandsets({owner,admin,database,fixtureRoot}){
  const envBase={BURIMUNSI_COLLECTION_ID:group,BURIMUNSI_PRODUCT_MODE:'standalone',ADMIN_ORIGINS:origin,
   BURIMUNSI_DEFAULT_STAFF_PIN:pin,BURIMUNSI_PIN_PEPPER_ID:'fixture',BURIMUNSI_PIN_PEPPER_BASE64:Buffer.alloc(32,29).toString('base64')};
  async function frame(kind,fn){
-  const work=await openApplicationWork({backend,sourceSha256:source,kind});let failed=true;
+  const work=await openApplicationWork({backend,sourceSha256:fenceSource,kind});let failed=true;
   try{const value=await fn(new PostgresDatabase(pool,{},work));failed=false;return value;}
   finally{assert.equal((await work.finish({failed})).state,'settled');}
  }
@@ -122,6 +124,12 @@ export async function verifyAdminHandsets({owner,admin,database,fixtureRoot}){
   assert.notEqual(signed[0].profile.id,signed[1].profile.id);assert.equal(signed[2].profile.role,'staff');
   for(const device of [A,B])assert.deepEqual(await consent(device),{enabled:true,generation:1});
   await assert.rejects(()=>consent(staff),e=>e.code==='42501'||e.status===403);
+  const driver=fileURLToPath(new URL('./fixtures/burimunsi-census-jsonb-driver.mjs',import.meta.url));
+  const lock=fileURLToPath(new URL('../deno.lock',import.meta.url)),endpoint=socket+'/.s.PGSQL.'+port;
+  const censusDriver=JSON.parse(execFileSync('deno',['run','--node-modules-dir=none','--lock='+lock,'--frozen','--cached-only',
+   '--allow-read','--allow-env','--allow-net=unix:'+endpoint,'--allow-write='+endpoint,driver,socket,String(port),database],
+   {encoding:'utf8',timeout:30000,input:JSON.stringify({phone:A,group,source:fenceSource})}));
+  assert.equal(censusDriver.driver,'postgres@3.4.7');assert.equal(censusDriver.missing,'incomplete');
   const original=(await admin.query('SELECT id,installation_id,custodian_account_id FROM private.burimunsi_device_grants WHERE installation_id=ANY($1::uuid[])',[[A.install,B.install]])).rows;
   assert.equal(original.length,2);assert.ok(original.every(x=>x.custodian_account_id===null));
   const disabled=await native(B,'/sms/observation-consent',{enabled:false,generation:2},'SELECT private.burimunsi_observation_set_consent(false,2) v');
@@ -252,6 +260,6 @@ export async function verifyAdminHandsets({owner,admin,database,fixtureRoot}){
   assert.equal((await dashboard(ownerLogin,list))[0].collectionId,group);
   assert.equal(ownerSession.data.user.role,'admin');
   assert.deepEqual(await treasury(),before);
-  return {arbitraryAdminInstalls:2,normalPhonePinSessions:true,staffDenied:true,revokedAdminDenied:true,scopedInventory:true,explicitRefusalPreserved:true,sharedAndTeamAdmin:true,switchedHandsetCountedOnce:true,legacyTieUnknown:true,upstreamSuspensionExcluded:true,teamScopedDashboard:true,independentSensitiveAndFinancialGrants:true,treasuryUnchanged:true};
+  return {arbitraryAdminInstalls:2,normalPhonePinSessions:true,staffDenied:true,revokedAdminDenied:true,scopedInventory:true,explicitRefusalPreserved:true,sharedAndTeamAdmin:true,switchedHandsetCountedOnce:true,legacyTieUnknown:true,upstreamSuspensionExcluded:true,teamScopedDashboard:true,censusDriver,independentSensitiveAndFinancialGrants:true,treasuryUnchanged:true};
  }finally{await pool.end();}
 }
