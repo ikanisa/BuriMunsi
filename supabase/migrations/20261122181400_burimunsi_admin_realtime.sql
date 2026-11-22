@@ -10,6 +10,7 @@ DO $check$
 BEGIN
  PERFORM private._collect_fence_require_operator();
  IF NOT EXISTS(SELECT 1 FROM private.collect_fence_control WHERE singleton AND mode='fenced')
+  OR to_regprocedure('private.burimunsi_browser_operator(text,text,uuid,boolean)') IS NULL
   OR to_regprocedure('realtime.send(jsonb,text,text,boolean)') IS NULL OR to_regprocedure('realtime.topic()') IS NULL
   OR NOT has_table_privilege('anon','realtime.messages','SELECT') OR NOT has_schema_privilege('anon','realtime','USAGE')
   OR EXISTS(SELECT 1 FROM pg_proc p WHERE p.oid=to_regprocedure('realtime.send(jsonb,text,text,boolean)')
@@ -44,7 +45,7 @@ ALTER TABLE private.burimunsi_admin_live_channels ENABLE ALWAYS TRIGGER collect_
 CREATE FUNCTION private._burimunsi_admin_live_authorized(ch private.burimunsi_admin_live_channels) RETURNS boolean
  LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $fn$
 DECLARE now_sec bigint:=floor(extract(epoch FROM clock_timestamp()))::bigint;
- live record; browser private.burimunsi_browser_pin_sessions%ROWTYPE;allowed boolean;
+ live record; browser private.burimunsi_browser_pin_sessions%ROWTYPE;account jsonb;allowed boolean;
  old_pin text:=current_setting('burimunsi.pin_frame',true);old_group text:=current_setting('burimunsi.collection_id',true);
 BEGIN
  IF ch.expires_at IS NULL OR ch.expires_at<=clock_timestamp()
@@ -58,7 +59,8 @@ BEGIN
  JOIN app.admin_sessions c ON c.auth_session_id=s.id AND c.user_id=ad.id AND c.auth_version=ad.auth_version AND c.public_id=ch.public_session_id
  JOIN app.collections g ON g.id=ch.collection_id AND g.status='active'
  JOIN app.admin_grants perm ON perm.user_id=u.id AND perm.permission='sms.read'
- JOIN app.admin_account_role_capabilities role_cap ON role_cap.role=ad.role AND role_cap.permission=perm.permission
+ JOIN app.admin_account_role_capabilities role_cap ON role_cap.permission=perm.permission
+  AND (role_cap.role=ad.role OR (ch.authority_kind='browser_pin' AND ad.role='admin' AND role_cap.role='owner'))
  WHERE s.id=ch.session_id AND s.user_id=ch.principal_id AND s.surface='admin' AND s.revoked_at IS NULL
   AND least(s.expires_at,c.expires_at)>now_sec AND c.issued_assurance_level=s.assurance_level
   AND c.issued_mfa_at IS NOT DISTINCT FROM s.mfa_at AND c.issued_mfa_factor_id IS NOT DISTINCT FROM s.mfa_factor_id
@@ -70,22 +72,16 @@ BEGIN
     AND b.public_id::text=ch.public_session_id AND b.cookie_hash=live.token_hash AND b.origin=live.origin
     AND b.origin='https://burimunsi-admin.ikanisa.com' AND b.issued_at=live.created_at AND b.issued_at=live.auth_at
     AND b.issued_at=live.cookie_created_at AND b.expires_at=live.cookie_expires_at AND b.expires_at=live.session_expires_at
-    AND b.expires_at>now_sec AND live.assurance_level=1 AND live.role='owner'
-    AND NOT EXISTS(SELECT 1 FROM app.collections g WHERE g.id<>ch.collection_id)
-    AND EXISTS(SELECT 1 FROM app.memberships m WHERE m.collection_id=b.collection_id AND m.user_id=b.principal_id AND m.active=1 AND m.role IN('owner','admin'));
+    AND b.expires_at>now_sec AND live.assurance_level=1;
   IF FOUND THEN
-   -- The issuer already verified the cookie and PIN. The WebSocket has
-   -- neither credential and cannot enter the HTTP-only owner binding RPC.
-   -- Compare the exact protected binding, native credential generation and
-   -- independently recomputed approval without manufacturing an Edge actor.
-   allowed:=EXISTS(SELECT 1 FROM private.burimunsi_accounts a JOIN private.burimunsi_scopes s ON s.collection_id=a.collection_id
-    JOIN private.collect_owner_identity id ON id.singleton AND id.principal_user_id=a.principal_user_id
-      AND id.admin_user_id=ch.admin_id AND id.owner_email=live.email
-    CROSS JOIN LATERAL (SELECT private.burimunsi_pin_root_snapshot(a.collection_id,a.principal_user_id,a.phone,a.role,a.capabilities) AS authority) root
-    WHERE a.id=browser.account_id AND a.collection_id=ch.collection_id AND a.principal_user_id=ch.principal_id
-      AND a.version=browser.account_version AND a.credential_version=browser.credential_version
-      AND a.active AND NOT a.removed AND a.role='admin'
-      AND root.authority->>'kind'='shared_approval' AND root.authority->>'adminId'=ch.admin_id AND root.authority=browser.authority);
+   -- Re-evaluate the same scoped account and credential generation the browser
+   -- used. This also picks up an Admin demotion after a channel was joined.
+   account:=private.burimunsi_browser_operator(ch.collection_id,NULL,browser.account_id,false);
+   allowed:=account->>'groupId'=ch.collection_id AND account->>'role'='admin'
+    AND account->>'storageRole'=live.role AND account->>'principalUserId'=ch.principal_id
+    AND account->>'adminId'=ch.admin_id AND account->>'id'=browser.account_id::text
+    AND account->>'authVersion'=live.auth_version::text AND account->>'version'=browser.account_version::text
+    AND account->>'credentialVersion'=browser.credential_version::text AND account->'authority'=browser.authority;
   END IF;
  ELSE
   allowed:=EXISTS(SELECT 1 FROM private.bff_sessions b JOIN private.auth_principal_links p ON p.auth_user_id=b.auth_user_id AND p.user_id=ch.principal_id
