@@ -7,6 +7,10 @@ object CoreChecks {
     private fun rejects(block: () -> Unit) { var caught = false; try { block() } catch (_: ContractFailure) { caught = true }; check(caught) }
     @JvmStatic fun main(args: Array<String>) {
         println("TAP version 13")
+        ok("receipt digests match the stored lowercase SHA-256 of UTF-8 text") {
+            check(Values.sha256("") == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+            check(Values.sha256("Ikaze • 1\u202f000 RWF 🧾") == "2a1aa8053a60b83bc8b68cc1430c292bc520484a0d465483a6e1fafcfbfec816")
+        }
         for (v in listOf("0780000816", "+250780000816", "250780000816", "00250780000816", "780000816", "+250 780 000 816")) ok("phone $v") { check(Values.phone(v) == "+250780000816") }
         for (v in listOf("staff@example.test", "abc0780000816", "*********816", "078000081", "++250780000816", "+250760000816", "0780000816<script>")) ok("reject phone $v") { rejects { Values.phone(v) } }
         ok("all 10000 PINs preserve leading zeroes") { for(n in 0..9999) { val code = n.toString().padStart(4,'0'); check(Values.pin(code) == code) } }
