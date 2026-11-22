@@ -5,9 +5,9 @@ import {PinHasher} from '../../../../supabase/functions/_shared/domain/burimunsi
 import {PostgresNativeAuthStore} from '../../../../supabase/functions/_shared/domain/burimunsi/postgres-auth-store.js';
 import {sha256} from '../../../../supabase/functions/_shared/domain/burimunsi/values.js';
 
-// Separate from the running service: this is the canonical byte order and keyed
-// domain used by the code-44 server for an original create without a PIN field.
-function predecessorFingerprint(command, pin, pepper) {
+// Independent keyed command identity. The older server supplied the resolved
+// PIN to this preimage. The current default mode fingerprints the omitted field.
+function staffCreateFingerprint(command, pin, pepper) {
   const {action, capabilities, name, phone, requestId} = command;
   return createHmac('sha256', pepper).update('burimunsi-credential-command-v1\0')
     .update(JSON.stringify({action, capabilities, name, phone, pin, requestId})).digest('hex');
@@ -17,7 +17,8 @@ export async function verifyStaffCreatePredecessor({owner, db, clock, group, oth
   const pepper = randomBytes(32), cursorKey = randomBytes(32), legacyPin = '7'.repeat(4);
   const origin = 'https://example.test', unexpected = () => assert.fail('Unexpected unrelated service call');
   const token = () => randomBytes(32).toString('hex');
-  await owner.query("INSERT INTO app.users VALUES('fixture-create-result-1','active'),('fixture-create-result-2','active')");
+  await owner.query(`INSERT INTO app.users VALUES
+    ('fixture-create-result-1','active'),('fixture-create-result-2','active'),('fixture-create-result-3','active')`);
   async function admin(collection) {
     const id = randomUUID(), grant = randomUUID(), installation = randomUUID(), session = randomUUID(), bearer = token();
     await owner.query(`INSERT INTO private.burimunsi_accounts
@@ -33,16 +34,16 @@ export async function verifyStaffCreatePredecessor({owner, db, clock, group, oth
   }
   const original = await admin(group), outside = await admin(otherGroup);
   let principalCalls = 0;
-  function route(actor, legacyStaffCreatePin) {
+  function route(actor, defaultStaffPin) {
     const auth = new PostgresNativeAuthStore({db, groupId: actor.collection, clock,
       createOperatorPrincipal: async () => ({id: 'fixture-create-result-' + ++principalCalls})});
     return composeNativeRequest({admission: {verified: true, groupId: actor.collection},
       config: {enabled: true, groupId: actor.collection, origin}, clock,
-      secrets: {pinPepper: pepper, pinPepperId: 'fixture', cursorKey, legacyStaffCreatePin},
+      secrets: {pinPepper: pepper, pinPepperId: 'fixture', cursorKey, defaultStaffPin},
       networkBucket: unexpected, ports: {auth, canonical: {inCanonicalTransaction: unexpected, inMemberTransaction: unexpected},
         records: {withReadSnapshot: unexpected}, gateway: {withAuthorityTransaction: unexpected, withReadSnapshot: unexpected}}});
   }
-  const handler = route(original, legacyPin);
+  const handler = route(original, legacyPin), withoutDefault = route(original);
   async function post(command, actor = original, service = handler) {
     const reply = await service(new Request(origin + '/v1/burimunsi/staff', {method: 'POST', headers: {
       'content-type': 'application/json', authorization: 'Bearer ' + actor.bearer,
@@ -58,7 +59,7 @@ export async function verifyStaffCreatePredecessor({owner, db, clock, group, oth
     response = result} = {}) {
     await owner.query(`INSERT INTO private.burimunsi_command_receipts
       (collection_id,actor_id,request_id,session_id,operation,fingerprint,response,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,1)`,
-      [actor.collection, actor.id, command.requestId, session, operation, predecessorFingerprint(command, legacyPin, pepper), response]);
+      [actor.collection, actor.id, command.requestId, session, operation, staffCreateFingerprint(command, legacyPin, pepper), response]);
     return command;
   }
   const otherRequest = () => ({...history, requestId: randomUUID()});
@@ -85,8 +86,8 @@ export async function verifyStaffCreatePredecessor({owner, db, clock, group, oth
   for (let attempt = 0; attempt < 2; attempt++)
     assert.deepEqual(await post(history), {status: 200, result});
   for (const command of [otherRequest(), wrongActor])
-    assert.deepEqual(await post(command), {status: 400, result: 'staff_passcode_required'});
-  assert.deepEqual(await post(history, outside, route(outside, legacyPin)), {status: 400, result: 'staff_passcode_required'});
+    assert.deepEqual(await post(command, original, withoutDefault), {status: 400, result: 'staff_passcode_required'});
+  assert.deepEqual(await post(history, outside, route(outside)), {status: 400, result: 'staff_passcode_required'});
   for (const command of [wrongSession, wrongOperation, {...history, name: 'Different name'},
     {...history, phone: '+250780000009'}, {...history, capabilities: ['records.read', 'members.enroll']}])
     assert.deepEqual(await post(command), {status: 409, result: 'idempotency_conflict'});
@@ -116,13 +117,33 @@ export async function verifyStaffCreatePredecessor({owner, db, clock, group, oth
   assert.equal(equalResult.status, 200);
   const {rows: [recorded]} = await owner.query(`SELECT fingerprint,response FROM private.burimunsi_command_receipts
     WHERE collection_id=$1 AND actor_id=$2 AND request_id=$3`, [group, original.id, equalDigits.requestId]);
-  assert.equal(recorded.fingerprint, predecessorFingerprint(equalDigits, equalDigits.pin, pepper));
+  assert.equal(recorded.fingerprint, staffCreateFingerprint(equalDigits, equalDigits.pin, pepper));
   assert.deepEqual(recorded.response, {...equalResult.result, staffCreateInput: 'explicit_pin'});
   assert.deepEqual(await post(equalDigits), equalResult);
   const {pin: _pin, ...omitted} = equalDigits;
   assert.deepEqual(await post(omitted), {status: 409, result: 'idempotency_conflict'});
   assert.deepEqual(await sideEffects(), {...before, accounts: before.accounts + 2, audit: before.audit + 2,
     receipts: before.receipts + 2, principalCalls: 2});
+
+  const defaultRequest = {...otherRequest(), phone: '+250780000010'};
+  const defaultResult = await post(defaultRequest);
+  assert.equal(defaultResult.status, 200);
+  assert.deepEqual(defaultResult.result, {applied: true, id: defaultResult.result.id, version: 1});
+  const {rows: [defaultReceipt]} = await owner.query(`SELECT fingerprint,response FROM private.burimunsi_command_receipts
+    WHERE collection_id=$1 AND actor_id=$2 AND request_id=$3`, [group, original.id, defaultRequest.requestId]);
+  assert.equal(defaultReceipt.fingerprint, staffCreateFingerprint(defaultRequest, undefined, pepper));
+  assert.deepEqual(defaultReceipt.response, {...defaultResult.result, staffCreateInput: 'default_pin'});
+  const pinRecord = async () => (await owner.query('SELECT phone,pin_hash FROM private.burimunsi_accounts WHERE id=$1',
+    [defaultResult.result.id])).rows[0];
+  const saved = await pinRecord(), rotatedPin = '6'.repeat(4);
+  assert.equal(await verifier.verify(saved.phone, legacyPin, saved.pin_hash), true);
+  assert.equal(await verifier.verify(saved.phone, rotatedPin, saved.pin_hash), false);
+  assert.deepEqual(await post(defaultRequest, original, route(original, rotatedPin)), defaultResult);
+  assert.deepEqual(await post(defaultRequest, original, withoutDefault), defaultResult);
+  assert.deepEqual(await post({...defaultRequest, pin: legacyPin}), {status: 409, result: 'idempotency_conflict'});
+  assert.deepEqual(await pinRecord(), saved);
+  assert.deepEqual(await sideEffects(), {...before, accounts: before.accounts + 3, audit: before.audit + 3,
+    receipts: before.receipts + 3, principalCalls: 3});
   await owner.query('UPDATE private.burimunsi_sessions SET revoked=true WHERE id=$1', [original.session]);
   assert.deepEqual(await post(history), {status: 401, result: 'session_unavailable'});
   assert.deepEqual(await originalReceipt(), beforeReceipt);

@@ -463,6 +463,7 @@
     <string name="ui_ccf28b3545f9">Retire this receiver and pair its replacement to the same receiving account. There can be only one active receiver.</string>
     <string name="ui_cd21e82c9071">Review the requested Android permissions. Grant access only on the approved receiving phone, then refresh this status.</string>
     <string name="ui_cd5da12c512a">Too many attempts. Try again later.</string>
+    <string name="ui_cdfa93bbd715">Leave blank for default</string>
     <string name="ui_ceaeb96063f7">Confirm the document processing consent before continuing.</string>
     <string name="ui_cf9c203d4f1d">Contribution history</string>
     <string name="ui_d00a6c24b1af">Member MoMo</string>

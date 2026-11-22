@@ -46,7 +46,7 @@ test('closed HTTP factory creates a branded route with no DB/provider/work-asser
   assert.equal(response.status,401);assert.equal(f.state.calls,0);
  }finally{await f.close();}
 });
-test('retired Staff passcode configuration cannot disable sign-in or worker startup',async()=>{
+test('malformed Staff default passcode cannot disable sign-in or worker startup',async()=>{
  const f=await fixture(),jobs=await fixture('jobs');try{
   f.env.BURIMUNSI_DEFAULT_STAFF_PIN='retired';
   jobs.env.BURIMUNSI_DEFAULT_STAFF_PIN='retired';

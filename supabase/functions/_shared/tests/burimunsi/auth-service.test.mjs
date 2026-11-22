@@ -1,7 +1,7 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {NativeAuthService} from '../../domain/burimunsi/auth-service.js';
 import {PinHasher} from '../../domain/burimunsi/pin.js';
-import {sha256} from '../../domain/burimunsi/values.js';
+import {canonicalJson,sha256} from '../../domain/burimunsi/values.js';
 const NOW=1793961600000,G='group-1',I='5ac17356-3e19-4d79-87ae-2ef65a42ff14',D='a'.repeat(64),N='b'.repeat(64);
 // TEST ONLY: finite state adapter. Production uses qualified PostgreSQL transactions.
 class Store{
@@ -19,7 +19,8 @@ class Store{
   const expiresAt=NOW+c.sessionTtlMs;this.sessions.push({...old,id:crypto.randomUUID(),tokenHash:c.replacementTokenHash,
    credentialVersion:a.credentialVersion,expiresAt,revoked:false});return {rotated:true,expiresAt};}
  async retainedStaffCommand(c){return this.receipts.get(c.requestId)||null;}
- async mutateStaff(c){this.writes++;let a=this.accounts.find(x=>x.id===c.id);if(c.action==='create'){a={id:crypto.randomUUID(),groupId:G,role:'staff',active:true,removed:false,version:1,credentialVersion:1,...c};delete a.action;this.accounts.push(a);}else{if(!a||a.version!==c.expectedVersion)return {applied:false};Object.assign(a,c);a.version++;if(c.action==='disable'||c.action==='remove')a.active=false;if(c.action==='enable')a.active=true;if(c.action==='remove')a.removed=true;}const response={applied:true,id:a.id,version:a.version};this.receipts.set(c.requestId,{sessionId:c.actorSessionId,fingerprint:c.fingerprint,response});return response;}
+ async mutateStaff(c){this.writes++;let a=this.accounts.find(x=>x.id===c.id);if(c.action==='create'){a={id:crypto.randomUUID(),groupId:G,role:'staff',active:true,removed:false,version:1,credentialVersion:1,...c};delete a.action;this.accounts.push(a);}else{if(!a||a.version!==c.expectedVersion)return {applied:false};Object.assign(a,c);a.version++;if(c.action==='disable'||c.action==='remove')a.active=false;if(c.action==='enable')a.active=true;if(c.action==='remove')a.removed=true;}const response={applied:true,id:a.id,version:a.version};this.receipts.set(c.requestId,{sessionId:c.actorSessionId,operation:'burimunsi.staff.'+c.action,fingerprint:c.fingerprint,
+  ...(c.action==='create'?{staffCreateInput:c.staffCreateInput}:{}),response});return response;}
 }
 const hasher={hash:async(phone,pin)=>({phone,pin}),verify:async(phone,pin,r)=>r.phone===phone&&r.pin===pin,commandFingerprint:async value=>sha256('test-only-keyed-boundary:'+value)};
 function setup(extra={}){const store=new Store(),svc=new NativeAuthService({store,hasher,groupId:G,clock:()=>NOW,...extra});return {store,svc};}
@@ -55,13 +56,61 @@ test('logout or account-version change before commit cannot create a replacement
  const candidateHash=await sha256('e'.repeat(64));assert.equal(store.sessions.some(s=>!s.revoked&&s.tokenHash===candidateHash),false);assert.equal(store.a.pinHash.pin,'0123');}});
 const create=()=>({action:'create',name:'Example Staff',phone:'0780000002',pin:'0042',capabilities:['records.read','members.enroll'],requestId:crypto.randomUUID()});
 test('admin adds staff without returning credential material',async()=>{const {svc,store,actor}=await signed();const result=await svc.manageStaff(actor,create());assert.deepEqual(Object.keys(result).sort(),['applied','id','version']);assert.equal(store.accounts[1].role,'staff');assert.equal(store.accounts[1].phone,'+250780000002')});
-test('new Staff accounts require an explicit passcode and existing accounts can retain theirs',async()=>{
- const {svc,store,actor}=await signed(),command=create();delete command.pin;
- await assert.rejects(svc.manageStaff(actor,command),e=>e.code==='staff_passcode_required'&&e.status===400);
- assert.equal(store.writes,0);
+test('omitted Staff passcode requires a configured default and edits retain existing credentials',async()=>{
+ for(const defaultStaffPin of [undefined,'retired','6781\n']){
+  const {svc,store,actor}=await signed({defaultStaffPin}),{pin,...command}=create();
+  await assert.rejects(svc.manageStaff(actor,command),e=>e.code==='staff_passcode_required'&&e.status===400);
+  assert.equal(store.writes,0);
+ }
+ const {svc,store,actor}=await signed();
  const created=await svc.manageStaff(actor,create());
  await svc.manageStaff(actor,{action:'edit',id:created.id,expectedVersion:1,name:'Updated Staff',requestId:crypto.randomUUID()});
  assert.equal(store.accounts[1].pinHash.pin,'0042');
+});
+test('new Staff can authenticate with the configured default and replay survives rotation or removal',async()=>{
+ const real=new PinHasher({pepper:new Uint8Array(32).fill(23),pepperId:'staff-create-test'});
+ const {svc,store}=setup({hasher:real,defaultStaffPin:'6781'});
+ store.a.pinHash=await real.hash(store.a.phone,login.pin);
+ const session=await svc.login(login,N),actor=await svc.authenticate(session.token,I);
+ const {pin,...command}=create(),created=await svc.manageStaff(actor,command);
+ const staff=store.accounts.find(account=>account.id===created.id);
+ store.device.accountIds.push(staff.id);
+ const staffLogin=await svc.login({...login,phone:command.phone,pin:'6781'},N);
+ assert.equal(staffLogin.profile.id,staff.id);assert.equal(staffLogin.profile.role,'staff');
+ const originalHash=structuredClone(staff.pinHash);
+ const originalAdminHash=structuredClone(store.a.pinHash);
+ for(const defaultStaffPin of ['8134',undefined]){
+  const restart=new NativeAuthService({store,hasher:real,groupId:G,clock:()=>NOW,defaultStaffPin});
+  assert.deepEqual(await restart.manageStaff(actor,command),created);
+  await assert.rejects(restart.manageStaff(actor,{...command,name:'Changed command'}),/idempotency_conflict/);
+  await assert.rejects(restart.manageStaff(actor,{...command,pin:'6781'}),/idempotency_conflict/);
+ }
+ assert.equal(store.writes,1);
+ assert.deepEqual(staff.pinHash,originalHash);
+ assert.deepEqual(store.a.pinHash,originalAdminHash);
+ assert.deepEqual(Object.keys(created).sort(),['applied','id','version']);
+ assert.equal(store.receipts.get(command.requestId).staffCreateInput,'default_pin');
+});
+test('explicit Staff passcodes override the default and keep their old replay identity',async()=>{
+ const {svc,store,actor}=await signed({defaultStaffPin:'6781'});
+ const command=create(),created=await svc.manageStaff(actor,command);
+ assert.equal(store.accounts[1].pinHash.pin,command.pin);
+ assert.deepEqual(await svc.manageStaff(actor,command),created);
+ const {pin,...omitted}=command;
+ await assert.rejects(svc.manageStaff(actor,omitted),/idempotency_conflict/);
+ await assert.rejects(svc.manageStaff(actor,{...create(),pin:null}),/invalid_passcode/);
+ assert.equal(store.writes,1);
+});
+test('legacy omitted-PIN replay matches the retained original without issuing a new credential',async()=>{
+ const {svc,store,actor}=await signed({defaultStaffPin:'6781'}),{pin,...command}=create();
+ const response={applied:true,id:crypto.randomUUID(),version:1};
+ store.receipts.set(command.requestId,{sessionId:actor.sessionId,operation:'burimunsi.staff.create',
+  fingerprint:await hasher.commandFingerprint(canonicalJson({...command,pin:'6781'})),response});
+ assert.deepEqual(await svc.manageStaff(actor,command),response);
+ assert.deepEqual(await svc.manageStaff(actor,{...command,pin:'6781'}),response);
+ const rotated=new NativeAuthService({store,hasher,groupId:G,clock:()=>NOW,defaultStaffPin:'8134'});
+ await assert.rejects(rotated.manageStaff(actor,command),/idempotency_conflict/);
+ assert.equal(store.writes,0);
 });
 test('staff cannot manage another account',async()=>{const {svc,actor}=await signed();await assert.rejects(svc.manageStaff({...actor,role:'staff'},create()),/access_denied/)});
 test('cannot smuggle admin role through creation',async()=>{const {svc,actor}=await signed();await assert.rejects(svc.manageStaff(actor,{...create(),role:'admin'}),/invalid_request/)});

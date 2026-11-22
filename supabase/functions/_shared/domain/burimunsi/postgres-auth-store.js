@@ -192,9 +192,19 @@ export class PostgresNativeAuthStore extends PostgresNativeAuthority {
     this.checkGroup(cmd.groupId);
     return this.write(async tx=>{
       const actor=await this.session(tx,{id:cmd.actorSessionId});authorize(actor,this.groupId,'staff.manage',{now:this.clock()});requireThat(actor.id===cmd.actorId,'session_unavailable',401);
+      const staffCreateInput=cmd.action==='create'?(cmd.staffCreateInput??'explicit_pin'):null;
+      requireThat(staffCreateInput===null||['explicit_pin','default_pin'].includes(staffCreateInput),'invalid_staff_command');
       const prior=await this.retained(tx,actor.id,cmd.requestId);
-      if(prior){requireThat(!originalStaffOperation(prior.operation),'staff_command_cancelled',409);
-        requireThat(prior.sessionId===actor.sessionId&&prior.fingerprint===cmd.fingerprint,'idempotency_conflict',409);return prior.response;}
+      if(prior){
+        requireThat(!originalStaffOperation(prior.operation),'staff_command_cancelled',409);
+        requireThat(prior.sessionId===actor.sessionId&&prior.fingerprint===cmd.fingerprint,'idempotency_conflict',409);
+        if(staffCreateInput){
+          requireThat(prior.operation==='burimunsi.staff.create'&&
+            (Object.hasOwn(prior,'staffCreateInput')?prior.staffCreateInput===staffCreateInput:staffCreateInput==='explicit_pin'),
+            'idempotency_conflict',409);
+        }
+        return prior.response;
+      }
       let id=cmd.id,version;
       if(cmd.action==='create'){
         requireThat(cmd.pinHash&&cmd.name&&cmd.phone&&cmd.capabilities,'invalid_staff_command');
@@ -237,9 +247,8 @@ export class PostgresNativeAuthStore extends PostgresNativeAuthority {
         await tx.unsafe('UPDATE private.burimunsi_sessions SET revoked=true WHERE collection_id=$1 AND account_id=$2::uuid',[this.groupId,id]);
       }
       const response={applied:true,id,version};
-      // An older server can still verify the unchanged HMAC and return the original public fields.
-      // Persist how this request was presented so an omitted PIN can never match a new explicit create.
-      const recorded=cmd.action==='create'?{...response,staffCreateInput:'explicit_pin'}:response;
+      // Record the input mode for replays while keeping the public response unchanged.
+      const recorded=staffCreateInput?{...response,staffCreateInput}:response;
       await this.audit(tx,actor.id,'burimunsi.staff.'+cmd.action,id,cmd.requestId);
       await tx.unsafe('INSERT INTO private.burimunsi_command_receipts(collection_id,actor_id,request_id,session_id,operation,fingerprint,response,created_at) VALUES($1,$2::uuid,$3::uuid,$4::uuid,$5,$6,$7::jsonb,$8)',
         [this.groupId,actor.id,cmd.requestId,actor.sessionId,'burimunsi.staff.'+cmd.action,cmd.fingerprint,recorded,this.clock()]);

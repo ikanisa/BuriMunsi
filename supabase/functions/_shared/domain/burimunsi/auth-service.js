@@ -7,14 +7,14 @@ import {cancelledStaffOperation,originalStaffOperation,requireOriginDigest} from
 /** No DB emulator is shipped in runtime. Adapter must use atomic distributed limits,
  * session-version checks and CAS updates in the existing Collect deployment. */
 export class NativeAuthService {
-  constructor({store,hasher,groupId,clock=()=>Date.now(),sessionTtlMs=30*60*1000,preserveStaffPinOnPhoneChange=false,legacyStaffCreatePin}) {
+  constructor({store,hasher,groupId,clock=()=>Date.now(),sessionTtlMs=30*60*1000,preserveStaffPinOnPhoneChange=false,defaultStaffPin}) {
     requirePort(store,['consumeAttempts','findAccount','findDeviceGrant','createSessionIfCurrent','loadSession','changePinIfCurrent','mutateStaff','findStaff','retainedStaffCommand','revokeSession']);
     requireThat(hasher && typeof hasher.hash==='function' && typeof hasher.verify==='function' && typeof hasher.commandFingerprint==='function' && groupId,'authentication_unconfigured',503);
     requireThat(sessionTtlMs>=60000 && sessionTtlMs<=8*60*60*1000,'invalid_session_policy',503);
     requireThat(typeof preserveStaffPinOnPhoneChange==='boolean','authentication_unconfigured',503);
     Object.assign(this,{store,hasher,groupId,clock,sessionTtlMs,preserveStaffPinOnPhoneChange});this.dummy=null;
-    // The historical binding can verify a retained command, never issue a credential.
-    this.legacyStaffCreatePin=typeof legacyStaffCreatePin==='string'&&/^[0-9]{4}$/.test(legacyStaffCreatePin)?legacyStaffCreatePin:undefined;
+    this.defaultStaffPin=typeof defaultStaffPin==='string'&&defaultStaffPin.length===4&&
+      /^[0-9]{4}$/.test(defaultStaffPin)?defaultStaffPin:undefined;
   }
   async login({phone,pin,installationId,installationToken},networkBucket) {
     phone=normalizePhone(phone);requirePin(pin);
@@ -78,22 +78,34 @@ export class NativeAuthService {
       action==='edit'?['action','id','expectedVersion','requestId']:fields[action];
     exactKeys(command,fields[action],required);
     const requestId=requireRequestId(command.requestId);
-    const predecessor=action==='create'&&!Object.hasOwn(command,'pin');
-    if(predecessor)requireThat(this.legacyStaffCreatePin!==undefined,'staff_passcode_required',400);
-    const original=predecessor?{...command,pin:this.legacyStaffCreatePin}:command;
-    const fingerprint=await this.hasher.commandFingerprint(canonicalJson(original));
+    const useDefault=action==='create'&&!Object.hasOwn(command,'pin');
+    const staffCreateInput=action==='create'?(useDefault?'default_pin':'explicit_pin'):null;
+    // Fingerprint the request as submitted so a default rotation cannot alter its identity.
+    const fingerprint=await this.hasher.commandFingerprint(canonicalJson(command));
     const prior=await this.store.retainedStaffCommand({groupId:this.groupId,actorId:actor.id,sessionId:actor.sessionId,requestId,fingerprint,now:this.clock()});
     if(prior){
       requireThat(!originalStaffOperation(prior.operation),'staff_command_cancelled',409);
-      requireThat(prior.sessionId===actor.sessionId&&prior.fingerprint===fingerprint&&
-        (!predecessor||prior.operation==='burimunsi.staff.create'&&!Object.hasOwn(prior,'staffCreateInput')),'idempotency_conflict',409);
+      requireThat(prior.sessionId===actor.sessionId,'idempotency_conflict',409);
+      let expectedFingerprint=fingerprint;
+      if(staffCreateInput){
+        requireThat(prior.operation==='burimunsi.staff.create','idempotency_conflict',409);
+        if(Object.hasOwn(prior,'staffCreateInput')){
+          requireThat(prior.staffCreateInput===staffCreateInput,'idempotency_conflict',409);
+        }else if(useDefault){
+          // Historical unmarked receipts fingerprinted the resolved PIN.
+          requireThat(this.defaultStaffPin!==undefined,'staff_passcode_required',400);
+          expectedFingerprint=await this.hasher.commandFingerprint(canonicalJson({...command,pin:this.defaultStaffPin}));
+        }
+      }
+      requireThat(prior.fingerprint===expectedFingerprint,'idempotency_conflict',409);
       const result=prior.response;
       requireThat(result?.applied===true&&typeof result.id==='string'&&/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(result.id)&&
         Number.isSafeInteger(result.version)&&result.version>0,'invalid_recovery_proof',503);
       return {applied:true,id:result.id,version:result.version};
     }
-    requireThat(!predecessor,'staff_passcode_required',400);
+    if(useDefault)requireThat(this.defaultStaffPin!==undefined,'staff_passcode_required',400);
     const value={action,groupId:this.groupId,actorId:actor.id,actorSessionId:actor.sessionId,requestId,fingerprint};
+    if(staffCreateInput)value.staffCreateInput=staffCreateInput;
     let target=null;
     if(action!=='create'){
       requireId(command.id);
@@ -109,12 +121,14 @@ export class NativeAuthService {
     }
     if(Object.hasOwn(command,'phone'))value.phone=normalizePhone(command.phone);
     const phone=value.phone??target?.phone;
-    // Default remains the legacy explicit PIN requirement. The qualified
-    // PostgreSQL path may preserve the protected derivation identity atomically.
+    // A Staff phone edit can preserve the protected derivation identity atomically.
     if(action==='edit'&&value.phone&&value.phone!==target.phone&&!Object.hasOwn(command,'pin')){
       requireThat(this.preserveStaffPinOnPhoneChange,'new_passcode_required');value.retainPhoneBoundPin=true;
     }
-    if(Object.hasOwn(command,'pin'))value.pinHash=await this.hasher.hash(phone,requirePin(command.pin));
+    if(useDefault||Object.hasOwn(command,'pin')){
+      const pin=useDefault?this.defaultStaffPin:command.pin;
+      value.pinHash=await this.hasher.hash(phone,requirePin(pin));
+    }
     if(Object.hasOwn(command,'capabilities')){
       requireThat(validOperatorCapabilities('staff', command.capabilities),'access_denied',403);
       value.capabilities=[...command.capabilities];

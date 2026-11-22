@@ -1472,7 +1472,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         val resolveBlankPhoneDenial=existing!=null&&pin.isBlank()&&normalizedPhone!=Values.phone(existing.phone)
         val body=JSONObject().put("action",if(existing==null)"create" else "edit").put("name",name.trim()).put("phone",normalizedPhone)
         if(existing!=null)body.put("id",existing.id).put("expectedVersion",existing.version)
-        if(existing==null||pin.isNotBlank())body.put("pin",Values.pin(pin))
+        if(pin.isNotBlank())body.put("pin",Values.pin(pin))
         val caps=JSONArray().put(Capability.READ.key);if(enroll)caps.put(Capability.ENROLL.key);if(allocate)caps.put(Capability.ALLOCATE.key);body.put("capabilities",caps)
         command{repo().staffAction(body,resolveBlankPhoneDenial)};val staff=io{repo().staff()};state=state.copy(sheet=Sheet.STAFF,sheetId=null,staff=staff,panelSavedAt=clock(),selectedStaff=null,draft=emptyMap(),draftDirty=false)
     }

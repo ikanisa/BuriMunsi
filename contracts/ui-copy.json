@@ -2322,6 +2322,11 @@
       "rw": "Wagerageje inshuro nyinshi. Ongera ugerageze nyuma."
     },
     {
+      "key": "ui_cdfa93bbd715",
+      "en": "Leave blank for default",
+      "rw": "Siga ubusa ukoreshe isanzwe"
+    },
+    {
       "key": "ui_ceaeb96063f7",
       "en": "Confirm the document processing consent before continuing.",
       "rw": "Emeza uburenganzira bwo gukoresha inyandiko mbere yo gukomeza."

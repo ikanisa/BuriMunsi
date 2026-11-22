@@ -5,6 +5,7 @@ import {readRecoveryProof} from '../../domain/burimunsi/postgres-operation-recov
 import {projectRecoveredOutcome} from '../../domain/burimunsi/operation-recovery.js';
 import {NativeAuthService} from '../../domain/burimunsi/auth-service.js';
 import {createNativeHandler} from '../../domain/burimunsi/http.js';
+import {sha256} from '../../domain/burimunsi/values.js';
 
 const uuid=n=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const groupId='group-1',requestId=uuid(8),originId=uuid(2),currentId=uuid(3),digest='a'.repeat(64),now=1794132000000;
@@ -73,6 +74,19 @@ test('writer wins the lock: cancellation returns original committed outcome with
  assert.equal(applied.applied,true);assert.equal(resolution.state,'committed');
  assert.equal(f.state.accounts,1);assert.equal(f.state.receipt.operation,input.operation);assert.equal(f.state.audits,1);
 });
+test('concurrent omitted-PIN creates retain the first committed receipt and audit',async()=>{
+ const f=fixture(),first={...f.command,staffCreateInput:'default_pin'};
+ const rotated={...first,pinHash:{synthetic:'different credential proof'}};
+ const [created,replayed]=await Promise.all([f.store.mutateStaff(first),f.store.mutateStaff(rotated)]);
+ assert.deepEqual(created,replayed);
+ assert.deepEqual(Object.keys(created).sort(),['applied','id','version']);
+ assert.equal(f.state.receipt.response.staffCreateInput,'default_pin');
+ assert.deepEqual(await f.store.retainedStaffCommand({groupId,actorId:actor.id,sessionId:originId,requestId,now}),{
+  sessionId:originId,operation:input.operation,fingerprint:first.fingerprint,staffCreateInput:'default_pin',response:created});
+ await assert.rejects(f.store.mutateStaff({...first,staffCreateInput:'explicit_pin'}),/idempotency_conflict/);
+ assert.equal(f.state.accounts,1);assert.equal(f.state.audits,1);
+ assert.equal((await f.store.resolveStaffCommand(input)).state,'committed');
+});
 test('cancellation wins the lock: a concurrent writer cannot create staff',async()=>{
  const f=fixture();const [resolution,applied]=await Promise.allSettled([f.store.resolveStaffCommand(input),f.store.mutateStaff(f.command)]);
  assert.equal(resolution.value.state,'cancelled');assert.equal(applied.status,'rejected');assert.match(String(applied.reason),/staff_command_cancelled/);
@@ -119,6 +133,31 @@ test('staff create maps only exact PostgreSQL freshness failure after transactio
  const original=Object.assign(Error('fresh_auth_required'),{code:'42501'});
  f.store.write=async()=>{throw original};
  await assert.rejects(f.store.mutateStaff({...f.command,action:'edit'}),error=>error===original);
+});
+test('strict Staff create accepts an omitted PIN and exposes only its public receipt',async()=>{
+ const f=fixture(),unused=async()=>{};
+ const hasher={hash:async(phone,pin)=>({digest:await sha256(phone+pin)}),verify:unused,
+  commandFingerprint:value=>sha256('synthetic-boundary:'+value)};
+ const service=new NativeAuthService({store:f.store,hasher,groupId,clock:()=>now,defaultStaffPin:'6781'});
+ const handler=createNativeHandler({auth:{login:unused,authenticate:async()=>actor,logout:unused,changePasscode:unused,
+   manageStaff:(...args)=>service.manageStaff(...args)},
+  records:{home:unused,page:unused,detail:unused,exportLedger:unused,commandStatus:unused},
+  contributions:{allocate:unused},members:{enroll:unused,setActive:unused},gateway:{status:unused,replace:unused},
+  origin:'https://example.test',networkBucket:async()=>'',strictContract:true,groupId});
+ const body={action:'create',phone:'+250780000002',name:'Synthetic Staff',capabilities:['records.read'],requestId};
+ const call=body=>handler(new Request('https://example.test/v1/burimunsi/staff',{
+  method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+'c'.repeat(64),
+   'x-burimunsi-installation':actor.installationId,'x-burimunsi-contract':'burimunsi.native.v1',
+   'x-burimunsi-request':uuid(10),'x-burimunsi-generation':'1'},body:JSON.stringify(body)}));
+ assert.equal((await call({...body,pin:null})).status,400);
+ assert.equal(f.state.accounts,0);
+ const response=await call(body);
+ assert.equal(response.status,200);
+ assert.equal(response.headers.get('cache-control'),'no-store');
+ const receipt=await response.json();
+ assert.deepEqual(Object.keys(receipt.data).sort(),['applied','id','version']);
+ assert.equal(f.state.receipt.response.staffCreateInput,'default_pin');
+ assert.equal(f.state.accounts,1);assert.equal(f.state.audits,1);
 });
 test('strict HTTP route is authenticated, no-store, scoped and rejects nonstaff operations',async()=>{
  const f=fixture(),unused=async()=>{};

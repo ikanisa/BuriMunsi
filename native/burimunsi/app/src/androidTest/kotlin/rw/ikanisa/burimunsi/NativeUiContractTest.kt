@@ -447,14 +447,14 @@ class NativeUiContractTest {
         panelButton("Edit staff","Save changes").assertIsEnabled().performClick()
         ui.runOnIdle{check(c.staffSaveCalls==1&&c.lastStaffPhone=="+250780000002"&&c.lastStaffPin.isEmpty())}
         ui.runOnIdle{c.state=c.state.copy(sheetId=null,selectedStaff=null,draft=mapOf("name" to "Example Staff","phone" to "+250780000002"))}
-        ui.onNodeWithText("4 digits",useUnmergedTree=true).assertExists()
-        panelButton("Add staff","Create staff").assertIsNotEnabled()
-        ui.runOnIdle{check(c.staffSaveCalls==1)}
-        field("Passcode").performScrollTo().performTextInput("12")
-        panelButton("Add staff","Create staff").assertIsNotEnabled()
-        field("Passcode").performTextInput("34")
+        ui.onNodeWithText("Leave blank for default",useUnmergedTree=true).assertExists()
         panelButton("Add staff","Create staff").assertIsEnabled().performClick()
-        ui.runOnIdle{check(c.staffSaveCalls==2&&c.lastStaffPin=="1234")}
+        ui.runOnIdle{check(c.staffSaveCalls==2&&c.lastStaffPin.isEmpty())}
+        field("Passcode").performScrollTo().performTextInput("26")
+        panelButton("Add staff","Create staff").assertIsNotEnabled()
+        field("Passcode").performTextInput("84")
+        panelButton("Add staff","Create staff").assertIsEnabled().performClick()
+        ui.runOnIdle{check(c.staffSaveCalls==3&&c.lastStaffPin=="2684")}
     }
     @Test fun staffViewsHaveNoInventedPreferencesOrAdminGatewayControls(){
         val c=FakeController(Route.SETTINGS,Role.STAFF);show(c)

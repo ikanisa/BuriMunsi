@@ -467,6 +467,7 @@ internal val UiStringIds:Map<String,Int> = mapOf(
     "Retire this receiver and pair its replacement to the same receiving account. There can be only one active receiver." to R.string.ui_ccf28b3545f9,
     "Review the requested Android permissions. Grant access only on the approved receiving phone, then refresh this status." to R.string.ui_cd21e82c9071,
     "Too many attempts. Try again later." to R.string.ui_cd5da12c512a,
+    "Leave blank for default" to R.string.ui_cdfa93bbd715,
     "Confirm the document processing consent before continuing." to R.string.ui_ceaeb96063f7,
     "Contribution history" to R.string.ui_cf9c203d4f1d,
     "Member MoMo" to R.string.ui_d00a6c24b1af,

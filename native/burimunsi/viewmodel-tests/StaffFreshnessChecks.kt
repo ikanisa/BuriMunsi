@@ -9,12 +9,13 @@ import rw.ikanisa.burimunsi.ui.Sheet
 
 fun main()=runBlocking {
     val model=BuriViewModel(Application())
-    suspend fun idle(){withTimeout(10000){while(model.state.busy)delay(2)};delay(10)}
+    suspend fun idle(controller:BuriViewModel=model){withTimeout(10000){while(controller.state.busy)delay(2)};delay(10)}
     idle()
     Fixture.staffFailure=ApiFailure("fresh_auth_required",403,false)
     val before=Fixture.staffMutations
     model.saveStaff("Synthetic Staff","0780000002","4682",true,false);idle()
     check(Fixture.staffMutations==before+1&&model.state.pending)
+    check(Fixture.lastStaffBody?.optString("pin")=="4682")
     check(model.state.error=="Check the previous action, then sign in again before adding staff.")
     model.saveStaff("Synthetic Staff","0780000002","4682",true,false);idle()
     check(Fixture.staffMutations==before+1&&model.state.pending)
@@ -46,5 +47,13 @@ fun main()=runBlocking {
     check(Fixture.lastStaffAutoResolve&&!model.state.pending&&model.state.sheet==Sheet.STAFF&&model.state.operator!=null)
     Fixture.staffFailure=null;Fixture.staffAutoOutcome=null
     model.viewModelScope.cancel()
+
+    val creator=BuriViewModel(Application())
+    idle(creator);creator.openSheet(Sheet.STAFF_EDIT);idle(creator)
+    val creates=Fixture.staffMutations
+    creator.saveStaff("Synthetic Staff","0780000002","",true,false);idle(creator)
+    check(Fixture.staffMutations==creates+1&&Fixture.lastStaffBody?.optString("action")=="create")
+    check(Fixture.lastStaffBody?.has("pin")==false&&creator.state.sheet==Sheet.STAFF&&!creator.state.pending)
+    creator.viewModelScope.cancel()
     println("PASS staff denials retain unknown outcomes; proven cancellation shows an error and proven commitment succeeds without replay")
 }
