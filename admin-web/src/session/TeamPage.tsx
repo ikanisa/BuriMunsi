@@ -53,7 +53,7 @@ const accessStatus = {
   revoked: {label: 'Access removed', tone: 'neutral'},
 } as const;
 
-function TeamDirectoryCard({team, changesUnavailable, showInvitations}: {team: Team; changesUnavailable: boolean; showInvitations: boolean}) {
+function TeamDirectoryCard({team, changesUnavailable, showInvitations, actor}: {team: Team; changesUnavailable: boolean; showInvitations: boolean; actor: AdminUser}) {
   return <Card className="admin-security-card">
     <h2>Team members</h2>
     {changesUnavailable && <p>Team access changes are currently unavailable.</p>}
@@ -62,9 +62,11 @@ function TeamDirectoryCard({team, changesUnavailable, showInvitations}: {team: T
         <thead><tr><th scope="col">Account</th><th scope="col">Role</th><th scope="col">Status</th>{showInvitations && <th scope="col">Invitation</th>}</tr></thead>
         <tbody>{team.members.map(member => {
           const status = accessStatus[member.status];
+          const name = member.displayName || member.publicId || (showInvitations ? member.email : member.id);
+          const contact = showInvitations ? member.email : member.id === actor.id ? actor.phone : null;
           return <tr key={member.id}>
-            <td><strong>{member.displayName || member.publicId || member.email}</strong><br /><span>{member.email}</span></td>
-            <td>{roleNames[member.role]}</td>
+            <td><strong>{name}</strong>{contact && <><br /><span>{contact}</span></>}</td>
+            <td>{!showInvitations && member.role === 'owner' ? 'Admin' : roleNames[member.role]}</td>
             <td><StatusBadge tone={status.tone}>{status.label}</StatusBadge></td>
             {showInvitations && <td>{invitationStatus(member.emailStatus, member.invitationKind) ?? '—'}</td>}
           </tr>;
@@ -134,6 +136,10 @@ function TeamWorkspace({
     verify: session.recheckSensitiveEmailVerification,
     current: () => isDirectoryCurrent() && hasCurrentTeamVerification(session, actor),
   };
+  const rolePermissions = team && verificationMode === 'passcode' ? {
+    admin: [...new Set([...(team.permissionsByRole.admin ?? []), ...(team.permissionsByRole.owner ?? [])])].sort(),
+    staff: team.permissionsByRole.staff ?? [],
+  } : team?.permissionsByRole;
   return <>
     <PageHeader title="Team access" subtitle={`Admins and staff who can use the ${adminBrand.product} workspace.`}
       actions={<Button icon="refresh" onClick={refresh} disabled={displayed === null}>Refresh</Button>} />
@@ -144,14 +150,14 @@ function TeamWorkspace({
     {displayed === null && <LoadingState label="Loading team access" />}
     {displayed?.error && <ErrorState title="Team access unavailable" message={displayed.error} onRetry={refresh} />}
     {team && <>
-      <TeamDirectoryCard team={team} showInvitations={verificationMode !== 'passcode'} changesUnavailable={team.canManage && (usesEmail ? !managedWrites :
+      <TeamDirectoryCard team={team} actor={actor} showInvitations={verificationMode !== 'passcode'} changesUnavailable={team.canManage && (usesEmail ? !managedWrites :
         !allowMutations || cloudflareRecoveryVersion !== 1)} />
       {managedWrites && <TeamManager context={managedContext} team={team} onChanged={resolved} />}
       {allowRecovery && fresh && team.canRecoverInvitations && <InvitationRecoveryPanel context={managedContext} onResolved={resolved} />}
       {allowRecovery && isOwnerManager && !usesEmail && cloudflareRecoveryVersion === 1 &&
         <CloudflareTeamPanel actor={actor} epoch={epoch} team={team} allowMutations={allowMutations} isDirectoryCurrent={isDirectoryCurrent} onChanged={resolved} onVerify={onVerify} />}
       <Card className="admin-security-card"><h2>Role permissions</h2>
-        {Object.entries(team.permissionsByRole).map(([role, permissions]) => <div key={role}>
+        {Object.entries(rolePermissions ?? {}).map(([role, permissions]) => <div key={role}>
           <h3>{role === 'owner' ? 'Owner' : role === 'admin' ? 'Admin' : 'Staff'}</h3>
           <p>{permissions.length ? permissions.join(', ') : 'No permissions recorded'}</p>
         </div>)}

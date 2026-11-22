@@ -38,6 +38,7 @@ export interface SessionContextValue extends SessionSnapshot {
   isRecentSensitiveVerification: (epoch: number, actorId: string, sessionId: string) => boolean;
   recheckSensitivePasscode?: () => Promise<boolean>;
   verifySensitivePasscode?: (pin: string) => Promise<void>;
+  changePasscode?: (current: string, next: string, confirmation: string) => Promise<void>;
   verificationMode: VerificationMode;
   requestSensitiveEmailVerification: () => Promise<OtpReceipt>;
   verifySensitiveEmailVerification: (challengeId: string, code: string) => Promise<void>;

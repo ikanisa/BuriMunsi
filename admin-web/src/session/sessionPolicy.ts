@@ -15,6 +15,7 @@ export function sensitiveVerificationDeadline(user: AdminUser, backend: AdminBac
   if (user.authMethod === 'phone_passcode') {
     const passcode = user.passcodeVerifiedAt == null ? NaN : Date.parse(user.passcodeVerifiedAt);
     if (!Number.isFinite(passcode) || passcode > now) return null;
+    if (user.accountId) return expires;
     verified = passcode;
   } else if (backend === 'supabase') {
     if (!user.emailVerifiedAt || !/(?:Z|\+00:00)$/.test(user.emailVerifiedAt)) return null;

@@ -34,11 +34,12 @@ node admin-web/tests/browser/smoke.mjs build/admin-web-fixture
 
 ## Internal access and SMS receiving
 
-People sign in to the Android app with a mobile number and passcode managed
-by BuriMunsi. The existing Admin uses the same credentials on the dedicated
-web Admin and confirms the passcode for sensitive actions. The Admin adds
-Staff by phone number for mobile access. Leaving the passcode field blank at
-creation uses the configured `BURIMUNSI_DEFAULT_STAFF_PIN` secret.
+Admins create accounts by mobile number, assign the Admin or Staff role, and
+can change or disable access in Team access. Users sign in to the Android
+app and dedicated web panel with their registered number and four-digit
+passcode. New accounts start with the configured `BURIMUNSI_DEFAULT_STAFF_PIN`
+secret. Changing that passcode is optional. For support, contact BuriMunsi
+on [WhatsApp at +250 788 767 816](https://wa.me/250788767816).
 
 The Admin account has M-Money SMS access. Staff SMS access is off. The receiving
 app uses one active receiving SIM at a time on the current handset. The Admin

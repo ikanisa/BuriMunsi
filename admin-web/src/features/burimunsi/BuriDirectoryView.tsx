@@ -1,10 +1,11 @@
 import {Card, StatusBadge} from '../../ui';
 import {directoryOperatorRows, type BuriDirectory, type BuriProvisioning} from './contracts';
 
-export function BuriDirectoryView({directory, provisioning, provisioningError}: {
+export function BuriDirectoryView({directory, provisioning, provisioningError, phoneAccounts = false}: {
   directory: BuriDirectory;
   provisioning: BuriProvisioning | null;
   provisioningError: boolean;
+  phoneAccounts?: boolean;
 }) {
   const operators = directoryOperatorRows(directory);
   return <>
@@ -16,8 +17,8 @@ export function BuriDirectoryView({directory, provisioning, provisioningError}: 
           <table className="admin-table">
             <thead><tr><th scope="col">Account</th><th scope="col">Collect role</th><th scope="col">BuriMunsi access</th><th scope="col">Capabilities</th></tr></thead>
             <tbody>{operators.map(({operator, approval}) => <tr key={operator.principalId}>
-              <td>{operator.displayName || operator.email}<br />{operator.email}</td>
-              <td>{operator.role}</td>
+              <td>{operator.displayName || (phoneAccounts ? operator.principalId : operator.email)}<br />{phoneAccounts ? approval?.phone ?? operator.principalId : operator.email}</td>
+              <td>{phoneAccounts ? operator.role === 'staff' ? 'Staff' : 'Admin' : operator.role}</td>
               <td>{approval ? <>
                 <StatusBadge tone={approval.active ? 'success' : 'warning'}>{approval.active ? 'Recorded enabled' : 'Recorded disabled'}</StatusBadge>
                 <br />{approval.role} · {approval.phone}<br />Collect status: {approval.sharedStatus}
