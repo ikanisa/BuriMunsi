@@ -2,7 +2,7 @@ import {lazy} from 'react';
 import {useLocation, useNavigate} from 'react-router';
 import {OverviewPage} from '../../features/overview/OverviewPage';
 import {canReadRequestHistory} from '../../features/requests/permissions';
-import {isVerifiedCurrentOwner} from '../../session/ownerIdentity';
+import {canManageOperatorAccess, hasScopedAdminAuthority} from '../../session/ownerIdentity';
 import {useSession} from '../../session/SessionProvider';
 import {verificationPath} from '../../session/returnLocation';
 import {useAccess, useSensitiveAccess} from './access';
@@ -74,7 +74,7 @@ export const operatorRoutes = [
   workspaceRoute('email', <EmailEventsPage />, requiresPermissions('email.read')),
   workspaceRoute('momo-receipts', <MomoReceiptsPage />, user => canReadSms(user) || canReadPayments(user)),
   workspaceRoute('notification-operator', <AssistedSmsRoute />, requiresPermissions('assisted_sms.read')),
-  workspaceRoute('notification-settings', <SmsControlsRoute />, user => user.role === 'owner' && user.permissions.includes('admin_users.manage')),
+  workspaceRoute('notification-settings', <SmsControlsRoute />, user => (user.accountId ? hasScopedAdminAuthority(user) : user.role === 'owner') && user.permissions.includes('admin_users.manage')),
   workspaceRoute('burimunsi', <BuriMunsiRoute />, user => user.financialModel === 'canonical_evidence_ledger' &&
-    isVerifiedCurrentOwner(user) && canManageReceiverAccess(user)),
+    canManageOperatorAccess(user) && canManageReceiverAccess(user)),
 ];

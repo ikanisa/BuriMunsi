@@ -33,7 +33,7 @@ function expected(value: unknown, minimum = 0): value is number {return typeof v
 function mode(snapshot: NativeProvisionSnapshot): Mode {return snapshot.operation === 'set_pin' ? snapshot.accountId ? 'pin-existing' : 'pin-new' : snapshot.grantId ? 'grant-existing' : 'grant-new';}
 function operation(value: Mode): ProvisionOperation {return value.startsWith('pin-') ? 'set_pin' : 'grant_installation';}
 function write(context: NativeProvisionContext) {checkNativeAuthority(context); if (!context.enabled || context.isEnabled && !context.isEnabled()) fail('This native access change is not enabled.');}
-function visible(context: NativeProvisionContext) {checkNativeAuthority(context); if (!context.isVisible() || context.signal?.aborted) fail('Return to this owner session before continuing.');}
+function visible(context: NativeProvisionContext) {checkNativeAuthority(context); if (!context.isVisible() || context.signal?.aborted) fail(context.user.accountId ? 'Return to the original Admin session before continuing.' : 'Return to this owner session before continuing.');}
 async function bindingKey(context: NativeProvisionContext) {return `collect.admin.buri-native-provision.v1:${await sha256Text(context.collectionId)}`;}
 async function readBinding(context: NativeProvisionContext): Promise<{kind: 'missing' | 'foreign'} | {kind: 'bound'; binding: Binding}> {
   const key = await bindingKey(context), authority = await pendingAuthority(context.identity); checkNativeAuthority(context);

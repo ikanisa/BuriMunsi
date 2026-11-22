@@ -92,7 +92,7 @@ export function NativeProvisioningPanel({pinContext, grantContext, directory, on
   return <Card><div className="core-detail"><h2>Native access setup</h2><p>Check an original request before starting another native access change.</p>
     {message && <p role="status">{message}</p>}
     {(pending?.kind === 'owned' || pending?.kind === 'unbound') && <p>Original request reference: <code>{pending.requestKey}</code>{pending.kind === 'unbound' && ' — its original review details are unavailable; keep the reference.'}</p>}
-    {pending?.kind === 'external' && <p>Use the original request shown for this group.</p>}{pending?.kind === 'foreign' && <p>The original owner session must check this request.</p>}
+    {pending?.kind === 'external' && <p>Use the original request shown for this group.</p>}{pending?.kind === 'foreign' && <p>The original Admin session must check this request.</p>}
     <Button type="button" disabled={busy} onClick={check}>Check native setup request</Button>
     {missing && pending?.kind === 'owned' && (pending.operation === 'set_pin' ? pinContext.enabled : grantContext.enabled) && <><p>Cancellation prevents a late original request from applying.</p><Button type="button" disabled={busy} onClick={cancel}>Cancel original native setup</Button></>}
     {(pinContext.enabled || grantContext.enabled) && !pending && <div className="core-edit-form"><label>Approved native account<select className="admin-input" disabled={busy} value={principal} onChange={event => {setPrincipal(event.target.value); setReview(null); setMessage('');}}><option value="">Select an account</option>{directory.accounts.map(account => <option key={account.principalId} value={account.principalId}>{account.name} · {account.phone}</option>)}</select></label>

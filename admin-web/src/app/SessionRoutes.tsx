@@ -44,7 +44,7 @@ export function ProtectedShell({navigation}: {navigation: readonly AdminNavItem[
     <InteractionSuspendedContext.Provider value={rechecking}><div inert={rechecking}>
       <AdminShell navigation={permitted} currentPath={`${location.pathname}${location.search}`}
         identity={{name: session.verificationMode === 'passcode' ? user.displayName ?? user.phone ?? 'BuriMunsi account' : user.email,
-          role: user.role === 'owner' ? 'Owner' : user.role === 'admin' ? 'Admin' : 'Staff'}} onSignOut={signOut}>
+          role: user.role === 'staff' ? 'Staff' : user.role === 'admin' || session.verificationMode === 'passcode' ? 'Admin' : 'Owner'}} onSignOut={signOut}>
         {canOpenAdminPath(location.pathname, user) ? <ScreenBoundary key={location.pathname}><Suspense fallback={<LoadingState label="Opening workspace" />}><Outlet /></Suspense></ScreenBoundary> : <ErrorState title="Access unavailable"
           message="Your account cannot open this page." />}
       </AdminShell>
