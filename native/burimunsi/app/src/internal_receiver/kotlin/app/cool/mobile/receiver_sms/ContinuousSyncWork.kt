@@ -49,10 +49,10 @@ internal class ContinuousForegroundStartup {
     private var pending: Future<*>? = null
 
     @Synchronized
-    fun changed(resumed: Boolean, start: (() -> Boolean) -> Unit) {
+    fun changed(resumed: Boolean, awaitingInitialAccess: Boolean = false, serviceRunning: Boolean = false, start: (() -> Boolean) -> Unit) {
         val expected = revision.incrementAndGet()
         pending?.cancel(false)
-        pending = if (!resumed) null else worker.submit {
+        pending = if (!resumed || (awaitingInitialAccess && !serviceRunning)) null else worker.submit {
             val current = { revision.get() == expected }
             if (current()) start(current)
         }

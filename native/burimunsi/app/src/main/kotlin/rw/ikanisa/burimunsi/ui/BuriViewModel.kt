@@ -294,7 +294,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             resumeQueued=true
             if(firstForeground)resumeMayReuseRecords=false
         }
-        gateway.foregroundChanged(true)
+        gateway.foregroundChanged(true,awaitingInitialAccess=coalesceInitialRestore)
         permissionsChanged()
         startExposureChecks()
         drainResumeCheck()
@@ -656,6 +656,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             install=setup?.first
             repository=setup?.second
             if(repository==null){
+                if(BuildConfig.IS_GATEWAY&&lifecycleObserved&&foreground)gateway.foregroundChanged(true)
                 state=UiState(error="Unable to sign in. Contact admin.",configurationRequired=true,busy=true)
                 return@work
             }
@@ -667,6 +668,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                 if(recoverReceiverRetirement())return@work
                 restoreSavedSession();completed=true
             }finally{
+                if(!completed && BuildConfig.IS_GATEWAY && lifecycleObserved && foreground)gateway.foregroundChanged(true)
                 if(sessionBootstrap.finishInitialRestore(completed))resumeQueued=true
             }
         }

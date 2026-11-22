@@ -28,3 +28,5 @@ object ObservationGateway{
  fun setPaused(context:Context,paused:Boolean){withControl(context){owner,config->config.setPaused(owner,paused)}}
  fun status(context:Context)=GatewayStatus(false,false,null,0,null,null,null,"authorization_required",observationMode=true)
 }
+
+internal object ObservationBackground { fun onProcessStart(context:android.content.Context) {} }

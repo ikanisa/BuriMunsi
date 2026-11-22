@@ -27,7 +27,7 @@ object GatewayFixture{
 }
 class FixtureGateway(private val app:Application,private val pairer:(String,Boolean)->org.json.JSONObject,
  private val pending:()->Boolean,private val recover:()->org.json.JSONObject?):GatewayPort{
- override fun foregroundChanged(resumed:Boolean){}
+ override fun foregroundChanged(resumed:Boolean,awaitingInitialAccess:Boolean){}
  override fun continuousHealth():ContinuousReceiverHealth{
   val release=GatewayFixture.healthRelease?:return ContinuousReceiverHealth()
   GatewayFixture.healthEntered?.countDown()
