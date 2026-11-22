@@ -154,7 +154,7 @@ test('dedicated phone sign-in, personal passcode changes and Team account operat
     assert.equal(out.headers.get('Cookie'), signIn ? null : '__Host-collect_admin=issued');
     assert.equal(out.headers.get('X-Collect-CSRF'), method === 'POST' && !signIn ? 'same-session-csrf' : null);
     assert.equal(out.headers.get('Idempotency-Key'), payload?.requestId ?? null);
-    assert.equal(out.headers.get('X-Collect-Owner-Identity-Version'), signIn || path === 'auth/session' ? '1' : null);
+    assert.equal(out.headers.get('X-Collect-Owner-Identity-Version'), path === 'auth/session' ? '1' : null);
     const clear = path === 'auth/passcode/change' || path === 'auth/logout';
     const expectedCookie = signIn ? '=issued' + attributes : clear ? '=' + attributes + '; Max-Age=0' : null;
     assert.equal(response.headers.get('Set-Cookie'), expectedCookie && BURIMUNSI_ADMIN_COOKIE + expectedCookie);

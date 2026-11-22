@@ -29,6 +29,7 @@ const exited = new Promise(resolveExit => server.once('close', resolveExit));
 const denied = [];
 const pageErrors = [];
 const unexpectedAuth = [];
+const incorrectIdentityHeaders = [];
 const allowedAuth = new Set(['session', 'phone-passcode', 'passcode/change', 'logout'].map(name => '/api/admin/auth/' + name));
 let browser;
 try {
@@ -66,6 +67,11 @@ try {
     context.on('request', request => {
       const {pathname} = new URL(request.url());
       if (pathname.startsWith('/api/admin/auth/') && !allowedAuth.has(pathname)) unexpectedAuth.push(pathname);
+      if (pathname.startsWith('/api/admin/')) {
+        const sessionRead = request.method() === 'GET' && pathname === '/api/admin/auth/session';
+        const identityVersion = request.headers()['x-collect-owner-identity-version'];
+        if (identityVersion !== (sessionRead ? '1' : undefined)) incorrectIdentityHeaders.push([request.method(), pathname]);
+      }
     });
     page.on('pageerror', error => pageErrors.push(error.message));
     if (serviceWorkers === 'block') await installLocalNetworkFence(page, origin, denied);
@@ -252,10 +258,11 @@ try {
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(denied, []);
   assert.deepEqual(unexpectedAuth, []);
+  assert.deepEqual(incorrectIdentityHeaders, []);
   const checks = ['obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'confirmed_sign_in_opens_overview_without_another_session_read', 'reload_restores_session', 'retired_passcode_bookmark_returns_to_overview', 'keyboard_receipt_navigation', 'sms_read_failure_retry',
       'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
       'retired_authenticator_bookmark_preserves_safe_destination', 'missing_scoped_admin_identity_removes_controls', 'session_failure_and_recovery_require_server_authority', 'expired_request_and_history_return_require_sign_in',
-      'mobile_drawer_traps_and_restores_focus_and_reflows', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, 'no_verification_or_otp_request'];
+      'mobile_drawer_traps_and_restores_focus_and_reflows', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, 'no_verification_or_otp_request', 'identity_version_only_on_session_get'];
   console.log(JSON.stringify({status: 'pass', environment: 'synthetic_loopback', origin, count: checks.length, checks}, null, 2));
 } finally {
   await browser?.close();
