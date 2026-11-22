@@ -1,4 +1,4 @@
-import {FENCE_IO_TIMEOUT_MS,fenceFailure,reserveDatabaseConnection} from '../../../supabase/functions/_shared/application-fence.js';
+import {FENCE_IO_TIMEOUT_MS,fenceFailure,observeFenceRegistration,reserveDatabaseConnection} from '../../../supabase/functions/_shared/application-fence.js';
 import type postgres from 'npm:postgres@3.4.7';
 
 type Sql=ReturnType<typeof postgres>;
@@ -22,11 +22,12 @@ async function result(tx:any,name:keyof typeof names,values:unknown[]){
 // cannot act on another lane's admission or grant general application access.
 export function smsFenceBackend(businessSql:Sql,controlSql:Sql,profileSha256:string){
  need(/^[a-f0-9]{64}$/.test(profileSha256));
- const call=(name:keyof typeof names,values:unknown[])=>bounded(businessSql.begin('ISOLATION LEVEL READ COMMITTED',async tx=>{
+ const transaction=(name:keyof typeof names,values:unknown[])=>businessSql.begin('ISOLATION LEVEL READ COMMITTED',async tx=>{
   await smsRuntimeRole(tx);return result(tx,name,values);
- }));
+ });
+ const call=(name:keyof typeof names,values:unknown[])=>bounded(transaction(name,values));
  return Object.freeze({
-  register:(id:string,source:string,kind:string)=>call('register',[id,source,kind,profileSha256]),
+  register:(id:string,source:string,kind:string)=>observeFenceRegistration(transaction('register',[id,source,kind,profileSha256])),
   close:(id:string,epoch:number,source:string,outcome:string,reason:string,dispatches:number,uncertain:number)=>call('close',[id,epoch,source,outcome,reason,dispatches,uncertain]),
   status:(id:string)=>call('status',[id]),
   async lease(id:string,epoch:number,source:string){

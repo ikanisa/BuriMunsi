@@ -6,6 +6,14 @@ handler for the `collect-sms` Supabase Edge Function. Its entry point is
 The separate [receipt-only Worker fixture](../managed-sms/README.md) shares the
 application and SQL compiler.
 
+## BuriMunsi sender wake
+
+OpenSMS 1.0.11 can wake its foreground job pull when a BuriMunsi payer receipt is queued or an assigned receipt is cancelled. The handset requests a five-minute private channel from `POST /v1/device/wake-channel` on its enrolled gateway using its existing device credential and an empty JSON object. The response contains a random topic, its expiry, server time and the project's public API key. The device credential is sent only to its enrolled HTTPS gateway.
+
+The gateway checks the active receipt application, the enabled collection and the single ready receipt handset. At publication it also checks the original message ID, idempotency key, content and recipient commitments. The private broadcast carries a change bit. OpenSMS then pulls jobs through its existing authenticated API. Missed signals and unavailable channels recover on its normal 30-second managed poll. The existing modem permits, local journal and delivery evidence govern SMS submission.
+
+Deploy migration `20261122191500_burimunsi_gateway_realtime_wake.sql` after the BuriMunsi Admin Realtime migration. The gateway uses the existing BuriMunsi payment configuration and managed publishable key. A current OpenSMS installation, a matching signed upgrade and an active enrolled SIM are required to verify the physical handoff.
+
 ## Source and scope
 
 The Drive archive is `1j5Xg6iMIYilauzBkIaFCIUc9v07UnInn`, SHA-256 `fbb65c024d8b1c1340245ea0014d525f7b1e2009910598e34de56c2ca0eb4909`. `upstream/provenance.json` records each original TypeScript and migration digest. Original migrations are retained under `upstream/migrations`; `tools/port_schema.py` deterministically generates `supabase/migrations/20261101012503_collect_sms_gateway.sql`. The original license is retained.

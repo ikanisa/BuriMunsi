@@ -24,6 +24,15 @@ const signatures={register:'private.collect_fence_register($1::uuid,$2::text,$3:
  close:'private.collect_fence_close($1::uuid,$2::bigint,$3::text,$4::text,$5::text,$6::integer,$7::integer)',
  status:'private.collect_fence_work_status($1::uuid)'};
 async function bounded(promise){let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(unavailable()),FENCE_IO_TIMEOUT_MS);})]);}finally{clearTimeout(timer);}}
+
+// A registration adapter returns this exact observation to openApplicationWork.
+// Only the original transaction's acknowledgement can authorize late cleanup.
+export function observeFenceRegistration(transaction){
+ const completion=Promise.resolve(transaction);
+ const observation=bounded(completion);
+ registrationCompletions.set(observation,completion);
+ return observation;
+}
 // A timed-out waiter never receives a business connection or starts SQL later.
 // No transaction callback is enqueued before this bounded reservation succeeds.
 export async function reserveDatabaseConnection(sql){
@@ -45,7 +54,7 @@ export function sqlFenceBackend(businessSql,controlSql,verifyAdmission=undefined
   return result(tx,name,values);
  });
  const call=(name,values)=>bounded(rawCall(name,values));
- const register=(id,source,kind)=>{const original=Promise.resolve(rawCall('register',[id,source,kind])),observation=bounded(original);registrationCompletions.set(observation,original);return observation;};
+ const register=(id,source,kind)=>observeFenceRegistration(rawCall('register',[id,source,kind]));
  return Object.freeze({register,close:(id,epoch,source,outcome,reason,dispatches,uncertain)=>call('close',[id,epoch,source,outcome,reason,dispatches,uncertain]),status:id=>call('status',[id]),
   async lease(id,epoch,source){
    const tx=await reserveDatabaseConnection(controlSql);let beginDispatched=false,released=false,cleanup=null,reusable=false;
