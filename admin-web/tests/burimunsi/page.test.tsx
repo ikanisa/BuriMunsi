@@ -1,18 +1,22 @@
 import { webcrypto } from 'node:crypto';
+import { Suspense } from 'react';
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionContextValue } from '../../src/session/SessionProvider';
 import { PENDING_KEY, readPending, retainPending } from '../../src/features/core/pendingAttempt';
 import { GUARDED_OPERATOR_FAMILY } from '../../src/features/burimunsi/recovery';
 import { BuriMunsiPage } from '../../src/features/burimunsi';
+import { accountRoutes } from '../../src/app/workspace/account-routes';
+import { operatorRoutes } from '../../src/app/workspace/operator-routes';
 import { accountId, collectionId, directory, grantId, installationId, nativeIntent, nativeReceipt, operatorIntent, operatorReceipt, owner, provisioning, requestId, scopes, staffPrincipal } from './fixture';
 
 const hook = vi.hoisted(() => ({value: null as unknown as SessionContextValue}));
 vi.mock('../../src/session/SessionProvider', async importOriginal => ({...await importOriginal<typeof import('../../src/session/SessionProvider')>(), useSession: () => hook.value}));
 let current = true, fresh = true, verificationAllowed = true;
 const identity = {id: owner.id, sessionId: owner.sessionId, email: owner.email, role: owner.role, permissions: owner.permissions, expiresAt: owner.expiresAt};
-function setup(options: {user?: typeof owner; request?: SessionContextValue['request']; verificationMode?: 'email' | 'authenticator';} = {}) {
+function setup(options: {user?: typeof owner; request?: SessionContextValue['request']; verificationMode?: SessionContextValue['verificationMode'];} = {}) {
   const request = options.request ?? vi.fn(async (path: string) => {
     if (path === 'momo/native-setup') return scopes;
     if (path.startsWith('burimunsi/operators?')) return directory;
@@ -31,6 +35,20 @@ function renewProof(session: SessionContextValue) {
 }
 
 describe('BuriMunsi read-only access', () => {
+  it('returns a directly opened BuriMunsi access page to Team access with the passcode gate intact', async () => {
+    fresh = false;
+    const request = vi.fn(async () => ({currentEmail: owner.email, canManage: false, members: [], permissionsByRole: {}}));
+    setup({verificationMode: 'passcode', user: {...owner, permissions: [...owner.permissions, 'admin_users.read']}, request});
+    const routes = [...operatorRoutes, ...accountRoutes].filter(route => route.path === 'burimunsi' || route.path === 'admin-users');
+    render(<MemoryRouter initialEntries={['/admin/burimunsi']}><Suspense fallback={null}><Routes>
+      {routes.map(route => <Route key={route.path} path={`/admin/${route.path}`} element={route.element} />)}
+    </Routes></Suspense></MemoryRouter>);
+    expect(await screen.findByRole('button', {name: 'Verify passcode'})).toBeVisible();
+    expect(request).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', {name: 'Back to team'}));
+    expect(await screen.findByRole('heading', {name: 'Team access'})).toBeVisible();
+    expect(await screen.findByText('No team members')).toBeVisible();
+  });
   it('fails closed without server-attested owner identity and performs no request', () => {
     const session = setup({user: {...owner, ownerIdentity: null}}); render(<BuriMunsiPage operatorPreparationEnabled />);
     expect(screen.getByText(/protected owner identity bound to this session/)).toBeVisible(); expect(session.request).not.toHaveBeenCalled(); expect(session.recheckSensitiveEmailVerification).not.toHaveBeenCalled();

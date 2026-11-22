@@ -50,7 +50,7 @@ function SmsControlsRoute() {
 function BuriMunsiRoute() {
   const go = useNavigate(), session = useSession();
   return <BuriMunsiPage operatorApprovalEnabled nativeAdministrationEnabled
-    onBack={() => go('/admin')} onVerify={() => go(verificationPath(session.verificationMode, '/admin/burimunsi'))} />;
+    onBack={() => go('/admin/admin-users')} onVerify={() => go(verificationPath(session.verificationMode, '/admin/burimunsi'))} />;
 }
 
 const canReadSms = requiresPermissions('sms.read');

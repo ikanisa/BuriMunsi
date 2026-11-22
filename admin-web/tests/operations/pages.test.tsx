@@ -97,9 +97,10 @@ describe('Operational pages', () => {
 describe('SMS receipt filters', () => {
   it('requires the existing read permission before requesting or showing filters', () => {
     mock.session.user.permissions = [];
-    render(<MemoryRouter><SmsReceiptsPage /></MemoryRouter>);
+    render(<MemoryRouter initialEntries={['/admin/sms-receipts?source=member']}><SmsReceiptsPage /></MemoryRouter>);
     expect(screen.getByText('Your current account cannot open these records.')).toBeVisible();
     expect(screen.queryByLabelText('Source')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Unavailable filters from this link/)).not.toBeInTheDocument();
     expect(mock.request).not.toHaveBeenCalled();
   });
 
@@ -189,7 +190,7 @@ describe('SMS receipt filters', () => {
     expect(screen.getByRole('button', {name: 'Previous'})).toBeEnabled();
   });
 
-  it('preserves old page and limit links through receipt detail and back', async () => {
+  it('preserves valid bookmark pagination and search through detail and back after removing redundant capture criteria', async () => {
     const user = userEvent.setup(), item = capture(3);
     mock.session.user.permissions = ['sms.read'];
     mock.request.mockImplementation(async (path: string) => {
@@ -208,14 +209,15 @@ describe('SMS receipt filters', () => {
     </Routes></MemoryRouter>);
     expect(await screen.findByText('Showing 3–3 of 3')).toBeVisible();
     expect(screen.getByText('Source metadata')).toBeVisible();
+    expect(screen.queryByText(/Unavailable filters from this link/)).not.toBeInTheDocument();
     const link = screen.getByRole('link', {name: /Capture · aaaaaaaa/});
-    expect(new URL(link.getAttribute('href')!, 'https://admin.invalid').searchParams.get('returnTo')).toBe(original);
+    expect(new URL(link.getAttribute('href')!, 'https://admin.invalid').searchParams.get('returnTo')).toBe('/admin/sms-receipts?page=2&limit=2&search=123456');
     await user.click(link);
     expect(await screen.findByText('Receipt details')).toBeVisible();
     await user.click(screen.getByRole('link', {name: /Back to records/}));
     expect(await screen.findByText('Showing 3–3 of 3')).toBeVisible();
     const params = new URLSearchParams(String(mock.request.mock.calls.at(-1)?.[0]).split('?')[1]);
-    expect(Object.fromEntries(params)).toMatchObject({limit: '2', offset: '2', source_kind: 'capture', extraction_status: 'not_extracted', search: '123456'});
+    expect(Object.fromEntries(params)).toEqual({limit: '2', offset: '2', search: '123456'});
   });
 
   it('retains the filtered list return path when opening a related legacy duplicate', async () => {
@@ -251,36 +253,69 @@ describe('SMS receipt filters', () => {
     expect(screen.getByRole('link', {name: /Back to records/})).toHaveAttribute('href', expected);
   });
 
-  it('discards an older response when the selected source filter changes', async () => {
+  it('discards an older response when the selected capture status changes', async () => {
     const user = userEvent.setup(); let resolveFirst: ((value: unknown) => void) | undefined;
     mock.session.user.permissions = ['sms.read'];
-    mock.request.mockImplementation((path: string) => path.includes('source_kind=capture')
+    mock.request.mockImplementation((path: string) => path.includes('status=received')
       ? Promise.resolve({rows: [capture(1, 'Current capture')], total: 1, limit: 25, offset: 0, next_offset: null})
       : new Promise(resolve => {resolveFirst = resolve;}));
     render(<MemoryRouter><SmsReceiptsPage /></MemoryRouter>);
     await waitFor(() => expect(resolveFirst).toBeDefined());
-    await user.selectOptions(screen.getByLabelText('Source'), 'capture');
+    await user.selectOptions(screen.getByLabelText('Status'), 'received');
     expect(await screen.findByText('Current capture')).toBeVisible();
     await act(async () => {resolveFirst?.({rows: [capture(2, 'Old capture')], total: 1, limit: 25, offset: 0, next_offset: null});});
     expect(screen.queryByText('Old capture')).not.toBeInTheDocument();
     expect(screen.getByText('Current capture')).toBeVisible();
   });
 
-  it('does not display rows that contradict a selected extraction or duplicate filter', async () => {
+  it('does not display rows that contradict a selected legacy extraction or duplicate filter', async () => {
     mock.session.user.permissions = ['sms.read'];
-    mock.request.mockResolvedValue({rows: [capture(1)], total: 1, limit: 25, offset: 0, next_offset: null});
-    render(<MemoryRouter initialEntries={['/admin/sms-receipts?extraction=parsed&duplicates=all']}><SmsReceiptsPage /></MemoryRouter>);
+    mock.session.user.financialModel = 'transaction_journals';
+    mock.request.mockResolvedValue({rows: [receiver(1)], total: 1, limit: 25, offset: 0, next_offset: null});
+    render(<MemoryRouter initialEntries={['/admin/sms-receipts?extraction=parsed&duplicates=conflicting']}><SmsReceiptsPage /></MemoryRouter>);
     expect(await screen.findByText('The workspace response could not be verified.')).toBeVisible();
     expect(screen.queryByText('Captured user')).not.toBeInTheDocument();
   });
 
-  it('shows the canonical empty result for a duplicate-only filter without inventing facts', async () => {
+  it.each(['source=member', 'source=receiver', 'extraction=parsed', 'extraction=needs_review', 'duplicates=all', 'duplicates=conflicting',
+    'status=pending', 'status=parsed', 'status=parse_failed', 'status=needs_review', 'status=reviewed'])(
+    'restores the capture list and explains the change when a link contains %s', async (filter) => {
+      mock.session.user.permissions = ['sms.read'];
+      mock.request.mockResolvedValue({rows: [capture(1)], total: 1, limit: 25, offset: 0, next_offset: null});
+      render(<MemoryRouter initialEntries={[`/admin/sms-receipts?${filter}`]}><SmsReceiptsPage /></MemoryRouter>);
+      expect(await screen.findByText('Captured user')).toBeVisible();
+      expect(screen.getByRole('status')).toHaveTextContent('Unavailable filters from this link were cleared.');
+      expect(mock.request).toHaveBeenCalledExactlyOnceWith('sms/receipts?limit=25&offset=0');
+    });
+
+  it('keeps the available search and status when clearing obsolete filters and starts from the first page', async () => {
+    const user = userEvent.setup();
+    mock.session.user.permissions = ['sms.read'];
+    mock.request.mockResolvedValue({rows: [capture(1)], total: 1, limit: 10, offset: 0, next_offset: null});
+    render(<MemoryRouter initialEntries={['/admin/sms-receipts?source=receiver&extraction=parsed&duplicates=all&search=123456&status=received&page=3&offset=20&limit=10']}><SmsReceiptsPage /></MemoryRouter>);
+    expect(await screen.findByText('Captured user')).toBeVisible();
+    expect(screen.getByText(/Unavailable filters from this link/)).toBeVisible();
+    expect(mock.request).toHaveBeenCalledExactlyOnceWith('sms/receipts?limit=10&offset=0&status=received&search=123456');
+    expect(screen.getByRole('searchbox', {name: 'Search SMS receipts'})).toHaveValue('123456');
+    const status = screen.getByRole('combobox', {name: 'Status'});
+    expect(status).toHaveValue('received');
+    expect(within(status).getAllByRole('option').map(option => option.textContent)).toEqual(['All statuses', 'Received', 'Under review', 'Rejected', 'Linked']);
+    expect(screen.queryByRole('combobox', {name: 'Source'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', {name: 'Extraction'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', {name: 'Duplicate references'})).not.toBeInTheDocument();
+    const link = screen.getByRole('link', {name: /Capture ·/});
+    expect(new URL(link.getAttribute('href')!, 'https://admin.invalid').searchParams.get('returnTo')).toBe('/admin/sms-receipts?search=123456&status=received&limit=10');
+    await user.selectOptions(status, '');
+    expect(await screen.findByText('Captured user')).toBeVisible();
+    expect(screen.queryByText(/Unavailable filters from this link/)).not.toBeInTheDocument();
+  });
+
+  it('still validates search text, status and page size when restoring an old link', async () => {
     mock.session.user.permissions = ['sms.read'];
     mock.request.mockResolvedValue({rows: [], total: 0, limit: 25, offset: 0, next_offset: null});
-    render(<MemoryRouter initialEntries={['/admin/sms-receipts?duplicates=all']}><SmsReceiptsPage /></MemoryRouter>);
+    const query = new URLSearchParams({extraction: 'parsed', status: 'unknown', search: 'a\tb', limit: '900', page: '2'});
+    render(<MemoryRouter initialEntries={[`/admin/sms-receipts?${query}`]}><SmsReceiptsPage /></MemoryRouter>);
     expect(await screen.findByText('No records found')).toBeVisible();
-    const params = new URLSearchParams(String(mock.request.mock.calls[0][0]).split('?')[1]);
-    expect(params.get('duplicates')).toBe('all');
-    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    expect(mock.request).toHaveBeenCalledExactlyOnceWith('sms/receipts?limit=25&offset=0');
   });
 });

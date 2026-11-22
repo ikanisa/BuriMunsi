@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { useParams } from 'react-router';
+import { Navigate, useLocation, useParams } from 'react-router';
 import type { AdminRequest } from '../../api/client';
 import { useSession } from '../../session/SessionProvider';
 import { Card, StatusBadge } from '../../ui';
@@ -7,8 +7,39 @@ import { isValidId, parseSmsDetail, parseSmsPage, type SmsReceipt } from './cont
 import { DetailPage, Facts, RecordLink, RecordsPage, RelatedPagination, formatStatus, formatTime, query, statusTone, useActor, type Actor, type Column, type RecordsFilter, type RecordsProps } from './OperationsRecords';
 import { SmsActionPanel } from './SmsActionPanel';
 
-const smsStatuses = ['pending', 'parsed', 'parse_failed', 'needs_review', 'rejected', 'reviewed', 'received', 'under_review', 'linked'] as const;
+const captureStatuses = ['received', 'under_review', 'rejected', 'linked'];
 const legacySmsStatuses = ['pending', 'parsed', 'parse_failed', 'needs_review', 'rejected', 'reviewed'] as const;
+const legacySmsFilters: RecordsFilter[] = [
+  {key: 'source', label: 'Source', allLabel: 'All sources', options: [
+    {value: 'member', label: 'Member'}, {value: 'receiver', label: 'Receiver'},
+  ]},
+  {key: 'extraction', label: 'Extraction', allLabel: 'All extraction states', options: [
+    {value: 'not_extracted', label: 'Not extracted'}, {value: 'parsed', label: 'Parsed'}, {value: 'needs_review', label: 'Needs review'},
+  ]},
+  {key: 'duplicates', label: 'Duplicate references', allLabel: 'Any references', options: [
+    {value: 'all', label: 'Any duplicates'}, {value: 'conflicting', label: 'Conflicting duplicates'},
+  ]},
+];
+const captureSearchHelp = 'Search captured SMS by receipt ID, six-digit user ID or account name.';
+
+function cleanCaptureFilters(params: URLSearchParams) {
+  const next = new URLSearchParams(params);
+  let unavailable = false;
+  for (const [key, equivalent] of Object.entries({source: 'capture', extraction: 'not_extracted', duplicates: ''})) {
+    if (params.getAll(key).some(value => value && value !== equivalent)) unavailable = true;
+    next.delete(key);
+  }
+  const statuses = params.getAll('status');
+  if (statuses.length > 1 || statuses.some(value => value && !captureStatuses.includes(value))) {
+    unavailable = true;
+    next.delete('status');
+  }
+  if (unavailable) {
+    next.delete('page');
+    next.delete('offset');
+  }
+  return {next, unavailable};
+}
 
 const smsLoad: RecordsProps<SmsReceipt>['load'] = async (request, offset, status, search, actor, filters, limit) => {
   const params = new URLSearchParams(query(offset, status, search, limit));
@@ -38,19 +69,23 @@ const smsColumns: Column<SmsReceipt>[] = [
 ];
 
 export function SmsReceiptsPage() {
-  const {actor} = useActor();
-  const filters: RecordsFilter[] = [
-    {key: 'source', label: 'Source', allLabel: 'All sources', options: [
-      {value: 'member', label: 'Member'}, {value: 'receiver', label: 'Receiver'}, ...(actor?.canonical ? [{value: 'capture', label: 'Capture'}] : []),
-    ]},
-    {key: 'extraction', label: 'Extraction', allLabel: 'All extraction states', options: [
-      {value: 'not_extracted', label: 'Not extracted'}, {value: 'parsed', label: 'Parsed'}, {value: 'needs_review', label: 'Needs review'},
-    ]},
-    {key: 'duplicates', label: 'Duplicate references', allLabel: 'Any references', options: [
-      {value: 'all', label: 'Any duplicates'}, {value: 'conflicting', label: 'Conflicting duplicates'},
-    ]},
-  ];
-  return <RecordsPage title="SMS receipts" subtitle="Review source evidence and extracted facts." permission="sms.read" statuses={actor?.canonical ? smsStatuses : legacySmsStatuses} searchable filters={filters} smsPagination rowKey={(row) => `${row.source_kind}/${row.id}`} columns={smsColumns} load={smsLoad} extra={<p className="operations-note">Recorded SMS evidence does not establish provider confirmation or settlement.</p>} />;
+  const {actor, session} = useActor();
+  const location = useLocation();
+  if (actor?.canonical && session.status === 'authenticated' && session.user?.permissions.includes('sms.read')) {
+    const params = new URLSearchParams(location.search);
+    const {next, unavailable} = cleanCaptureFilters(params);
+    if (next.toString() !== params.toString()) return <Navigate replace
+      to={{pathname: location.pathname, search: next.toString(), hash: location.hash}}
+      state={{...location.state, receiptFiltersCleared: unavailable}} />;
+  }
+  return <RecordsPage title="SMS receipts" subtitle={actor?.canonical ? captureSearchHelp : 'Review source evidence and extracted facts.'}
+    permission="sms.read" statuses={actor?.canonical ? captureStatuses : legacySmsStatuses} searchable filters={actor?.canonical ? [] : legacySmsFilters}
+    smsPagination rowKey={(row) => `${row.source_kind}/${row.id}`} columns={smsColumns} load={smsLoad}
+    extra={<>
+      {actor?.canonical && location.state?.receiptFiltersCleared === true &&
+        <p className="operations-note" role="status">Unavailable filters from this link were cleared. Showing receipts with the remaining filters.</p>}
+      <p className="operations-note">Recorded SMS evidence does not establish provider confirmation or settlement.</p>
+    </>} />;
 }
 
 export function SmsReceiptDetailPage({allowActions = false, allowRecovery = true}: {allowActions?: boolean; allowRecovery?: boolean}) {
