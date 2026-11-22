@@ -16,8 +16,8 @@ const sha=x=>createHash('sha256').update(x).digest('hex');
 const fail=code=>{throw Error(code);};
 const flags=process.argv.slice(2),managedLifecycle=flags.includes('--managed-lifecycle'),textSubjects=flags.includes('--text-subjects');
 const scopedWriters=flags.includes('--scoped-writers'),release=flags.includes('--writer-journal-release');
-const forward=flags.includes('--forward-migration-release'),phoneOperators=flags.includes('--phone-operators');
-if(flags.some(x=>!['--managed-lifecycle','--text-subjects','--scoped-writers','--writer-journal-release','--forward-migration-release','--phone-operators'].includes(x))||new Set(flags).size!==flags.length||(textSubjects&&!managedLifecycle)||((scopedWriters||release||forward||phoneOperators)&&!textSubjects)||([scopedWriters,release,forward,phoneOperators].filter(Boolean).length>1))fail('invalid_mode');
+const forward=flags.includes('--forward-migration-release'),phoneOperators=flags.includes('--phone-operators'),freshPhoneReads=flags.includes('--fresh-phone-reads');
+if(flags.some(x=>!['--managed-lifecycle','--text-subjects','--scoped-writers','--writer-journal-release','--forward-migration-release','--phone-operators','--fresh-phone-reads'].includes(x))||new Set(flags).size!==flags.length||(textSubjects&&!managedLifecycle)||((scopedWriters||release||forward||phoneOperators||freshPhoneReads)&&!textSubjects)||([scopedWriters,release,forward,phoneOperators,freshPhoneReads].filter(Boolean).length>1))fail('invalid_mode');
 const work=JSON.parse(await readFile(root+'/supabase/managed-migration-history/source-migrations.lock.json','utf8')).migrations;
 const deployed=await retainedLock();
 if(work.length!==58||deployed.length!==62||work.slice(0,52).some((x,i)=>x.name!==deployed[i].name||x.sha256!==deployed[i].sha256))fail('source_chain_changed');
@@ -157,6 +157,11 @@ await withOwnedArchiveFixture(async({owner,admin,watcher,database,fixtureRoot})=
   finally{await admin.query('SET ROLE supabase_storage_admin; CREATE INDEX bucket_lifecycle_states_due_idx ON storage.bucket_lifecycle_states USING btree (next_run_at, bucket_id) WHERE (next_run_at IS NOT NULL); RESET ROLE');}
   await owner.query('SELECT private._retention_manifest_schema_v2()');negativeChecks.push('post_install_storage_drift');
  }
+ if(freshPhoneReads){
+  const {verifyFreshPhoneReads}=await import('../../../supabase/tests/burimunsi/fresh-phone-migrations.mjs');
+  await verifyFreshPhoneReads({owner,admin,database,fixtureRoot});
+  return;
+ }
  if(phoneOperators){
   const {verifyPhoneOperatorAccounts}=await import('./phone-operator.fixture.mjs');
   console.log(JSON.stringify(await verifyPhoneOperatorAccounts({owner,database,fixtureRoot})));
@@ -175,5 +180,5 @@ await withOwnedArchiveFixture(async({owner,admin,watcher,database,fixtureRoot})=
  const cohort=scopedWriters?await verifyWriterJournalSource({owner,admin,watcher}):null;
  const writerJournalChecks=cohort?.checks,plannedManagedHistory=cohort?.plan.migrations.at(-1).expected_history;
  console.log(JSON.stringify({status:managedLifecycle?'synthetic_managed_chain_complete':'synthetic_partial_chain_complete',applied:done.length,forwardMigrations:(textSubjects?1:0)+(cohort?.plan.migrations.length??0),total:union.length,skipped,observations,negativeChecks,retentionFunctionHashes:hashes,writerJournalChecks,journalPostingEvidence:cohort?.postingSubjectEvidence,fixtureCohortHistory:cohort?.fixtureHistory,plannedManagedHistory,productionDispatch:false}));
-},(release||forward||phoneOperators) && process.platform==='linux' ? writerJournalLinuxPg : undefined);
+},(release||forward||phoneOperators||freshPhoneReads) && process.platform==='linux' ? writerJournalLinuxPg : undefined);
 if(replayFailed)process.exitCode=1;
