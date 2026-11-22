@@ -7,7 +7,7 @@ import { digest } from '../core.js';
 import { observationDisplayHints } from './observation-display-hints.js';
 import { storageEntity, verifyRetainedObject } from '../../storage-identity.js';
 import { readObservationListing } from './postgres-observation-listing.js';
-import { PostgresObservationReconciliation } from './postgres-observation-reconciliation.js';
+import { PostgresObservationReconciliation, readObservationProcessingStatus } from './postgres-observation-reconciliation.js';
 import {
  approvedObservationProfile as approvedProfile,
  copyObservationValue as copy,
@@ -108,12 +108,7 @@ export class PostgresNativeObservations {
    new Set(input.sourceIds).size===input.sourceIds.length,'invalid_request',400);
   input.sourceIds.forEach(requireRequestId);
   try{return await this.authority.read(async tx=>{await this.current(tx,actor);
-   const r=await tx.unsafe('SELECT private.burimunsi_observation_processing_status($1::jsonb) AS result',[JSON.stringify(input.sourceIds)]);
-   const value=r[0]?.result,allowed=new Set(['pending','retrying','parsed','needs_review','conflict','duplicate','security','historical','unknown']);
-   check(r.length===1&&value?.groupId===this.groupId&&Array.isArray(value.statuses)&&value.statuses.length===input.sourceIds.length);
-   value.statuses.forEach((item,i)=>check(item?.sourceId===input.sourceIds[i]&&allowed.has(item.status)&&typeof item.canRetry==='boolean'&&
-    (!item.canRetry||['retrying','needs_review'].includes(item.status))));
-   return value;
+   return readObservationProcessingStatus(tx,this.groupId,input.sourceIds);
   });}catch(error){throw mapped(error);}
  }
  async processingRetry(actor,sourceId,input){

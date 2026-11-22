@@ -690,6 +690,54 @@ test('batch reconciliation verifies encrypted objects in request order without p
  });
 });
 
+test('inline parser outcomes share the final authorized source snapshot and omit every missing item',async()=>{
+ const f=fixture(),a=await batchWitness(91),b=await batchWitness(92),missing=await batchWitness(93);
+ await f.run(async adapter=>{
+  const savedA=await adapter.observe(actor,a.item),savedB=await adapter.observe(actor,b.item);
+  const statuses=new Map([[savedA.sourceId,'duplicate'],[savedB.sourceId,'needs_review']]);
+  const items=[b.proof,missing.proof,a.proof],queries=[];
+  let changeResult=null;
+  const read=adapter.authority.read;
+  adapter.authority.read=fn=>read(tx=>{
+   const keys=[];let authorized=false;
+   return fn({unsafe:async(query,args)=>{
+    if(query.includes('burimunsi_observation_processing_status')){
+     assert.equal(authorized,true);assert.deepEqual(keys,items.map(item=>item.sourceKey));
+     const ids=JSON.parse(args[0]);queries.push(ids);
+     const result={groupId:group,statuses:ids.map(sourceId=>({sourceId,status:statuses.get(sourceId),canRetry:false}))};
+     return [{result:changeResult?changeResult(result):result}];
+    }
+    const result=await tx.unsafe(query,args);
+    if(query.includes('burimunsi_observation_context'))authorized=true;
+    if(query.includes('burimunsi_observation_key_lookup'))keys.push(args[0]);
+    return result;
+   }});
+  });
+  const batch=()=>adapter.reconcileBatch(actor,{items,includeProcessing:true});
+  const result=await batch();
+  assert.deepEqual(queries,[[savedB.sourceId,savedA.sourceId]]);
+  assert.deepEqual(result.items,[
+   {sourceKey:b.proof.sourceKey,state:'matched',sourceId:savedB.sourceId,processingStatus:'needs_review'},
+   {sourceKey:missing.proof.sourceKey,state:'missing',sourceId:null},
+   {sourceKey:a.proof.sourceKey,state:'matched',sourceId:savedA.sourceId,processingStatus:'duplicate'},
+  ]);
+  const allMissing=await adapter.reconcileBatch(actor,{items:[missing.proof],includeProcessing:true});
+  assert.deepEqual(allMissing.items,[result.items[1]]);assert.equal(queries.length,1);
+  await adapter.reconcileBatch(actor,{items,includeProcessing:false});
+  assert.equal(queries.length,1);
+  for(const malformed of [r=>({...r,groupId:'foreign'}),r=>({...r,statuses:r.statuses.toReversed()}),
+   r=>({...r,statuses:r.statuses.slice(1)}),r=>({...r,statuses:r.statuses.map(s=>({...s,status:'unverified'}))})]){
+   changeResult=malformed;await assert.rejects(batch,e=>e.status===503);
+  }
+  changeResult=null;const count=queries.length;
+  const bytes=f.state.media.get('sms/'+savedB.sourceId);f.state.media.delete('sms/'+savedB.sourceId);
+  await assert.rejects(batch,e=>e.status===503);assert.equal(queries.length,count);
+  f.state.media.set('sms/'+savedB.sourceId,bytes);
+  f.state.onGet=async()=>{f.state.enabled=false;};
+  await assert.rejects(batch,e=>e.status===403);assert.equal(queries.length,count);
+ });
+});
+
 test('a batch fails closed for per-item conflicts, reservations, storage failure and unauthorized actors',async()=>{
  const f=fixture(),a=await batchWitness(4),b=await batchWitness(5),missing=await batchWitness(6);
  await f.run(async adapter=>{

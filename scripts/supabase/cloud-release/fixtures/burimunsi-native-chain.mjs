@@ -144,8 +144,8 @@ export function nativeRuntime(client,group){
    try{return (await client.query(sql,args)).rows;}
    catch(error){if(process.env.BURIMUNSI_FIXTURE_DEBUG)process.stderr.write(sql+' '+error.message+' '+(error.where??'')+'\n');throw error;}
  }};
- const run=kind=>async fn=>{
-  await client.query('BEGIN');
+ const run=(kind,{readOnly=false}={})=>async fn=>{
+  await client.query(readOnly?'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY':'BEGIN');
   try{
    await client.query("SET LOCAL ROLE collect_runtime; SET LOCAL collect.edge_verified='true'; SET LOCAL search_path=app,pg_catalog");
    await client.query("SELECT set_config('test.work_kind',$1,true),set_config('burimunsi.collection_id',$2,true)",[kind,group]);

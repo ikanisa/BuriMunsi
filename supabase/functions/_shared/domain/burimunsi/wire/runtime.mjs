@@ -138,7 +138,8 @@ export function semantics(product,operation,r,expected={}) {
   if(operation==='observationReconcileBatch'){
    if(!Array.isArray(expected.sourceKeys)||new Set(expected.sourceKeys).size!==expected.sourceKeys.length||
     data.items.length!==expected.sourceKeys.length||data.items.some((item,i)=>item.sourceKey!==expected.sourceKeys[i]||
-     (item.state==='matched')!==(item.sourceId!==null)))fail('CONTRACT_IDENTITY');
+     (item.state==='matched')!==(item.sourceId!==null)||
+     Object.hasOwn(item,'processingStatus')!==(expected.includeProcessing===true&&item.state==='matched')))fail('CONTRACT_IDENTITY');
   }
   if(['observationReconcileStatus','observationReconcileVerifiedStatus'].includes(operation)&&data.hasRecorded!==(data.recordedCount>0))fail('CONTRACT_STATE');
   if(operation==='observationReveal'){

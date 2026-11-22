@@ -162,7 +162,7 @@ export function createNativeHandler({auth,records,contributions,members,gateway,
       }
       if(route==='/sms/observations/reconcile-batch'&&method==='POST'){
         requirePort(observations,['reconcileBatch']);
-        return json(await observations.reconcileBatch(actor,await body(req,['items','runId'],['items'])));
+        return json(await observations.reconcileBatch(actor,await body(req,['items','runId','includeProcessing'],['items'])));
       }
       if(route==='/sms/observations/inbox-check'&&method==='POST'){
         requirePort(observations,['inboxCheck']);

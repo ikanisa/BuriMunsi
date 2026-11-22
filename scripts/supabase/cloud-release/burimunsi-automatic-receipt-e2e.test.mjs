@@ -59,7 +59,7 @@ function receiptFixture(f){
   if(sql===PIN_CONTEXT_SQL)return [pinRow];assert.ok(sql.startsWith('SET TRANSACTION'));return [];
  }})};
  env.DB=db;env.BURIMUNSI_PAYMENT_SMS_ENABLED="true";env.BURIMUNSI_PAYMENT_SMS_COLLECTION_ID=group;
- const authority={db,groupId:group,read:run('http_collect'),write:run('http_collect'),session:async()=>actor,assertOwned:work.assert};
+ const authority={db,groupId:group,read:run('http_collect',{readOnly:true}),write:run('http_collect'),session:async()=>actor,assertOwned:work.assert};
  const custody={namespace:env.PRIVATE_MEDIA.namespace,journal,sameJournal:(x,y)=>canonicalJson(x)===canonicalJson(y),decrypt:(sealed,aad)=>decrypt(env,sealed,aad)};
  const witnesses={stage:async(_binding,targets)=>targets,prefetch:async targets=>{for(const target of targets)assert.ok(objects.has(target.key));},
   sealed:async(_binding,key)=>{assert.ok(objects.has(key));return objects.get(key).sealed;},forget(){}};
@@ -115,8 +115,8 @@ test('ordinary Android replay posts once, explicitly suppresses the masked payer
   proofs.push(proof);
   const page=await flow.route('/reconcile-batch',{items:[proof]});
   assert.deepEqual(page.items,[{sourceKey:input.sourceKey,state:'matched',sourceId:retained.sourceId}]);
-  const pending=await flow.route('/processing-status',{sourceIds:[retained.sourceId]});
-  assert.equal(pending.statuses[0].status,'pending');
+  const pending=await flow.route('/reconcile-batch',{items:[proof],includeProcessing:true});
+  assert.equal(pending.items[0].processingStatus,'pending');
   flow.provider(input.rawBody);
   assert.deepEqual(await flow.parser.process(retained.sourceId),{state:'completed',relation:'accepted'});
   assert.deepEqual(await flow.parser.process(retained.sourceId),{state:'completed'});mark(ref,'parsed');
@@ -137,7 +137,9 @@ test('ordinary Android replay posts once, explicitly suppresses the masked payer
  const check={runId:randomUUID(),expectedConsentGeneration:1,state:'checking',candidateCount:0,missingCount:0,pendingCount:0,
   phoneLatestKey:null,parsedLatestKey:null,collectionRevision:null};
  await flow.route('/inbox-check',check);
- for(const item of byPhone)assert.equal((await flow.route('/reconcile-batch',{runId:check.runId,items:[item]})).items[0].state,'matched');
+ const verifiedPage=await flow.route('/reconcile-batch',{runId:check.runId,items:byPhone,includeProcessing:true});
+ assert.deepEqual(verifiedPage.items,byPhone.map(item=>({sourceKey:item.sourceKey,state:'matched',
+  sourceId:sources[proofs.indexOf(item)].source,processingStatus:'parsed'})));
  const census=await flow.route('/reconcile-verified-status');
  assert.equal(census.recordedCount,2);
  await flow.route('/inbox-check',{...check,state:'verified',candidateCount:2,phoneLatestKey:latest,parsedLatestKey:latest,collectionRevision:census.revision});
