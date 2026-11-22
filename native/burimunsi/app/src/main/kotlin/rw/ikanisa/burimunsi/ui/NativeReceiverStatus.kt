@@ -41,7 +41,9 @@ internal class NativeReceiverStatus(
 
     private var epoch = 0L
     private var latestRead = 0L
-    private var homeJob: Job? = null
+    private var visibleJob: Job? = null
+    private var startJob: Job? = null
+    private var startQueued = false
     private var healthJob: Job? = null
     private var healthRequest: Request? = null
     private var health by mutableStateOf<Pair<Request, ContinuousReceiverHealth>?>(null)
@@ -81,7 +83,7 @@ internal class NativeReceiverStatus(
 
     fun invalidate() {
         epoch++
-        homeJob?.cancel()
+        visibleJob?.cancel()
         healthJob?.cancel()
         healthRequest = null
         health = null
@@ -160,10 +162,30 @@ internal class NativeReceiverStatus(
         control(requireControlTicket()) { gateway.replace(code) }
 
     fun refreshHome(publish: (GatewayStatus) -> Unit) {
-        homeJob?.cancel()
+        refreshVisible(Route.HOME, publish)
+    }
+
+    fun refreshVisible(route: Route, publish: (GatewayStatus) -> Unit) {
+        visibleJob?.cancel()
         val ticket = request() ?: return
-        if (ticket.route == Route.HOME && ticket.sheet == null)
-            homeJob = scope.launch { read(ticket, home = true, publish = publish) }
+        if (ticket.route == route && ticket.sheet == null)
+            visibleJob = scope.launch { read(ticket, home = true, publish = publish) }
+    }
+
+    fun startReceiver() {
+        if (!receiver) return
+        if (startJob?.isActive == true) {
+            startQueued = true
+            return
+        }
+        startJob = scope.launch {
+            do {
+                startQueued = false
+                try { withContext(Dispatchers.IO) { gateway.start() } }
+                catch (e: CancellationException) { throw e }
+                catch (_: Exception) { /* A later lifecycle or permission event may retry. */ }
+            } while (startQueued)
+        }
     }
 
     fun permissionsChanged(grants: List<Pair<String, Int>>?, drained: () -> Unit) {
@@ -176,11 +198,10 @@ internal class NativeReceiverStatus(
         }
         val ticket = if (changed) request() else null
         // The authorized receiving queue has its own lifecycle, including when the operator is signed out.
-        scope.launch {
-            try { withContext(Dispatchers.IO) { gateway.start() } }
-            catch (e: CancellationException) { throw e }
-            catch (_: Exception) { /* The next queue wakeup can retry. */ }
-            if (ticket != null && current(ticket) && permissionView(ticket)) {
+        startReceiver()
+        if (ticket != null) scope.launch {
+            startJob?.join()
+            if (current(ticket) && permissionView(ticket)) {
                 pendingPermissions = ticket
                 drained()
             }

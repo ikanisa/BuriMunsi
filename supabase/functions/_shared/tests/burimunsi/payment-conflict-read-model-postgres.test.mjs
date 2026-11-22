@@ -9,9 +9,7 @@ const fixture=loadBuriPostgresFixture();
 test('conflicting sources disappear from unallocated counts and change the page revision', {skip:!fixture},async()=>{
  const queries=[];const sql={unsafe:async(q)=>{queries.push(q);
   if(q.startsWith('SELECT count(*) AS total'))return [{total:0}];
-  if(q.startsWith('SELECT coalesce(sum(amount_minor)'))return [{balance:0}];
-  if(q.startsWith('SELECT coalesce(sum(c.credited_amount)'))return [{today:0}];
-  if(q.includes(' AS unallocated_amount'))return [{members:0,unallocated:0,unallocated_amount:0}];
+  if(q.includes(' AS unallocated_amount'))return [{balance:0,today:0,members:0,unallocated:0,unallocated_amount:0,id:null}];
   return [];
  }};
  const store=new PostgresRecordsStore({authority:{groupId:'group',read:fn=>fn(sql),session:async()=>null},
@@ -50,7 +48,7 @@ test('conflicting sources disappear from unallocated counts and change the page 
  for(const [i,relation,source]of [[0,'duplicate','tx'],[1,'conflict','tx'],[2,'conflict','another']]){
   statement+=prepared(`count_${i}`,'count',relation,source,count,'text,text',"'group','%%'");
   statement+=prepared(`revision_${i}`,'revision',relation,source,revision,'text',"'group'");
-  statement+=prepared(`home_${i}`,'home',relation,source,home,'text',"'group'");
+  statement+=prepared(`home_${i}`,'home',relation,source,home,'text,text',"'group','2026-11-13T10:00:00Z'");
  }
  statement+='ROLLBACK;';
  const child=fixture.run('postgres',['-Atq'],statement);

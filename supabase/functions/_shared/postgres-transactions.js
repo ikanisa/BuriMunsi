@@ -2,9 +2,7 @@ import {applicationWorkTuple,fenceFailure,reserveDatabaseConnection} from './app
 import {adminPasscodeProof} from './domain/admin_email_policy.js';
 import {ApiError} from './domain/core.js';
 
-function setLocalLimits(tx) {
-  return tx`select pg_catalog.set_config('statement_timeout','15s',true),pg_catalog.set_config('lock_timeout','5s',true)`;
-}
+const runtimeSetup = "SET LOCAL ROLE collect_runtime; SET LOCAL statement_timeout='15s'; SET LOCAL lock_timeout='5s'";
 
 // Request-scoped PostgreSQL transactions share the original admission and claims.
 // The compatibility adapter translates SQL dialects and statement results.
@@ -59,13 +57,14 @@ export class PostgresTransactions {
     await work.assert();
     const [mode] = await tx.unsafe("SELECT pg_catalog.current_setting('transaction_read_only') AS transaction_read_only,pg_catalog.current_setting('transaction_isolation') AS transaction_isolation");
     if (mode?.transaction_read_only !== readOnly || mode?.transaction_isolation !== isolation) throw fenceFailure(null);
-    await tx`set local role collect_runtime`;
-    await tx`select pg_catalog.set_config('search_path','app,public,pg_catalog',true),pg_catalog.set_config('request.jwt.claims',${JSON.stringify(this.claims)},true),pg_catalog.set_config('collect.edge_verified','true',true)`;
+    await tx.unsafe(runtimeSetup);
+    const claims = JSON.stringify(this.claims);
     if (work.kind === 'http_admin') {
       const [id, epoch, source] = applicationWorkTuple(work);
-      await tx`select pg_catalog.set_config('collect.fence_admission_id',${id},true),pg_catalog.set_config('collect.fence_epoch',${String(epoch)},true),pg_catalog.set_config('collect.fence_source_sha256',${source},true)`;
+      await tx`select pg_catalog.set_config('search_path','app,public,pg_catalog',true),pg_catalog.set_config('request.jwt.claims',${claims},true),pg_catalog.set_config('collect.edge_verified','true',true),pg_catalog.set_config('collect.fence_admission_id',${id},true),pg_catalog.set_config('collect.fence_epoch',${String(epoch)},true),pg_catalog.set_config('collect.fence_source_sha256',${source},true)`;
+    } else {
+      await tx`select pg_catalog.set_config('search_path','app,public,pg_catalog',true),pg_catalog.set_config('request.jwt.claims',${claims},true),pg_catalog.set_config('collect.edge_verified','true',true)`;
     }
-    await setLocalLimits(tx);
     await this.#applyBrowserPasscode(tx);
   }
 
@@ -74,7 +73,7 @@ export class PostgresTransactions {
     if (!work) throw fenceFailure(null);
     await work.assert();
     const [admissionId, epoch, source] = applicationWorkTuple(work);
-    await tx`set local role collect_runtime`;
+    await tx.unsafe(runtimeSetup);
     await tx`select pg_catalog.set_config('search_path','app,public,pg_catalog',true),pg_catalog.set_config('request.jwt.claims',${JSON.stringify(claims)},true),pg_catalog.set_config('collect.edge_verified','true',true),pg_catalog.set_config('collect.fence_admission_id',${admissionId},true),pg_catalog.set_config('collect.fence_epoch',${String(epoch)},true),pg_catalog.set_config('collect.fence_source_sha256',${source},true)`;
     try {
       const rows = await tx`select private.collect_fence_assert_write(${admissionId}::uuid,${epoch}::bigint,${source}::text) as result`;
@@ -85,7 +84,6 @@ export class PostgresTransactions {
     } catch (error) {
       throw fenceFailure(error);
     }
-    await setLocalLimits(tx);
     await this.#applyBrowserPasscode(tx);
   }
 

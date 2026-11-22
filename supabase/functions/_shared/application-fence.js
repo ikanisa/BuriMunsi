@@ -29,7 +29,10 @@ export async function reserveDatabaseConnection(sql){
  need(typeof sql?.reserve==='function');const pending=Promise.resolve().then(()=>sql.reserve());
  try{return await bounded(pending);}catch(error){void pending.then(async late=>{try{await late?.release();}catch{}},()=>{});throw fenceFailure(error);}
 }
-async function runtimeRole(tx){await tx.unsafe('SET LOCAL ROLE collect_runtime');await tx.unsafe("SELECT pg_catalog.set_config('collect.edge_verified','true',true)");}
+const runtimeRoleSql = "SET LOCAL ROLE collect_runtime; SELECT pg_catalog.set_config('collect.edge_verified','true',true)";
+const leaseSetupSql = "SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout='5s'; " +
+ runtimeRoleSql + '; SELECT pg_catalog.pg_advisory_xact_lock_shared(7346371,1)';
+async function runtimeRole(tx){await tx.unsafe(runtimeRoleSql);}
 async function result(tx,name,values){const rows=await tx.unsafe('SELECT '+signatures[name]+' AS result',values);need(rows.length===1&&rows[0].result&&typeof rows[0].result==='object');return rows[0].result;}
 export function sqlFenceBackend(businessSql,controlSql){
  need(typeof businessSql?.begin==='function'&&typeof controlSql?.reserve==='function');
@@ -52,8 +55,10 @@ export function sqlFenceBackend(businessSql,controlSql){
     // a rejection quarantines forever. Never enqueue another rollback/reset.
     return bounded(cleanup);
    };
-   try{beginDispatched=true;await tx.unsafe('BEGIN ISOLATION LEVEL READ COMMITTED');await runtimeRole(tx);await tx.unsafe("SET LOCAL statement_timeout='5s'");await tx.unsafe("SET LOCAL lock_timeout='5s'");
-    await tx.unsafe('SELECT pg_catalog.pg_advisory_xact_lock_shared(7346371,1)');
+   try{beginDispatched=true;await tx.unsafe('BEGIN ISOLATION LEVEL READ COMMITTED');
+    // These fixed setup commands share one wire round trip. No authority
+    // lookup starts until PostgreSQL confirms the role, limits and WORK lock.
+    await tx.unsafe(leaseSetupSql);
     const row=await result(tx,'assert',[id,epoch,source]);
     return {row,async assert(){need(!cleanup&&!released);return bounded(result(tx,'assert',[id,epoch,source]));},release};
    }catch(error){await release().catch(()=>{});throw error;}

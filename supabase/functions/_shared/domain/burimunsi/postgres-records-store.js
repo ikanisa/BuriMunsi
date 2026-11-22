@@ -6,7 +6,7 @@ import {sha256,canonicalJson} from './values.js';
 import {listOnboardingSuggestions} from './smart-onboarding-suggestions.js';
 import {canonicalListingInstant,listingText} from './listing-query.js';
 import {readMemberListing} from './postgres-member-listing.js';
-import {paymentAllocationFilterSql,paymentReferenceSql,paymentsSql,readCanonicalHome} from './postgres-payment-reads.js';
+import {nativePaymentListingScope,paymentAllocationFilterSql,paymentReferenceSql,paymentsSql,readCanonicalHome} from './postgres-payment-reads.js';
 import {projectLedger,projectMember,projectPayment} from './postgres-record-projections.js';
 
 const MEMBERS=`SELECT u.id,m.collection_id,u.full_name,u.momo_number,m.active,m.revision,u.revision AS person_revision,m.joined_at,
@@ -80,14 +80,15 @@ export class PostgresRecordsStore {
         },
         listRevision:async(g,kind,memberId,paymentReference=null)=>{
           scope(g);let rows;
-          if(kind==='payments')rows=await sql.unsafe(`SELECT t.id,t.version,t.has_conflict,p.revision AS payment_revision,p.status,p.member_id,
+          if(kind==='payments')rows=await sql.unsafe(`${auto?nativePaymentListingScope:''}SELECT t.id,t.version,t.has_conflict,p.revision AS payment_revision,p.status,p.member_id,
             f.beneficiary_member_id,pm.revision AS membership_revision,u.revision AS member_revision,${paymentReference?`(${paymentReferenceSql}=$2) AS reference_match,`:''}
             (SELECT count(*) FROM app.momo_transaction_sources bad WHERE bad.transaction_id=t.id AND bad.relation='conflict') AS conflict_count,
-            (SELECT count(*) FROM app.ledger_entries l WHERE l.payment_id=p.id AND l.collection_id=x.collection_id) AS ledger_count${auto?',x.native_source_id,private.burimunsi_auto_projection(x.native_source_id) AS native_meta':''}
-            FROM private.burimunsi_transaction_scopes x JOIN app.momo_transactions t ON t.id=x.transaction_id AND t.receiving_account_id=x.receiving_account_id
+            (SELECT count(*) FROM app.ledger_entries l WHERE l.payment_id=p.id AND l.collection_id=x.collection_id) AS ledger_count${auto?',x.native_source_id,native.value AS native_meta':''}
+            FROM ${auto?'payment_scope':'private.burimunsi_transaction_scopes'} x JOIN app.momo_transactions t ON t.id=x.transaction_id AND t.receiving_account_id=x.receiving_account_id
             LEFT JOIN app.momo_financial_links f ON f.transaction_id=t.id LEFT JOIN app.payments p ON p.id=f.payment_id AND p.collection_id=x.collection_id
             LEFT JOIN app.memberships pm ON pm.collection_id=x.collection_id AND pm.user_id=coalesce(p.member_id,CASE WHEN p.id IS NOT NULL THEN f.beneficiary_member_id END)
-            LEFT JOIN app.users u ON u.id=pm.user_id WHERE x.collection_id=$1 ORDER BY t.id LIMIT 100001`,paymentReference?[g,paymentReference]:[g]);
+            LEFT JOIN app.users u ON u.id=pm.user_id ${auto?'LEFT JOIN native_projection native ON native.source_id=x.native_source_id':''}
+            WHERE x.collection_id=$1 ORDER BY t.id LIMIT 100001`,paymentReference?[g,paymentReference]:[g]);
           else if(kind==='ledger'){requireThat(memberId,'member_required');rows=await sql.unsafe('SELECT id FROM app.ledger_entries WHERE collection_id=$1 AND member_id=$2 ORDER BY id LIMIT 100001',[g,memberId]);}
           else if(kind==='staff')rows=await sql.unsafe('SELECT id,version FROM private.burimunsi_accounts WHERE collection_id=$1 AND role=\'staff\' ORDER BY id LIMIT 100001',[g]);
           else if(kind==='audit')rows=await sql.unsafe('SELECT id FROM private.burimunsi_audit WHERE collection_id=$1 ORDER BY id LIMIT 100001',[g]);
@@ -99,7 +100,9 @@ export class PostgresRecordsStore {
           if(kind==='payments'){
             const args=[g];let extra='';
             if(memberId!==null){await this.memberExists(sql,g,memberId);args.push(memberId);extra=' AND u.id=$2';}
-            rows=await sql.unsafe((paymentReference?paymentsSql(auto,true):PAYMENTS)+extra+' ORDER BY t.id LIMIT 100001',args);
+            const batch=auto&&memberId===null;
+            const projection=paymentsSql(auto,{includeReference:!!paymentReference,batch});
+            rows=await sql.unsafe((batch?nativePaymentListingScope:'')+projection+extra+' ORDER BY t.id LIMIT 100001',args);
             entries=rows.map(r=>{
               const item=projectPayment(r),conflict=pgInteger(r.has_conflict)===1||r.source_conflict===true;
               if(item.sourceKind!=='observation'){
@@ -146,11 +149,13 @@ export class PostgresRecordsStore {
             const args=[g,safeLike(q)];
             const matches=fields.map(field=>`coalesce(${field},'')`+" ILIKE $2 ESCAPE '\\'");
             if(query.paymentReference)matches.push(`(${paymentReferenceSql})=$${args.push(query.paymentReference)}`);
-            let where=PAYMENTS+' AND ('+matches.join(' OR ')+')';
+            let where=' AND ('+matches.join(' OR ')+')';
             if(memberId!==null){await this.memberExists(sql,g,memberId);args.push(memberId);where+=' AND u.id=$'+args.length;}
             where+=paymentAllocationFilterSql(auto,filter);
-            total=pgInteger((await sql.unsafe('SELECT count(*) AS total FROM ('+where+') AS scoped',args))[0].total);
-            rows=await sql.unsafe(where+' ORDER BY t.transaction_at DESC NULLS LAST,t.id DESC LIMIT $'+(args.length+1)+' OFFSET $'+(args.length+2),[...args,limit,offset]);read=projectPayment;
+            // Matching uses canonical fields. Counting does not need the
+            // protected native receipt projection that supplies display data.
+            total=pgInteger((await sql.unsafe('SELECT count(*) AS total FROM ('+paymentsSql(false)+where+') AS scoped',args))[0].total);
+            rows=await sql.unsafe(PAYMENTS+where+' ORDER BY t.transaction_at DESC NULLS LAST,t.id DESC LIMIT $'+(args.length+1)+' OFFSET $'+(args.length+2),[...args,limit,offset]);read=projectPayment;
           }else if(kind==='ledger'){
             requireThat(memberId,'member_required');await this.memberExists(sql,g,memberId);
             total=pgInteger((await sql.unsafe('SELECT count(*) AS total FROM app.ledger_entries WHERE collection_id=$1 AND member_id=$2',[g,memberId]))[0].total);
@@ -169,7 +174,7 @@ export class PostgresRecordsStore {
         readDetail:async({groupId:g,kind,id,includePaymentReference=false})=>{
           scope(g);if(kind==='sms')return this.sourceReader.detail(sql,g,id);
           const readPayment=kind==='payment';
-          const query=readPayment?(includePaymentReference?paymentsSql(auto,true):PAYMENTS):MEMBERS;
+          const query=readPayment?(includePaymentReference?paymentsSql(auto,{includeReference:true}):PAYMENTS):MEMBERS;
           const [row]=await sql.unsafe(query+(readPayment?' AND t.id=$2':' AND u.id=$2'),[g,id]);
           if(!row)return null;
           if(!readPayment)return projectMember(row);

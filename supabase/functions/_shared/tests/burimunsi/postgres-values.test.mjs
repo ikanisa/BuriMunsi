@@ -64,15 +64,16 @@ test('masked member identity cannot borrow a complete login phone',async()=>{
  await assert.rejects(f.store.withReadSnapshot(tx=>tx.readDetail({groupId:'g',kind:'member',id:'m'})),error=>error.code==='invalid_member_projection'&&error.status===503);
 });
 test('home projects the canonical ledger amount for each recent credit',async()=>{
+ const queries=[];
  const sql={unsafe:async q=>{
-  if(q.startsWith('SELECT coalesce(sum(amount_minor)'))return[{balance:'12000'}];
-  if(q.startsWith('SELECT coalesce(sum(c.credited_amount)'))return[{today:'12000'}];
-  if(q.includes(' AS unallocated_amount'))return[{members:'1',unallocated:'0',unallocated_amount:'0'}];
-  return[{id:'p',collection_id:'g',payer_name:'Example',payer_identifier:'***111',amount_minor:'11000',credited_amount:'12000',
+  queries.push(q);
+  return[{balance:'12000',today:'12000',members:'1',unallocated:'0',unallocated_amount:'0',
+   id:'p',collection_id:'g',payer_name:'Example',payer_identifier:'***111',amount_minor:'11000',credited_amount:'12000',
    transaction_datetime_raw:'2026-11-11 12:00:00',provider_transaction_id:'synthetic-ref',has_conflict:0,source_conflict:false,payment_status:'confirmed',ledger_posted:true,version:1,momo_number:null}];
  }};
  const store=new PostgresRecordsStore({authority:{groupId:'g',session:async()=>null,read:fn=>fn(sql)},sourceReader:{revision(){},page(){},detail(){}}});
  const home=await store.withReadSnapshot(tx=>tx.canonicalHome('g'));
+ assert.equal(queries.length,1);
  assert.equal(home.groupBalanceRwf,12000);assert.equal(home.todayRwf,12000);assert.equal(home.recentPayments[0].amountRwf,12000);
  assert.equal(home.recentPayments[0].state,'posted');assert.equal(home.recentPayments[0].sourceId,null);
 });

@@ -283,14 +283,19 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     fun onNetworkAvailable(){
         if(!foreground||repository==null)return
         if(if(state.operator==null)!restoreRetryPending else !needsSessionCheck||!sessionRetryPending){
-            automaticVisibleRefresh(force=true);return
+            // Android invokes this for the current validated network on every
+            // callback registration. An already fresh foreground keeps its
+            // normal refresh cadence instead of fetching everything again.
+            if(state.offline||state.readbackRequired||visibleExpired)automaticVisibleRefresh(force=true)
+            return
         }
         val now=clock()
         if(lastConnectivityRetryAt>0L&&now>=lastConnectivityRetryAt&&now-lastConnectivityRetryAt<5_000L)return
         lastConnectivityRetryAt=now;resumeQueued=true;drainResumeCheck()
     }
     private fun refreshSupport(){
-        supportJob?.cancel();supportPhone=null
+        if(!foreground||state.starting||supportPhone!=null||supportJob?.isActive==true||
+            (state.operator!=null&&state.sheet!=Sheet.HELP))return
         val client=supportClient?:return
         supportJob=viewModelScope.launch{
             val result=withContext(Dispatchers.IO){client.read()}
@@ -549,11 +554,8 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         if(!resumeQueued)needsSessionCheck=false
     }
     private suspend fun loadSessionRecords(grant:NativeSessionBootstrap.Grant){
-        if(BuildConfig.IS_GATEWAY)io{
-            sessionBootstrap.requireCurrent(grant)
-            try{gateway.start()}catch(e:CancellationException){throw e}catch(_:Exception){}
-        }
         refreshSessionRecords(grant)
+        receiverStatus.startReceiver()
     }
     private suspend fun refreshSessionRecords(grant:NativeSessionBootstrap.Grant){
         sessionBootstrap.requireCurrent(grant)
@@ -712,6 +714,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                     drainMemberDocument()
                     drainGatewayPermissionStatus()
                     checkpointNavigation()
+                    refreshSupport()
                 }
             }
         }.also { job -> if (onFinished != null) job.invokeOnCompletion { onFinished() } }
@@ -769,6 +772,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                     else->null
                 }
                 state=UiState(pending=state.pending,error=notice)
+                refreshSupport()
             }
         }
         }
@@ -964,10 +968,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
 
     private suspend fun refreshRememberedReceiverStatus() {
         if (state.route == Route.HOME) refreshHomeGatewayStatus()
-        if (state.route == Route.SETTINGS) {
-            refreshReceiverPanel()
-            receiverStatus.refreshHealth()
-        }
+        if (state.route == Route.SETTINGS) refreshSettingsDiagnostics()
     }
 
     private fun refreshHomeGatewayStatus() = receiverStatus.refreshHome { state=state.copy(gateway=it) }
@@ -978,6 +979,11 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
 
     private suspend fun refreshReceiverPanel() {
         receiverStatus.read(receiverStatus.request(), publish = ::showReceiverPanelStatus)
+    }
+
+    private fun refreshSettingsDiagnostics() {
+        receiverStatus.refreshVisible(Route.SETTINGS, publish = ::showReceiverPanelStatus)
+        receiverStatus.refreshHealth()
     }
 
     private suspend fun refreshNow(){
@@ -1073,15 +1079,10 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                 }
             }
             Route.SETTINGS->{
-                val ticket=receiverStatus.request()
-                state=state.copy(gateway=null)
-                val staff=if(hasAccess(Capability.STAFF))io{repo().staff()}else null
-                if(ticket==null){
-                    state=state.copy(staff=staff,panelSavedAt=clock())
-                }else receiverStatus.read(ticket) { receiving ->
-                    state=state.copy(staff=staff,gateway=receiving,panelSavedAt=clock())
-                }
-                receiverStatus.refreshHealth()
+                // Only the Staff access panel needs the directory. Receiver
+                // diagnostics must not prevent opening Settings or signing out.
+                state=state.copy(staff=null,gateway=null,panelSavedAt=clock())
+                refreshSettingsDiagnostics()
             }
             else->Unit
         }

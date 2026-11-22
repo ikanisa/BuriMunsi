@@ -51,6 +51,9 @@ const suites=[
   'Postgres suggestions preserve managed phones and native name/masked-suffix identity',
   'a conflicting cross-source receipt prevents clean financial outcome on PostgreSQL',
   'conflicting sources disappear from unallocated counts and change the page revision']},
+ {label:'native-payment-projection',files:[
+  'supabase/functions/_shared/tests/burimunsi/native-payment-batch-postgres.test.mjs'],expected:[
+  'batched native payment projections preserve collection, actor and receipt disclosure']},
  {label:'observation-dedup',files:[
   'supabase/functions/_shared/tests/burimunsi/observation-source-keys-postgres.test.mjs'],expected:[
   'real PostgreSQL source reservation preserves exact replay, distinct rows and authorization']},

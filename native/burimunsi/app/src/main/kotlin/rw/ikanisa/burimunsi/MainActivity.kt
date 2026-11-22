@@ -12,6 +12,7 @@ import android.os.PowerManager
 import android.content.pm.PackageManager
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.ReportDrawnWhen
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.SystemBarStyle
@@ -26,6 +27,7 @@ import app.cool.mobile.R
 import rw.ikanisa.burimunsi.ui.*
 import rw.ikanisa.burimunsi.core.export.ExportFormat
 import rw.ikanisa.burimunsi.core.Capability
+import rw.ikanisa.burimunsi.core.ScreenGate
 
 class MainActivity:ComponentActivity(){
     private var notificationsRequested=false
@@ -55,6 +57,10 @@ class MainActivity:ComponentActivity(){
         if(!BuildConfig.DEBUG)window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         setContent {
             var visible by remember{mutableStateOf(false)}
+            ReportDrawnWhen {
+                visible && !model.state.starting && !model.state.busy &&
+                    model.screenGate == ScreenGate.OPEN
+            }
             LaunchedEffect(model.state.sheet, model.state.operator?.id, model.state.onboarding.step,
                 model.state.onboarding.documentUri, memberInputs.selectedCapture) {
                 memberInputs.reconcileSelection()

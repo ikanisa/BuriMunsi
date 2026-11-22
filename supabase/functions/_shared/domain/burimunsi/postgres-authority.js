@@ -35,8 +35,11 @@ export class PostgresNativeAuthority {
           await lockCollectMutation(tx);
         }
       }
-      await tx.unsafe("SELECT set_config('burimunsi.collection_id',$1,true)",[this.groupId]);
-      await applyPhonePinContext(this.db,tx,this.groupId);
+      // The PIN setter independently verifies the session and sets the scoped
+      // collection itself. Managed and worker paths still set it explicitly.
+      if (!await applyPhonePinContext(this.db,tx,this.groupId)) {
+        await tx.unsafe("SELECT set_config('burimunsi.collection_id',$1,true)",[this.groupId]);
+      }
       await this.assertOwned();
       const result=await fn(tx);
       // A revoked/replaced admission must roll back, not publish callback success.
