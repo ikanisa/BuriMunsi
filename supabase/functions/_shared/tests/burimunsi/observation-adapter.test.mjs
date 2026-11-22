@@ -42,6 +42,7 @@ function fixture(){
   }
   if(query.includes('observation_context')){allowed();return [{result:{...ctx(),sessionId:state.liveSessionId??session,consentGeneration:state.generation}}];}
   if(query.includes('observation_reconcile_verified_status')){allowed();return [{result:{groupId:group,hasPending:true,
+   ...(state.legacyInventory?{}:{scope:'verified_installation'}),
    hasRecorded:state.rows.size>0,recordedCount:state.rows.size,hasUnmatchedCanonical:false,revision:'a'.repeat(64)}}];}
   if(query.includes('observation_reconcile_status')){allowed();return [{result:state.reconcileStatus??{groupId:group,hasPending:false,
    hasRecorded:state.rows.size>0,recordedCount:state.rows.size,hasUnmatchedCanonical:false,revision:'f'.repeat(64)}}];}
@@ -220,6 +221,10 @@ test('strict HTTP capture and reconciliation replay one retained observation und
   assert.deepEqual(verified,{groupId:group,hasPending:true,hasRecorded:true,recordedCount:1,
    hasUnmatchedCanonical:false,revision:'a'.repeat(64),scope:'verified_collection'});
   assert.deepEqual(await read(await request('/reconcile-verified-status')),verified);
+  assert.deepEqual(await read(await request('/reconcile-verified-status?scope=installation')),{...verified,scope:'verified_installation'});
+  assert.equal((await request('/reconcile-verified-status?scope=someone-else')).status,400);
+  f.state.legacyInventory=true;assert.equal((await request('/reconcile-verified-status?scope=installation')).status,503);
+  f.state.legacyInventory=false;
   for(const raw of ['/recover-held','/recover-held-ack'])assert.equal((await request(raw,capture)).status,400);
   const historical={...capture,requestId:id(58),sourceKey:'8'.repeat(64),expectedConsentGeneration:1};
   const absent=await read(await request('/recover-held-ack',historical));
@@ -236,9 +241,11 @@ test('strict HTTP capture and reconciliation replay one retained observation und
    for(const [suffix,body] of [['/reconcile',proof],['/reconcile-batch',{items:[proof]}],['/reconcile-status'],['/reconcile-verified-status']]){
     assert.equal((await request(suffix,body)).status,403);
    }
-   for(const changed of [{revoked:true},{active:false},{installationProfile:'staff'},{groupId:'another-group'}]){
+   for(const changed of [{revoked:true},{active:false},{installationProfile:'unrecognized'},{groupId:'another-group'}]){
     current={...actor,...changed};assert.equal((await request('/reconcile-verified-status')).status,403);
    }
+   current={...actor,installationProfile:'staff',capabilities:['records.read']};
+   assert.equal((await request('/reconcile-verified-status?scope=installation')).status,200);
    current=actor;f.state.enabled=false;assert.equal((await request('/reconcile-verified-status')).status,403);
   } finally {observations.authority.session=session;}
   assert.equal(f.state.puts,2);
@@ -351,7 +358,7 @@ test('reconciliation fails closed for staff, disabled consent and unresolved res
   serviceCentreAt:item.serviceCentreAt,inboxReceivedAt:item.inboxReceivedAt,subscriptionId:item.subscriptionId};
  await f.run(async adapter=>{
   const session=adapter.authority.session;
-  for(const changed of [{role:'staff'},{installationProfile:'staff'},{groupId:'other'},{revoked:true}]){
+  for(const changed of [{role:'staff'},{installationProfile:'unrecognized'},{groupId:'other'},{revoked:true}]){
    adapter.authority.session=async()=>({...actor,...changed});
    await assert.rejects(adapter.reconcile(actor,proof),e=>e.status===403);
   }
@@ -756,7 +763,7 @@ test('a batch fails closed for per-item conflicts, reservations, storage failure
   await assert.rejects(adapter.reconcileBatch(actor,proofs),e=>e.status===503&&e.code==='observation_unavailable');
   f.state.onGet=null;
   const session=adapter.authority.session;
-  for(const changed of [{role:'staff'},{installationProfile:'staff'},{groupId:'other'},{revoked:true}]){
+  for(const changed of [{role:'staff'},{installationProfile:'unrecognized'},{groupId:'other'},{revoked:true}]){
    adapter.authority.session=async()=>({...actor,...changed});
    await assert.rejects(adapter.reconcileBatch(actor,proofs),e=>e.status===403);
   }

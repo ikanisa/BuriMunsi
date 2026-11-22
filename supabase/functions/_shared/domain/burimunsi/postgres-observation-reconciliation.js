@@ -362,10 +362,11 @@ export class PostgresObservationReconciliation {
   reconcileStatus(actor) {
     return this.#statusSnapshot(actor, false);
   }
-  async reconcileVerifiedStatus(actor) {
-    return { ...await this.#statusSnapshot(actor, true), scope: 'verified_collection' };
+  async reconcileVerifiedStatus(actor, scope) {
+    check(scope === undefined || scope === 'installation', 'invalid_query', 400);
+    return { ...await this.#statusSnapshot(actor, true, scope === 'installation'), scope: scope === 'installation' ? 'verified_installation' : 'verified_collection' };
   }
-  async #statusSnapshot(actor, verified) {
+  async #statusSnapshot(actor, verified, installation = false) {
     try {
       const result = await this.authority.read(async (tx) => {
         await this.context(tx, actor);
@@ -377,7 +378,7 @@ export class PostgresObservationReconciliation {
         check(rows.length === 1);
         const value = rows[0].result;
         check(
-          value && value.groupId === this.groupId && typeof value.hasPending === 'boolean' &&
+          value && (!installation || value.scope === 'verified_installation') && value.groupId === this.groupId && typeof value.hasPending === 'boolean' &&
             typeof value.hasRecorded === 'boolean' && typeof value.hasUnmatchedCanonical === 'boolean' &&
             Number.isSafeInteger(value.recordedCount) && value.recordedCount >= 0 &&
             value.recordedCount <= 100000 &&

@@ -175,7 +175,7 @@ export function createNativeHandler({auth,records,contributions,members,gateway,
       }
       if(heldOperation==='observationReconcileVerifiedStatus'){
         requirePort(observations,['reconcileVerifiedStatus']);
-        return json(await observations.reconcileVerifiedStatus(actor));
+        return json(await observations.reconcileVerifiedStatus(actor,wireQuery.scope));
       }
       if(heldOperation==='observationRecoverHeld'||heldOperation==='observationRecoverHeldAck'){
         const port=heldOperation==='observationRecoverHeld'?'recoverHeld':'recoverHeldAck';

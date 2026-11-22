@@ -92,7 +92,7 @@ export class PostgresNativeObservations {
   const a=await this.authority.session(tx,{id:expected.sessionId});
   check(a&&a.id===expected.id&&a.sessionId===expected.sessionId&&a.groupId===this.groupId&&
    a.principalUserId===expected.principalUserId&&a.installationId===expected.installationId&&
-   a.role==='admin'&&a.installationProfile==='internal_receiver'&&a.active===true&&a.revoked===false,
+   a.role==='admin'&&['staff','internal_receiver'].includes(a.installationProfile)&&a.active===true&&a.revoked===false,
    'access_denied',403);
   return a;
  }
@@ -129,8 +129,8 @@ export class PostgresNativeObservations {
  reconcileStatus(actor) {
   return this.#reconciliation.reconcileStatus(actor);
  }
- reconcileVerifiedStatus(actor) {
-  return this.#reconciliation.reconcileVerifiedStatus(actor);
+ reconcileVerifiedStatus(actor, scope) {
+  return this.#reconciliation.reconcileVerifiedStatus(actor, scope);
  }
  async inboxCheck(actor,input){
   try{return await this.authority.write(async tx=>{

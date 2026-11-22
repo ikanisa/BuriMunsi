@@ -5707,7 +5707,12 @@
     },
     "observationReconcileVerifiedStatus.query": {
       "type": "object",
-      "properties": {},
+      "properties": {
+        "scope": {
+          "type": "string",
+          "const": "installation"
+        }
+      },
       "required": [],
       "additionalProperties": false
     },
@@ -5742,7 +5747,10 @@
         },
         "scope": {
           "type": "string",
-          "const": "verified_collection"
+          "enum": [
+            "verified_collection",
+            "verified_installation"
+          ]
         }
       },
       "required": [
