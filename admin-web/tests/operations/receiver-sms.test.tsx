@@ -68,7 +68,7 @@ describe('BuriMunsi receiver observations',()=>{
       expect(frame.topic).toBe('realtime:'+topic);expect(frame.payload.config.private).toBe(true);
       socket.send(JSON.stringify({topic:frame.topic,event:'phx_reply',ref:frame.ref,join_ref:frame.join_ref,payload:{status:'ok',response:{}}}));
       changed.mockImplementation(()=>socket.send(JSON.stringify({topic:frame.topic,event:'broadcast',ref:null,
-        payload:{type:'broadcast',event:'operations_changed',payload:{changed:true}}})));
+        payload:{type:'broadcast',event:'operations_changed',payload:{changed:true,id:crypto.randomUUID()}}})));
     }));
     const streams=operationsStreams({origin:SUPABASE_PROJECT_ORIGIN,publishableKey:'sb_publishable_synthetic_test_only',request:fixture.request});
     const view=render(<OperationsLiveContext.Provider value={streams}><MemoryRouter><MomoReceiptsPage /></MemoryRouter></OperationsLiveContext.Provider>);

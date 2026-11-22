@@ -7,6 +7,14 @@ export interface OperationsSubscription {
   request: AdminRequest;
 }
 interface Capability {topic: string; expires: number}
+const broadcastId = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+function isOperationsChange(payload: unknown) {
+  if (!isJsonObject(payload) || payload.changed !== true) return false;
+  const keys = Object.keys(payload);
+  // realtime.send may append its own UUID. Consumers only receive an invalidation.
+  return keys.length === 1 || (keys.length === 2 && typeof payload.id === 'string' && broadcastId.test(payload.id));
+}
 
 export function operationsCapability(value: JsonObject, now: number): Capability {
   const {topic, expiresAt} = value;
@@ -30,9 +38,7 @@ export async function openOperationsBroadcast(options: OperationsSubscription, t
   let active = true;
   const channel = socket.channel(topic, {config: {private: true, broadcast: {self: false}, presence: {enabled: false}}});
   channel.on('broadcast', {event: 'operations_changed'}, message => {
-    const payload: unknown = message.payload;
-    if (active && message.event === 'operations_changed' && isJsonObject(payload) &&
-        Object.keys(payload).length === 1 && payload.changed === true) changed();
+    if (active && message.event === 'operations_changed' && isOperationsChange(message.payload)) changed();
   }).subscribe(state => {
     if (!active) return;
     if (state === 'SUBSCRIBED') {ready(); changed();} // Recover changes missed while joining or reconnecting.
