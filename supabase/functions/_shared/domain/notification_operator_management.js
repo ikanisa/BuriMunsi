@@ -21,7 +21,7 @@ const managementFields=(body,allowed)=>assertReceiptSmsFields(body,allowed,'Requ
 function failure(error){
  if(error instanceof ApiError)return error;
  if(/recent_email_(?:verification|sign_in)_required/.test(String(error?.message??error)))return new ApiError(403,'recent_email_sign_in_required','Verify your current Admin email before continuing.');const text=String(error?.message??error);
- if(/admin_account_authority|admin_account_guards|session_changed|permission_denied|mfa_required/.test(text))return new ApiError(403,'sms_authority_changed','Your account access changed. Sign in and verify again.');
+ if(/admin_account_authority|admin_account_guards|session_changed|permission_denied|mfa_required/.test(text))return new ApiError(403,'sms_authority_changed','Your account access changed. Sign in again.');
  if(/admin_bridge_state|sms_policy_revision|UNIQUE constraint/.test(text))return new ApiError(409,'sms_policy_changed','The collection or policy changed. Refresh before continuing.');
  return new ApiError(503,'sms_configuration_unknown','The result could not be confirmed. Check its original request before repeating it.');
 }
