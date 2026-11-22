@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 import { Navigate, useLocation, useParams } from 'react-router';
 import type { AdminRequest } from '../../api/client';
 import { useSession } from '../../session/SessionProvider';
+import {canDisplaySessionRecords} from '../../session/sessionContext';
 import { Card, StatusBadge } from '../../ui';
 import { isValidId, parseSmsDetail, parseSmsPage, type SmsReceipt } from './contracts';
 import { DetailPage, Facts, RecordLink, RecordsPage, RelatedPagination, formatStatus, formatTime, query, statusTone, useActor, type Actor, type Column, type RecordsFilter, type RecordsProps } from './OperationsRecords';
@@ -71,7 +72,7 @@ const smsColumns: Column<SmsReceipt>[] = [
 export function SmsReceiptsPage() {
   const {actor, session} = useActor();
   const location = useLocation();
-  if (actor?.canonical && session.status === 'authenticated' && session.user?.permissions.includes('sms.read')) {
+  if (actor?.canonical && canDisplaySessionRecords(session) && session.user?.permissions.includes('sms.read')) {
     const params = new URLSearchParams(location.search);
     const {next, unavailable} = cleanCaptureFilters(params);
     if (next.toString() !== params.toString()) return <Navigate replace

@@ -1,4 +1,4 @@
-import {AdminRequestError, isJsonObject, type AdminBackend, type AdminRequestOptions, type JsonObject} from './contracts';
+import {AdminRequestError, AdminTransportError, isJsonObject, type AdminBackend, type AdminRequestOptions, type JsonObject} from './contracts';
 
 const CSRF = /^[A-Za-z0-9_-]{32,200}$/;
 const EMAIL_PROOF_PATHS = new Set(['auth/email-verification', 'auth/email/request', 'auth/email/verify']);
@@ -24,7 +24,9 @@ export async function boundedResponseBody(response: Response, maximumBytes: numb
   let length = 0;
   try {
     while (true) {
-      const {done, value} = await reader.read();
+      const {done, value} = await reader.read().catch(() => {
+        throw new AdminTransportError('The service response could not be verified.', response.status);
+      });
       if (done) break;
       length += value.byteLength;
       if (length > maximumBytes) throw new Error('Response too large.');

@@ -1,5 +1,6 @@
-import {useEffect, useLayoutEffect, useRef, type RefObject} from 'react';
+import {createContext, useContext, useEffect, useLayoutEffect, useRef, type RefObject} from 'react';
 
+export const InteractionSuspendedContext = createContext(false);
 const scopes: HTMLElement[] = [];
 const controlSelector = [
   'a[href]', 'button', 'input:not([type="hidden"])', 'select', 'textarea', '[tabindex]',
@@ -18,12 +19,14 @@ function tabbableControls(panel: HTMLElement): HTMLElement[] {
 
 export function useFocusScope(open: boolean, panelRef: RefObject<HTMLElement | null>, onDismiss: () => void,
   restoreTo?: RefObject<HTMLElement | null>) {
+  const suspended = useContext(InteractionSuspendedContext);
+  const active = open && !suspended;
   const dismissRef = useRef(onDismiss);
   useLayoutEffect(() => { dismissRef.current = onDismiss; }, [onDismiss]);
 
   useEffect(() => {
     const panel = panelRef.current;
-    if (!open || !panel) return;
+    if (!active || !panel) return;
     const owner = panel.ownerDocument;
     const previous = restoreTo?.current ?? (owner.activeElement instanceof HTMLElement ? owner.activeElement : null);
     scopes.push(panel);
@@ -55,7 +58,8 @@ export function useFocusScope(open: boolean, panelRef: RefObject<HTMLElement | n
       scopes.splice(scopes.indexOf(panel), 1);
       owner.removeEventListener('focusin', onFocus);
       owner.removeEventListener('keydown', onKeyDown);
-      if (wasTop && previous?.isConnected) previous.focus();
+      if (wasTop && previous?.isConnected && !previous.closest('[inert]')) previous.focus();
     };
-  }, [open, panelRef, restoreTo]);
+  }, [active, panelRef, restoreTo]);
+  return active;
 }

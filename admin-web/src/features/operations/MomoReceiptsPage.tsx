@@ -1,6 +1,7 @@
 import {adminBrand} from '../../branding';
 import {useState} from 'react';
 import {useSession} from '../../session/SessionProvider';
+import {canDisplaySessionRecords} from '../../session/sessionContext';
 import {Button, ErrorState, PageHeader} from '../../ui';
 import {MomoIncomingSms} from './MomoIncomingSms';
 import {MomoTransactionList} from './MomoTransactionList';
@@ -8,7 +9,7 @@ import './operations.css';
 
 export function MomoReceiptsPage({allowActions = false, allowRecovery = true, initialView = 'incoming', transactionsOnly = false}: {allowActions?: boolean; allowRecovery?: boolean; initialView?: 'incoming' | 'transactions'; transactionsOnly?: boolean}) {
   const session = useSession(), permissions = session.user?.permissions ?? [];
-  const canSms = session.status === 'authenticated' && permissions.includes('sms.read'), canPayments = session.status === 'authenticated' && permissions.includes('payments.read');
+  const canSms = canDisplaySessionRecords(session) && permissions.includes('sms.read'), canPayments = canDisplaySessionRecords(session) && permissions.includes('payments.read');
   const [view, setView] = useState<'incoming' | 'transactions'>(initialView);
   const actual = transactionsOnly ? 'transactions' : view === 'incoming' && canSms || !canPayments ? 'incoming' : 'transactions';
   const available = transactionsOnly ? canPayments : canSms || canPayments;

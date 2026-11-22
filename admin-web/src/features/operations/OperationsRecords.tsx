@@ -4,6 +4,7 @@ import { useCallback, useMemo, useRef, type ReactNode } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router';
 import type { AdminRequest } from '../../api/client';
 import { safeAdminReturnLocation, useSession } from '../../session/SessionProvider';
+import {canDisplaySessionRecords} from '../../session/sessionContext';
 import { Button, Card, EmptyState, ErrorState, LoadingState, PageHeader } from '../../ui';
 import type { Page } from './contracts';
 import { useOperationRead } from './useOperationRead';
@@ -83,7 +84,7 @@ export function RecordsPage<T>({title, subtitle, permission, statuses = [], sear
     }
     setParams(next);
   };
-  const canRead = !!actor && session.status === 'authenticated' && !!session.user?.permissions.includes(permission);
+  const canRead = !!actor && canDisplaySessionRecords(session) && !!session.user?.permissions.includes(permission);
   const loadPage = useCallback(() => actor ? load(session.request, offset, status, search, actor, JSON.parse(filterKey) as Record<string, string>, limit) : Promise.reject(new Error('Account unavailable.')), [actor, filterKey, limit, load, offset, search, session.request, status]);
   const key = JSON.stringify([session.epoch, actor?.id ?? '', actor?.canonical ?? null, permission, offset, limit, status, search, filterKey]);
   const {result, retry} = useOperationRead(key, canRead, loadPage);
@@ -144,7 +145,7 @@ export function DetailPage<T>({title, subtitle, permission, back, resourceKey, v
   const rawOffset = params.get('relatedOffset') ?? '0';
   const offset = /^\d{1,10}$/.test(rawOffset) && Number(rawOffset) <= 2147483647 && Number(rawOffset) % 25 === 0 ? Number(rawOffset) : 0;
   const setOffset = (value: number) => {const next = new URLSearchParams(params); if (value === 0) next.delete('relatedOffset'); else next.set('relatedOffset', String(value)); setParams(next);};
-  const canRead = !!actor && session.status === 'authenticated' && !!session.user?.permissions.includes(permission);
+  const canRead = !!actor && canDisplaySessionRecords(session) && !!session.user?.permissions.includes(permission);
   const loadDetail = useCallback(() => actor ? load(session.request, actor, offset) : Promise.reject(new Error('Account unavailable.')), [actor, load, offset, session.request]);
   const {result, retry} = useOperationRead(`${session.epoch}:${actor?.id ?? ''}:${resourceKey}:${offset}`, canRead && valid, loadDetail);
   const candidate = safeAdminReturnLocation(params.get('returnTo'));

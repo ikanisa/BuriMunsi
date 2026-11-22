@@ -15,6 +15,7 @@ vi.mock('../../src/session/SessionProvider', async (importOriginal) => {
 
 import { EmailEventsPage } from '../../src/features/operations/EmailEventsPage';
 import { SmsReceiptDetailPage, SmsReceiptsPage } from '../../src/features/operations/SmsReceiptPages';
+import {InteractionSuspendedContext} from '../../src/ui/useFocusScope';
 
 const epoch = Date.parse('2026-11-16T08:00:00.000Z') / 1000;
 function row(index: number) {
@@ -42,7 +43,7 @@ function receiver(index: number) {
     amount_rwf: 1000, network: 'mtn_momo', direction: 'incoming', is_payment: 1,
     duplicate_reference_count: 1, conflicting_reference_count: 0};
 }
-afterEach(() => { mock.request.mockReset(); mock.session.user.permissions = ['email.read']; mock.session.user.financialModel = 'canonical_evidence_ledger'; mock.session.epoch = 1; });
+afterEach(() => { mock.request.mockReset(); mock.session.status = 'authenticated'; mock.session.user.permissions = ['email.read']; mock.session.user.financialModel = 'canonical_evidence_ledger'; mock.session.epoch = 1; });
 
 describe('Operational pages', () => {
   it('uses the authorized endpoint and coalesces the initial StrictMode read', async () => {
@@ -95,6 +96,26 @@ describe('Operational pages', () => {
 });
 
 describe('SMS receipt filters', () => {
+  it('preserves a verified receipt through session rechecking, then reads the current page again', async () => {
+    mock.session.user.permissions = ['sms.read'];
+    mock.request.mockResolvedValueOnce({rows: [capture(1, 'Verified receipt')], total: 1, limit: 25, offset: 0, next_offset: null})
+      .mockResolvedValueOnce({rows: [capture(1, 'Refreshed receipt')], total: 1, limit: 25, offset: 0, next_offset: null});
+    const route = (suspended: boolean) => <InteractionSuspendedContext.Provider value={suspended}>
+      <MemoryRouter initialEntries={['/admin/sms-receipts?status=received']}><SmsReceiptsPage /></MemoryRouter>
+    </InteractionSuspendedContext.Provider>;
+    const view = render(route(false));
+    const row = await screen.findByRole('row', {name: /Verified receipt/});
+    mock.session.status = 'rechecking';
+    view.rerender(route(true));
+    expect(screen.getByRole('row', {name: /Verified receipt/})).toBe(row);
+    expect(screen.queryByText('Access unavailable')).toBeNull();
+    expect(mock.request).toHaveBeenCalledTimes(1);
+    mock.session.status = 'authenticated';
+    view.rerender(route(false));
+    expect(await screen.findByRole('row', {name: /Refreshed receipt/})).toBe(row);
+    expect(mock.request.mock.calls).toEqual(Array(2).fill(['sms/receipts?limit=25&offset=0&status=received']));
+  });
+
   it('requires the existing read permission before requesting or showing filters', () => {
     mock.session.user.permissions = [];
     render(<MemoryRouter initialEntries={['/admin/sms-receipts?source=member']}><SmsReceiptsPage /></MemoryRouter>);

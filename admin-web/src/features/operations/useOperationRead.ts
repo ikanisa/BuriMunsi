@@ -1,5 +1,6 @@
-import {useCallback, useEffect, useRef, useState} from 'react';
+import {useCallback, useContext, useEffect, useRef, useState} from 'react';
 import {AdminRequestError} from '../../api/client';
+import {InteractionSuspendedContext} from '../../ui/useFocusScope';
 
 export type OperationReadState<T> =
   | {key: string; status: 'success'; value: T; receivedAt: number}
@@ -12,12 +13,14 @@ export function useOperationRead<T>(
   load: () => Promise<T>,
   {pollMs, invalidResponse = 'The workspace response could not be verified.'}: {pollMs?: number; invalidResponse?: string} = {},
 ) {
+  const suspended = useContext(InteractionSuspendedContext);
   const [result, setResult] = useState<OperationReadState<T> | null>(null);
   const [attempt, setAttempt] = useState(0);
   const flight = useRef<{key: string; promise: Promise<T>} | null>(null);
   const attemptKey = `${key}:${attempt}`;
 
   useEffect(() => {
+    if (suspended) {flight.current = null; return;}
     if (!enabled) return;
     let read = flight.current;
     if (!read || read.key !== attemptKey) {
@@ -39,14 +42,14 @@ export function useOperationRead<T>(
       if (flight.current === current) flight.current = null;
     });
     return () => {active = false;};
-  }, [attemptKey, enabled, invalidResponse, load]);
+  }, [attemptKey, enabled, invalidResponse, load, suspended]);
 
   const retry = useCallback(() => {
     if (!pollMs || !flight.current) setAttempt(value => value + 1);
   }, [pollMs]);
 
   useEffect(() => {
-    if (!enabled || !pollMs) return;
+    if (!enabled || suspended || !pollMs) return;
     const refreshVisible = () => {
       if (document.visibilityState === 'visible' && navigator.onLine) retry();
     };
@@ -60,7 +63,7 @@ export function useOperationRead<T>(
       window.removeEventListener('focus', refreshVisible);
       window.removeEventListener('online', refreshVisible);
     };
-  }, [enabled, pollMs, retry]);
+  }, [enabled, pollMs, retry, suspended]);
 
   return {result: enabled && result?.key === attemptKey ? result : null, retry};
 }

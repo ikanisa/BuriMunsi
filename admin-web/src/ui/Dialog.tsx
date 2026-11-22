@@ -16,9 +16,9 @@ export interface DialogProps {
 export function Dialog({ open, title, onClose, children, footer, placement = 'center' }: DialogProps) {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
-  useFocusScope(open, panelRef, onClose);
+  const active = useFocusScope(open, panelRef, onClose);
 
-  if (!open) return null;
+  if (!active) return null;
   return createPortal(<div className={`admin-dialog-backdrop admin-dialog-backdrop--${placement}`} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div ref={panelRef} className={`admin-dialog admin-dialog--${placement}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
       <div className="admin-dialog-header"><h2 id={titleId}>{title}</h2><button type="button" className="admin-icon-button" aria-label="Close dialog" onClick={onClose}><Icon name="close" /></button></div>

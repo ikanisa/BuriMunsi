@@ -1,6 +1,7 @@
 /* eslint-disable no-control-regex -- Reject control characters in operator search input. */
 import {useCallback, useLayoutEffect, useRef, useState, type FormEvent} from 'react';
 import {useSession} from '../../session/SessionProvider';
+import {canDisplaySessionRecords} from '../../session/sessionContext';
 import {AdminRequestError} from '../../api/client';
 import {Button, Card, EmptyState, StatusBadge} from '../../ui';
 import {isValidId} from './contracts';
@@ -51,7 +52,7 @@ export function MomoTransactionList({allowActions, allowRecovery}: {allowActions
     retryOwner.current = {read: load};
     return () => {retryOwner.current?.controller?.abort(); retryOwner.current = null;};
   }, [load]);
-  const {result, retry} = useOperationRead(`${session.epoch}:transactions:${JSON.stringify(filters)}:${offset}`, session.status === 'authenticated' && permissions.includes('payments.read'), load, momoReadOptions);
+  const {result, retry} = useOperationRead(`${session.epoch}:transactions:${JSON.stringify(filters)}:${offset}`, canDisplaySessionRecords(session) && permissions.includes('payments.read'), load, momoReadOptions);
   const apply = (event: FormEvent) => {
     event.preventDefault();
     const start = from ? kigaliDate(from, false) : '', end = to ? kigaliDate(to, true) : '';

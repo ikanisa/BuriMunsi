@@ -4,12 +4,17 @@ import type {SensitiveEmailRecovery} from './sensitiveEmailVerification';
 import type {AdminUser, OtpReceipt} from './sessionResponses';
 
 export interface SessionSnapshot {
-  status: 'loading' | 'anonymous' | 'authenticated' | 'error';
+  status: 'loading' | 'anonymous' | 'authenticated' | 'rechecking' | 'error';
   user: AdminUser | null;
   error?: string;
   logoutUnconfirmed: boolean;
   mfaRecoveryPending: boolean;
   epoch: number;
+}
+
+/** Previously verified records can stay visible in the suspended workspace. */
+export function canDisplaySessionRecords(session: Pick<SessionSnapshot, 'status' | 'user'>): boolean {
+  return !!session.user && (session.status === 'authenticated' || session.status === 'rechecking');
 }
 
 export type PasswordChangeOutcome = 'session-retained' | 'signed-out';

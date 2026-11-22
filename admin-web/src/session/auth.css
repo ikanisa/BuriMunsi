@@ -9,6 +9,11 @@
 .admin-auth-subtitle, .admin-auth-task > p { margin: 10px 0 24px; color: var(--admin-muted); }
 .admin-auth-form { display: grid; gap: 14px; }
 .admin-auth-feedback { margin: 0; padding: 12px 14px; border-radius: 10px; background: var(--admin-accent-surface); color: var(--admin-ink); overflow-wrap: anywhere; }
+.admin-session-recheck {
+  position: fixed; z-index: 130; inset-block-start: 12px; inset-inline: 12px;
+  display: flex; align-items: center; gap: 12px; width: fit-content; max-width: calc(100% - 24px);
+  margin-inline: auto; padding: 8px 12px;
+}
 .admin-auth-help { margin: 4px 0 0; color: var(--admin-muted); }
 .admin-auth-task { width: min(100%, 520px); padding: 8px 0; }
 .admin-challenge-dialog { width: min(420px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 16px; border: 1px solid var(--admin-line); border-radius: 20px; background: var(--admin-surface); color: var(--admin-ink); }
