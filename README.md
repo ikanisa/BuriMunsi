@@ -1,6 +1,6 @@
 # BuriMunsi
 
-BuriMunsi runs group savings for its configured group. The Android Staff app handles member and payment workflows. The Android Admin Sync variant operates on the authorized receiving handset. The web Admin handles operator access, member and financial oversight, and reconciliation.
+BuriMunsi runs group savings for its configured group. The Android Staff app handles member and payment workflows. Admin Sync processes eligible M-Money receipts on each Android phone signed in by an authorized Admin. The web Admin handles operator access, member and financial oversight, and reconciliation.
 
 For BuriMunsi support or an account deletion request, [contact support on WhatsApp at +250 788 767 816](https://wa.me/250788767816).
 
@@ -41,14 +41,16 @@ passcode. New accounts start with the configured `BURIMUNSI_DEFAULT_STAFF_PIN`
 secret. Changing that passcode is optional. For support, contact BuriMunsi
 on [WhatsApp at +250 788 767 816](https://wa.me/250788767816).
 
-The Admin account has M-Money SMS access. Staff SMS access is off. The receiving
-app uses one active receiving SIM at a time on the current handset. The Admin
-can use the existing receiver handoff when changing phones. App access comes
-from the account on any supported handset.
+An Admin signs in to Admin Sync on any supported Android phone and grants the
+Android permissions for that phone. Each participating phone reconciles its
+own eligible SMS, including older gaps, and uploads missing receipts
+automatically. When several phones observe the same provider transaction,
+BuriMunsi records its credit and eligible payer notification once. Staff
+accounts have no access to SMS.
 
 The release record binds the Android artifacts, Admin build and live Edge
-source. Record carrier receipt reconciliation when an authorized transaction
-is completed through the active receiver. [Android authority transition](native/burimunsi/configuration/authority-transition.md) · [Scheduler operation](supabase/jobs/README.md)
+source. Carrier delivery is confirmed when the outbound gateway records the
+delivery acknowledgement for the original payer notification. [Android authority transition](native/burimunsi/configuration/authority-transition.md) · [Scheduler operation](supabase/jobs/README.md)
 
 The managed runtime revision requires the exact deployment source, the current
 fence epoch and function inventory, and verified preimages for
