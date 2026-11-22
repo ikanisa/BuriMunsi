@@ -10,7 +10,7 @@ data class ObservationEntry(val owner:ObservationOwner,val sourceKey:String,val 
     override fun toString()="ObservationEntry(redacted)"
 }
 data class ObservationSeen(val owner:ObservationOwner,val sourceKey:String,val inboxRowId:Long,val requestId:String,val bodySha256:String,
-    val inboxReceivedAt:String?=null) {
+    val inboxReceivedAt:String?=null, val capturedAt:String?=null) {
     override fun toString()="ObservationSeen(redacted)"
 }
 data class ObservationJournalState(val pending:List<ObservationEntry>,val seen:List<ObservationSeen>) {
