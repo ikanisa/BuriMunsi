@@ -4,7 +4,7 @@ import {AdminRequestError, isAdminPublishableKey, isVerificationUuid, type Admin
 const KEY = /^[A-Za-z0-9._:-]{8,200}$/;
 const CAPTCHA_PATHS = new Set(['auth/otp', 'auth/login', 'auth/forgot-password', 'auth/email/request']);
 const SESSION_AUTH_PATHS = new Set(['auth/session', 'auth/email-verification', 'auth/otp', 'auth/verify', 'auth/login', 'auth/logout', 'auth/forgot-password', 'auth/complete-password', 'auth/google/start', 'auth/google/exchange', 'auth/mfa/recover']);
-const PHONE_SESSION_PATHS = new Set(['auth/session', 'auth/phone-passcode', 'auth/passcode/verify', 'auth/logout']);
+const PHONE_SESSION_PATHS = new Set(['auth/session', 'auth/phone-passcode', 'auth/passcode/verify', 'auth/passcode/change', 'auth/logout']);
 
 function validMfaRecovery(body: JsonObject | undefined): boolean {
   return !!body && typeof body === 'object' && !Array.isArray(body) &&
@@ -54,7 +54,7 @@ export function admitRequest(config: AdminClientConfig, path: string, options: A
   if (options.idempotencyKey !== undefined && !KEY.test(options.idempotencyKey)) throw new TypeError('Invalid request reference.');
   if (options.reviewReason !== undefined && (options.reviewReason.trim().length < 8 || options.reviewReason.length > 1000 || /[\r\n]/.test(options.reviewReason))) throw new TypeError('Invalid review reason.');
   return {target, method, mutation, authenticated, mfaRecovery, phonePasscodeOnly: config.phonePasscodeOnly,
-    checksCredentials: path === 'auth/verify' || path === 'auth/login' || path === 'auth/phone-passcode' || path === 'auth/passcode/verify'};
+    checksCredentials: path === 'auth/verify' || path === 'auth/login' || path === 'auth/phone-passcode' || path === 'auth/passcode/verify' || path === 'auth/passcode/change'};
 }
 
 type AdmittedRequest = ReturnType<typeof admitRequest>;

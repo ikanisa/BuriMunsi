@@ -7,6 +7,7 @@ import {logicalRequest} from '../edge-http-transport.js';
 import {adminSessionOriginMatches, validateAdminOrigin} from '../admin-security.js';
 import {handleAuth} from '../domain/auth.js';
 import {momoGatewayRoute} from '../domain/momo_gateway.js';
+import domain from '../domain/index.js';
 
 const project = MANAGED_SUPABASE_ORIGIN;
 const group = 'fixture-group';
@@ -72,7 +73,10 @@ Deno.test('standalone preserves native and dedicated Admin admission without bro
     ['collect-api', '/privacy/account-deletion', 'GET', 'https://other.example', 403],
     ['collect-api', '/v1/momo/gateway/profile', 'GET', BURIMUNSI_ADMIN_ORIGIN, 403],
     ['admin-api', '/api/admin/auth/phone-passcode', 'POST', BURIMUNSI_ADMIN_ORIGIN, 204],
-    ['admin-api', '/api/admin/auth/passcode/verify', 'POST', BURIMUNSI_ADMIN_ORIGIN, 204],
+    ['admin-api', '/api/admin/auth/passcode/change', 'POST', BURIMUNSI_ADMIN_ORIGIN, 204],
+    ['admin-api', '/api/admin/team', 'GET', BURIMUNSI_ADMIN_ORIGIN, 204],
+    ['admin-api', '/api/admin/team/accounts', 'POST', BURIMUNSI_ADMIN_ORIGIN, 204],
+    ['admin-api', '/api/admin/team/accounts/7dfc16fb-b3b8-4c2d-b6f8-bcbfd8025001/access', 'POST', BURIMUNSI_ADMIN_ORIGIN, 204],
     ['admin-api', '/api/admin/auth/session', 'GET', BURIMUNSI_ADMIN_ORIGIN, 204],
     ['admin-api', '/api/admin/auth/logout', 'POST', BURIMUNSI_ADMIN_ORIGIN, 204],
     ['admin-api', '/api/admin/auth/session', 'GET', project, 204],
@@ -111,7 +115,7 @@ Deno.test('standalone preserves native and dedicated Admin admission without bro
 Deno.test('standalone rejects old Admin and direct member authentication before work or preflight admission', async () => {
   const routes = {
     'admin-api': [
-      ['POST', '/api/admin/auth/otp'], ['POST', '/api/admin/auth/verify'], ['POST', '/api/admin/auth/login'],
+      ['POST', '/api/admin/auth/otp'], ['POST', '/api/admin/auth/verify'], ['POST', '/api/admin/auth/passcode/verify'], ['POST', '/api/admin/auth/login'],
       ['POST', '/api/admin/auth/forgot-password'], ['POST', '/api/admin/auth/complete-password'],
       ['POST', '/api/admin/auth/change-password'], ['GET', '/api/admin/auth/email-verification'],
       ['POST', '/api/admin/auth/email/request'], ['POST', '/api/admin/auth/email/verify'],
@@ -159,14 +163,40 @@ Deno.test('standalone direct deletion information remains available without acco
   const document = await response.text();
   const style = '/functions/v1/collect-api' + path + '/assets/style.css';
   assertEquals(document.includes(`href="${style}"`), true);
-  assertEquals(document.includes('Contact support about account deletion'), true);
-  assertEquals(/<form\b|<script\b|@collect\.ikanisa\.com/i.test(document), false);
+  assertEquals(document.includes('href="https://wa.me/250788767816" rel="noreferrer">Contact support on WhatsApp at +250 788 767 816</a>'), true);
+  assertEquals(/mailto:|<form\b|<script\b|@collect\.ikanisa\.com/i.test(document), false);
   const head = await handler(request('collect-api', path, 'HEAD'));
   assertEquals(head.status, 200);
   assertEquals(await head.text(), '');
   const stylesheet = await handler(request('collect-api', path + '/assets/style.css', 'GET'));
   assertEquals(stylesheet.status, 200);
   assertEquals(stylesheet.headers.get('Content-Type'), 'text/css; charset=utf-8');
+});
+
+Deno.test('installed BuriMunsi clients receive the published WhatsApp number from the public configuration', async () => {
+  const operation = 'get_public_runtime_config';
+  const channel = {key: 'support.whatsapp', channel_type: 'whatsapp', is_active: true, value: '+250788767816'};
+  const previous = {version: 3, support_channels: [{key: 'support.email', value: 'old@example.test'}]};
+  async function configuration(stored: unknown, standalone: boolean) {
+    const DB = {prepare: (sql: string) => {
+      assertEquals(sql, 'SELECT value_json FROM runtime_config WHERE key=?');
+      return {bind: (key: string) => {
+        assertEquals(key, operation);
+        return {first: () => stored === undefined ? null : {value_json: JSON.stringify(stored)}};
+      }};
+    }};
+    return await domain.fetch(new Request('https://example.test/v1/rpc/' + operation, {
+      method: 'POST', body: '{}', headers: {'Content-Type': 'application/json'},
+    }), {DB, BURIMUNSI_PRODUCT_MODE: standalone ? 'standalone' : undefined}, {});
+  }
+  for (const [stored, expected] of [[previous, {version: 3, support_channels: [channel]}], [undefined, {support_channels: [channel]}]]) {
+    const response = await configuration(stored, true);
+    assertEquals(response.status, 200);
+    assertEquals(await response.json(), expected);
+  }
+  const shared = await configuration(previous, false);
+  assertEquals(await shared.json(), previous);
+  assertEquals((await configuration([], true)).status, 503);
 });
 
 Deno.test('standalone compares the only database collection with the configured scope under the runtime role', async () => {

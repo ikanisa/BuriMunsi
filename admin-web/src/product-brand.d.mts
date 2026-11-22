@@ -7,6 +7,7 @@ interface AdminBrand {
   iconSha256: string;
   iconSize: string;
   iconPurpose: string;
+  support: {phone: string; number: string; url: string};
 }
 
 export const burimunsiAdminBrand: AdminBrand;

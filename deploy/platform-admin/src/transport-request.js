@@ -74,7 +74,11 @@ export function admitRequest(request, rawTarget, frontendOrigin, {browserAdminCo
   if (route.path + route.query !== canonical) refuse(400, 'proxy_path_invalid');
   if (!METHODS.has(request.method)) refuse(405, 'proxy_method_invalid');
   const method = request.method === 'OPTIONS' ? request.headers.get('Access-Control-Request-Method') : request.method;
-  if (burimunsi && (!adminRoute || !standaloneAdminRoute(method, route.logicalPath))) refuse(404, 'proxy_route_not_allowed');
+  // The preceding standalone Edge contract still verifies a recent passcode here.
+  const legacyPasscode = method === 'POST' && route.logicalPath === '/api/admin/auth/passcode/verify' && !route.query;
+  if (burimunsi && (!adminRoute || (!standaloneAdminRoute(method, route.logicalPath) && !legacyPasscode))) {
+    refuse(404, 'proxy_route_not_allowed');
+  }
   for (const name of SPOOFED_AUTHORITY) if (request.headers.has(name)) refuse(400, 'proxy_authority_invalid');
 
   const callback = route.functionName === 'collect-api' && route.logicalPath === GOOGLE_CALLBACK && request.method === 'GET';

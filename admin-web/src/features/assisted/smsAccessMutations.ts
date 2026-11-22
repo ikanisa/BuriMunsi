@@ -1,10 +1,12 @@
 import type {AdminRequest, JsonObject} from '../../api/client';
+import type {AdminUser} from '../../session/sessionResponses';
 import {clearPending, listPending, readPending, retainPending, type PendingAttempt, type PendingIdentity} from '../core/pendingAttempt';
 import type {SmsAccessReceipt, SmsAccessState, SmsDecisionDetail} from './smsControlContracts';
-import {MANAGEMENT_FAMILY as FAMILY, MANAGEMENT_PERMISSION as PERMISSION, MANAGEMENT_UUID as UUID, managementIdentity, managementStorage, parseManagementPending, withManagementLock} from './smsControlRecovery';
+import {MANAGEMENT_FAMILY as FAMILY, MANAGEMENT_PERMISSION as PERMISSION, MANAGEMENT_UUID as UUID, hasSmsManagementAuthority, managementIdentity, managementStorage, parseManagementPending, withManagementLock} from './smsControlRecovery';
 
 const originals = new WeakSet<object>(), checked = new WeakSet<object>();
 export interface SmsAccessContext {
+  scopedActor?: AdminUser;
   allowAccessChanges: boolean;
   authorityEpoch: number;
   identity: PendingIdentity & {principalId: string};
@@ -24,12 +26,12 @@ export class SmsAccessOutcomeUnknown extends Error {
 
 function authority(context: SmsAccessContext, mutation = false) {
   const actor = context.identity;
-  if ((mutation && context.allowAccessChanges !== true) || actor.role !== 'owner' || actor.email !== 'info@ikanisa.com' || !actor.permissions.includes(PERMISSION) || !UUID.test(actor.id) || !UUID.test(actor.sessionId) || !UUID.test(actor.principalId) || !context.isCurrent()) throw new Error('Reopen SMS controls with the current verified owner sign-in.');
+  if ((mutation && context.allowAccessChanges !== true) || !hasSmsManagementAuthority(actor, context.scopedActor) || !actor.permissions.includes(PERMISSION) || !UUID.test(actor.id) || !UUID.test(actor.sessionId) || !UUID.test(actor.principalId) || !context.isCurrent()) throw new Error(context.scopedActor ? 'Reopen SMS controls with your current Admin session.' : 'Reopen SMS controls with the current verified owner sign-in.');
 }
 function guarded<T>(context: SmsAccessContext, mutation: boolean, work: () => Promise<T>): Promise<T> {authority(context, mutation); return withManagementLock(context, work);}
 async function verify(context: SmsAccessContext, mutation = false) {
   authority(context, mutation);
-  if (!(await context.verifyFresh())) throw new Error('Verify your current owner sign-in before continuing.');
+  if (!(await context.verifyFresh())) throw new Error(context.scopedActor ? 'Your Admin session changed. Sign in again.' : 'Verify your current owner sign-in before continuing.');
   authority(context, mutation);
 }
 async function exact(context: SmsAccessContext, saved: PendingAttempt) {
@@ -74,12 +76,12 @@ async function dispatch(context: SmsAccessContext, saved: PendingAttempt, origin
 export function changeSmsAccess(context: SmsAccessContext, expected: SmsAccessState, enabled: boolean, ownerConfirmed: boolean): Promise<SmsAccessResult> {
   return guarded(context, true, async () => {
     await verify(context, true);
-    if (expected.adminId !== context.identity.id.toLowerCase() || expected.principalId !== context.identity.principalId.toLowerCase() || !Number.isSafeInteger(expected.revision) || expected.revision < 0 || expected.revision >= Number.MAX_SAFE_INTEGER || !ownerConfirmed || (enabled ? expected.canOperate : !expected.readGranted && !expected.manageGranted)) throw new Error('Refresh and confirm the current owner access first.');
+    if (expected.adminId !== context.identity.id.toLowerCase() || expected.principalId !== context.identity.principalId.toLowerCase() || !Number.isSafeInteger(expected.revision) || expected.revision < 0 || expected.revision >= Number.MAX_SAFE_INTEGER || !ownerConfirmed || (enabled ? expected.canOperate : !expected.readGranted && !expected.manageGranted)) throw new Error('Refresh and confirm the current account access first.');
     const pending = (await listPending(managementIdentity(context), FAMILY, PERMISSION, managementStorage(context))).map(parseManagementPending);
     authority(context, true);
     if (pending.length) throw new Error('Check the original SMS controls request before making another change.');
     const latest = await currentAccess(context);
-    if (latest.revision !== expected.revision || latest.readGranted !== expected.readGranted || latest.manageGranted !== expected.manageGranted || latest.canOperate !== expected.canOperate) throw new Error('Owner access changed. Refresh before continuing.');
+    if (latest.revision !== expected.revision || latest.readGranted !== expected.readGranted || latest.manageGranted !== expected.manageGranted || latest.canOperate !== expected.canOperate) throw new Error('Account access changed. Refresh before continuing.');
     if (typeof globalThis.crypto?.randomUUID !== 'function') throw new Error('A secure request reference is unavailable.');
     const requestId = globalThis.crypto.randomUUID();
     const original: SmsAccessOriginal = Object.freeze({requestId, actorId: context.identity.id, sessionId: context.identity.sessionId, principalId: context.identity.principalId, authorityEpoch: context.authorityEpoch, expectedRevision: expected.revision, expectedRead: expected.readGranted, expectedManage: expected.manageGranted, enabled});
@@ -104,7 +106,7 @@ export function checkSmsAccessOriginal(context: SmsAccessContext, saved: Pending
     authority(context);
     const status = await context.parseStatus(response, pending.request_key);
     authority(context);
-    if (!status.currentAccess) throw new Error('The current owner access could not be verified.');
+    if (!status.currentAccess) throw new Error('The current account access could not be verified.');
     if (status.observed) {
       const decision = status.decision, expected = pending.intent.expected_decision_revision;
       if (!decision || (typeof expected === 'number' && decision.revision !== expected + 1) || (original && (decision.enabled !== original.enabled || decision.revision !== original.expectedRevision + 1))) throw new Error('The recorded result does not match the original access request.');

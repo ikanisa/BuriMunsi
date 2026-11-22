@@ -95,6 +95,8 @@ test('the BuriMunsi browser proxy closes legacy auth, native and invitation rout
     ['POST', '/api/admin/team/7dfc16fb-b3b8-4c2d-b6f8-bcbfd8025001/resend'],
     ['GET', '/api/admin/team/v2'], ['POST', '/api/admin/team/v2/invite'],
     ['POST', '/api/admin/auth/session'], ['GET', '/api/admin/auth/phone-passcode'],
+    ['GET', '/api/admin/auth/passcode/verify'], ['POST', '/api/admin/auth/passcode/verify?extra=1'],
+    ['POST', '/api/admin/team'], ['HEAD', '/api/admin/team'], ['GET', '/api/admin/team/accounts'],
   ];
   for (const [method, path] of paths) {
     const headers = {Origin: BURIMUNSI_ADMIN_ORIGIN};
@@ -108,7 +110,8 @@ test('the BuriMunsi browser proxy closes legacy auth, native and invitation rout
 
 test('the phone sign-in and passcode verification forms use the dedicated Admin transport', async () => {
   const routes = [['POST', 'auth/phone-passcode'], ['POST', 'auth/passcode/verify'], ['GET', 'auth/session'],
-    ['POST', 'auth/logout'], ['GET', 'team']];
+    ['POST', 'auth/logout'], ['GET', 'team'], ['POST', 'auth/passcode/change'], ['POST', 'team/accounts'],
+    ['POST', 'team/accounts/7dfc16fb-b3b8-4c2d-b6f8-bcbfd8025001/access']];
   const forwarded = [];
   const worker = createAdminWorker({fetchImpl: async upstream => {
     assert.equal(upstream.headers.get('Origin'), BURIMUNSI_ADMIN_ORIGIN);
@@ -153,8 +156,8 @@ test('public BuriMunsi deletion support serves only its static document and styl
   assert.equal(response.headers.get('X-Collect-Document'), 'burimunsi.privacy.support.v1');
   assert.match(response.headers.get('Content-Security-Policy'), /default-src 'none'.*form-action 'none'/);
   const document = await response.text();
-  assert.match(document, /Contact support about account deletion/);
-  assert.doesNotMatch(document, /<script\b|<form\b/);
+  assert.ok(document.includes('href="https://wa.me/250788767816" rel="noreferrer">Contact support on WhatsApp at +250 788 767 816</a>'));
+  assert.doesNotMatch(document, /mailto:|<script\b|<form\b/i);
   const alias = await worker.fetch(request('/functions/v1/collect-api' + path), env);
   assert.equal(await alias.text(), document);
   const style = await worker.fetch(request(path + '/assets/style.css'), env);

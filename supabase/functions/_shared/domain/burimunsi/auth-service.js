@@ -7,12 +7,12 @@ import {cancelledStaffOperation,originalStaffOperation,requireOriginDigest} from
 /** No DB emulator is shipped in runtime. Adapter must use atomic distributed limits,
  * session-version checks and CAS updates in the existing Collect deployment. */
 export class NativeAuthService {
-  constructor({store,hasher,groupId,clock=()=>Date.now(),sessionTtlMs=30*60*1000,preserveStaffPinOnPhoneChange=false,defaultStaffPin}) {
+  constructor({store,hasher,groupId,clock=()=>Date.now(),sessionTtlMs=30*60*1000,preserveStaffPinOnPhoneChange=false,defaultStaffPin,defaultOnlyOnCreate=false}) {
     requirePort(store,['consumeAttempts','findAccount','findDeviceGrant','createSessionIfCurrent','loadSession','changePinIfCurrent','mutateStaff','findStaff','retainedStaffCommand','revokeSession']);
     requireThat(hasher && typeof hasher.hash==='function' && typeof hasher.verify==='function' && typeof hasher.commandFingerprint==='function' && groupId,'authentication_unconfigured',503);
     requireThat(sessionTtlMs>=60000 && sessionTtlMs<=8*60*60*1000,'invalid_session_policy',503);
     requireThat(typeof preserveStaffPinOnPhoneChange==='boolean','authentication_unconfigured',503);
-    Object.assign(this,{store,hasher,groupId,clock,sessionTtlMs,preserveStaffPinOnPhoneChange});this.dummy=null;
+    Object.assign(this,{store,hasher,groupId,clock,sessionTtlMs,preserveStaffPinOnPhoneChange,defaultOnlyOnCreate});this.dummy=null;
     this.defaultStaffPin=typeof defaultStaffPin==='string'&&defaultStaffPin.length===4&&
       /^[0-9]{4}$/.test(defaultStaffPin)?defaultStaffPin:undefined;
   }
@@ -103,6 +103,7 @@ export class NativeAuthService {
         Number.isSafeInteger(result.version)&&result.version>0,'invalid_recovery_proof',503);
       return {applied:true,id:result.id,version:result.version};
     }
+    if(action==='create'&&this.defaultOnlyOnCreate)requireThat(useDefault,'invalid_staff_command',400);
     if(useDefault)requireThat(this.defaultStaffPin!==undefined,'staff_passcode_required',400);
     const value={action,groupId:this.groupId,actorId:actor.id,actorSessionId:actor.sessionId,requestId,fingerprint};
     if(staffCreateInput)value.staffCreateInput=staffCreateInput;

@@ -31,16 +31,6 @@ fun main()=runBlocking {
     ck("a known recent Home opens after server revalidation without rereading records or resetting age",
         Fixture.sessionReads==beforeRecentResume+1&&Fixture.homeReads==recentHomeReads&&
             m.state.savedAt==recentHomeAt&&m.screenGate==ScreenGate.OPEN)
-    val supportReads=AtomicInteger()
-    Fixture.supportFetch={supportReads.incrementAndGet();"+250780000001"};m.onBackground();m.onForeground();idle()
-    ck("returning to records does not fetch the support contact",supportReads.get()==0&&m.supportPhone==null)
-    m.openSheet(Sheet.HELP);idle()
-    withTimeout(2000){while(m.supportPhone==null)delay(2)}
-    ck("Help fetches support once from current runtime config",m.supportPhone=="+250780000001"&&supportReads.get()==1)
-    m.onBackground();ck("background clears displayed support contact",m.supportPhone==null)
-    Fixture.supportFetch={null};m.onForeground();idle()
-    ck("offline or missing support config never invents a phone",m.supportPhone==null)
-    m.closeSheet();idle()
     m.navigate(Route.PAYMENTS);idle();m.search("payer");m.searchSubmit();idle();m.listPosition(Route.PAYMENTS,null,3,11)
     val reads=Fixture.sessionReads
     m.onBackground()

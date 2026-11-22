@@ -1,5 +1,6 @@
 import {useEffect, useRef, useState} from 'react';
 import {Icon} from '../ui/Icon';
+import {SupportLink} from '../ui/SupportLink';
 import {hasActiveFocusScope} from '../ui/useFocusScope';
 
 export interface AdminShellIdentity {
@@ -39,6 +40,7 @@ export function AdminAccountMenu({identity, onSignOut}: {identity: AdminShellIde
     {open && <div className="admin-profile-menu">
       <strong>{identity.name}</strong>
       {identity.role && <span>{identity.role}</span>}
+      <SupportLink />
       {onSignOut && <button type="button" onClick={() => {setOpen(false); onSignOut();}}>
         <Icon name="logout" />Sign out
       </button>}

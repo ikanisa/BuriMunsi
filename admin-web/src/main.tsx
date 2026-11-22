@@ -3,6 +3,7 @@ import {AdminApp} from './app/App';
 import {readAdminConfig} from './config';
 import {hasPredecessorCustody} from './custodyRealm';
 import {registerAdminWorker} from './pwa-registration';
+import {SupportLink} from './ui/SupportLink';
 import {captureSetupLocation, SessionProvider} from './session/SessionProvider';
 import './styles/admin.css';
 
@@ -29,5 +30,5 @@ try {
   if (import.meta.env.PROD) void registerAdminWorker();
 } catch {
   renderer.render(<main className="admin-state" role="alert"><h1>Workspace unavailable</h1>
-    <p>The workspace could not be opened. Contact your administrator.</p></main>);
+    <p>The workspace could not be opened.</p><SupportLink /></main>);
 }

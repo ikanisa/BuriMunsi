@@ -28,13 +28,13 @@ test('Cloud Admin binds the verified profile and preserves same-origin cookie au
 test('Cloud mutation keeps same-origin CSRF and request bytes',async()=>{
   let calls=0;
   const worker=createAdminWorker({fetchImpl:async upstream=>{
-    calls++;assert.equal(upstream.url,profile.supabase_origin+'/functions/v1/admin-api/api/admin/team');
+    calls++;assert.equal(upstream.url,profile.supabase_origin+'/functions/v1/admin-api/api/admin/team/accounts');
     assert.equal(upstream.headers.get('origin'),profile.admin_origin);
     assert.equal(upstream.headers.get('x-collect-csrf'),'same-session-csrf');
     assert.deepEqual(await upstream.json(),{request_id:'original'});
     return Response.json({ok:true});
   }});
-  const response=await worker.fetch(request('/api/admin/team',{method:'POST',headers:{Origin:profile.admin_origin,'X-Collect-CSRF':'same-session-csrf','Content-Type':'application/json'},body:JSON.stringify({request_id:'original'})}),env);
+  const response=await worker.fetch(request('/api/admin/team/accounts',{method:'POST',headers:{Origin:profile.admin_origin,'X-Collect-CSRF':'same-session-csrf','Content-Type':'application/json'},body:JSON.stringify({request_id:'original'})}),env);
   assert.equal(response.status,200);assert.equal(calls,1);
 });
 

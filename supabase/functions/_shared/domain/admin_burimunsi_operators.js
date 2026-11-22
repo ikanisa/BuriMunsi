@@ -1,7 +1,7 @@
 import {ApiError,json,readJson,uuid} from './core.js';
 import {adminAccountSession} from './admin_accounts.js';
 import {adminEmailArguments,adminPasscodeProof} from './admin_email_policy.js';
-import {requireBuriMunsiOwner} from './admin_burimunsi_authority.js';
+import {requireBuriMunsiAdmin,rethrowWorkflowSessionFailure} from './admin_burimunsi_authority.js';
 import {PostgresNativeAuthority} from './burimunsi/postgres-authority.js';
 import {validOperatorCapabilities} from './burimunsi/operator-access.mjs';
 import {normalizePhone} from './burimunsi/values.js';
@@ -24,16 +24,15 @@ function checkedReceipt(value,requestId,expectedPrincipal=null){
  if(expectedPrincipal!==null&&value.principalId!==expectedPrincipal)throw Error('BuriMunsi approval principal changed');
  return value;
 }
-function knownFailure(error){
+function knownFailure(error,env){
  const code=error?.message;
- if(['recent_email_sign_in_required','recent_email_verification_required'].includes(code))
-  fail(403,'recent_email_sign_in_required','Verify your current Admin email before continuing.');
+ rethrowWorkflowSessionFailure(error,env);
  if(['admin_invitation_authority','burimunsi_shared_operator_unavailable'].includes(code))
   fail(403,'burimunsi_operator_unavailable','Refresh the approved Collect account before continuing.');
  if(['burimunsi_approval_changed','burimunsi_approval_request_conflict'].includes(code))
   fail(409,'burimunsi_approval_changed','This approval or its original request changed. Refresh before continuing.');
  if(code==='burimunsi_invalid_approval')fail(400,'invalid_approval','Check the selected account and BuriMunsi access.');
- if(error?.code==='23505')fail(409,'burimunsi_duplicate_phone','This BuriMunsi login phone already has an owner.');
+ if(error?.code==='23505')fail(409,'burimunsi_duplicate_phone','This phone number is already assigned to an account.');
 }
 
 /** Owner approvals inside the EXISTING Collect Admin/BFF. No invitation, email,
@@ -52,8 +51,8 @@ export async function adminBuriMunsiOperators(request,env){
  }
  if(request.method!=='GET'&&!(request.method==='POST'&&path===BASE))fail(405,'method_not_allowed','Use the operator view or approval action.');
  const account=await adminAccountSession(request,env);
- await requireBuriMunsiOwner({request,env,account,permissions:['admin_users.manage'],
-  ownerMessage:'The Collect owner manages BuriMunsi access.',
+ await requireBuriMunsiAdmin({request,env,account,permissions:['admin_users.manage'],
+  adminMessage:'An administrator manages BuriMunsi access.',
   unavailableCode:'burimunsi_unavailable',unavailableMessage:'BuriMunsi is not configured for this deployment.'});
  const body=request.method==='POST'?await readJson(request,4096):null;
  const group=await selectAdminCollection({env,account,requested:body?.collectionId??url.searchParams.get('collectionId')});
@@ -82,7 +81,7 @@ export async function adminBuriMunsiOperators(request,env){
    // command is callable and the prior command is no longer callable.
    return json({contractVersion:1,collectionId:group,configured:value.configured,team:value.team,approvals:value.approvals,
     ...(negotiatesApproval&&row.guarded_approval===true?{approvalContract:2}:{})},200,{'Pragma':'no-cache'});
-  }catch(error){knownFailure(error);fail(503,'burimunsi_unavailable','The current BuriMunsi access could not be confirmed.');}
+  }catch(error){knownFailure(error,env);fail(503,'burimunsi_unavailable','The current BuriMunsi access could not be confirmed.');}
  }
  const allowed=['requestId','collectionId','adminId','principalId','phone','role','capabilities','active','expectedVersion'];
  if(Object.keys(body).length!==allowed.length||!allowed.every(k=>Object.hasOwn(body,k)))
@@ -103,7 +102,7 @@ export async function adminBuriMunsiOperators(request,env){
    [...actor,group,requestId,adminId,phone,body.role,[...body.capabilities].sort(),body.active,body.expectedVersion,principalId]))[0]?.result);
   return json(checkedReceipt(receipt,requestId,principalId),200,{'Pragma':'no-cache'});
  }catch(error){
-  knownFailure(error);
+  knownFailure(error,env);
   // COMMIT may have succeeded. Retain the exact request ID, check its outcome,
   // and never generate/retry a replacement approval automatically.
   return json({contractVersion:1,requestId,outcome:'operation_unknown',

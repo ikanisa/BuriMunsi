@@ -1,7 +1,7 @@
 import {ApiError,json,readJson,uuid} from './core.js';
 import {adminAccountSession} from './admin_accounts.js';
 import {adminEmailArguments} from './admin_email_policy.js';
-import {BURI_ADMIN_PRIVATE_HEADERS as headers,requireBuriMunsiOwner} from './admin_burimunsi_authority.js';
+import {BURI_ADMIN_PRIVATE_HEADERS as headers,requireBuriMunsiAdmin,rethrowWorkflowSessionFailure} from './admin_burimunsi_authority.js';
 import {AdminNativeProvisioning,provisioningCommand} from './burimunsi/admin-provisioning.js';
 import {selectAdminCollection} from './burimunsi/admin-scope-selection.js';
 
@@ -10,12 +10,11 @@ const fail=(status,code,message)=>{throw new ApiError(status,code,message);};
 const UNAVAILABLE_CODE='burimunsi_provisioning_unavailable';
 const UNAVAILABLE_MESSAGE='BuriMunsi provisioning is not configured for this deployment.';
 const unavailable=()=>fail(503,UNAVAILABLE_CODE,UNAVAILABLE_MESSAGE);
-function knownFailure(error){
+function knownFailure(error,env){
   if(error instanceof ApiError)throw error;
-  if(['recent_email_sign_in_required','recent_email_verification_required'].includes(error?.message))
-    fail(403,'recent_email_sign_in_required','Verify your current owner email before continuing.');
+  rethrowWorkflowSessionFailure(error,env);
   if(['admin_invitation_authority','burimunsi_provisioning_denied','burimunsi_operator_not_approved'].includes(error?.message))
-    fail(403,'burimunsi_provisioning_denied','The current owner or approved Collect account could not be confirmed.');
+    fail(403,'burimunsi_provisioning_denied','The administrator or approved account could not be confirmed.');
   if(['burimunsi_provisioning_changed','burimunsi_provisioning_request_conflict'].includes(error?.message)||error?.code==='23505')
     fail(409,'burimunsi_provisioning_changed','The account, approval or installation changed. Check the original request and refresh.');
   if(error?.message==='burimunsi_delivery_expired')fail(410,'burimunsi_delivery_expired','This delivery expired or was superseded. Rotate the grant with its current version.');
@@ -37,8 +36,8 @@ export async function adminBuriMunsiProvisioning(request,env){
   if(!(path===BASE&&['GET','POST'].includes(request.method)||match&&request.method===(match[2]?'POST':'GET')))
     fail(405,'method_not_allowed','Use the provisioning view or its explicit action.');
   const account=await adminAccountSession(request,env);
-  await requireBuriMunsiOwner({request,env,account,permissions:['admin_users.manage'],
-    ownerMessage:'The current Collect owner provisions native access.',
+  await requireBuriMunsiAdmin({request,env,account,permissions:['admin_users.manage'],
+    adminMessage:'An administrator manages app access.',
     unavailableCode:UNAVAILABLE_CODE,unavailableMessage:UNAVAILABLE_MESSAGE});
   const input=request.method==='POST'?await readJson(request,2048):null;
   const group=await selectAdminCollection({env,account,requested:input?.collectionId??url.searchParams.get('collectionId')});
@@ -57,13 +56,13 @@ export async function adminBuriMunsiProvisioning(request,env){
       }else result=match?.[2]?await service.delivery(requestId,input):
         requestId?await service.lookup(requestId):await service.directory({verifyContract});
       return json(result,200,headers);
-    }catch(error){knownFailure(error);unavailable();}
+    }catch(error){knownFailure(error,env);unavailable();}
   }
   const body=provisioningCommand(input,group);
   if(verifyContract&&body.operation==='grant_installation')fail(400,'invalid_provisioning','This contract supports PIN setup and installation revocation.');
   try{return json(await service.apply(body),200,headers);}
   catch(error){
-    knownFailure(error);
+    knownFailure(error,env);
     // An unknown COMMIT never means "failed" or permission to use a new key.
     return json({contractVersion:1,collectionId:group,requestId:body.requestId,outcome:'operation_unknown',
       error:{code:'burimunsi_provisioning_unknown',message:'Provisioning was not confirmed. Check the original request before continuing.'}},503,headers);

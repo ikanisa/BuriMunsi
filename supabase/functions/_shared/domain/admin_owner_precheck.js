@@ -1,11 +1,16 @@
 import {LEGACY_ADMIN_OWNER_EMAIL} from '../admin-security.js';
+import {BURIMUNSI_PRODUCT_MODE} from '../burimunsi-standalone.js';
 import {ApiError} from './core.js';
 import {fenceFailure} from '../application-fence.js';
+import {activePhoneOperator} from './admin_email_policy.js';
 
-/** Preliminary display/dispatch check only. Every sensitive mutation must still
- * revalidate the cookie-bound actor, protected owner, grants and email proof
- * inside its existing fenced database transaction. */
+/** The database revalidates the active cookie, principal, role and grants in
+ * the same transaction as each protected operation. */
 export async function preliminaryCurrentOwner(env,account){
+ if(env?.BURIMUNSI_PRODUCT_MODE===BURIMUNSI_PRODUCT_MODE){
+  const proof=activePhoneOperator(account);
+  return Boolean(proof?.operatorRole==='admin' && proof.collectionId===env.BURIMUNSI_COLLECTION_ID);
+ }
  if(account?.role!=='owner')return false;
  if(env?.COLLECT_ADMIN_DYNAMIC_OWNER_AUTH_ENABLED!=='true')return account.email===LEGACY_ADMIN_OWNER_EMAIL;
  if(typeof account.id!=='string'||typeof account.principal_id!=='string'||typeof account.email!=='string')return false;

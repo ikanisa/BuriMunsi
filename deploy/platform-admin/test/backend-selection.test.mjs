@@ -31,7 +31,7 @@ test('explicit Supabase selection uses the nominated project once without touchi
   const content = new Uint8Array([0, 9, 123, 195, 169, 255]);
   const entry = createAdminWorker({fetchImpl: async upstream => {
     calls++;
-    assert.equal(upstream.url, SUPABASE_ORIGIN + '/functions/v1/admin-api/api/admin/team?cursor=a%2Bb&cursor=c');
+    assert.equal(upstream.url, SUPABASE_ORIGIN + '/functions/v1/admin-api/api/admin/core/users/synthetic-user?cursor=a%2Bb&cursor=c');
     assert.equal(upstream.method, 'PATCH');
     assert.deepEqual(new Uint8Array(await upstream.arrayBuffer()), content);
     for (const [name, value] of [['Origin', origin], ['Cookie', '__Host-collect_admin=managed_fixture'],
@@ -41,7 +41,7 @@ test('explicit Supabase selection uses the nominated project once without touchi
     }
     return Response.json({ok: true}, {headers: {'Set-Cookie': cookie, 'Cache-Control': 'public'}});
   }});
-  const response = await entry.fetch(req('/api/admin/team?cursor=a%2Bb&cursor=c', {
+  const response = await entry.fetch(req('/api/admin/core/users/synthetic-user?cursor=a%2Bb&cursor=c', {
     method: 'PATCH', body: content, headers: {Origin: origin,
       Cookie: '__Host-collect_admin=old_fixture; __Host-burimunsi_admin_rrlduytparvsjfmegalh=managed_fixture',
       'Idempotency-Key': 'fixture-operation', 'X-Collect-CSRF': 'fixture-csrf',
@@ -53,7 +53,7 @@ test('explicit Supabase selection uses the nominated project once without touchi
 });
 
 test('Supabase entrypoint binds cold Admin reads to its configured frontend with no service fallback', async () => {
-  for (const [path, method] of [['/api/admin/auth/session', 'GET'], ['/api/admin/team', 'HEAD']]) {
+  for (const [path, method] of [['/api/admin/auth/session', 'GET'], ['/api/admin/team', 'GET']]) {
     let calls = 0;
     const entry = createAdminWorker({fetchImpl: async upstream => {
       calls++; assert.equal(upstream.headers.get('Origin'), origin);
@@ -69,7 +69,7 @@ test('Supabase entrypoint binds cold Admin reads to its configured frontend with
 });
 
 test('Supabase entrypoint retains lost Admin refresh uncertainty without service fallback', async () => {
-  for (const [path, method] of [['/api/admin/auth/session', 'GET'], ['/api/admin/team', 'HEAD']]) {
+  for (const [path, method] of [['/api/admin/auth/session', 'GET'], ['/api/admin/team', 'GET']]) {
     let calls = 0;
     const entry = createAdminWorker({fetchImpl: async () => {calls++; throw new Error('synthetic lost custody response');}});
     const response = await entry.fetch(req(path, {method, headers: {Cookie: '__Host-burimunsi_admin_rrlduytparvsjfmegalh=fixture'}}), environment(supabaseEnv));
@@ -171,7 +171,8 @@ test('integrated transport bytes retain the recorded current source identity', a
     ...provenance.burimunsi_admin_successor.source_sha256s,
     ...provenance.standalone_admin_successor.source_sha256s,
     ...provenance.burimunsi_phone_passcode_successor.source_sha256s,
-    ...provenance.burimunsi_admin_performance_successor.source_sha256s};
+    ...provenance.burimunsi_admin_performance_successor.source_sha256s,
+    ...provenance.burimunsi_admin_phone_team_successor.source_sha256s};
   const expected = (await readdir(source))
     .filter(name => /^(?:index|admin-session-realm|supabase-transport|transport-[\w-]+)\.js$/.test(name)).sort();
   assert.deepEqual(Object.keys(files).sort(), expected);

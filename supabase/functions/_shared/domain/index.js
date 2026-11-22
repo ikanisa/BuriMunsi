@@ -1,4 +1,6 @@
 import { isGoogleProviderNavigation } from '../runtime-env.js';
+import { BURIMUNSI_PRODUCT_MODE } from '../burimunsi-standalone.js';
+import { burimunsiSupport } from '../burimunsi-support.js';
 import { ApiError, json, readJson, first, now } from './core.js';
 import { syncEvents } from './sync.js';
 import { handleAuth, requireSession } from './auth.js';
@@ -41,6 +43,14 @@ async function publicRpc(operation, body, env) {
     ? 'policy:' + (body.p_document_key ?? body.p_slug ?? body.p_kind ?? body.slug)
     : operation;
   const row = await first(env, 'SELECT value_json FROM runtime_config WHERE key=?', key);
+  // Installed BuriMunsi builds read this existing public channel before sign-in.
+  if (operation === 'get_public_runtime_config' && env.BURIMUNSI_PRODUCT_MODE === BURIMUNSI_PRODUCT_MODE) {
+    const config = row ? JSON.parse(row.value_json) : {};
+    if (!config || typeof config !== 'object' || Array.isArray(config)) {
+      throw new ApiError(503, 'configuration_unavailable', 'The public configuration is unavailable.');
+    }
+    return {...config, support_channels: [{key: 'support.whatsapp', channel_type: 'whatsapp', is_active: true, value: burimunsiSupport.number}]};
+  }
   if (!row) {
     throw new ApiError(503, 'configuration_unavailable', 'This information is unavailable. Please contact support.');
   }

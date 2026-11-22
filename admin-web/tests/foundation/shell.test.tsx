@@ -19,6 +19,10 @@ describe('Admin shell', () => {
     expect(screen.getByRole('link', { name: 'Groups' })).toHaveAttribute('href', '#/admin/groups');
     expect(screen.getByRole('heading', { name: 'Group detail' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Account: Operator' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', {name: 'Account: Operator'}));
+    const help = screen.getByRole('link', {name: 'WhatsApp support · +250 788 767 816'});
+    expect(help).toHaveAttribute('href', 'https://wa.me/250788767816');
+    expect(help).toHaveAttribute('rel', 'noopener noreferrer');
     expect(signOut).not.toHaveBeenCalled();
   });
 
@@ -79,6 +83,8 @@ describe('Admin shell', () => {
     </AdminShell>);
     const trigger = screen.getByRole('button', {name: 'Account: Operator'});
     await user.click(trigger);
+    await user.tab();
+    expect(screen.getByRole('link', {name: 'WhatsApp support · +250 788 767 816'})).toHaveFocus();
     await user.tab();
     expect(screen.getByRole('button', {name: 'Sign out'})).toHaveFocus();
     await user.keyboard('{Escape}');

@@ -256,5 +256,12 @@
     },
     "change": "Validate the deployed profile once per configuration, serve anonymous same-origin session reads locally and support a cookie-bound passcode response.",
     "deployed": false
+  },
+  "burimunsi_admin_phone_team_successor": {
+    "source_sha256s": {
+      "transport-request.js": "29ed941542797aecc8f58a01631b8d422149e7f896a2ab46741a0b5e6b1eaa57"
+    },
+    "change": "Route authenticated phone team operations and preserve exact legacy passcode verification while the preceding Edge contract is served.",
+    "deployed": false
   }
 }

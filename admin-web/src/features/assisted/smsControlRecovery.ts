@@ -1,10 +1,17 @@
 import type {PendingAttempt, PendingIdentity} from '../core/pendingAttempt';
 import {custodyKey} from '../../custodyRealm';
+import {hasScopedAdminAuthority} from '../../session/ownerIdentity';
+import type {AdminUser} from '../../session/sessionResponses';
 
 export const MANAGEMENT_FAMILY = 'notification-management';
 export const MANAGEMENT_PERMISSION = 'admin_users.manage';
 export const MANAGEMENT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export interface ManagementStoreContext {identity: PendingIdentity & {principalId: string}; isCurrent: () => boolean; storage?: Storage}
+export function hasSmsManagementAuthority(actor: Pick<AdminUser,'id'|'sessionId'|'principalId'|'role'|'email'>, scoped?: AdminUser) {
+  if (!scoped) return actor.role === 'owner' && actor.email === 'info@ikanisa.com';
+  return hasScopedAdminAuthority(scoped) && scoped.id === actor.id && scoped.sessionId === actor.sessionId &&
+    scoped.principalId === actor.principalId && scoped.role === actor.role;
+}
 const running = new Set<string>();
 
 /** Same owner/session/principal namespace as Flutter's management recovery. */

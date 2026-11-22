@@ -1,9 +1,50 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {preliminaryCurrentOwner} from '../domain/admin_owner_precheck.js';
+import {attestAdminPasscodeAccount,adminEmailVerifiedAt,requireFreshAdminEmail} from '../domain/admin_email_policy.js';
+import {accountGuard} from '../domain/admin_accounts_legacy.js';
+import {BURIMUNSI_ADMIN_ORIGIN,BURIMUNSI_PRODUCT_MODE} from '../burimunsi-standalone.js';
 
 const original={id:'admin-one',principal_id:'principal-one',email:'info@ikanisa.com',role:'owner'};
 const alternate={...original,email:'owner@example.invalid'};
+const nativeEnv={BURIMUNSI_PRODUCT_MODE,BURIMUNSI_COLLECTION_ID:'review-group'};
+function phoneAccount(storageRole,operatorRole,expiresIn=300) {
+ const now=Math.floor(Date.now()/1000);
+ const account={id:crypto.randomUUID(),principal_id:crypto.randomUUID(),auth_session_id:crypto.randomUUID(),
+  public_id:crypto.randomUUID(),token_hash:'a'.repeat(64),auth_version:1,origin:BURIMUNSI_ADMIN_ORIGIN,
+  expires_at:now+expiresIn,role:storageRole,email:null};
+ return attestAdminPasscodeAccount(account,{accountId:crypto.randomUUID(),sessionId:account.auth_session_id,publicId:account.public_id,
+  adminId:account.id,principalId:account.principal_id,collectionId:nativeEnv.BURIMUNSI_COLLECTION_ID,storageRole,operatorRole,
+  verifiedAt:now-600,expiresAt:account.expires_at,proofId:crypto.randomUUID()});
+}
+
+test('dedicated managed administrators share one scoped role throughout a valid PIN session',async()=>{
+ for(const storageRole of ['owner','admin','staff']){
+  const managed=phoneAccount(storageRole,'admin');
+  assert.equal(await preliminaryCurrentOwner(nativeEnv,managed),true);
+  assert.doesNotThrow(()=>requireFreshAdminEmail(managed));
+  assert.equal(adminEmailVerifiedAt(managed),null);
+  assert.equal(await preliminaryCurrentOwner({...nativeEnv,BURIMUNSI_COLLECTION_ID:'different-group'},managed),false);
+ }
+ assert.equal(await preliminaryCurrentOwner(nativeEnv,phoneAccount('staff','staff')),false);
+ assert.equal(await preliminaryCurrentOwner(nativeEnv,phoneAccount('owner','staff')),false);
+ assert.equal(await preliminaryCurrentOwner(nativeEnv,{...phoneAccount('admin','admin')}),false);
+ const expired=phoneAccount('admin','admin',-1);
+ assert.equal(await preliminaryCurrentOwner(nativeEnv,expired),false);
+ assert.throws(()=>requireFreshAdminEmail(expired),error=>error.status===401);
+});
+
+test('dedicated protected operations re-read the exact session and require the current personal grant',()=>{
+ const managed=phoneAccount('admin','admin');
+ const db={prepare(text){return {bind(...args){return {text,args};}};}};
+ const {statement}=accountGuard({...nativeEnv,DB:db},managed,'admin_users.manage',{owner:true,fresh:true});
+ assert.match(statement.text,/private\.burimunsi_browser_pin_session\(\?,\?,\?\)/);
+ assert.match(statement.text,/session_value->>'operatorRole'='admin'/);
+ assert.match(statement.text,/jsonb_exists\(session_value->'permissions'/);
+ assert.ok(statement.args.includes(managed.principal_id)&&statement.args.includes(managed.public_id));
+ assert.ok(statement.args.includes('admin_users.manage'));
+ assert.equal(statement.args.length,statement.text.match(/\?/g).length);
+});
 function fixture(result=true){
  const calls=[];
  return {calls,env:{COLLECT_ADMIN_DYNAMIC_OWNER_AUTH_ENABLED:'true',DB:{prepare(sql){
