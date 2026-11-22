@@ -27,30 +27,27 @@ export function MomoTransactionList({allowActions, allowRecovery}: {allowActions
   const [checking, setChecking] = useState(false);
   const canCheck = ['payments.read', 'users.read', 'collections.read'].every((permission) => permissions.includes(permission));
   const {epoch, isCurrentAuthority} = session, actorId = session.user?.id, sessionId = session.user?.sessionId;
-  const retryOwner = useRef<{read: () => Promise<MomoPage>; controller?: AbortController} | null>(null);
+  const retryOwner = useRef<((signal: AbortSignal) => Promise<MomoPage>) | null>(null);
   const latestRequest = useRef(0);
-  const load = useCallback(async function readTransactions(): Promise<MomoPage> {
+  const load = useCallback(async function readTransactions(signal: AbortSignal): Promise<MomoPage> {
     const requestNumber = ++latestRequest.current;
-    retryOwner.current?.controller?.abort();
     const query = new URLSearchParams({limit: '25', offset: String(offset), search: filters.search, status: filters.status});
     if (filters.account) query.set('receiving_account_id', filters.account); if (filters.group) query.set('group_id', filters.group);
     if (filters.from) query.set('from', filters.from); if (filters.to) query.set('to', filters.to);
     const path = `momo/transactions?${query}`;
     let body;
-    try {body = await request(path);}
+    try {body = await request(path, {signal});}
     catch (error) {
-      const owner = retryOwner.current;
       if (!(error instanceof AdminRequestError) || error.statusCode !== 503 || error.code !== 'service_unavailable' || error.outcomeUnknown ||
-          owner?.read !== readTransactions || requestNumber !== latestRequest.current ||
+          signal.aborted || retryOwner.current !== readTransactions || requestNumber !== latestRequest.current ||
           !actorId || !sessionId || !isCurrentAuthority(epoch, actorId, sessionId)) throw error;
-      owner.controller = new AbortController();
-      body = await request(path, {signal: owner.controller.signal});
+      body = await request(path, {signal});
     }
     return parseMomoPage(body, offset, filters);
   }, [filters, offset, request, epoch, actorId, sessionId, isCurrentAuthority]);
   useLayoutEffect(() => {
-    retryOwner.current = {read: load};
-    return () => {retryOwner.current?.controller?.abort(); retryOwner.current = null;};
+    retryOwner.current = load;
+    return () => {retryOwner.current = null;};
   }, [load]);
   const {result, retry} = useOperationRead(`${session.epoch}:transactions:${JSON.stringify(filters)}:${offset}`, canDisplaySessionRecords(session) && permissions.includes('payments.read'), load, momoReadOptions);
   const apply = (event: FormEvent) => {

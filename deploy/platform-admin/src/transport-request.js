@@ -106,8 +106,9 @@ export function upstreamRequest(request, admission, bytes, signal, frontendOrigi
   for (const [name, value] of request.headers) if (FORWARD_HEADERS.has(name)) headers.set(name, value);
   if (browserAdminCookie) managedBrowserCookies(headers, route, browserAdminCookie);
 
-  // Owner metadata opt-in and native device proof are restricted to their consumers.
-  if (route.functionName === 'admin-api' && route.logicalPath === '/api/admin/auth/session' && request.method === 'GET' &&
+  // Older panels can send the identity header on sign-in. Only the session read consumes it.
+  const sessionRead = route.logicalPath === '/api/admin/auth/session' && request.method === 'GET';
+  if (route.functionName === 'admin-api' && sessionRead &&
       request.headers.get('x-collect-owner-identity-version') === '1') {
     headers.set('X-Collect-Owner-Identity-Version', '1');
   }

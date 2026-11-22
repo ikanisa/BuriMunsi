@@ -15,6 +15,7 @@ const user = {id: 'admin-one', email: 'operator@example.test', role: 'admin', se
   permissions: ['overview.read', 'collections.read'], principalId: 'principal-one', assuranceLevel: 1, mfaAt: null,
   authMethod: 'phone_passcode', phone: '+250780000001', financialModel: 'canonical_evidence_ledger'};
 const sessionPath = '/api/admin/auth/session';
+const scheduledCheckMs = 120_000;
 const verified = (permissions = user.permissions, expiresAt = Date.now() + 3_600_000) => Response.json({
   user: {...user, permissions, passcodeVerifiedAt: new Date(Date.now() - 1000).toISOString()},
   expiresAt: new Date(expiresAt).toISOString(), csrfToken: 'c'.repeat(64), ownerEmail: null,
@@ -61,7 +62,9 @@ describe('scheduled Admin session checks', () => {
     const {epoch} = session.getSnapshot();
     expect(session.isRecentSensitiveVerification(epoch, user.id, user.sessionId)).toBe(true);
 
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(scheduledCheckMs - 1);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
     expect(session.getSnapshot()).toMatchObject({status: 'rechecking', user: {id: user.id}});
     expect(session.isCurrentAuthority(epoch, user.id, user.sessionId)).toBe(false);
     expect(session.isRecentSensitiveVerification(epoch, user.id, user.sessionId)).toBe(false);
@@ -88,7 +91,7 @@ describe('scheduled Admin session checks', () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(verified()).mockImplementation(async () => response());
     const session = openSession(fetchImpl);
     await session.refresh();
-    await vi.advanceTimersByTimeAsync(120_000);
+    await vi.advanceTimersByTimeAsync(scheduledCheckMs);
     expect(session.getSnapshot()).toMatchObject({status, user: null});
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
@@ -100,7 +103,7 @@ describe('scheduled Admin session checks', () => {
       .mockImplementationOnce(async () => verified());
     const session = openSession(fetchImpl);
     await session.refresh();
-    await vi.advanceTimersByTimeAsync(90_000);
+    await vi.advanceTimersByTimeAsync(scheduledCheckMs + 30_000);
     expect(session.getSnapshot().status).toBe('rechecking');
     await vi.advanceTimersByTimeAsync(2_000);
     await vi.waitFor(() => expect(session.getSnapshot().status).toBe('authenticated'));
@@ -115,7 +118,7 @@ describe('scheduled Admin session checks', () => {
       .mockImplementation(async () => verified());
     const session = openSession(fetchImpl);
     await session.refresh();
-    await vi.advanceTimersByTimeAsync(180_000);
+    await vi.advanceTimersByTimeAsync(scheduledCheckMs + 60_000);
     expect(fetchImpl).toHaveBeenCalledTimes(5);
     expect(session.getSnapshot()).toMatchObject({status: 'error', user: null});
     await session.refresh();
@@ -130,7 +133,7 @@ describe('scheduled Admin session checks', () => {
       .mockImplementationOnce(async () => maintenance()).mockReturnValueOnce(held.promise);
     const session = openSession(fetchImpl);
     await session.refresh();
-    await vi.advanceTimersByTimeAsync(105_000);
+    await vi.advanceTimersByTimeAsync(scheduledCheckMs + 45_000);
     expect(session.getSnapshot()).toMatchObject({status: 'error', user: null});
     held.release(verified());
     await vi.advanceTimersByTimeAsync(100_000);
@@ -152,7 +155,7 @@ describe('scheduled Admin session checks', () => {
     await session.refresh();
     const {epoch} = session.getSnapshot();
     const oldRead = session.request('core/groups');
-    await vi.advanceTimersByTimeAsync(62_000);
+    await vi.advanceTimersByTimeAsync(scheduledCheckMs + 2_000);
     await vi.waitFor(() => expect(session.getSnapshot()).toMatchObject({epoch, status: 'authenticated'}));
     expect(checks).toBe(3);
     held.release(denied());
@@ -166,13 +169,13 @@ describe('scheduled Admin session checks', () => {
     vi.useFakeTimers();
     vi.stubGlobal('crypto', webcrypto);
     const held = holdResponse();
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(verified(user.permissions, Date.now() + 63_000))
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(verified(user.permissions, Date.now() + scheduledCheckMs + 3_000))
       .mockImplementationOnce(async () => maintenance()).mockReturnValueOnce(held.promise)
       .mockResolvedValueOnce(Response.json({ok: true}))
       .mockResolvedValueOnce(Response.json({user: null, expiresAt: null, csrfToken: null, ownerEmail: null}));
     const session = openSession(fetchImpl);
     await session.refresh();
-    await vi.advanceTimersByTimeAsync(62_000);
+    await vi.advanceTimersByTimeAsync(scheduledCheckMs + 2_000);
     expect(session.getSnapshot().status).toBe('rechecking');
     expect(fetchImpl).toHaveBeenCalledTimes(3);
     if (reason === 'sign-out') await session.signOut();
@@ -215,14 +218,14 @@ describe('scheduled Admin session checks', () => {
       const originalRow = await screen.findByRole('row', {name: /Review savings/});
       const search = screen.getByRole('textbox', {name: 'Search Groups'});
       fireEvent.change(search, {target: {value: 'savings'}});
-      await act(async () => {await vi.advanceTimersByTimeAsync(60_000);});
+      await act(async () => {await vi.advanceTimersByTimeAsync(scheduledCheckMs);});
       expect(screen.getByText('Rechecking account access…')).toBeInTheDocument();
       expect(search.closest('[inert]')).toBeInTheDocument();
       expect(originalRow).toBeVisible();
       expect(screen.queryByText('Workspace unavailable')).toBeNull();
       await act(async () => {await vi.advanceTimersByTimeAsync(28_000);});
       expect(screen.getByText('Rechecking account access…')).toBeInTheDocument();
-      await act(async () => {await vi.advanceTimersByTimeAsync(2_000);});
+      await act(async () => {await vi.advanceTimersByTimeAsync(3_000);});
       expect(screen.queryByText('Rechecking account access…')).toBeNull();
       expect(search.closest('[inert]')).toBeNull();
       expect(screen.getByRole('textbox', {name: 'Search Groups'})).toBe(search);
@@ -276,7 +279,7 @@ it.each(['dialog', 'compact navigation'] as const)('suspends an open %s and lets
     expect(hasActiveFocusScope()).toBe(true);
     if (kind === 'dialog') expect(screen.getByRole('button', {name: 'Record action'})).toBeVisible();
     else expect(trigger).toHaveAttribute('aria-expanded', 'true');
-    await act(async () => {await vi.advanceTimersByTimeAsync(60_000);});
+    await act(async () => {await vi.advanceTimersByTimeAsync(scheduledCheckMs);});
     expect(screen.getByText('Rechecking account access…')).toBeInTheDocument();
     expect(hasActiveFocusScope()).toBe(false);
     if (kind === 'dialog') expect(screen.queryByRole('button', {name: 'Record action', hidden: true})).toBeNull();

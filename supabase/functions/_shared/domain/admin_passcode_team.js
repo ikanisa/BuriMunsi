@@ -46,7 +46,7 @@ export async function handlePasscodeTeam(request, env, path) {
       command = {action:'access',id:uuid(access[1]),expectedVersion:body.expectedVersion,active:body.active,
         ...(Object.hasOwn(body,'role') ? {role:body.role} : {})};
     }
-    const row = await first(env,'SELECT private.burimunsi_browser_team_write(?,?::uuid,?::jsonb,?::jsonb) AS result',
+    const row = await first(env,'SELECT private.burimunsi_browser_team_write(?,?::uuid,?::text::jsonb,?::text::jsonb) AS result',
       proof.collectionId,requestId,JSON.stringify(command),pinHash && JSON.stringify(pinHash));
     if (row?.result?.applied !== true || !Number.isSafeInteger(row.result.version)) throw unavailable();
     return json(row.result);

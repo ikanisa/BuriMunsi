@@ -75,6 +75,20 @@ describe('BuriMunsi read-only access', () => {
     expect(screen.queryByRole('button', {name: /approve|grant|set pin|save access/i})).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', {name: 'Prepare operator access'})).not.toBeInTheDocument();
   });
+  it('loads the sole standalone group and both directories in one action', async () => {
+    const session = setup();
+    hook.value = {...session, verificationMode: 'passcode',
+      user: {...owner, authMethod: 'phone_passcode', passcodeVerifiedAt: new Date().toISOString()}};
+    const user = userEvent.setup();
+    render(<BuriMunsiPage />);
+    await user.click(screen.getByRole('button', {name: 'Load BuriMunsi access'}));
+    expect(await screen.findByRole('heading', {name: 'Collect operators'})).toBeVisible();
+    expect(screen.getByText('Synthetic savings')).toBeVisible();
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(vi.mocked(session.request).mock.calls.map(([path]) => path)).toEqual([
+      'momo/native-setup', `burimunsi/operators?collectionId=${collectionId}`, `burimunsi/provisioning?collectionId=${collectionId}`,
+    ]);
+  });
   it('keeps the hosted review read-only even if action flags are supplied and a checkpoint exists', async () => {
     await retainPending(identity, 'burimunsi.provisioning', `${collectionId}:${staffPrincipal}`, requestId, 'admin_users.manage', nativeIntent);
     const session = setup(), user = userEvent.setup();

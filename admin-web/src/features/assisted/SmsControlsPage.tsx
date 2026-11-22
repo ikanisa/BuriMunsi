@@ -77,21 +77,21 @@ function Controls({onVerify, allowPolicyChanges, allowPolicyEnabling, allowAcces
     const current = () => active && isRecentSensitiveVerification(epoch, actorId, sessionId);
     void (async () => {
       try {
-        if (verificationMode !== 'authenticator' && !await recheckProof?.()) throw new Error(`Verify your ${verificationMode} before continuing.`);
+        if (verificationMode === 'email' && !await recheckProof?.()) throw new Error(`Verify your ${verificationMode} before continuing.`);
         if (!current()) return;
         const access = parseSmsAccess(await request('notification-operator/access', {method: 'GET', authenticated: true}), actorId, principalId);
         if (!current()) return;
         let history: SmsHistoryPage | null = null, historyError = '', policy: SmsPolicyState | null = null, policyError = '', detail: SmsDecisionDetail | SmsMaterializationStatus | null = null, detailError = '';
-        try {
-          const query = new URLSearchParams({limit: String(SMS_HISTORY_PAGE_SIZE)});
-          if (pageCursor) {query.set('after_created_at', pageCursor.after_created_at); query.set('after_request_id', pageCursor.after_request_id);}
-          history = parseSmsHistory(await request(`notification-operator/operations?${query}`, {method: 'GET', authenticated: true}), pageCursor);
-        } catch {historyError = 'Recorded requests could not be loaded.';}
-        if (!current()) return;
-        if (group && canReadPolicy) {
-          try {policy = parseSmsPolicy(await request(`notification-operator/policies/${group}`, {method: 'GET', authenticated: true}), group);}
-          catch {policyError = 'The group policy could not be loaded.';}
-        }
+        const query = new URLSearchParams({limit: String(SMS_HISTORY_PAGE_SIZE)});
+        if (pageCursor) {query.set('after_created_at', pageCursor.after_created_at); query.set('after_request_id', pageCursor.after_request_id);}
+        const [historyRead, policyRead] = await Promise.allSettled([
+          request(`notification-operator/operations?${query}`, {method: 'GET', authenticated: true}).then(value => parseSmsHistory(value, pageCursor)),
+          group && canReadPolicy ? request(`notification-operator/policies/${group}`, {method: 'GET', authenticated: true}).then(value => parseSmsPolicy(value, group)) : null,
+        ]);
+        if (historyRead.status === 'fulfilled') history = historyRead.value;
+        else historyError = 'Recorded requests could not be loaded.';
+        if (policyRead.status === 'fulfilled') policy = policyRead.value;
+        else policyError = 'The group policy could not be loaded.';
         if (!current()) return;
         if (selected && (selected.kind === 'access' || canReadPolicy)) {
           if (!history?.items.some((item) => item.requestId === selected.requestId && item.kind === selected.kind)) detailError = 'The recorded request is no longer on this history page.';

@@ -16,8 +16,12 @@ const sha=x=>createHash('sha256').update(x).digest('hex');
 const fail=code=>{throw Error(code);};
 const flags=process.argv.slice(2),managedLifecycle=flags.includes('--managed-lifecycle'),textSubjects=flags.includes('--text-subjects');
 const scopedWriters=flags.includes('--scoped-writers'),release=flags.includes('--writer-journal-release');
-const forward=flags.includes('--forward-migration-release'),phoneOperators=flags.includes('--phone-operators'),freshPhoneReads=flags.includes('--fresh-phone-reads');
-if(flags.some(x=>!['--managed-lifecycle','--text-subjects','--scoped-writers','--writer-journal-release','--forward-migration-release','--phone-operators','--fresh-phone-reads'].includes(x))||new Set(flags).size!==flags.length||(textSubjects&&!managedLifecycle)||((scopedWriters||release||forward||phoneOperators||freshPhoneReads)&&!textSubjects)||([scopedWriters,release,forward,phoneOperators,freshPhoneReads].filter(Boolean).length>1))fail('invalid_mode');
+const forward=flags.includes('--forward-migration-release'),adminHandsets=flags.includes('--admin-handsets'),phoneSmsHealth=flags.includes('--phone-sms-health');
+const phoneOperators=flags.includes('--phone-operators')||adminHandsets||phoneSmsHealth;
+const freshPhoneReads=flags.includes('--fresh-phone-reads');
+const modes=[scopedWriters,release,forward,phoneOperators,freshPhoneReads].filter(Boolean);
+const allowed=new Set(['--managed-lifecycle','--text-subjects','--scoped-writers','--writer-journal-release','--forward-migration-release','--phone-operators','--admin-handsets','--phone-sms-health','--fresh-phone-reads']);
+if(flags.some(x=>!allowed.has(x))||new Set(flags).size!==flags.length||(textSubjects&&!managedLifecycle)||(modes.length>0&&!textSubjects)||modes.length>1||(adminHandsets&&phoneSmsHealth))fail('invalid_mode');
 const work=JSON.parse(await readFile(root+'/supabase/managed-migration-history/source-migrations.lock.json','utf8')).migrations;
 const deployed=await retainedLock();
 if(work.length!==58||deployed.length!==62||work.slice(0,52).some((x,i)=>x.name!==deployed[i].name||x.sha256!==deployed[i].sha256))fail('source_chain_changed');
@@ -164,7 +168,11 @@ await withOwnedArchiveFixture(async({owner,admin,watcher,database,fixtureRoot})=
  }
  if(phoneOperators){
   const {verifyPhoneOperatorAccounts}=await import('./phone-operator.fixture.mjs');
-  console.log(JSON.stringify(await verifyPhoneOperatorAccounts({owner,database,fixtureRoot})));
+  console.log(JSON.stringify(await verifyPhoneOperatorAccounts({owner,database,fixtureRoot,phoneSmsHealth})));
+  if(adminHandsets){
+   const {verifyAdminHandsets}=await import('./burimunsi-admin-handsets.fixture.mjs');
+   console.log(JSON.stringify(await verifyAdminHandsets({owner,admin,database,fixtureRoot})));
+  }
   return;
  }
  if(forward){

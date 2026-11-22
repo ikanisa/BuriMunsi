@@ -1,6 +1,6 @@
 /** Same-origin request orchestration for the Cloudflare Admin frontend. */
 import {boundedBytes, fetchWithinDeadline} from './transport-body.js';
-import {failure, ProxyFailure, refuse} from './transport-failure.js';
+import {failure, protectedHeaders, ProxyFailure, refuse} from './transport-failure.js';
 import {admitRequest, FRONTENDS, transportOrigin, upstreamRequest} from './transport-request.js';
 import {qualifyResponse} from './transport-response.js';
 import {BURIMUNSI_ADMIN_COOKIE, MANAGED_ADMIN_COOKIE} from './admin-session-realm.js';
@@ -40,12 +40,29 @@ export function createCollectTransport({frontendOrigin, isolateAdminSession = fa
       const bytes = await boundedBytes(request.body, maxRequestBytes, signal, 413, 'proxy_request_too_large');
       const outgoing = upstreamRequest(request, admission, bytes, signal, frontendOrigin, browserAdminCookie);
       if (signal.aborted) refuse(504, 'proxy_deadline');
+      // Admission and cookie normalization have already run. An anonymous
+      // session lookup needs neither an Edge invocation nor a database fence.
+      if (burimunsi && request.method === 'GET' && admission.route.path === '/api/admin/auth/session' &&
+          admission.route.query === '' && !outgoing.headers.has('Cookie') && !outgoing.headers.has('Authorization')) {
+        const headers = protectedHeaders(new Headers({
+          Vary: 'Origin, Cookie',
+          'Access-Control-Expose-Headers': 'X-Collect-Evidence-Sensitivity',
+          'Access-Control-Max-Age': '600',
+        }));
+        return Response.json({user: null, expiresAt: null, csrfToken: null, ownerEmail: null}, {headers});
+      }
       attempted = true;
       const upstream = await fetchWithinDeadline(outgoing, signal, fetchImpl);
-      return await qualifyResponse(upstream, {
+      const response = await qualifyResponse(upstream, {
         route: admission.route, method: request.method, signal, maxResponseBytes, browserAdminCookie,
         frontendOrigin, allowedFrontends,
       });
+      if (burimunsi && admission.route.path === '/api/admin/auth/phone-passcode' && request.method === 'POST' && response.ok) {
+        const prefix = browserAdminCookie + '=';
+        const cookie = response.headers.get('Set-Cookie');
+        if (!cookie?.startsWith(prefix) || cookie.startsWith(prefix + ';')) refuse(502, 'proxy_cookie_invalid');
+      }
+      return response;
     } catch (error) {
       if (!(error instanceof ProxyFailure)) {
         const classification = error instanceof Error && /illegal invocation/i.test(error.message)

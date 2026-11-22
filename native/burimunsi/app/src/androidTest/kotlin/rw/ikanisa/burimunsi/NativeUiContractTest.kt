@@ -451,10 +451,11 @@ class NativeUiContractTest {
         ui.onNodeWithText("New passcode",useUnmergedTree=true).assertDoesNotExist()
         panelButton("Add staff","Create staff").assertIsEnabled().performClick()
         ui.runOnIdle{check(c.staffSaveCalls==2&&c.lastStaffPin.isEmpty())}
-        field("Passcode").performScrollTo().performTextInput("26")
-        panelButton("Add staff","Create staff").assertIsNotEnabled()
-        field("Passcode").performTextInput("84")
-        panelButton("Add staff","Create staff").assertIsEnabled().performClick()
+        ui.runOnIdle{c.state=c.state.copy(sheetId=account.id,selectedStaff=account,draft=mapOf("name" to account.name,"phone" to account.phone))}
+        field("New passcode").performScrollTo().performTextInput("26")
+        panelButton("Edit staff","Save changes").assertIsNotEnabled()
+        field("New passcode").performTextInput("84")
+        panelButton("Edit staff","Save changes").assertIsEnabled().performClick()
         ui.runOnIdle{check(c.staffSaveCalls==3&&c.lastStaffPin=="2684")}
     }
     @Test fun staffViewsHaveNoInventedPreferencesOrAdminGatewayControls(){

@@ -53,7 +53,7 @@ describe('Operational pages', () => {
     const table = screen.getByRole('table');
     expect(within(table).getByText('Accepted')).toBeVisible();
     expect(mock.request).toHaveBeenCalledTimes(1);
-    expect(mock.request).toHaveBeenCalledWith('email/events?limit=25&offset=0');
+    expect(mock.request).toHaveBeenCalledWith('email/events?limit=25&offset=0', {signal: expect.any(AbortSignal)});
     expect(within(table).queryByText('Delivered')).not.toBeInTheDocument();
   });
 
@@ -80,7 +80,7 @@ describe('Operational pages', () => {
     expect(await screen.findByText('Showing 1–25 of 26')).toBeVisible();
     await user.click(screen.getByRole('button', {name: 'Next'}));
     expect(await screen.findByText('Showing 26–26 of 26')).toBeVisible();
-    expect(mock.request).toHaveBeenLastCalledWith('email/events?limit=25&offset=25');
+    expect(mock.request).toHaveBeenLastCalledWith('email/events?limit=25&offset=25', {signal: expect.any(AbortSignal)});
   });
 
   it('lets an operator recover when a saved page is now beyond the total', async () => {
@@ -113,7 +113,7 @@ describe('SMS receipt filters', () => {
     mock.session.status = 'authenticated';
     view.rerender(route(false));
     expect(await screen.findByRole('row', {name: /Refreshed receipt/})).toBe(row);
-    expect(mock.request.mock.calls).toEqual(Array(2).fill(['sms/receipts?limit=25&offset=0&status=received']));
+    expect(mock.request.mock.calls).toEqual(Array(2).fill(['sms/receipts?limit=25&offset=0&status=received', {signal: expect.any(AbortSignal)}]));
   });
 
   it('requires the existing read permission before requesting or showing filters', () => {
@@ -136,7 +136,7 @@ describe('SMS receipt filters', () => {
     render(<MemoryRouter initialEntries={['/admin/sms-receipts?source=capture&status=received&offset=25&search=missing']}><SmsReceiptsPage /></MemoryRouter>);
     expect(await screen.findByText(/^Loaded .+ Kigali$/)).toBeVisible();
     await user.click(screen.getByRole('button', {name: 'Clear filters'}));
-    expect(mock.request).toHaveBeenLastCalledWith('sms/receipts?limit=25&offset=0');
+    expect(mock.request).toHaveBeenLastCalledWith('sms/receipts?limit=25&offset=0', {signal: expect.any(AbortSignal)});
     expect(screen.getByRole('searchbox', {name: 'Search SMS receipts'})).toHaveValue('');
     expect(screen.queryByText(/^Loaded .+ Kigali$/)).not.toBeInTheDocument();
     settlePage({rows: [capture(1)], total: 1, limit: 25, offset: 0, next_offset: null});
@@ -255,7 +255,7 @@ describe('SMS receipt filters', () => {
     const related = await screen.findByRole('link', {name: `Receiver · ${second.id}`});
     expect(new URL(related.getAttribute('href')!, 'https://admin.invalid').searchParams.get('returnTo')).toBe(back);
     await user.click(related);
-    await waitFor(() => expect(mock.request).toHaveBeenCalledWith(`sms/receipts/receiver/${second.id}?limit=25&offset=0`));
+    await waitFor(() => expect(mock.request).toHaveBeenCalledWith(`sms/receipts/receiver/${second.id}?limit=25&offset=0`, {signal: expect.any(AbortSignal)}));
     expect(screen.getByRole('link', {name: /Back to records/})).toHaveAttribute('href', back);
   });
 
@@ -306,7 +306,7 @@ describe('SMS receipt filters', () => {
       render(<MemoryRouter initialEntries={[`/admin/sms-receipts?${filter}`]}><SmsReceiptsPage /></MemoryRouter>);
       expect(await screen.findByText('Captured user')).toBeVisible();
       expect(screen.getByRole('status')).toHaveTextContent('Unavailable filters from this link were cleared.');
-      expect(mock.request).toHaveBeenCalledExactlyOnceWith('sms/receipts?limit=25&offset=0');
+      expect(mock.request).toHaveBeenCalledExactlyOnceWith('sms/receipts?limit=25&offset=0', {signal: expect.any(AbortSignal)});
     });
 
   it('keeps the available search and status when clearing obsolete filters and starts from the first page', async () => {
@@ -316,7 +316,7 @@ describe('SMS receipt filters', () => {
     render(<MemoryRouter initialEntries={['/admin/sms-receipts?source=receiver&extraction=parsed&duplicates=all&search=123456&status=received&page=3&offset=20&limit=10']}><SmsReceiptsPage /></MemoryRouter>);
     expect(await screen.findByText('Captured user')).toBeVisible();
     expect(screen.getByText(/Unavailable filters from this link/)).toBeVisible();
-    expect(mock.request).toHaveBeenCalledExactlyOnceWith('sms/receipts?limit=10&offset=0&status=received&search=123456');
+    expect(mock.request).toHaveBeenCalledExactlyOnceWith('sms/receipts?limit=10&offset=0&status=received&search=123456', {signal: expect.any(AbortSignal)});
     expect(screen.getByRole('searchbox', {name: 'Search SMS receipts'})).toHaveValue('123456');
     const status = screen.getByRole('combobox', {name: 'Status'});
     expect(status).toHaveValue('received');
@@ -337,6 +337,6 @@ describe('SMS receipt filters', () => {
     const query = new URLSearchParams({extraction: 'parsed', status: 'unknown', search: 'a\tb', limit: '900', page: '2'});
     render(<MemoryRouter initialEntries={[`/admin/sms-receipts?${query}`]}><SmsReceiptsPage /></MemoryRouter>);
     expect(await screen.findByText('No records found')).toBeVisible();
-    expect(mock.request).toHaveBeenCalledExactlyOnceWith('sms/receipts?limit=25&offset=0');
+    expect(mock.request).toHaveBeenCalledExactlyOnceWith('sms/receipts?limit=25&offset=0', {signal: expect.any(AbortSignal)});
   });
 });

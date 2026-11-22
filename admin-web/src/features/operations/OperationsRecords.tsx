@@ -56,6 +56,7 @@ export interface RecordsProps<T> {
 
 export function RecordsPage<T>({title, subtitle, permission, statuses = [], searchable = false, filters = [], smsPagination = false, rowKey, columns, load, extra}: RecordsProps<T>) {
   const {session, actor} = useActor();
+  const {request} = session;
   const [params, setParams] = useSearchParams();
   const searchForm = useRef<HTMLFormElement>(null);
   const limits = params.getAll('limit'), offsets = params.getAll('offset');
@@ -85,7 +86,11 @@ export function RecordsPage<T>({title, subtitle, permission, statuses = [], sear
     setParams(next);
   };
   const canRead = !!actor && canDisplaySessionRecords(session) && !!session.user?.permissions.includes(permission);
-  const loadPage = useCallback(() => actor ? load(session.request, offset, status, search, actor, JSON.parse(filterKey) as Record<string, string>, limit) : Promise.reject(new Error('Account unavailable.')), [actor, filterKey, limit, load, offset, search, session.request, status]);
+  const loadPage = useCallback((signal: AbortSignal) => {
+    if (!actor) return Promise.reject(new Error('Account unavailable.'));
+    const scoped: AdminRequest = (path, options) => request(path, {...options, signal});
+    return load(scoped, offset, status, search, actor, JSON.parse(filterKey) as Record<string, string>, limit);
+  }, [actor, filterKey, limit, load, offset, request, search, status]);
   const key = JSON.stringify([session.epoch, actor?.id ?? '', actor?.canonical ?? null, permission, offset, limit, status, search, filterKey]);
   const {result, retry} = useOperationRead(key, canRead, loadPage, {live: permission === 'sms.read' || permission === 'payments.read'});
   const noRecords = result?.status === 'success' && result.value.rows.length === 0;
@@ -141,12 +146,17 @@ interface DetailProps<T> {
 
 export function DetailPage<T>({title, subtitle, permission, back, resourceKey, valid, load, render, additionalReturns = []}: DetailProps<T>) {
   const {session, actor} = useActor();
+  const {request} = session;
   const [params, setParams] = useSearchParams();
   const rawOffset = params.get('relatedOffset') ?? '0';
   const offset = /^\d{1,10}$/.test(rawOffset) && Number(rawOffset) <= 2147483647 && Number(rawOffset) % 25 === 0 ? Number(rawOffset) : 0;
   const setOffset = (value: number) => {const next = new URLSearchParams(params); if (value === 0) next.delete('relatedOffset'); else next.set('relatedOffset', String(value)); setParams(next);};
   const canRead = !!actor && canDisplaySessionRecords(session) && !!session.user?.permissions.includes(permission);
-  const loadDetail = useCallback(() => actor ? load(session.request, actor, offset) : Promise.reject(new Error('Account unavailable.')), [actor, load, offset, session.request]);
+  const loadDetail = useCallback((signal: AbortSignal) => {
+    if (!actor) return Promise.reject(new Error('Account unavailable.'));
+    const scoped: AdminRequest = (path, options) => request(path, {...options, signal});
+    return load(scoped, actor, offset);
+  }, [actor, load, offset, request]);
   const {result, retry} = useOperationRead(`${session.epoch}:${actor?.id ?? ''}:${resourceKey}:${offset}`, canRead && valid, loadDetail, {live: permission === 'sms.read' || permission === 'payments.read'});
   const candidate = safeAdminReturnLocation(params.get('returnTo'));
   const returnPath = candidate && [back, ...additionalReturns].includes(new URL(candidate, 'https://admin.invalid').pathname) ? candidate : back;

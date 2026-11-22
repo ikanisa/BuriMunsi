@@ -12,6 +12,12 @@ const reply = (body: unknown, status = 200) => Response.json(body, {status});
 const anonymous = () => reply({user: null, expiresAt: null, csrfToken: null, ownerEmail: null});
 const signedIn = (user = account) => reply({user: {...user, passcodeVerifiedAt: new Date(Date.now() - 1000).toISOString()},
   expiresAt: new Date(Date.now() + 3_600_000).toISOString(), csrfToken: csrf, ownerEmail: null});
+const owner = {...account, role: 'owner'};
+const ownerIdentity = {schemaVersion: 1, adminId: owner.id, principalId: owner.principalId, email: owner.email};
+const confirmed = (passcodeVerifiedAt = new Date(Date.now() - 1000).toISOString()) => ({
+  sessionContract: 2, user: {...owner, passcodeVerifiedAt}, expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+  csrfToken: csrf, ownerEmail: owner.email, ownerIdentity,
+});
 
 function openLogin(fetchImpl: typeof fetch, challenge = vi.fn()) {
   const onSignedIn = vi.fn();
@@ -53,8 +59,13 @@ describe('BuriMunsi phone and passcode sign-in', () => {
     const challenge = vi.fn();
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
-      if (path.endsWith('/auth/session')) return authenticated ? signedIn() : anonymous();
+      const identityVersion = new Headers(init?.headers).get('X-Collect-Owner-Identity-Version');
+      if (path.endsWith('/auth/session')) {
+        expect(identityVersion).toBe('1');
+        return authenticated ? signedIn() : anonymous();
+      }
       expect(path).toBe('/api/admin/auth/phone-passcode');
+      expect(identityVersion).toBeNull();
       expect(JSON.parse(String(init?.body))).toEqual({phone: '+250780000001', pin: '0123'});
       expect(init?.credentials).toBe('same-origin');
       authenticated = true;
@@ -87,6 +98,38 @@ describe('BuriMunsi phone and passcode sign-in', () => {
     expect(screen.getByLabelText('Four-digit passcode')).toHaveValue('');
   });
 
+  it.each([true, false])('checks a direct owner proof without a second session read (%s)', async matches => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, options?: RequestInit) => {
+      if (String(input).endsWith('/auth/session')) return anonymous();
+      expect(new Headers(options?.headers).get('X-Collect-Owner-Identity-Version')).toBeNull();
+      const proof = confirmed();
+      return reply(matches ? proof : {...proof, ownerIdentity: {...ownerIdentity, principalId: 'another-person'}});
+    });
+    const onSignedIn = openLogin(fetchImpl);
+    await waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
+    submit();
+    if (matches) await waitFor(() => expect(onSignedIn).toHaveBeenCalledOnce());
+    else {
+      expect(await screen.findByRole('button', {name: 'Check session'})).toBeInTheDocument();
+      expect(onSignedIn).not.toHaveBeenCalled();
+    }
+    expect(fetchImpl.mock.calls.map(([path]) => path)).toEqual(['/api/admin/auth/session', '/api/admin/auth/phone-passcode']);
+  });
+
+  it.each(['admin', 'staff'])('opens a managed %s session directly from its phone sign-in response', async role => {
+    const accountId = '11111111-1111-4111-8111-111111111111';
+    const user = {...account, email: null, accountId, role, passcodeVerifiedAt: new Date(Date.now() - 1000).toISOString()};
+    const adminIdentity = {schemaVersion: 1, accountId, role, adminId: user.id, principalId: user.principalId, collectionId: 'group-one'};
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/auth/session') ? anonymous() :
+      reply({sessionContract: 2, user, csrfToken: csrf, expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        ownerEmail: null, ...(role === 'admin' ? {adminIdentity} : {})}));
+    const onSignedIn = openLogin(fetchImpl);
+    await waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
+    submit();
+    await waitFor(() => expect(onSignedIn).toHaveBeenCalledOnce());
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual(['/api/admin/auth/session', '/api/admin/auth/phone-passcode']);
+  });
+
   it('rejects a different cookie session after a successful sign-in response', async () => {
     let attempted = false;
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
@@ -111,6 +154,23 @@ describe('BuriMunsi phone and passcode sign-in', () => {
 });
 
 describe('BuriMunsi passcode verification', () => {
+  it('accepts the bound versioned proof on the same session without another GET', async () => {
+    const verified = new Date().toISOString();
+    const old = new Date(Date.now() - 310_000).toISOString();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, options?: RequestInit) => {
+      if (String(input).endsWith('/auth/session')) return reply(confirmed(old));
+      expect(new Headers(options?.headers).get('X-Collect-Owner-Identity-Version')).toBeNull();
+      return reply({contractVersion: 1, sessionId: owner.sessionId, passcodeVerifiedAt: verified, session: confirmed(verified)});
+    });
+    const controller = new AdminSessionController({backend: 'supabase', phonePasscodeOnly: true, publishableKey,
+      captchaEnabled: false, googleEnabled: false, fetchImpl});
+    try {
+      await controller.refresh();
+      await controller.verifySensitivePasscode('0123');
+      expect(controller.getSnapshot().user?.passcodeVerifiedAt).toBe(verified);
+      expect(fetchImpl.mock.calls.map(([path]) => path)).toEqual(['/api/admin/auth/session', '/api/admin/auth/passcode/verify']);
+    } finally {controller.stop();}
+  });
   it.each([true, false])('requires independent readback of a new proof on the same session (%s)', async matches => {
     const original = new Date(Date.now() - 310_000).toISOString();
     const verified = new Date(Date.now() - 1000).toISOString();
@@ -121,12 +181,17 @@ describe('BuriMunsi passcode verification', () => {
       captchaEnabled: true, googleEnabled: false, fetchImpl: async (input, init) => {
         const path = String(input);
         fetchPaths.push(path);
-        if (path.endsWith('/auth/session')) return reply({
-          user: {...account, passcodeVerifiedAt: verifiedRequest && matches ? verified : original},
-          expiresAt, csrfToken: csrf, ownerEmail: null,
-        });
+        const headers = new Headers(init?.headers);
+        if (path.endsWith('/auth/session')) {
+          expect(headers.get('X-Collect-Owner-Identity-Version')).toBe('1');
+          return reply({
+            user: {...account, passcodeVerifiedAt: verifiedRequest && matches ? verified : original},
+            expiresAt, csrfToken: csrf, ownerEmail: null,
+          });
+        }
         expect(path).toBe('/api/admin/auth/passcode/verify');
-        expect(new Headers(init?.headers).get('X-Collect-CSRF')).toBe(csrf);
+        expect(headers.get('X-Collect-Owner-Identity-Version')).toBeNull();
+        expect(headers.get('X-Collect-CSRF')).toBe(csrf);
         expect(JSON.parse(String(init?.body))).toEqual({pin: '0123'});
         verifiedRequest = true;
         return reply({contractVersion: 1, sessionId: account.sessionId, passcodeVerifiedAt: verified});

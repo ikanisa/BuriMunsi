@@ -135,7 +135,7 @@ export class PostgresNativeObservations {
  async inboxCheck(actor,input){
   try{return await this.authority.write(async tx=>{
    await this.context(tx,actor);
-   const r=await tx.unsafe('SELECT private.burimunsi_observation_inbox_check($1::jsonb) AS result',[JSON.stringify(input)]);
+   const r=await tx.unsafe('SELECT private.burimunsi_observation_inbox_check($1::text::jsonb) AS result',[JSON.stringify(input)]);
    const result=r[0]?.result;
    check(r.length===1&&result?.groupId===this.groupId&&result.runId===input.runId&&result.state===input.state);
    return result;

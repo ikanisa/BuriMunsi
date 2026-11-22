@@ -5,7 +5,7 @@ import {normalizeLoginPhone, PASSCODE} from './phonePasscode';
 import {authorityKey} from './sessionAuthority';
 import {OTP} from './sessionPolicy';
 import type {SessionReadback} from './sessionReadback';
-import {parseAdminUser, parseSignInOtpReceipt, type AdminUser, type OtpReceipt} from './sessionResponses';
+import {parseAdminUser, parsePhoneLoginSession, parseSignInOtpReceipt, type AdminUser, type OtpReceipt} from './sessionResponses';
 
 // The Google exchange predates policy/owner negotiation: auth/session is the
 // authoritative source for these fields, which can be omitted by the exchange.
@@ -19,6 +19,7 @@ interface SignInSession {
   fenceLogout: () => boolean;
   fenceVerification: () => boolean;
   restore: (readback: SessionReadback) => Promise<boolean>;
+  confirmPhoneSession: (user: AdminUser, csrfToken: string, current: () => boolean) => Promise<boolean>;
 }
 
 export class AdminSignIn {
@@ -59,6 +60,15 @@ export class AdminSignIn {
       body: {phone: normalizedPhone, pin},
       authenticated: false,
     }, {isCurrent: current, receiveCsrf: () => undefined});
+    if (this.session.config().phonePasscodeOnly && body.sessionContract === 2) {
+      try {
+        const {user, csrfToken} = parsePhoneLoginSession(body, normalizedPhone);
+        if (await this.session.confirmPhoneSession(user, csrfToken, current)) return;
+      } catch {
+        throw new AdminRequestError(message, {outcomeUnknown: true});
+      }
+      throw new AdminRequestError(message, {outcomeUnknown: true});
+    }
     let expected: AdminUser;
     try {expected = parseAdminUser(body);} catch {throw new AdminRequestError(message, {outcomeUnknown: true});}
     if (expected.role === 'staff' && !expected.accountId || expected.accountId && expected.phone !== normalizedPhone) throw new AdminRequestError(message, {outcomeUnknown: true});

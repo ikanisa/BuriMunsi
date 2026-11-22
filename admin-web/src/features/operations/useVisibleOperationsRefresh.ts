@@ -3,7 +3,7 @@ import {useOperationsLive} from './operationsLiveContext';
 
 /** Refetch the current authorized route. Notifications contain no record data. */
 export function useVisibleOperationsRefresh(enabled: boolean, pollMs: number | undefined,
-  refresh: (invalidated: boolean) => void, collectionId?: string, liveReads = false) {
+  refresh: (invalidated: boolean, minimumAge: number) => void, collectionId?: string, liveReads = false) {
   const stream = useOperationsLive(enabled && (!!pollMs || liveReads), collectionId);
   const interval = stream.configured ? (stream.connected ? 60000 : Math.min(pollMs ?? 5000, 5000)) : pollMs;
   useEffect(() => {
@@ -11,12 +11,12 @@ export function useVisibleOperationsRefresh(enabled: boolean, pollMs: number | u
     let timer: number | undefined;
     const visible = () => document.visibilityState === 'visible' && navigator.onLine;
     const stop = () => {if (timer !== undefined) window.clearInterval(timer); timer = undefined;};
-    const tick = () => {if (visible()) refresh(false); else stop();};
+    const tick = () => {if (visible()) refresh(false, interval); else stop();};
     const schedule = () => {stop(); if (visible()) timer = window.setInterval(tick, interval);};
-    const resume = () => {schedule(); if (visible()) refresh(false);};
+    const resume = () => {schedule(); if (visible()) refresh(false, interval);};
     const changed = (event: Event) => {
       const scope: unknown = (event as CustomEvent<{collectionId?: string}>).detail?.collectionId;
-      if (visible() && (!scope || !collectionId || scope === collectionId)) refresh(true);
+      if (visible() && (!scope || !collectionId || scope === collectionId)) refresh(true, 0);
     };
     schedule();
     document.addEventListener('visibilitychange', resume);

@@ -6,7 +6,8 @@ import pg from '../node_modules/pg/lib/index.js';
 import {startOwnedPg17} from '../current-pg-transfer/test-support/owned-pg17.mjs';
 
 const read=name=>readFile(new URL('../../../supabase/migrations/'+name,import.meta.url),'utf8');
-const [migration,admin,member]=await Promise.all([read('20261122191500_burimunsi_gateway_realtime_wake.sql'),
+const [migration,unpaired,admin,member]=await Promise.all([read('20261122191500_burimunsi_gateway_realtime_wake.sql'),
+ read('20261122204000_burimunsi_unpaired_sender_wake.sql'),
  read('20261122191400_burimunsi_admin_realtime.sql'),read('20261022200028_collect_private_member_realtime.sql')]);
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const device='synthetic-sender',app='app_'+randomUUID(),group=randomUUID(),token=hash(randomBytes(32)),other=hash(randomBytes(32));
@@ -34,7 +35,8 @@ test('original payer work wakes a currently authorized managed sender using only
  CREATE TABLE collect_sms.devices(installation_id text PRIMARY KEY,token_hash text,allowed_kinds text,ready int,revoked_at text);
  CREATE TABLE collect_sms.applications(application_id text PRIMARY KEY,token_hash text,allowed_kinds text,revoked_at text);
  CREATE TABLE collect_sms.messages(message_id text PRIMARY KEY,application_id text,idempotency_key text,state text,kind text,cancel_requested int,owner_installation_id text,text text DEFAULT 'synthetic receipt',to_number text DEFAULT '+250780000001');
- CREATE TABLE private.burimunsi_scopes(collection_id text PRIMARY KEY,enabled boolean); CREATE TABLE private.burimunsi_payment_sms_deliveries(message_id text,application_id text,idempotency_key text,collection_id text,body_sha256 text,destination_sha256 text);
+ CREATE TABLE app.collections(id text PRIMARY KEY,status text NOT NULL);
+ CREATE TABLE private.burimunsi_scopes(collection_id text PRIMARY KEY,enabled boolean,active_binding_id text); CREATE TABLE private.burimunsi_payment_sms_deliveries(message_id text,application_id text,idempotency_key text,collection_id text,body_sha256 text,destination_sha256 text);
  GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA collect_sms TO collect_sms_runtime;
  CREATE TABLE private.member_realtime_control(singleton boolean,enabled boolean,policy_sha256 text,source_sha256 text,attempted_total bigint);
  CREATE TABLE private.auth_principal_links(auth_user_id uuid,user_id text);CREATE TABLE app.users(id text,access_status text);
@@ -61,16 +63,18 @@ test('original payer work wakes a currently authorized managed sender using only
  await q("SELECT set_config('burimunsi.admin_live_member_preimage',private._collect_member_realtime_metadata_sha(),false)");
  const hardened=admin.slice(admin.indexOf('ALTER POLICY collect_member_no_anonymous_v1'),admin.indexOf('END;$member_pin$;')+'END;$member_pin$;'.length);
  await q(hardened);
- await q('INSERT INTO private.burimunsi_scopes VALUES($1,true)',[group]);
+ await q("INSERT INTO app.collections VALUES($1,'active')",[group]);
+ await q('INSERT INTO private.burimunsi_scopes VALUES($1,false,NULL)',[group]);
  await q("INSERT INTO collect_sms.devices VALUES($1,$2,'[\"receipt\"]',1,NULL)",[device,token]);
  await q("INSERT INTO collect_sms.applications VALUES($1,$2,'[\"receipt\"]',NULL)",[app,other]);
  const receipt=async key=>q("INSERT INTO private.burimunsi_payment_sms_deliveries VALUES($1,$2,$3,$4,$5,$6)",[app+':'+key,app,key,group,hash('synthetic receipt'),hash('+250780000001')]);
  for(const key of ['first','rotated','offline','revoked','ambiguous','expired','rollback','wrong-content','wrong-recipient'])await receipt(key);
- for(const relation of ['collect_sms.devices','collect_sms.applications','private.burimunsi_scopes','private.burimunsi_payment_sms_deliveries']){
+ for(const relation of ['collect_sms.devices','collect_sms.applications','app.collections','private.burimunsi_scopes','private.burimunsi_payment_sms_deliveries']){
   await q('ALTER TABLE '+relation+' ENABLE ROW LEVEL SECURITY;ALTER TABLE '+relation+' FORCE ROW LEVEL SECURITY');
   if(relation.startsWith('collect_sms'))await q('CREATE POLICY gateway_runtime ON '+relation+' TO collect_sms_runtime USING(true) WITH CHECK(true)');
  }
  await q(migration);
+ await q(unpaired);
  await q(`CREATE FUNCTION collect_sms.fixture_expire() RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
  BEGIN PERFORM set_config('burimunsi.gateway_wake_frame','1',true);
  UPDATE private.burimunsi_gateway_wake_channels SET expires_at=clock_timestamp()-interval '1 second';END$$`);
@@ -88,6 +92,16 @@ test('original payer work wakes a currently authorized managed sender using only
  const lease=await issue();assert.match(lease.topic,/^buri:gw:[0-9a-f]{64}$/);assert.deepEqual(await issue(),lease);
  assert.equal(JSON.stringify(lease).includes(device),false);assert.equal(JSON.stringify(lease).includes(token),false);
  await put('other');await put('first',app,'receipt');assert.equal(await joined(lease.topic),1);
+ // An existing subscriber also loses access as soon as the group or its
+ // configured bound receiver becomes ineligible.
+ await q('RESET ROLE');await q("UPDATE app.collections SET status='archived'");await gateway();
+ assert.equal(await issue(),null);assert.equal(await joined(lease.topic),0);
+ await q('RESET ROLE');await q("UPDATE app.collections SET status='active'");
+ await q("UPDATE private.burimunsi_scopes SET active_binding_id='paired',enabled=false");await gateway();
+ assert.equal(await issue(),null);assert.equal(await joined(lease.topic),0);
+ await q('RESET ROLE');await q("UPDATE private.burimunsi_scopes SET enabled=true");await gateway();
+ assert.deepEqual(await issue(),lease);assert.equal(await joined(lease.topic),1);
+ await q('RESET ROLE');await q('UPDATE private.burimunsi_scopes SET active_binding_id=NULL,enabled=false');
  await gateway();for(const [key,text,to] of [['wrong-content','incorrect','+250780000001'],['wrong-recipient','synthetic receipt','+250780000002']]){
   await q("INSERT INTO collect_sms.messages VALUES($1,$2,$3,'accepted','receipt',0,NULL,$4,$5)",[app+':'+key,app,key,text,to]);
  }assert.equal(await joined(lease.topic),1);

@@ -20,7 +20,7 @@ describe('BuriMunsi receiver observations',()=>{
     render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
     const records=await screen.findByRole('region',{name:'Android receiver observations'});
     expect(within(records).getByText('Credited')).toBeVisible();expect(within(records).getByText('100000000172')).toBeVisible();
-    expect(within(records).getByText('Reported delivered')).toBeVisible();expect(screen.getByText(/Inbox matched at the last check/)).toBeVisible();
+    expect(within(records).getByText('Reported delivered')).toBeVisible();expect(screen.getByText(/All participating Admin phone inboxes matched/)).toBeVisible();
     expect(screen.queryByRole('button',{name:'Review source'})).not.toBeInTheDocument();
     expect(fixture.request.mock.calls[1][0]).toBe('momo/observations?collectionId=first-group&limit=25&includeProcessing=1');
   });

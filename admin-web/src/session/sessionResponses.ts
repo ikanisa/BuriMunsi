@@ -1,6 +1,6 @@
 /* eslint-disable no-control-regex -- Reject control characters in session identifiers. */
 import {AdminRequestError, isJsonObject, isVerificationUuid, type JsonObject} from '../api/contracts';
-import {isAdminIdentityId, parseOwnerIdentitySession, parseScopedAdminIdentity, type AdminOwnerIdentity, type ScopedAdminIdentity} from './ownerIdentity';
+import {hasScopedAdminAuthority, isAdminIdentityId, isVerifiedCurrentOwner, parseOwnerIdentitySession, parseScopedAdminIdentity, type AdminOwnerIdentity, type ScopedAdminIdentity} from './ownerIdentity';
 
 export interface AdminUser {
   id: string;
@@ -46,7 +46,7 @@ function hasSessionFields(body: JsonObject): boolean {
   return sessionFields.every(key => Object.hasOwn(body, key));
 }
 
-function isCsrfToken(value: unknown): boolean {
+function isCsrfToken(value: unknown): value is string {
   return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 }
 
@@ -110,6 +110,17 @@ export function parseSessionUser(body: JsonObject, now: number): AdminUser {
       ? {displayName: result.displayName.trim()} : {}),
     ...(typeof result.phone === 'string' && /^\+2507[2389]\d{7}$/.test(result.phone) ? {phone: result.phone} : {}),
   };
+}
+
+export function parsePhoneLoginSession(body: JsonObject, phone: string, now = Date.now()) {
+  const user = parseSessionUser(body, now);
+  const boundIdentity = user.accountId
+    ? !!user.principalId && (user.role === 'staff' ? body.adminIdentity == null : hasScopedAdminAuthority(user))
+    : isVerifiedCurrentOwner(user);
+  if (!hasSessionFields(body) || body.sessionContract !== 2 || !isCsrfToken(body.csrfToken) ||
+      !boundIdentity || user.authMethod !== 'phone_passcode' || user.phone !== phone ||
+      !user.passcodeVerifiedAt) throw new Error('Invalid BuriMunsi sign-in session.');
+  return {user, csrfToken: body.csrfToken};
 }
 
 function parsePasscodeTime(value: unknown, now: number): string | null {
