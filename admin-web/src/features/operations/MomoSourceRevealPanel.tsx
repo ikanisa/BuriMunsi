@@ -9,14 +9,14 @@ import type { MomoExtraction } from './momoSourceActions';
 import { momoRevealReason, revealMomoSource, type MomoRevealedSource, type MomoSourceRevealContext } from './momoSourceReveal';
 
 /** Unmount the sensitive view on any gate, source or authority change. */
-export function MomoSourceRevealPanel({source, enabled = false, onCandidate}: {source: MomoSourceJob; enabled?: boolean; onCandidate?: (candidate: MomoExtraction | null) => void}) {
+export function MomoSourceRevealPanel({source, enabled = false, onCandidate, observationGroup}: {source: Pick<MomoSourceJob, 'raw_sms_id' | 'body_sha256'>; observationGroup?: string; enabled?: boolean; onCandidate?: (candidate: MomoExtraction | null) => void}) {
   const session = useSession(), user = session.user;
   if (!enabled || session.status !== 'authenticated' || !user || user.financialModel !== 'canonical_evidence_ledger' || !['sms.read', 'sms.reveal'].every((permission) => user.permissions.includes(permission))) return null;
   if (!source.body_sha256) return <p>Original source access is unavailable because its recorded digest is missing.</p>;
-  const scope = JSON.stringify([session.epoch, user.id, user.sessionId, user.email, user.role, user.principalId, user.financialModel, user.expiresAt, [...user.permissions].sort(), source.raw_sms_id, source.body_sha256]);
-  return <MomoSourceRevealSession key={scope} source={source} session={session} user={user} onCandidate={onCandidate} />;
+  const scope = JSON.stringify([session.epoch, user.id, user.sessionId, user.email, user.role, user.principalId, user.financialModel, user.expiresAt, [...user.permissions].sort(), source.raw_sms_id, source.body_sha256, observationGroup]);
+  return <MomoSourceRevealSession key={scope} source={source} session={session} user={user} onCandidate={onCandidate} observationGroup={observationGroup} />;
 }
-function MomoSourceRevealSession({source, session, user, onCandidate}: {source: MomoSourceJob; session: SessionContextValue; user: AdminUser; onCandidate?: (candidate: MomoExtraction | null) => void}) {
+function MomoSourceRevealSession({source, session, user, onCandidate, observationGroup}: {source: Pick<MomoSourceJob, 'raw_sms_id' | 'body_sha256'>; observationGroup?: string; session: SessionContextValue; user: AdminUser; onCandidate?: (candidate: MomoExtraction | null) => void}) {
   const live = useRef(session), mounted = useRef(false), pending = useRef<AbortController | null>(null), busyRef = useRef(false);
   useLayoutEffect(() => {live.current = session;}, [session]);
   useLayoutEffect(() => {mounted.current = true; return () => {mounted.current = false; pending.current?.abort();};}, []);
@@ -38,7 +38,7 @@ function MomoSourceRevealSession({source, session, user, onCandidate}: {source: 
     busyRef.current = true; setBusy(true); setMessage(''); setNeedsVerification(false); setContent(null);
     const controller = new AbortController(); pending.current = controller;
     const context: MomoSourceRevealContext = {request: session.request, identity: {id: user.id, sessionId: user.sessionId, email: user.email, role: user.role, permissions: user.permissions, expiresAt: user.expiresAt}, financialModel: user.financialModel,
-      source, enabled: true, isCurrent: current, signal: controller.signal,
+      source, observationGroup, enabled: true, isCurrent: current, signal: controller.signal,
       verifyFresh: async () => {const actor = live.current.user; return !!actor && actor.id === user.id && actor.sessionId === user.sessionId && await verifySensitiveAccess(live.current, actor);}};
     try {
       const result = await revealMomoSource(context, reviewReason);

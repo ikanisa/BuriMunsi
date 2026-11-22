@@ -3,7 +3,7 @@ import {Button, EmptyState, ErrorState, LoadingState} from '../../ui';
 import type {Page} from './contracts';
 import type {OperationReadState} from './useOperationRead';
 
-export const momoReadOptions = {invalidResponse: 'The MoMo records could not be verified.'};
+export const momoReadOptions = {live: true, invalidResponse: 'The MoMo records could not be verified.'};
 
 const momoAmount = new Intl.NumberFormat('en-RW', {maximumFractionDigits: 0});
 

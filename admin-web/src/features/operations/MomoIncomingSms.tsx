@@ -7,9 +7,18 @@ import {Button, Card, StatusBadge} from '../../ui';
 import {parseSmsPage, type Page, type SmsReceipt} from './contracts';
 import {formatStatus, formatTime} from './OperationsRecords';
 import {MomoPager, MomoResult, MomoTable, momoReadOptions} from './MomoRecordViews';
+import {ReceiverSmsPanel} from './ReceiverSmsPanel';
 import {useOperationRead} from './useOperationRead';
 
 export function MomoIncomingSms() {
+  const session = useSession();
+  const [receiver, setReceiver] = useState(session.user?.authMethod === 'phone_passcode');
+  return <><div className="momo-views" aria-label="SMS sources">
+    <Button variant={receiver ? 'primary' : 'secondary'} aria-pressed={receiver} onClick={() => setReceiver(true)}>Android receiver</Button>
+    <Button variant={!receiver ? 'primary' : 'secondary'} aria-pressed={!receiver} onClick={() => setReceiver(false)}>App uploads</Button>
+  </div>{receiver ? <ReceiverSmsPanel /> : <UploadedSms />}</>;
+}
+function UploadedSms() {
   const session = useSession(), request = session.request, [input, setInput] = useState(''), [search, setSearch] = useState(''), [offset, setOffset] = useState(0);
   const load = useCallback(async (signal: AbortSignal) => {
     const query = new URLSearchParams({source_kind: 'capture', limit: '25', offset: String(offset)});
