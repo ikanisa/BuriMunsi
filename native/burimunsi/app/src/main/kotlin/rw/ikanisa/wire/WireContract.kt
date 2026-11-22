@@ -152,6 +152,20 @@ object StrictQuery {
     }
 }
 
+/** Decode only route schemas reached by validation. Field rules and references still run on every response. */
+internal class LazyWireDefinitions(private val encoded: Map<String, String>) : AbstractMap<String, Any?>() {
+    private val decoded = java.util.concurrent.ConcurrentHashMap<String, Any>()
+    override val size get() = encoded.size
+    override val keys get() = encoded.keys
+    override fun containsKey(key: String) = encoded.containsKey(key)
+    override fun get(key: String): Any? {
+        val source = encoded[key] ?: return null
+        return decoded.computeIfAbsent(key) { checkNotNull(StrictJson.parse(source)) }
+    }
+    override val entries: Set<Map.Entry<String, Any?>>
+        get() = encoded.keys.associateWith { get(it) }.entries
+}
+
 class WireContract(private val product: String, private val version: String,
     private val defs: Map<String, Any?>, private val routes: List<List<String>> = emptyList()) {
     private val patterns = java.util.concurrent.ConcurrentHashMap<String, Regex>()
