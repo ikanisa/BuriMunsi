@@ -36,7 +36,11 @@ test('returning verified handsets can sign in through a shift-start burst while 
   const until=previous.indexOf('CREATE FUNCTION private.burimunsi_pin_create_session(',from);
   assert.ok(from>0 && until>from);
   await db.query(previous.slice(from,until));
-  await db.query(await migration('20261122150200_burimunsi_known_device_login_budget.sql'));
+  await db.query("CREATE FUNCTION private.burimunsi_observation_storage_commit() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN RETURN NEW; END$$; GRANT USAGE,CREATE ON SCHEMA private TO postgres;");
+  await db.query(await migration('20261122181200_burimunsi_known_device_login_budget.sql'));
+  await db.query("SET ROLE postgres; CREATE FUNCTION private.synthetic_new_operator_rpc() RETURNS int LANGUAGE sql AS 'SELECT 1'; RESET ROLE");
+  const privileges=(await db.query("SELECT has_function_privilege('anon','private.synthetic_new_operator_rpc()','execute') AS future_public,has_function_privilege('authenticated','private.burimunsi_observation_storage_commit()','execute') AS trigger_public")).rows[0];
+  assert.deepEqual(privileges,{future_public:false,trigger_public:false});
   const call=async(phone,device,key,network=direct,profile='internal_receiver')=>(await db.query(
     'SELECT private.burimunsi_pin_login_account($1,$2,$3::uuid,$4,floor(extract(epoch from clock_timestamp())*1000)::bigint,$5,$6) result',
     [phone,hash(phone),device,network,key,profile])).rows[0].result;

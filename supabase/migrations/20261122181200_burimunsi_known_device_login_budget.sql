@@ -45,4 +45,9 @@ END $function$;
 REVOKE ALL ON FUNCTION private.burimunsi_pin_login_account(text,text,uuid,text,bigint,text,text)
   FROM PUBLIC,anon,authenticated,service_role,collect_runtime,collect_importer;
 GRANT EXECUTE ON FUNCTION private.burimunsi_pin_login_account(text,text,uuid,text,bigint,text,text) TO collect_runtime;
+-- Keep new owner-created RPCs private until explicitly granted. Existing
+-- public APIs keep their reviewed ACLs. The storage journal callback is only
+-- used by its table trigger and needs no client EXECUTE privilege.
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION private.burimunsi_observation_storage_commit() FROM PUBLIC,anon,authenticated,service_role;
 COMMIT;

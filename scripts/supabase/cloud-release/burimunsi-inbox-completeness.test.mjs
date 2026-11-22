@@ -94,7 +94,7 @@ test('isolated PG17 reconciles native and gateway pages, original consent, histo
  const original=await sqlSource('20261117134954_burimunsi_observation_processing_status.sql');
  const segment=original.slice(original.indexOf('CREATE FUNCTION private.burimunsi_observation_processing_status'),original.indexOf('-- No job is created'));
  await execute(segment);
- await execute(await sqlSource('20261122150000_burimunsi_sms_completeness.sql'));
+ await execute(await sqlSource('20261122181000_burimunsi_sms_completeness.sql'));
  await execute("INSERT INTO private.burimunsi_scopes VALUES($1,'wallet',NULL)",[group]);
  await execute("INSERT INTO private.burimunsi_accounts VALUES($1,$2,true,false,'admin')",[account,group]);
  await execute("INSERT INTO private.burimunsi_device_grants VALUES($1,$2,1,$3,true,'internal_receiver')",[grant,group,device]);

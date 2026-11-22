@@ -9,7 +9,7 @@ import {startOwnedPg17} from '../current-pg-transfer/test-support/owned-pg17.mjs
 import {handleAdmin} from '../../../supabase/functions/_shared/domain/admin_bridge.js';
 import {compileSql} from '../../../supabase/functions/_shared/postgres-compatibility-sql.js';
 
-const release=await readFile(new URL('../../../supabase/migrations/20261122150400_burimunsi_admin_realtime.sql',import.meta.url),'utf8');
+const release=await readFile(new URL('../../../supabase/migrations/20261122181400_burimunsi_admin_realtime.sql',import.meta.url),'utf8');
 const predecessor=await readFile(new URL('../../../supabase/migrations/20261022200028_collect_private_member_realtime.sql',import.meta.url),'utf8');
 function memberFunction(name){
  const start=predecessor.indexOf('CREATE FUNCTION private.'+name+'(');
