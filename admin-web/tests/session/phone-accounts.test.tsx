@@ -74,8 +74,9 @@ describe('dedicated phone accounts', () => {
     });
     open('/admin/burimunsi', fetchImpl);
     fireEvent.click(await screen.findByRole('button', {name: 'Load groups'}, {timeout: 5000}));
-    expect(await screen.findByRole('option', {name: 'group-one'})).toBeInTheDocument();
-    expect(screen.queryByRole('option', {name: 'another-group'})).toBeNull();
+    expect(await screen.findByText('group-one', {exact: true})).toBeInTheDocument();
+    expect(screen.queryByText('another-group', {exact: true})).toBeNull();
+    expect(fetchImpl.mock.calls.some(([url]) => String(url).includes('collectionId=another-group'))).toBe(false);
     expect(screen.queryByText('Owner verification')).toBeNull();
     fireEvent.click(screen.getByRole('link', {name: 'SMS controls'}));
     await waitFor(() => expect(fetchImpl.mock.calls.some(([path]) => path === '/api/admin/notification-operator/access')).toBe(true), {timeout: 5000});
