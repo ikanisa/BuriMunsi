@@ -4,6 +4,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /** Preserve signals arriving while another observation job owns the shared gate. */
 internal class ObservationWakeup {
+    companion object {
+        fun recoverOnProcessStart(pendingReceipt:()->Boolean, heldReceipt:()->Boolean, pendingControl:()->Boolean):Boolean =
+            try { pendingReceipt() || heldReceipt() || pendingControl() }
+            catch (_: Exception) { true } // Retry uncertain protected state through the normal authorized worker.
+    }
+
     private val gate=MomoGatewayWakeupGate()
     private val localRetry=AtomicBoolean(false)
     private val networkRetry=AtomicBoolean(false)

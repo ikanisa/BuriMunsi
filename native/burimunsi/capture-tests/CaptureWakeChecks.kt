@@ -29,6 +29,15 @@ fun main(){
     ck("worker completion rechecks and schedules retained work",CaptureFixture.scheduleCalls==1&&CaptureFixture.pendingJobs.size==1)
     CaptureFixture.reset();receiver.onReceive(context,sms);receiver.onReceive(context,sms)
     ck("repeated schedules retain the same one-shot job identity",CaptureFixture.signalCalls==2&&CaptureFixture.pendingJobs.size==1)
+    ck("idle process startup skips the observation network job",
+        !ObservationWakeup.recoverOnProcessStart({false},{false},{false}))
+    ck("a retained receipt immediately wakes the original worker",
+        ObservationWakeup.recoverOnProcessStart({true},{error("unneeded")},{error("unneeded")}))
+    ck("a held receipt or pending consent wakes the original worker",
+        ObservationWakeup.recoverOnProcessStart({false},{true},{false}) &&
+            ObservationWakeup.recoverOnProcessStart({false},{false},{true}))
+    ck("unreadable protected work still gets an immediate authorized recovery attempt",
+        ObservationWakeup.recoverOnProcessStart({throw IllegalStateException("unreadable")},{false},{false}))
     val observation=ObservationWakeup();var network=0;var local=0;var urgent=false
     check(observation.begin())
     observation.signalNetwork{network++};observation.signalLocal{local++}

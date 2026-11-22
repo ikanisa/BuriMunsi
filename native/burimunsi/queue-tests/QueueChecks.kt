@@ -37,7 +37,7 @@ fun main(){
   val view=ObservationGateway.queued(context,"")!!;var shown=false
   NativeRepository.switch(null);check(!ObservationGateway.publishQueued(context,view){shown=true}&&!shown)
   NativeRepository.switch(a);check(!ObservationGateway.publishQueued(context,view){shown=true}&&!shown)
-  check(journal.pending(a).size==1)
+  check(journal.pending(a).size==1 && journal.hasPendingWork())
  }
  test("permission revocation blocks both reads and in-flight publication"){
   val view=ObservationGateway.queued(context,"")!!;var shown=false

@@ -47,7 +47,7 @@ private class CollectGateway(private val context:Context,private val managedColl
     }
     override fun continuousHealth()=BuriContinuousSupervisor.health()
     override fun stopContinuous()=BuriContinuousSupervisor.stop(context)
-    override fun recoverContinuous()=BuriContinuousSupervisor.recover(context)
+    override fun recoverContinuous()=ObservationBackground.onProcessStart(context)
     override fun retirementPending():Boolean=if(BuildConfig.IS_QUALIFICATION)false else {
         val snapshot=store.read()
         snapshot?.optBoolean("receiver_retired")!=true&&(snapshot?.optBoolean("retirement_pending")==true||hasRetirement())
