@@ -27,8 +27,9 @@ export const MomoReceiptsPage = lazy(() => import('../../features/operations/Mom
 
 export function OverviewRoute() {
   const access = useAccess();
+  const {verificationMode} = useSession();
   return <OverviewPage key={access.authorityKey} request={access.request} permissions={access.permissions}
-    financialModel={access.financialModel} authorityKey={access.authorityKey} />;
+    financialModel={access.financialModel} authorityKey={access.authorityKey} preferSmsHealth={verificationMode === 'passcode'} />;
 }
 
 function RequestHistoryRoute() {

@@ -1,5 +1,5 @@
-import {useEffect, useState} from 'react';
-import type {AdminRequest} from '../../api/client';
+import {useEffect, useRef, useState} from 'react';
+import {AdminRequestError, type AdminRequest} from '../../api/client';
 import {Button, Card, ErrorState, LoadingState} from '../../ui';
 import {assistedLabels, nativeLabels, parseSmsOversight, payerLabels, type Oversight} from './smsOversightContract';
 
@@ -20,20 +20,32 @@ function QueueCounts<Key extends string>({labels, counts}: {labels: Record<Key, 
 }
 
 /** Metadata only: a stale sample never presents counts as current. */
-export function SmsOversight({request, permissions, authorityKey}: {request: AdminRequest; permissions: readonly string[]; authorityKey: string}) {
+export function SmsOversight({request, permissions, authorityKey, preferSmsHealth}: {request: AdminRequest; permissions: readonly string[]; authorityKey: string; preferSmsHealth?: boolean}) {
   const allowed = permissions.includes('system_health.read');
   const [revision, setRevision] = useState(0), [now, setNow] = useState(Date.now);
   const [state, setState] = useState<{scope: string; sample: Oversight | null; error: boolean} | null>(null);
+  const legacyAuthority = useRef<string | null>(null);
   const scope = JSON.stringify([authorityKey, revision]); const current = state?.scope === scope ? state : null;
   useEffect(() => {
     if (!allowed) return;
     const controller = new AbortController();
-    void request('oversight/health', {authenticated: true, expectedStatus: 200, signal: controller.signal})
-      .then(parseSmsOversight)
+    const options = {authenticated: true, expectedStatus: 200, signal: controller.signal};
+    const read = async () => {
+      if (preferSmsHealth && legacyAuthority.current !== authorityKey) {
+        try {return parseSmsOversight(await request('oversight/sms-health', options), 'admin_sms_health');}
+        catch (failure) {
+          if (controller.signal.aborted || !(failure instanceof AdminRequestError) || failure.statusCode !== 404 ||
+              !['oversight_not_found', 'proxy_route_not_allowed'].includes(failure.code ?? '')) throw failure;
+          legacyAuthority.current = authorityKey;
+        }
+      }
+      return parseSmsOversight(await request('oversight/health', options));
+    };
+    void read()
       .then(sample => {if (!controller.signal.aborted) setState({scope, sample, error: false});})
       .catch(() => {if (!controller.signal.aborted) setState({scope, sample: null, error: true});});
     return () => controller.abort();
-  }, [allowed, request, scope]);
+  }, [allowed, authorityKey, preferSmsHealth, request, scope]);
   useEffect(() => {
     if (!allowed) return;
     const timer = window.setInterval(() => setNow(Date.now()), 5000);

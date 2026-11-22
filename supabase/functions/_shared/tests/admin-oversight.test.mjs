@@ -45,6 +45,46 @@ test('health reports managed pause and native configuration independently',async
  assert.equal(value.configuration.native_sms_ledger,'disabled');
 });
 
+test('SMS health matches the visible aggregates in one guarded batch without scanning other queues',async()=>{
+ const rows=healthRows();
+ const native={burimunsi_sms:{pending:1,retrying:2,blocked:1,unmatched:3,posted:4,oldest_pending_seconds:40},
+  burimunsi_payer_sms:{pending:2,gateway_accepted:3,sent:4,delivered:5,failed:0,unknown:1,suppressed:0}};
+ const f=fixture({selects:rows});
+ f.account.permissions.push('sms.read');f.actor.permissions.add('sms.read');
+ f.env.DB.adminReadBatch=async (_context,guard,statements)=>{
+  assert.ok(guard.args.includes('system_health.read'));
+  f.calls.push(statements);
+  return statements.map(({sql})=>{
+   const full=oversightHealthSql.indexOf(sql);
+   if(full>=0)return {results:rows[full]};
+   if(sql.includes('to_regprocedure'))return {results:[{available:true}]};
+   if(sql.includes('private.burimunsi_admin_sms_health'))return {results:[{result:native}]};
+   assert.match(sql,/FROM assisted_sms_jobs j LEFT JOIN assisted_sms_send_starts/);
+   assert.doesNotMatch(sql,/assisted_sms_claims|notification_events|notification_deliveries|admin_email_events|admin_invitation_attempts|momo_processing_jobs/);
+   const {queued,claimed,send_started,uncertain,oldest_queued_at,oldest_unobserved_send_at}=rows[2][0];
+   return {results:[{queued,claimed,send_started,uncertain,oldest_queued_at,oldest_unobserved_send_at}]};
+  });
+ };
+ const full=await f.read('health');
+ assert.deepEqual(f.calls.map(batch=>batch.length),[7,1,1]);
+ f.calls.length=0;
+ const narrow=await f.read('sms-health');
+ assert.deepEqual(f.calls.map(batch=>batch.length),[3]);
+ assert.equal(narrow.scope,'admin_sms_health');assert.equal(narrow.checked_at,full.checked_at);
+ assert.equal(narrow.worker_heartbeat,full.worker_heartbeat);assert.equal(narrow.external_services_checked,false);
+ assert.deepEqual(Object.keys(narrow.queues).sort(),['assisted_sms','burimunsi_payer_sms','burimunsi_sms']);
+ for(const [name,queue] of Object.entries(narrow.queues))for(const [key,value] of Object.entries(queue))assert.deepEqual(value,full.queues[name][key]);
+ assert.deepEqual(Object.keys(narrow.queues.assisted_sms).sort(),['automatic_retry','claimed','oldest_queued_seconds','oldest_unobserved_send_seconds','queued','send_started','uncertain']);
+
+ f.actor.permissions.delete('sms.read');f.calls.length=0;
+ assert.deepEqual(Object.keys((await f.read('sms-health')).queues),['assisted_sms']);
+ assert.deepEqual(f.calls.map(batch=>batch.length),[2]);
+ f.actor.permissions.delete('system_health.read');f.calls.length=0;
+ await assert.rejects(()=>f.read('sms-health'),{code:'permission_required'});assert.equal(f.calls.length,0);
+ await assert.rejects(()=>f.read('sms-health?limit=1'),{code:'invalid_oversight_query'});
+ await assert.rejects(()=>f.read('sms-health','POST'),{code:'method_not_allowed'});
+});
+
 test('missing or changed grant and malformed health results fail closed',async()=>{
  const f=fixture({selects:healthRows()});f.actor.permissions.clear();await assert.rejects(()=>f.read('health'),{code:'permission_required'});assert.equal(f.calls.length,0);
  await assert.rejects(()=>fixture({denied:true}).read('health'),{code:'admin_access_changed'});

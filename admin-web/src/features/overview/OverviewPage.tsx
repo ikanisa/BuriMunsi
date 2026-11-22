@@ -18,8 +18,8 @@ const metricAppearance: Record<string, {icon: string; tone: string}> = {
   total_posted_contributions_rwf: {icon: 'swap', tone: 'info'},
 };
 
-export function OverviewPage({request, permissions, financialModel, authorityKey}: {
-  request: AdminRequest; permissions: readonly string[]; financialModel: FinancialModel; authorityKey: string;
+export function OverviewPage({request, permissions, financialModel, authorityKey, preferSmsHealth}: {
+  request: AdminRequest; permissions: readonly string[]; financialModel: FinancialModel; authorityKey: string; preferSmsHealth?: boolean;
 }) {
   const [result, setResult] = useState<{scope: string; data: OverviewData | null; error: string} | null>(null);
   const [generation, setGeneration] = useState(0);
@@ -56,6 +56,6 @@ export function OverviewPage({request, permissions, financialModel, authorityKey
         </Card>)}</div>
         <p className="overview-measured">Measured {new Date(data.measuredAt).toLocaleString()} · {financialModel === 'canonical_evidence_ledger' ? 'Recorded evidence' : 'Transaction journals'}</p>
       </>}
-    <SmsOversight request={request} permissions={permissions} authorityKey={authorityKey} />
+    <SmsOversight request={request} permissions={permissions} authorityKey={authorityKey} preferSmsHealth={preferSmsHealth} />
   </>;
 }
