@@ -6,7 +6,8 @@ import {readFile,writeFile} from 'node:fs/promises';
 import test from 'node:test';
 import {startPayerFixture} from './fixtures/burimunsi-payer-postgres.mjs';
 import {openFixturePayerWorker} from './fixtures/burimunsi-payer-delivery.mjs';
-import {installNativeChain,nativeRuntime,nativeActor,uuid,sha} from './fixtures/burimunsi-native-chain.mjs';
+import pg from '../node_modules/pg/lib/index.js';
+import {installNativeChain,installHandsetInventory,nativeRuntime,nativeActor,uuid,sha,testProfile} from './fixtures/burimunsi-native-chain.mjs';
 import {compileSql} from '../../../supabase/functions/_shared/postgres-compatibility-sql.js';
 import {validateProviderProfile,MOMO_SCHEMA_VERSION} from '../../../supabase/functions/_shared/domain/momo_pipeline.js';
 import {decrypt} from '../../../supabase/functions/_shared/domain/encryption.js';
@@ -48,8 +49,8 @@ function providerOutput(body){
   evidence:{incoming_success:'You have received',principal:'You have received '+amount+' RWF',transaction_id:'FT Id: '+reference,
     transaction_datetime:'at '+time,payer:'from '+name+' ('+identifier+')',fee:null,wallet_balance_after:'Balance: '+balance+' RWF'}};
 }
-function receiptFixture(f){
- const {run,env,journal,objects}=nativeRuntime(f.client,group),a=nativeActor(group),work={assert:async()=>{}};
+function receiptFixture(f,a=nativeActor(group)){
+ const {run,env,journal,objects}=nativeRuntime(f.client,group),work={assert:async()=>{}};
  const actor={id:a.accountId,sessionId:a.sessionId,principalUserId:a.principalUserId,installationId:a.installationId,
   groupId:group,role:'admin',installationProfile:'internal_receiver',capabilities:['records.read','sms.read','gateway.manage'],
   active:true,revoked:false,expiresAt:Date.now()+1800000};
@@ -179,4 +180,92 @@ test('ordinary Android replay posts once, explicitly suppresses the masked payer
    stages:timeline};
   await writeFile(process.env.BURIMUNSI_CHAIN_PROOF,JSON.stringify(proof,null,2)+'\n',{mode:0o600});
  }
+});
+
+test('two Admin receipt sources concurrently reporting the same network transfer post one ledger credit and create one payer SMS',async t=>{
+ let peer;t.after(async()=>{if(peer)await peer.end();});
+ const f=await startPayerFixture(t,{groupId:group,memberId:member,phoneNumber:phone,enabledAgo:86400000,
+  beforeNoticeMigration:client=>installNativeChain(client,group)});
+ await installHandsetInventory(f.client);
+ peer=new pg.Client({host:f.cluster.socket,port:f.cluster.port,database:'postgres',user:f.cluster.initialUser});
+ await peer.connect();await peer.query('SET ROLE postgres');
+ const first=nativeActor(group),second={...first,accountId:uuid(71),installationId:uuid(72),grantId:uuid(73),sessionId:uuid(74),principalUserId:'fixture-peer'};
+ await f.client.query('UPDATE app.users SET full_name=$1 WHERE id=$2',['EXAMPLE',member]);
+ await f.client.query("INSERT INTO private.burimunsi_accounts VALUES($1,$2,true,false,'admin',$3)",[second.accountId,group,second.principalUserId]);
+ await f.client.query("INSERT INTO private.burimunsi_device_grants VALUES($1,$2,1,$3,true,'internal_receiver')",[second.grantId,group,second.installationId]);
+ await f.client.query('INSERT INTO private.burimunsi_device_accounts VALUES($1,$2,$3)',[second.accountId,second.grantId,group]);
+ await f.client.query('INSERT INTO private.burimunsi_observation_consents VALUES($1,$2,$3,$4,1,1,true)',[group,second.accountId,second.installationId,second.grantId]);
+ const ctx=(await f.client.query("SELECT current_setting('fixture.native_context')::jsonb ctx")).rows[0].ctx;
+ await peer.query("SELECT set_config('fixture.native_actor',$1,false),set_config('fixture.native_context',$2,false),set_config('fixture.native_profile',$3,false),set_config('burimunsi.collection_id',$4,false)",
+  [JSON.stringify(second),JSON.stringify({...ctx,...second}),JSON.stringify(testProfile),group]);
+ const one=receiptFixture(f,first),two=receiptFixture({client:peer},second);
+ const input=fullWire(),copy={...input,requestId:randomUUID(),sourceKey:sha(second.installationId+input.sourceKey)};
+ const [a,b]=await Promise.all([one.route('',input),two.route('',copy)]);
+ assert.notEqual(a.sourceId,b.sourceId);
+ assert.deepEqual(await Promise.all([one.route('',input),two.route('',copy)]),[a,b]);
+ one.provider(input.rawBody);two.provider(copy.rawBody);
+ const parsed=await Promise.all([one.parser.process(a.sourceId),two.parser.process(b.sourceId)]);
+ assert.deepEqual(parsed.map(x=>x.relation).sort(),['accepted','duplicate']);
+ const credited=parsed[0].relation==='accepted'?[one,a]:[two,b],duplicate=parsed[0].relation==='accepted'?[two,b]:[one,a];
+ assert.equal((await credited[0].ledger.process(credited[1].sourceId)).state,'posted');
+ assert.equal((await credited[0].ledger.process(credited[1].sourceId)).state,'already_posted');
+ assert.equal((await duplicate[0].route('/processing-status',{sourceIds:[duplicate[1].sourceId]})).statuses[0].status,'duplicate');
+ const amounts=(await f.client.query(`SELECT (SELECT count(*)::int FROM app.momo_transactions) transfers,
+  (SELECT count(*)::int FROM app.momo_transaction_sources) sources,(SELECT count(*)::int FROM app.payments) payments,
+  (SELECT count(*)::int FROM app.ledger_entries WHERE kind='contribution') credits,
+  (SELECT sum(amount_minor)::int FROM app.ledger_entries WHERE kind='contribution') credited,
+  (SELECT count(*)::int FROM private.burimunsi_payment_sms_obligations WHERE disposition='eligible') notices`)).rows[0];
+ assert.deepEqual(amounts,{transfers:1,sources:2,payments:1,credits:1,credited:1000,notices:1});
+ const sms=await openFixturePayerWorker({client:f.client,collectionId:group,enabledAt:f.enabledAt,applicationId:f.app});
+ try{
+  const submitted=await sms.drain();assert.equal(submitted.processed,1);assert.deepEqual(sms.requests,['POST']);assert.equal(sms.submitted.to,phone);
+  const admin=()=>f.rpc('burimunsi_admin_observation_outcomes',[group,[a.sourceId,b.sourceId],true],['text','text[]','boolean'],'http_admin');
+  const checkNotice=async expected=>{
+   const entry=(await admin()).find(row=>row.sourceId===credited[1].sourceId);assert.equal(entry.payerStatus,expected);
+  };
+  await f.client.query("INSERT INTO app.admin_grants VALUES('principal','sms.read'),('principal','payments.read')");
+  await f.client.query("INSERT INTO private.burimunsi_operator_approvals VALUES($1,'principal','admin',true,ARRAY['records.read','sms.read'],NULL,'admin')",[group]);
+  await checkNotice('unknown');
+  await sms.carrierDelivered();assert.equal((await sms.drain()).gateway_state,'delivered');assert.equal((await sms.drain()).processed,0);
+  assert.deepEqual(sms.requests,['POST','GET']);await checkNotice('delivered');
+  async function verifyInbox(flow,inputs){
+   const items=inputs.map(v=>({sourceKey:v.sourceKey,bodySha256:sha(v.rawBody),rawSender:v.rawSender,
+    serviceCentreAt:v.serviceCentreAt,inboxReceivedAt:v.inboxReceivedAt,subscriptionId:v.subscriptionId}));
+   const run={runId:randomUUID(),expectedConsentGeneration:1,state:'checking',candidateCount:0,missingCount:0,pendingCount:0,
+    phoneLatestKey:null,parsedLatestKey:null,collectionRevision:null};
+   await flow.route('/inbox-check',run);
+   const page=await flow.route('/reconcile-batch',{items,runId:run.runId,includeProcessing:true});
+   assert.ok(page.items.every(i=>i.state==='matched'&&['parsed','duplicate'].includes(i.processingStatus)));
+   const status=await flow.route('/reconcile-verified-status?scope=installation');assert.equal(status.scope,'verified_installation');
+   assert.equal(status.recordedCount,inputs.length);assert.equal(status.hasUnmatchedCanonical,false);
+   const latest=inputs.at(-1).sourceKey;
+   const checked=await flow.route('/inbox-check',{...run,state:'verified',candidateCount:inputs.length,phoneLatestKey:latest,
+    parsedLatestKey:latest,collectionRevision:status.revision});assert.equal(checked.state,'verified');return status;
+  }
+  const firstHead=await verifyInbox(one,[input]);await verifyInbox(two,[copy]);
+  const summary=()=>f.rpc('burimunsi_observation_admin_inbox_check',[group],['text'],'http_admin');
+  const both=await summary();
+  assert.deepEqual({...both,checkedAt:null},{state:'verified',checkedAt:null,candidateCount:2,missingCount:0,pendingCount:0,headsMatch:true});
+  assert.ok(Number.isSafeInteger(both.checkedAt));
+  const otherProof={sourceKey:copy.sourceKey,bodySha256:sha(copy.rawBody),rawSender:copy.rawSender,serviceCentreAt:copy.serviceCentreAt,
+   inboxReceivedAt:copy.inboxReceivedAt,subscriptionId:copy.subscriptionId};
+  assert.equal((await one.route('/reconcile-batch',{items:[otherProof],includeProcessing:true})).items[0].state,'missing');
+  const foreignRun=randomUUID();
+  await one.route('/inbox-check',{expectedConsentGeneration:1,runId:foreignRun,state:'checking',candidateCount:0,missingCount:0,pendingCount:0,
+   phoneLatestKey:null,parsedLatestKey:null,collectionRevision:null});
+  await assert.rejects(()=>f.rpc('burimunsi_observation_inbox_page',[foreignRun,JSON.stringify([{key:copy.sourceKey,sourceId:b.sourceId,
+   bodySha256:sha(copy.rawBody),inboxReceivedAt:copy.inboxReceivedAt}])],['uuid','jsonb'],'http_collect'),/inbox_source_changed/);
+  const origins=(await f.client.query('SELECT account_id,installation_id,principal_user_id FROM private.burimunsi_native_receipt_origins WHERE source_id=ANY($1::text[])',[[a.sourceId,b.sourceId]])).rows;
+  for(const actor of [first,second])assert.ok(origins.some(r=>r.account_id===actor.accountId&&r.installation_id===actor.installationId&&r.principal_user_id===actor.principalUserId));
+  await verifyInbox(one,[input]);
+  const later=new Date(Date.parse(copy.inboxReceivedAt)+1000).toISOString();
+  const extra={...copy,requestId:randomUUID(),sourceKey:sha('only second handset'),inboxReceivedAt:later,capturedAt:later,serviceCentreAt:later,
+   rawBody:copy.rawBody.replace('987654322','987654329')};
+  const retained=await two.route('',extra);assert.equal((await summary()).state,'incomplete');
+  assert.deepEqual(await one.route('/reconcile-verified-status?scope=installation'),firstHead);two.provider(extra.rawBody);
+  assert.equal((await two.parser.process(retained.sourceId)).relation,'accepted');
+  const secondHead=await verifyInbox(two,[copy,extra]);assert.notEqual(secondHead.revision,firstHead.revision);
+  assert.deepEqual(await verifyInbox(one,[input]),firstHead);
+  const complete=await summary();assert.equal(complete.state,'verified');assert.equal(complete.candidateCount,3);assert.equal(complete.headsMatch,true);
+ }finally{await sms.complete();}
 });
