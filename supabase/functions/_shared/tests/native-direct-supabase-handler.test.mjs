@@ -7,13 +7,13 @@ import {registerHooks} from 'node:module';
 import {canonicalProfile,MANAGED_SUPABASE_ORIGIN} from '../deployment-profile.js';
 import {admitDirectSupabaseNativeIngress} from '../native-direct-supabase-ingress.js';
 
-const state={events:[],buckets:[],authority:[]};globalThis.__directIngressTest=state;
+const state={events:[],buckets:[],authority:[],readModes:[]};globalThis.__directIngressTest=state;
 const mock={
  './runtime-env.js':`export const COLLECT_SUPABASE_ORIGIN='${MANAGED_SUPABASE_ORIGIN}';export const configurePublicRuntimeEnv=e=>({...e});export const normalizeRuntimeEnv=e=>({...e});export const isGoogleProviderNavigation=()=>false;`,
  './deployment-database.js':`export const assertRuntimeDeployment=async()=>{globalThis.__directIngressTest.events.push('schema')};export const prepareDeploymentCheck=async()=>async()=>{globalThis.__directIngressTest.events.push('schema')};`,
  './postgres-connections.js':`export const connection=()=>{globalThis.__directIngressTest.events.push('database');return {}};export const fenceConnection=()=>({});`,
  './postgres.js':`export class PostgresDatabase{constructor(){this.sql={}}setApplicationWork(work){this.applicationWork=work}}`,
- './application-fence.js':`export const sqlFenceBackend=(sql,control,beforeRegister)=>({beforeRegister});export const openApplicationWork=async({backend})=>{await backend?.beforeRegister?.();globalThis.__directIngressTest.events.push('fence');return {finish:async()=>{},waitUntil:p=>p}};`,
+ './application-fence.js':`export const sqlFenceBackend=(sql,control,beforeRegister,standaloneRead)=>{globalThis.__directIngressTest.readModes.push(standaloneRead);return {beforeRegister}};export const openApplicationWork=async({backend})=>{await backend?.beforeRegister?.();globalThis.__directIngressTest.events.push('fence');return {finish:async()=>{},waitUntil:p=>p}};`,
  './adapters.js':`export class SupabaseObjectBucket{constructor(){}}export const providerAdapters=()=>({});`,
  './domain/index.js':`export default {fetch:async(request,env)=>{const s=globalThis.__directIngressTest;s.events.push('dispatch');s.buckets.push(await env.__network(request));s.authority.push([request.headers.get('authorization'),request.headers.get('cookie'),request.headers.get('x-forwarded-for')]);return Response.json({fixture:true})}};`,
  './domain/core.js':`export const json=(v,status=200,headers={})=>Response.json(v,{status,headers});`,
@@ -40,7 +40,7 @@ const raw=canonicalProfile(profile),env=()=>({COLLECT_DEPLOYMENT_PROFILE:raw,
  COLLECT_DATABASE_URL:'postgres://synthetic.invalid/fixture',BUILD_SOURCE_ID:'a'.repeat(64)});
 const req=(headers={},origin=MANAGED_SUPABASE_ORIGIN)=>new Request(origin+'/functions/v1/collect-api/v1/burimunsi/session/login',
  {method:'POST',headers:{'content-type':'application/json',...headers},body:'{}'});
-function reset(){state.events=[];state.buckets=[];state.authority=[];}
+function reset(){state.events=[];state.buckets=[];state.authority=[];state.readModes=[];}
 
 test('opted-in direct mode reaches dispatch through the bounded global bucket without signed-frontdoor fallback',async()=>{
  reset();let signed=0,claim=0;
@@ -80,6 +80,7 @@ test('dedicated fresh PIN read verifies the database at admission and returns bo
    {headers:{'X-BuriMunsi-Auth':'phone_pin'}}));
   assert.equal(response.status,200);
   assert.deepEqual(state.events,['database','schema','fence','native','dispatch']);
+  assert.deepEqual(state.readModes,[timed]);
   if(timed)assert.match(response.headers.get('Server-Timing'),/^admission;dur=\d+, records;dur=\d+$/);
   else assert.equal(response.headers.get('Server-Timing'),null);
  }

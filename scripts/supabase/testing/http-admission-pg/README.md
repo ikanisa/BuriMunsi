@@ -56,3 +56,15 @@ The CI job uses `qualify.mjs` to run the six admission and nine lifecycle cases 
 it has no skipped-test fallback. A passing local fixture does
 not establish managed deployment, real network acknowledgement loss, or the
 full application migration chain.
+
+## BuriMunsi native read admission
+
+The wire qualification runs the production admission adapter and postgres.js 3.4.7 against an owned PostgreSQL 17 Unix socket. It exercises the original fence migration, the deployment identity function, collection scope, work-lock lifetime, cancellation and late or lost acknowledgements. Its two warm-connection measurements alternate the sequential and combined paths. The latency proxy adds 0 or 30 ms of round-trip latency. These figures cover admission through the lease proof. The application handler and the handset run outside the measurement.
+
+From the repository root, use the same three fixture environment variables shown above and the pinned Deno lock.
+
+```sh
+deno run --frozen --cached-only --config supabase/functions/deno.json --lock supabase/functions/deno.lock \
+  --allow-env --allow-sys --allow-read --allow-write="$COLLECT_HTTP_ADMISSION_PG_TMP_ROOT" --allow-run --allow-net \
+  scripts/supabase/testing/http-admission-pg/standalone-read.deno.mjs
+```

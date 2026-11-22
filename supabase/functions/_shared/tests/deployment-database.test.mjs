@@ -60,3 +60,26 @@ test('standalone registration proof captures exact deployment and collection in 
   assert.equal(count,1);
  }
 });
+
+test('a phone read binds the checked deployment, sole group and original admission in one statement',async()=>{
+ const input=env(),group='this-group',reg={id:'11111111-1111-4111-8111-111111111111',source:'a'.repeat(64),kind:'http_collect'};
+ const check=await prepareDeploymentCheck(input,group),issued={kind:reg.kind};
+ for(const [proof,error] of [
+  [{allowed:true,scope_matches:true,result:issued},null],
+  [{allowed:false,scope_matches:true,result:null},'deployment_identity_mismatch'],
+  [{allowed:true,scope_matches:false,result:null},'burimunsi_collection_mismatch'],
+ ]){
+  const read=check(async(parts,...parameters)=>{
+   const sql=parts.join('?');
+   assert.match(sql,/WITH authorized AS MATERIALIZED/);
+   assert.match(sql,/CASE WHEN allowed AND scope_matches THEN\s+private\.collect_fence_register/);
+   assert.match(sql,/SELECT id FROM app\.collections LIMIT 2/);
+   assert.deepEqual(parameters,[input.COLLECT_DEPLOYMENT_PROFILE_SHA256,group,reg.id,reg.source,reg.kind]);
+   return [proof];
+  },reg);
+  if(error)await assert.rejects(read,{message:error});else assert.equal(await read,issued);
+ }
+ await assert.rejects(check(()=>assert.fail('unexpected query'),{...reg,kind:'jobs'}),/standalone_read_registration_required/);
+ const shared=await prepareDeploymentCheck(input);
+ await assert.rejects(shared(()=>assert.fail('unexpected query'),reg),/standalone_read_registration_required/);
+});
