@@ -1,5 +1,5 @@
 import { BuriError } from './errors.js';
-import { exactKeys } from './values.js';
+import { exactKeys, requireRequestId } from './values.js';
 import { readLatestRetainedObservationId } from './postgres-observation-listing.js';
 import { PostgresObservationReconcileEvidence } from './postgres-observation-reconcile-evidence.js';
 import {
@@ -133,7 +133,8 @@ export class PostgresObservationReconciliation {
   /** Verify a bounded set of phone witnesses. Each result describes the final
    * authorized snapshot; this never writes observations or financial state. */
   async reconcileBatch(actor, input) {
-    exactKeys(input, ['items']);
+    exactKeys(input, ['items','runId'], ['items']);
+    if(input.runId!==undefined)requireRequestId(input.runId);
     check(
       Array.isArray(input.items) && input.items.length >= 1 && input.items.length <= 20,
       'invalid_request',
@@ -159,16 +160,23 @@ export class PostgresObservationReconciliation {
       if (indexes.length) await this.#verifyBatchJournals(batch, snapshot);
       // authority.read is REPEATABLE READ, so the keys and authorization are
       // rechecked together after the network and custody operations.
-      const final = await this.authority.read(snapshot);
-      check(
-        same(final.ctx, initial.ctx) && same(final.records, initial.records) &&
-          same(final.candidates, initial.candidates),
-        'observation_changed',
-        409,
-      );
-      const matches = final.records.map((r, i) => r ?? legacy.get(i)?.match ?? null),
-        ids = matches.filter(Boolean).map((r) => r.id);
-      check(new Set(ids).size === ids.length, 'observation_item_conflict', 409);
+      const finish=async tx=>{
+        const final=await snapshot(tx);
+        check(same(final.ctx,initial.ctx)&&same(final.records,initial.records)&&same(final.candidates,initial.candidates),
+          'observation_changed',409);
+        const matches=final.records.map((r,i)=>r??legacy.get(i)?.match??null);
+        const ids=matches.filter(Boolean).map(r=>r.id);
+        check(new Set(ids).size===ids.length,'observation_item_conflict',409);
+        if(input.runId){
+          const page=values.map((v,i)=>({key:v.sourceKey,sourceId:matches[i]?.id??null,bodySha256:v.bodySha256,
+            inboxReceivedAt:v.inboxReceivedAt}));
+          const saved=await tx.unsafe('SELECT private.burimunsi_observation_inbox_page($1::uuid,$2::jsonb) AS saved',
+            [input.runId,JSON.stringify(page)]);
+          check(saved.length===1&&saved[0].saved===true);
+        }
+        return matches;
+      };
+      const matches=await (input.runId?this.authority.write(finish):this.authority.read(finish));
       await this.authority.assertOwned();
       return {
         groupId: this.groupId,
@@ -210,7 +218,7 @@ export class PostgresObservationReconciliation {
     check(isObservationSenderAllowed(value.rawSender, profile), 'unsupported_receipt', 422);
     let found;
     try {
-      found = await this.#evidence.lookupSourceKey(tx, value.sourceKey, contentSha, value.bodySha256);
+      found = await this.#evidence.lookupSourceKey(tx, value.sourceKey, contentSha, value.bodySha256,value.gatewayEnvelopeId);
     } catch (error) {
       throw mapKeyError ? mapKeyError(error) : error;
     }
@@ -223,7 +231,7 @@ export class PostgresObservationReconciliation {
         409,
       );
     }
-    const candidates = record ? [] : await this.#evidence.readLegacyCandidates(tx, actor, value.bodySha256);
+    const candidates = record||value.gatewayEnvelopeId ? [] : await this.#evidence.readLegacyCandidates(tx, actor, value.bodySha256);
     return { record, candidates };
   }
 
@@ -247,7 +255,7 @@ export class PostgresObservationReconciliation {
         try {
           if (initial.records[i]) {
             await serialize(() =>
-              this.#evidence.verifyKeyedObject(hashes[i], values[i].bodySha256, initial.records[i])
+              this.#evidence.verifyKeyedObject(hashes[i], values[i].bodySha256, initial.records[i],values[i])
             );
           } else {
             const proof = await serialize(() =>

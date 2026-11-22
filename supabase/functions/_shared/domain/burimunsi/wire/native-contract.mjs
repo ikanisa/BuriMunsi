@@ -32,6 +32,7 @@ export function nativeExpected(binding,route,body,originDigest,handoffFingerprin
   staffId:body?.id,commandRequestId:body?.requestId,staffOperation:body?.operation,
   consentEnabled:body?.enabled,consentGeneration:body?.generation,displayHintsVersion:body?.displayHintsVersion,
   importRows:body?.rows?.map(row=>row.row),sourceIds:body?.sourceIds,sourceKey:body?.sourceKey,observationBodySha256:route.observationBodySha256,
+  inboxRun:body?.runId,inboxState:body?.state,
   sourceKeys:Array.isArray(body?.items)?body.items.map(item=>item.sourceKey):undefined,originDigest,handoffFingerprint};
 }
 export function bindNativeResponse(route,binding,body,data,originDigest,handoffFingerprint){

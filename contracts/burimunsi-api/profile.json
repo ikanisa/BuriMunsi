@@ -221,6 +221,11 @@
       "POST",
       "^/sms/observations/recover-held-ack$",
       "observationRecoverHeldAck"
+    ],
+    [
+      "POST",
+      "^/sms/observations/inbox-check$",
+      "observationInboxCheck"
     ]
   ],
   "operations": [
@@ -267,6 +272,7 @@
     "observationReconcileStatus",
     "observationRecoverHeld",
     "observationReconcileVerifiedStatus",
-    "observationRecoverHeldAck"
+    "observationRecoverHeldAck",
+    "observationInboxCheck"
   ]
 }

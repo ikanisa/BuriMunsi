@@ -782,3 +782,20 @@ test('adjacent principal currency never accepts partial aliases or aliases embed
   assert.deepEqual(validateNativeAutoExtraction(source(body),account,output),{kind:'invalid_output'},`${monetary} / ${currency}`);
  }
 });
+
+test('the in-clause carrier date must be a complete, quoted and validated timestamp after the payer',()=>{
+ const timestamp='2026-11-22 17:09:43',party='from EXAMPLE (+250780000001)';
+ const prefix='You have received 1000 RWF '+party,tail='. Reference: 987654322. Balance: 2000 RWF.';
+ const values=extraction({event_kind:'incoming_receipt',payment_outcome:'successful',transaction_id_raw:'987654322',
+  transaction_datetime_raw:timestamp,principal_amount_raw:'1000',currency_raw:'RWF',payer_name_raw:'EXAMPLE',payer_identifier_raw:'+250780000001',
+  wallet_balance_after_raw:'2000 RWF',evidence:{incoming_success:'You have received',principal:'You have received 1000 RWF',
+   transaction_id:'Reference: 987654322',transaction_datetime:'at '+timestamp,payer:party,fee:null,wallet_balance_after:'Balance: 2000 RWF'}});
+ const valid=prefix+' at '+timestamp+tail;
+ assert.equal(proveNativeAutoCredit(source(valid),account,values),true);
+ for(const body of [prefix+' at '+timestamp+' for another pending receipt'+tail,
+    prefix+' was requested at '+timestamp+tail,prefix+' at 2026-11-22 17:09:44'+tail]){
+   assert.equal(proveNativeAutoCredit(source(body),account,values),false);
+ }
+ assert.equal(proveNativeAutoCredit(source(valid),account,{...values,transaction_datetime_raw:null,
+  evidence:{...values.evidence,transaction_datetime:null}}),false);
+});

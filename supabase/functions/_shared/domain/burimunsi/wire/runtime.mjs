@@ -132,6 +132,7 @@ export function semantics(product,operation,r,expected={}) {
     data.statuses.some((row,i)=>row.sourceId!==expected.sourceIds[i]||row.canRetry&&!['retrying','needs_review'].includes(row.status)))fail('CONTRACT_IDENTITY');
   }
   if(operation==='observationProcessingRetry'&&(data.sourceId!==expected.recordId||data.requestId!==expected.commandRequestId))fail('CONTRACT_IDENTITY');
+  if(operation==='observationInboxCheck'&&(data.runId!==expected.inboxRun||data.state!==expected.inboxState))fail('CONTRACT_IDENTITY');
   if(operation==='observationReconcile'&&(data.sourceKey!==expected.sourceKey||
    (data.state==='matched')!==(data.sourceId!==null)))fail('CONTRACT_IDENTITY');
   if(operation==='observationReconcileBatch'){

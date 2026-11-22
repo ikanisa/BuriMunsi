@@ -11,9 +11,10 @@ import {
   observationStorageTarget as target,
   requireObservation as check,
   sameObservationValue as same,
+  sameObservationInstant,
   verifyObservationJournal,
 } from './observation-evidence.js';
-import { sha256 } from './values.js';
+import { canonicalJson, sha256 } from './values.js';
 
 const keyLookup = 'SELECT private.burimunsi_observation_key_lookup($1,$2,$3) AS result';
 
@@ -37,7 +38,9 @@ export class PostgresObservationReconcileEvidence {
     return this.getStorageWitnesses();
   }
 
-  lookupSourceKey(tx, sourceKey, contentSha, bodySha) {
+  lookupSourceKey(tx, sourceKey, contentSha, bodySha,gatewayEnvelopeId) {
+    if(gatewayEnvelopeId)return tx.unsafe('SELECT private.burimunsi_observation_gateway_lookup($1::uuid,$2) AS result',
+      [gatewayEnvelopeId,bodySha]);
     return tx.unsafe(keyLookup, [sourceKey, contentSha, bodySha]);
   }
 
@@ -55,13 +58,25 @@ export class PostgresObservationReconcileEvidence {
     this.storageWitnesses.forget(binding);
   }
 
-  async verifyKeyedObject(contentSha, bodySha, prior) {
+  async verifyKeyedObject(contentSha, bodySha, prior,witness) {
     let bytes;
     try {
       await this.authority.assertOwned();
       bytes = await verifyRetainedObject(this.env, prior);
       await this.authority.assertOwned();
       const p = decodeObservationPayload(bytes);
+      if(prior.gatewayEnvelopeId){
+        check(witness?.gatewayEnvelopeId===prior.gatewayEnvelopeId&&p.raw_sender===witness.rawSender&&
+          p.gateway_binding_id===prior.gatewayBindingId&&p.gateway_binding_version===prior.gatewayBindingVersion&&
+          p.subscription_id===witness.subscriptionId&&p.subscription_id===prior.subscriptionId&&
+          typeof p.raw_body==='string'&&await sha256(p.raw_body)===bodySha&&await sha256(canonicalJson(p))===prior.fingerprint&&
+          ((p.service_centre_at===null&&witness.serviceCentreAt===null)||sameObservationInstant(p.service_centre_at,witness.serviceCentreAt))&&
+          ((p.source_mode==='catch_up'&&p.completeness==='incomplete'&&sameObservationInstant(p.inbox_received_at,witness.inboxReceivedAt))||
+            (p.source_mode==='live'&&p.completeness==='complete'&&
+             (p.inbox_received_at!==null?sameObservationInstant(p.inbox_received_at,witness.inboxReceivedAt):p.service_centre_at!==null))),
+          'observation_changed',409);
+        return;
+      }
       check(
         p && p.provenance === 'native_observation_unverified' && p.source_mode === 'catch_up' &&
           p.complete === false &&
@@ -196,10 +211,10 @@ export class PostgresObservationReconcileEvidence {
     }
   }
   async checkDuplicate(actor, value, contentSha, bodySha, prior) {
-    await this.verifyKeyedObject(contentSha, bodySha, prior);
+    await this.verifyKeyedObject(contentSha, bodySha, prior,value);
     await this.authority.write(async (tx) => {
       await this.current(tx, actor);
-      const rows = await this.lookupSourceKey(tx, value.sourceKey, contentSha, bodySha);
+      const rows = await this.lookupSourceKey(tx, value.sourceKey, contentSha, bodySha,value.gatewayEnvelopeId);
       check(
         rows.length === 1 && rows[0].result && same(row(rows[0].result), prior),
         'observation_changed',

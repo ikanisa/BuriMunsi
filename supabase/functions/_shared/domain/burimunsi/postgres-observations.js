@@ -52,16 +52,6 @@ function consent(value) {
  check(value && typeof value.enabled === 'boolean');
  return { enabled: value.enabled, generation: int(value.generation) };
 }
-function validateReconcileInput(input){
- exactKeys(input,RECONCILE_KEYS);const value=copy(input);
- check(HASH.test(value.sourceKey??'')&&HASH.test(value.bodySha256??'')&&
-  text(value.rawSender,1,96)&&value.rawSender.trim().length>0&&!CONTROL.test(value.rawSender)&&
-  iso(value.inboxReceivedAt)&&(value.serviceCentreAt===null||iso(value.serviceCentreAt))&&
-  (value.subscriptionId===null||Number.isInteger(value.subscriptionId)&&value.subscriptionId>=0&&value.subscriptionId<=2147483647),
-  'invalid_request',400);
- return value;
-}
-
 /** All authority derives from the existing phone/PIN and installation proof.
  * The SQL functions revalidate and lock it at each write/disclosure boundary. */
 export class PostgresNativeObservations {
@@ -147,6 +137,15 @@ export class PostgresNativeObservations {
  reconcileVerifiedStatus(actor) {
   return this.#reconciliation.reconcileVerifiedStatus(actor);
  }
+ async inboxCheck(actor,input){
+  try{return await this.authority.write(async tx=>{
+   await this.context(tx,actor);
+   const r=await tx.unsafe('SELECT private.burimunsi_observation_inbox_check($1::jsonb) AS result',[JSON.stringify(input)]);
+   const result=r[0]?.result;
+   check(r.length===1&&result?.groupId===this.groupId&&result.runId===input.runId&&result.state===input.state);
+   return result;
+  });}catch(error){throw mapped(error);}
+ }
 
  async setConsent(actor,value){
   exactKeys(value,['enabled','generation']);check(typeof value.enabled==='boolean'&&Number.isSafeInteger(value.generation)&&value.generation>=1,'invalid_request',400);
@@ -175,10 +174,12 @@ export class PostgresNativeObservations {
   await this.current(tx,actor);const r=await tx.unsafe('SELECT private.burimunsi_observation_lookup($1::uuid,$2) AS result',[requestId,fingerprint]);
   check(r.length===1);return r[0].result===null?null:row(r[0].result);
  }
- async prepare(actor,value,fingerprint,id,initial,contentSha,bodySha){
+ async prepare(actor,value,fingerprint,id,initial,contentSha,bodySha,heldGeneration=null){
   return this.authority.write(async tx=>{
    await this.current(tx,actor);
-   const result=value.sourceKey?await tx.unsafe('SELECT private.burimunsi_observation_key_prepare($1,$2,$3,$4::uuid,$5,$6,$7,$8,$9::bigint) AS result',
+   const keyedPrepare=heldGeneration===null?'SELECT private.burimunsi_observation_key_prepare($1,$2,$3,$4::uuid,$5,$6,$7,$8,$9::bigint) AS result':
+    'SELECT private.burimunsi_observation_held_prepare($1,$2,$3,$4::uuid,$5,$6,$7,$8,$9::bigint) AS result';
+   const result=value.sourceKey?await tx.unsafe(keyedPrepare,
     [value.sourceKey,contentSha,bodySha,value.requestId,fingerprint,id,initial.profile.version,initial.ctx.profile_sha256,initial.ctx.consentGeneration]):
     await tx.unsafe('SELECT private.burimunsi_observation_legacy_retry_prepare($1::uuid,$2,$3,$4,$5,$6::bigint) AS result',
      [value.requestId,fingerprint,id,initial.profile.version,initial.ctx.profile_sha256,initial.ctx.consentGeneration]);
@@ -256,7 +257,25 @@ export class PostgresNativeObservations {
    throw new BuriError('observation_unavailable',503);
   throw original;
  }
- async observe(actor, input) {
+ observe(actor, input) {
+  return this.#capture(actor,input,null,false);
+ }
+ recoverHeld(actor,input) {
+  return this.#heldCapture(actor,input,false);
+ }
+ recoverHeldAck(actor,input) {
+  return this.#heldCapture(actor,input,true);
+ }
+ async #heldCapture(actor,{expectedConsentGeneration,...input},ackOnly) {
+  check(Number.isSafeInteger(expectedConsentGeneration)&&expectedConsentGeneration>=1&&
+   HASH.test(input.sourceKey??'')&&input.sourceMode==='catch_up'&&input.complete===false,'invalid_request',400);
+  const result=await this.#capture(actor,input,expectedConsentGeneration,ackOnly);
+  if(!ackOnly)return {...result,autoProcessing:'held'};
+  return {requestId:input.requestId,sourceKey:input.sourceKey,bodySha256:result.bodySha256,
+   state:result.sourceId?'acknowledged':'unconfirmed',sourceId:result.sourceId,
+   autoProcessing:result.sourceId?'held':'unknown',financialEffects:0,retryAllowed:false};
+ }
+ async #capture(actor, input, heldGeneration, ackOnly) {
   const value = validateObservationInput(input),
    bodySha = await sha256(value.rawBody),
    payload = payloadFor(value),
@@ -278,14 +297,29 @@ export class PostgresNativeObservations {
     inboxReceivedAt: value.inboxReceivedAt,
     subscriptionId: value.subscriptionId,
     ...(value.sourceKey ? { sourceKey: value.sourceKey } : {}),
+    ...(heldGeneration!==null ? { heldConsentGeneration:heldGeneration } : {}),
    }),
   );
+  const heldWitness=async tx=>{
+   await this.current(tx,actor);
+   const r=await tx.unsafe('SELECT private.burimunsi_observation_held_matches($1,$2::uuid,$3,$4,$5::bigint) AS result',
+    [value.sourceKey,value.requestId,fingerprint,bodySha,heldGeneration]);
+   check(r.length===1&&typeof r[0].result==='boolean');return r[0].result;
+  };
+  const checkHeld=async()=>{if(heldGeneration!==null)
+   check(await this.authority.read(heldWitness),'observation_changed',409);};
   try {
+   if(heldGeneration!==null){
+    const admitted=await this.authority.read(heldWitness);
+    if(ackOnly&&!admitted)return {sourceId:null,bodySha256:bodySha};
+   }
    let prior = await this.authority.read((tx) => this.find(tx, actor, value.requestId, fingerprint));
    if (prior) {
+    await checkHeld();
     await this.checkRetained(actor, prior, payload, bodySha);
     const final = await this.authority.read((tx) => this.find(tx, actor, value.requestId, fingerprint));
     check(final && same(final, prior), 'observation_changed', 409);
+    await checkHeld();
     return {
      requestId: value.requestId,
      sourceId: prior.id,
@@ -294,7 +328,9 @@ export class PostgresNativeObservations {
      financialEffects: 0,
     };
    }
+   if(ackOnly)return {sourceId:null,bodySha256:bodySha};
    const initial = await this.authority.read((tx) => this.context(tx, actor));
+   check(heldGeneration===null||initial.ctx.consentGeneration===heldGeneration,'access_denied',403);
    check(isObservationCandidate(value, initial.profile), 'unsupported_receipt', 422);
    const id = await storageEntity(
     'burimunsi.native.observation.v1',
@@ -303,8 +339,9 @@ export class PostgresNativeObservations {
    );
    // The admission is durable before any object reservation or provider call.
    // A retry reuses the same intent; uncertainty never consumes another slot.
-   const prepared = await this.prepare(actor, value, fingerprint, id, initial, contentSha, bodySha);
+   const prepared = await this.prepare(actor, value, fingerprint, id, initial, contentSha, bodySha,heldGeneration);
    if (prepared.kind === 'duplicate') {
+    check(heldGeneration===null,'observation_changed',409);
     await this.#reconciliation.checkDuplicate(actor, value, contentSha, bodySha, prepared.record);
     return {
      requestId: value.requestId,
@@ -391,6 +428,7 @@ export class PostgresNativeObservations {
    await this.checkRetained(actor, committed, payload, bodySha);
    const final = await this.authority.read((tx) => this.find(tx, actor, value.requestId, fingerprint));
    check(final && same(final, committed), 'observation_changed', 409);
+   await checkHeld();
    return {
     requestId: value.requestId,
     sourceId: committed.id,

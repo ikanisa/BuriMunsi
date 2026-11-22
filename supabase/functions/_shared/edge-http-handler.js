@@ -79,7 +79,7 @@ export function createHandler(functionName, envReader = () => Deno.env.toObject(
       let pendingNativeIngress;
       if (isCollectNativeRoute(logical)) {
         if (!collect) return json({code: 'not_found'}, 404, cors);
-        const unavailable = unavailableHeldObservation(logical);
+        const unavailable = unavailableHeldObservation(logical, env);
         if (unavailable) return unavailable;
 
         runtime.stage = 'native_ingress';

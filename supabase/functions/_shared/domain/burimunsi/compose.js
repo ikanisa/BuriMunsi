@@ -34,7 +34,7 @@ export function composeNativeRequest({admission,config,ports,secrets,networkBuck
   const cursor=new ScopedCursor(secrets.cursorKey);
   const records=new RecordsService({store:ports.records,groupId,cursor,clock,smartOnboardingImport});
   return createNativeHandler({auth,records,contributions,members,gateway,observations:ports.observations,cursor,
-    origin:config.origin,networkBucket,groupId,strictContract:true});
+    origin:config.origin,networkBucket,groupId,strictContract:true,verifiedObservationStatusEnabled:!!ports.observations});
 }
 
 /** Shared request/worker selection. Enabled preparation can never silently fall

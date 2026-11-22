@@ -57,14 +57,20 @@ function fixture(){
    return [{result:{...ctx(),profile_tuple_sha256:state.tupleChangedOnPrepare?'e'.repeat(64):ctx().profile_tuple_sha256,
     consentGeneration:state.generation,requestId,fingerprint,sourceId}}];
   }
-  if(query.includes('observation_key_prepare')){
+  if(query.includes('observation_held_matches')){
+   allowed();const [key,requestId,fingerprint,body,generation]=args;
+   if(generation!==state.generation)throw sqlError('42501');
+   const stored=state.sourceKeys.get(key);
+   return [{result:!!stored?.held&&stored.generation===generation&&stored.body===body&&state.requests.get(requestId)?.fingerprint===fingerprint}];
+  }
+  if(query.includes('observation_key_prepare')||query.includes('observation_held_prepare')){
    allowed();const [key,content,body,requestId,fingerprint,sourceId,profileVersion,profileHash,generation]=args;
    if(generation!==state.generation||profileVersion!=='synthetic-v1'||profileHash!=='b'.repeat(64))throw sqlError('40001');
    const prior=state.sourceKeys.get(key);
    if(prior&&(prior.content!==content||prior.body!==body))throw sqlError('23505');
    if(prior&&prior.sourceId!==sourceId){const record=state.rows.get(prior.sourceId);if(!record)throw sqlError('55000');
     return [{result:{kind:'duplicate',record:structuredClone(record)}}];}
-   if(!prior){state.sourceKeys.set(key,{content,body,sourceId});state.requests.set(requestId,{requestId,fingerprint,sourceId});}
+   if(!prior){state.sourceKeys.set(key,{content,body,sourceId,held:query.includes('observation_held_prepare'),generation});state.requests.set(requestId,{requestId,fingerprint,sourceId});}
    else if(state.requests.get(requestId)?.fingerprint!==fingerprint)throw sqlError('23505');
    return [{result:{kind:'new',context:{...ctx(),profile_tuple_sha256:state.tupleChangedOnPrepare?'e'.repeat(64):ctx().profile_tuple_sha256,
     consentGeneration:state.generation,requestId,fingerprint,sourceId}}}];
@@ -213,7 +219,15 @@ test('strict HTTP capture and reconciliation replay one retained observation und
   assert.deepEqual(verified,{groupId:group,hasPending:true,hasRecorded:true,recordedCount:1,
    hasUnmatchedCanonical:false,revision:'a'.repeat(64),scope:'verified_collection'});
   assert.deepEqual(await read(await request('/reconcile-verified-status')),verified);
-  for(const raw of ['/recover-held','/recover-held-ack'])assert.equal((await request(raw,capture)).status,404);
+  for(const raw of ['/recover-held','/recover-held-ack'])assert.equal((await request(raw,capture)).status,400);
+  const historical={...capture,requestId:id(58),sourceKey:'8'.repeat(64),expectedConsentGeneration:1};
+  const absent=await read(await request('/recover-held-ack',historical));
+  assert.equal(absent.state,'unconfirmed');assert.equal(absent.retryAllowed,false);assert.equal(f.state.puts,1);
+  const held=await read(await request('/recover-held',historical));assert.equal(held.autoProcessing,'held');
+  assert.deepEqual(await read(await request('/recover-held',historical)),held);
+  const acknowledged=await read(await request('/recover-held-ack',historical));
+  assert.equal(acknowledged.sourceId,held.sourceId);assert.equal(acknowledged.state,'acknowledged');
+  assert.equal((await request('/recover-held-ack',{...historical,expectedConsentGeneration:2})).status,403);
   current={...actor,role:'staff'};
   const session=observations.authority.session;
   observations.authority.session=async()=>current;
@@ -226,8 +240,8 @@ test('strict HTTP capture and reconciliation replay one retained observation und
    }
    current=actor;f.state.enabled=false;assert.equal((await request('/reconcile-verified-status')).status,403);
   } finally {observations.authority.session=session;}
-  assert.equal(f.state.puts,1);
-  assert.equal(f.state.commits,1);
+  assert.equal(f.state.puts,2);
+  assert.equal(f.state.commits,2);
  });
 });
 
