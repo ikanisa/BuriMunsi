@@ -13,6 +13,8 @@ class ContractFailure(val code: String) : IllegalArgumentException(code)
 fun checkContract(test: Boolean, code: String) { if (!test) throw ContractFailure(code) }
 object Values {
     const val MAX_RWF: Long = 9_007_199_254_740_991L
+    private val requestIdPattern = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}")
+    private val idPattern = Regex("[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
     fun phone(input: String): String {
         checkContract(input.length <= 40 && Regex("[+0-9 ()-]+").matches(input), "invalid_phone")
         var p = input.trim().replace(Regex("[ ()-]"), "")
@@ -44,14 +46,15 @@ object Values {
         return local.toInstant(ZoneOffset.ofTotalSeconds(offsetMinutes * 60)).toString()
     }
     fun requestId(input: String): String {
-        checkContract(Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}").matches(input), "invalid_request_id")
+        checkContract(requestIdPattern.matches(input), "invalid_request_id")
         return UUID.fromString(input).toString()
     }
     fun id(input: String): String {
-        checkContract(Regex("[A-Za-z0-9][A-Za-z0-9_-]{0,127}").matches(input), "invalid_id")
+        checkContract(idPattern.matches(input), "invalid_id")
         return input
     }
-    fun sha256(input: String): String = MessageDigest.getInstance("SHA-256").digest(input.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+    fun sha256(input: String): String =
+        MessageDigest.getInstance("SHA-256").digest(input.toByteArray(Charsets.UTF_8)).toHexString()
     fun apiOrigin(input: String): URI {
         val uri = try { URI(input) } catch (_: Exception) { throw ContractFailure("configuration_required") }
         checkContract(uri.scheme == "https" && !uri.host.isNullOrBlank() && uri.userInfo == null && uri.rawQuery == null && uri.rawFragment == null && (uri.path.isNullOrEmpty() || uri.path == "/"), "configuration_required")
