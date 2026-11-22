@@ -86,9 +86,19 @@ try {
   assert.equal(await page.getByLabel('Email', { exact: true }).count(), 0);
   await page.getByLabel('Mobile number', { exact: true }).fill('0780 000 001');
   await page.getByLabel('Four-digit passcode', { exact: true }).fill('0123');
+  const loginRequests = [];
+  const recordLogin = request => {
+    const {pathname} = new URL(request.url());
+    if (pathname.startsWith('/api/admin/auth/')) loginRequests.push(pathname);
+  };
+  page.on('request', recordLogin);
+  const firstOverview = page.waitForResponse(response => new URL(response.url()).pathname === '/api/admin/core/overview' && response.ok());
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   const overview = page.getByRole('heading', { name: 'Operations overview' });
   await overview.waitFor();
+  await firstOverview;
+  page.off('request', recordLogin);
+  assert.deepEqual(loginRequests, ['/api/admin/auth/phone-passcode']);
   const cookies = await desktop.context.cookies(origin);
   assert(cookies.some(cookie => cookie.name === 'collect_fixture_session' && cookie.httpOnly));
   assert(!String(await page.evaluate(() => document.cookie)).includes('collect_fixture_session'));
@@ -144,20 +154,21 @@ try {
 
   await sessionPage.goto(origin + '/admin/security/authenticator?' + new URLSearchParams({ returnTo: '/admin/burimunsi?draft=private' }));
   await sessionPage.getByRole('heading', { name: 'BuriMunsi access' }).waitFor();
-  await sessionPage.getByRole('button', { name: 'Load groups' }).waitFor();
+  const loadAccess = sessionPage.getByRole('button', { name: 'Load BuriMunsi access', exact: true });
+  await loadAccess.waitFor();
   assert.equal(new URL(sessionPage.url()).hash, '#/admin/burimunsi');
 
   nextSession = 'unattested';
   await sessionPage.reload();
   await sessionPage.getByRole('heading', { name: 'Access unavailable' }).waitFor();
-  assert.equal(await sessionPage.getByRole('button', { name: 'Load groups' }).count(), 0);
+  assert.equal(await loadAccess.count(), 0);
 
   nextSession = 'unavailable';
   await sessionPage.reload();
   await sessionPage.getByRole('heading', { name: 'Workspace unavailable' }).waitFor();
   assert.equal(await sessionPage.getByRole('heading', { name: 'BuriMunsi access' }).count(), 0);
   await sessionPage.getByRole('button', { name: 'Try again' }).click();
-  await sessionPage.getByRole('button', { name: 'Load groups' }).waitFor();
+  await loadAccess.waitFor();
 
   const sessionRead = sessionPage.waitForResponse(response => sessionApi(new URL(response.url())));
   await sessionPage.goto(origin + '/admin/licenses');
@@ -241,7 +252,7 @@ try {
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(denied, []);
   assert.deepEqual(unexpectedAuth, []);
-  const checks = ['obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'reload_restores_session', 'retired_passcode_bookmark_returns_to_overview', 'keyboard_receipt_navigation', 'sms_read_failure_retry',
+  const checks = ['obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'confirmed_sign_in_opens_overview_without_another_session_read', 'reload_restores_session', 'retired_passcode_bookmark_returns_to_overview', 'keyboard_receipt_navigation', 'sms_read_failure_retry',
       'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
       'retired_authenticator_bookmark_preserves_safe_destination', 'missing_scoped_admin_identity_removes_controls', 'session_failure_and_recovery_require_server_authority', 'expired_request_and_history_return_require_sign_in',
       'mobile_drawer_traps_and_restores_focus_and_reflows', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, 'no_verification_or_otp_request'];
