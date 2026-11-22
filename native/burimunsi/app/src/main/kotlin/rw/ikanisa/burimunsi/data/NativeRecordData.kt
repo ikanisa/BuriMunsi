@@ -22,6 +22,63 @@ internal class NativeRecordData(
     private val receiptVersions: AllocationReceiptVersions,
     private val recordReadOwner: Any,
 ) : NativeSessionRequests by sessions {
+    private data class CachedRecord(val payload:String,val savedAt:Long)
+
+    private fun accessScope(owner:Operator)=owner.role.name+":"+owner.capabilities.sorted().joinToString(",")
+
+    private fun cachedRecord(path:String,group:String,owner:Operator,sessionScope:String,now:Long,recent:Boolean):CachedRecord? {
+        val cache=try{cacheStore.read()?.let(::JSONObject)}catch(_:Exception){null}?:return null
+        if(cache.optString("contractVersion")!=BuriMunsiSchemas.VERSION||cache.optString("sessionScope")!=sessionScope||
+            cache.optString("groupId")!=group||cache.optString("accountId")!=owner.id)return null
+        if((recent||cache.has("accessScope"))&&cache.optString("accessScope")!=accessScope(owner))return null
+        val entry=cache.optJSONObject("entries")?.optJSONObject(path)?:return null
+        val stored=entry.opt("savedAt")
+        if(stored !is Long&&stored !is Int)return null
+        val saved=(stored as Number).toLong()
+        val current=if(recent)SnapshotFreshness.recent(saved,now)else SnapshotFreshness.reusable(saved,now)
+        return if(current)CachedRecord(entry.optString("payload"),saved)else null
+    }
+
+    fun hasRecentHome(saved:SavedNativeSession):Boolean {
+        val owner=saved.operatorOrNull()?:return false
+        val now=System.currentTimeMillis()
+        return now<owner.expiresAt&&cachedRecord("/home",saved.groupId,owner,Values.sha256(saved.token),now,recent=true)!=null
+    }
+
+    private fun <T> recentRecord(path:String,expectedOwner:Operator?=null,decode:(String)->T):Pair<T,Long>? {
+        val witness=ownedSession()
+        return authority.withCurrent(witness){
+            val owner=operator?:throw ApiFailure("session_unavailable",401)
+            checkContract(expectedOwner==null||owner===expectedOwner,"session_changed")
+            val now=System.currentTimeMillis()
+            checkContract(now<owner.expiresAt,"session_unavailable")
+            val entry=cachedRecord(path,groupId,owner,Values.sha256(witness.token),now,recent=true)
+                ?:return@withCurrent null
+            // Confirmed session, original snapshot time. Never use cached
+            // bytes from a prior capability set or refresh their age locally.
+            val record=try {
+                decode(api.validateCached(path,entry.payload,
+                    mapOf("groupId" to groupId,"actorId" to owner.id,"generation" to witness.generation.toString())))
+            }catch(_:Exception){return@withCurrent null}
+            record to entry.savedAt
+        }
+    }
+
+    // Preserve financial rows while requiring a live receipt read for its SMS source.
+    fun recentHome(owner:Operator)=recentRecord("/home",owner){ value->
+        val home=decodeHome(JSONObject(value))
+        home.copy(recent=home.recent.map{it.copy(sourceId=null)})
+    }
+
+    fun recentPayments(listing:ListingQuery)=recentRecord(listingPath("/payments",ListingTarget.PAYMENTS,listing,null)){ value->
+        val payments=page(value,::decodePayment)
+        payments.copy(items=payments.items.map{it.copy(sourceId=null)})
+    }
+
+    fun recentMembers(listing:ListingQuery)=recentRecord(listingPath("/members",ListingTarget.MEMBERS,listing,null)){
+        page(it,::decodeMember)
+    }
+
     private fun records(path:String):String = records(path){value,_->value}
     private fun <T> records(path:String,read:(String,Operator)->T):T {
         val witness=ownedSession()
@@ -43,13 +100,10 @@ internal class NativeRecordData(
             return authority.withCurrent(witness){
                 val now=System.currentTimeMillis()
                 if(now>=who.expiresAt)throw ApiFailure("session_unavailable",401)
-                val cache=try{cacheStore.read()?.let(::JSONObject)}catch(_:Exception){null}
-                if(cache==null||cache.optString("contractVersion")!=BuriMunsiSchemas.VERSION||cache.optString("sessionScope")!=sessionScope||cache.optString("groupId")!=groupId||cache.optString("accountId")!=who.id)throw error
-                val entry=cache.optJSONObject("entries")?.optJSONObject(path)?:throw error
-                val saved=entry.getLong("savedAt");if(now<saved||now-saved>SnapshotFreshness.TTL_MS)throw error
-                val payload=api.validateCached(path,entry.getString("payload"),mapOf("groupId" to groupId,"actorId" to who.id,"generation" to witness.generation.toString()))
+                val entry=cachedRecord(path,groupId,who,sessionScope,now,recent=false)?:throw error
+                val payload=api.validateCached(path,entry.payload,mapOf("groupId" to groupId,"actorId" to who.id,"generation" to witness.generation.toString()))
                 val result=read(payload,who)
-                sessions.markRead(saved, fromCache = true); result
+                sessions.markRead(entry.savedAt, fromCache = true); result
             }
         }
     }
@@ -57,11 +111,15 @@ internal class NativeRecordData(
     private fun saveRecord(path:String,payload:String,owner:Operator,sessionScope:String,now:Long) {
         try {
             var cache=cacheStore.read()?.let(::JSONObject)
-            if(cache?.optString("sessionScope")!=sessionScope||cache.optString("contractVersion")!=BuriMunsiSchemas.VERSION)cache=null
+            val access=accessScope(owner)
+            if(cache?.optString("sessionScope")!=sessionScope||cache.optString("contractVersion")!=BuriMunsiSchemas.VERSION||
+                cache.optString("groupId")!=groupId||cache.optString("accountId")!=owner.id||
+                cache.optString("accessScope")!=access)cache=null
             val entries=cache?.optJSONObject("entries")?:JSONObject()
             entries.put(path,JSONObject().put("savedAt",now).put("payload",payload))
             while(entries.length()>8){val key=entries.keys().asSequence().minByOrNull{entries.getJSONObject(it).getLong("savedAt")}?:break;entries.remove(key)}
-            val saved=JSONObject().put("contractVersion",BuriMunsiSchemas.VERSION).put("groupId",groupId).put("accountId",owner.id).put("sessionScope",sessionScope).put("entries",entries).toString()
+            val saved=JSONObject().put("contractVersion",BuriMunsiSchemas.VERSION).put("groupId",groupId).put("accountId",owner.id)
+                .put("sessionScope",sessionScope).put("accessScope",access).put("entries",entries).toString()
             if(saved.toByteArray(Charsets.UTF_8).size<=1_000_000)cacheStore.write(saved)
         }catch(_:Exception){/* Cache persistence cannot change the canonical response. */}
     }

@@ -113,9 +113,9 @@ internal class NativeSessions(
         if(ownedWitness==witness)clearMemoryOperator()
     }
 
-    class ProfileRead(val operator:Operator,val home:JSONObject?=null)
+    class ProfileRead(val operator:Operator,val home:JSONObject?=null,val useRecentHome:Boolean=false)
 
-    fun restore(includeHome:Boolean=false):ProfileRead?{
+    fun restore(includeHome:Boolean=false,canReuseHome:(SavedNativeSession)->Boolean={false}):ProfileRead?{
         // Snapshot, validate and attach under one process-wide lock. A second
         // activity with the same saved bearer joins the existing generation.
         val restored=synchronized(authority){
@@ -146,7 +146,7 @@ internal class NativeSessions(
             witness to saved
         }
         val (witness,saved)=restored?:return null
-        return resumeAttachedSession(witness,saved,includeHome)
+        return resumeAttachedSession(witness,saved,includeHome,canReuseHome)
     }
     fun login(phone:String,pin:String):Operator {
         val normalizedPhone=Values.phone(phone);val normalizedPin=Values.pin(pin)
@@ -206,13 +206,18 @@ internal class NativeSessions(
     }
     private fun resumeAttachedSession(
         witness:SessionWitness,saved:SavedNativeSession,includeHome:Boolean=false,
+        canReuseHome:(SavedNativeSession)->Boolean={false},
     ):ProfileRead =
         synchronized(sessionRefreshLock){
             try{
                 val pending=saved.pendingPasscode
                 if(pending?.stage==PasscodeStage.INFLIGHT)
                     ProfileRead(recoverPasscode(witness,pending.token,checkNotNull(saved.owner)))
-                else refreshSessionLocked(witness,saved.owner,includeHome)
+                else {
+                    val useRecent=includeHome&&api.resolvesLoginScope&&canReuseHome(saved)
+                    val confirmed=refreshSessionLocked(witness,saved.owner,includeHome&&!useRecent)
+                    ProfileRead(confirmed.operator,confirmed.home,useRecent)
+                }
             }catch(error:Exception){
                 // Settle this failed read before another refresh of the same
                 // witness can publish. A replacement never inherits this cleanup.
@@ -226,9 +231,9 @@ internal class NativeSessions(
             }
         }
 
-    fun refreshSession():Operator {
+    fun refreshSession(includeHome:Boolean=false):ProfileRead {
         val witness=ownedSession()
-        return synchronized(sessionRefreshLock){refreshSessionLocked(witness,expectedOwner=null).operator}
+        return synchronized(sessionRefreshLock){refreshSessionLocked(witness,expectedOwner=null,includeHome)}
     }
     private fun readSession(witness:SessionWitness,includeHome:Boolean):JSONObject {
         if(includeHome&&api.resolvesLoginScope){
@@ -266,7 +271,7 @@ internal class NativeSessions(
             // delayed refresh of this same predecessor session.
             // Older records can retain just the expected actor. The server response above is the current grant.
             val savedProfile=saved.operatorOrNull()
-            try{saveSession(saved.withConfirmedProfile(profileJson,profile.expiresAt))}
+            try{if(savedProfile!=profile)saveSession(saved.withConfirmedProfile(profileJson,profile.expiresAt))}
             catch(e:Exception){authority.blockObservationIfCurrent(witness);throw e}
             lastReadFromCache=false;lastReadSavedAt=System.currentTimeMillis()
             operator=profile

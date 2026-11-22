@@ -118,8 +118,9 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null){
  fun restore():Operator?{Fixture.restoreReads++;Fixture.restoreEntered?.countDown();
   check(Fixture.restoreBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false)
   Fixture.restoreFailure?.let{throw it};return operator}
- internal class Restoration(val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null)
- internal fun restoreForHome():Restoration?=restore()?.let{Restoration(it,Fixture.restoredHome,Fixture.restoredHomeSavedAt)}
+ internal class Restoration(val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null,val reusedHome:Boolean=false)
+ internal fun restoreForHome(allowRecentCache:Boolean):Restoration?=restore()?.let{Restoration(it,Fixture.restoredHome,Fixture.restoredHomeSavedAt)}
+ internal fun refreshHome()=Restoration(refreshSession())
  fun current()=operator?.takeUnless{Fixture.processSessionInvalidated}?.let{it.copy(id=Fixture.currentOwnerOverride?:it.id)}
  internal fun <T> withCurrentProfile(profile:Operator,publish:(String,Long)->T):T {
   checkContract(operator===profile&&current()==profile,"session_changed")
@@ -154,6 +155,8 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null){
  fun pending():Any?{if(Fixture.journalFailure)throw ContractFailure("operation_store_unavailable");return if(Fixture.pendingFlag)"original-operation" else null}
  fun reconcilePending():JSONObject{Fixture.reconciles++;Fixture.recoveryFailure?.let{throw it};if(Fixture.resolveOnCheck&&Fixture.outcomeState in setOf("committed","cancelled"))Fixture.pendingFlag=false;return JSONObject().put("state",Fixture.outcomeState).put("financialState",Fixture.financialState)}
  fun home():Home{Fixture.readFailure?.let{throw it};provenance();Fixture.homeReads++;check(Fixture.homeBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false);return Home(10000,10000,1,1,listOf(Fixture.payment()),"now")}
+ internal fun recentPayments(listing:ListingQuery):Pair<Page<Payment>,Long>?=null
+ internal fun recentMembers(listing:ListingQuery):Pair<Page<Member>,Long>?=null
  fun recordReadScope():RecordReadScope{
   val who=current()?:throw ContractFailure("session_unavailable");val collection=collectionId;val revision=readScopeRevision
   val epoch=Fixture.processSessionEpoch.get();val caps=who.capabilities.toSet()

@@ -22,8 +22,11 @@ internal class NativeMemberDirectory(
 
     private var viewportRevision = 0L
 
-    fun first(query: ListingQuery, anchor: String?): Read {
+    fun first(query: ListingQuery, anchor: String?, allowRecentCache: Boolean = false): Read {
         val source = repository()
+        if(allowRecentCache&&anchor==null)source.recentMembers(query)?.let{(page,savedAt)->
+            if(SnapshotFreshness.recent(savedAt,now()))return Read(page,false,savedAt)
+        }
         val page = if (anchor == null) source.members(query) else try {
             source.members(query, anchorId = anchor)
         } catch (failure: ApiFailure) {

@@ -50,15 +50,23 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
 
     fun restore(): Operator? = sessions.restore()?.operator
 
-    internal class Restoration(val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null)
+    internal class Restoration(val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null,
+        val reusedHome:Boolean=false)
 
-    internal fun restoreForHome():Restoration? {
-        val restored=sessions.restore(includeHome=true)?:return null
-        val snapshot=restored.home?.let{records.acceptRestoredHome(restored.operator,it)}
-        return Restoration(restored.operator,snapshot?.first,snapshot?.second)
+    internal fun restoreForHome(allowRecentCache:Boolean):Restoration? {
+        val restored=sessions.restore(includeHome=true,canReuseHome={allowRecentCache&&records.hasRecentHome(it)})?:return null
+        return withHome(restored)
     }
+
+    private fun withHome(verified:NativeSessions.ProfileRead):Restoration {
+        val snapshot=verified.home?.let{records.acceptRestoredHome(verified.operator,it)}
+            ?:if(verified.useRecentHome)records.recentHome(verified.operator)else null
+        return Restoration(verified.operator,snapshot?.first,snapshot?.second,verified.useRecentHome)
+    }
+
+    internal fun refreshHome():Restoration=withHome(sessions.refreshSession(includeHome=true))
     fun login(phone: String, pin: String): Operator = sessions.login(phone, pin)
-    fun refreshSession(): Operator = sessions.refreshSession()
+    fun refreshSession(): Operator = sessions.refreshSession().operator
     fun changePin(current: String, next: String, confirm: String): Operator = sessions.changePin(current, next, confirm)
     fun current(): Operator? = sessions.current()
 
@@ -79,6 +87,8 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
     fun pairGateway(code: String, replace: Boolean): JSONObject = receiverPairing.pairGateway(code, replace)
 
     fun home(): Home = records.home()
+    internal fun recentPayments(listing:ListingQuery) = records.recentPayments(listing)
+    internal fun recentMembers(listing:ListingQuery) = records.recentMembers(listing)
     fun recordReadScope(): RecordReadScope = records.recordReadScope()
     fun validateRecordReadScope(scope: RecordReadScope) = records.validateRecordReadScope(scope)
 

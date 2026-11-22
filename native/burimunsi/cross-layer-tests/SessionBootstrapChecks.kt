@@ -305,6 +305,69 @@ private suspend fun bundledHomeRestores() {
     }
 }
 
+private suspend fun recentHomeKeepsAgeAndAuthorization() {
+    val scenario = SessionScenario()
+    val repo = scenario.repository()
+    scenario.signIn(repo)
+    repo.home()
+    val originalTime = checkNotNull(repo.lastReadSavedAt)
+    Transport.calls.clear()
+    val model = BuriViewModel(scenario.app)
+    try {
+        idle(model)
+        check(model.state.home != null && model.state.savedAt == originalTime && !model.state.offline)
+        check(Transport.calls.map { it.path } == listOf("/v1/burimunsi/session"))
+        model.onFixtureMain { refresh() }
+        idle(model)
+        check(Transport.calls.count { it.path == "/v1/burimunsi/home" } == 1)
+    } finally { stop(model) }
+
+    val flag = if (BuildConfig.IS_GATEWAY) Capability.GATEWAY else Capability.ALLOCATE
+    scenario.capabilities = listOf(Capability.READ,flag)
+    Transport.calls.clear()
+    val changed = BuriViewModel(scenario.app)
+    try {
+        idle(changed)
+        check(changed.state.home != null && changed.allows(flag))
+        check(Transport.calls.any { it.path == "/v1/burimunsi/home" })
+    } finally { stop(changed) }
+
+    val cache=JSONObject(SecureStore.records.getValue("records"))
+    cache.getJSONObject("entries").getJSONObject("/home")
+        .put("savedAt",System.currentTimeMillis()-SnapshotFreshness.ONLINE_REUSE_MS-1)
+    SecureStore.records["records"]=cache.toString()
+    Transport.calls.clear()
+    val expired = BuriViewModel(scenario.app)
+    try {
+        idle(expired)
+        check(expired.state.home != null && Transport.calls.any { it.path == "/v1/burimunsi/session?include=home" })
+    } finally { stop(expired) }
+}
+
+private fun firstPageCacheRequiresExactQuery() {
+    val scenario = SessionScenario()
+    val repo = scenario.repository()
+    scenario.signIn(repo)
+    val other = Transport.handler
+    Transport.handler = { request ->
+        if (request.path.contains("/payments?") || request.path.contains("/members?"))
+            JSONObject().put("items",JSONArray()).put("totalCount",0).put("revision","reviewed-generation")
+                .put("asOf","2026-11-20T00:00:00Z").put("nextCursor",JSONObject.NULL).toString()
+        else other(request)
+    }
+    val standard=ListingQuery()
+    repo.payments(standard)
+    val savedAt=repo.lastReadSavedAt
+    repo.members(standard)
+    val requests=Transport.calls.size
+    check(repo.recentPayments(standard)?.second == savedAt && repo.recentMembers(standard) != null)
+    check(repo.recentPayments(standard.copy(sort=ListingSort.OLDEST)) == null)
+    check(repo.recentMembers(standard.copy(q="different")) == null)
+    check(Transport.calls.size == requests)
+    repo.payments(standard)
+    check(Transport.calls.size == requests+1)
+}
+
 fun main() = runBlocking {
     val results = listOf(
         "signed-out startup retires Settings and Sync before a new group signs in" to suspend { interruptedRestore(Replacement.NONE) },
@@ -318,6 +381,8 @@ fun main() = runBlocking {
         "an equal-valued foreground profile replaces the authority held by the screen" to suspend { equalProfileRefresh() },
         "an older actor-only saved profile restores through a current server profile" to suspend { legacyProfileRestores() },
         "a paired session and Home response restores and caches the authorized snapshot" to suspend { bundledHomeRestores() },
+        "recent Home cache keeps its age and expires on access changes or timeout" to suspend { recentHomeKeepsAgeAndAuthorization() },
+        "recent first pages require an exact query and explicit reads still reach the server" to suspend { firstPageCacheRequiresExactQuery() },
     ).map { (label, scenario) ->
         runCatching { scenario() }.also { result ->
             println((if (result.isSuccess) "PASS" else "FAIL") + " $flavor $label")
