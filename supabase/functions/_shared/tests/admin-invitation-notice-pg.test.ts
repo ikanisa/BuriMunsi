@@ -5,13 +5,13 @@ import {wrapFixtureModule} from './helpers/fenced-module.js';
 import {fixtureAdminAccount,establishInitialAdminEmail,adminEmailFixtureDatabase} from './helpers/admin-email-fixture.js';
 import assert from 'node:assert/strict';
 import {isAbsolute, join} from 'node:path';
-import {pathToFileURL} from 'node:url';
+import {fileURLToPath, pathToFileURL} from 'node:url';
 
 // Local integration qualification. Root alone executes real PostgreSQL. Managed
 // fixture rows and intercepted SMTP/Auth HTTP prove no live send, TLS, inbox,
 // provider signature or client acceptance. Permit only 127.0.0.1:55439 network.
 const database = Deno.env.get('COLLECT_INVITATION_NOTICE_TEST_DATABASE_URL');
-const sourceRoot = Deno.env.get('COLLECT_AUTH_SOURCE_ROOT');
+const sourceRoot = Deno.env.get('COLLECT_AUTH_SOURCE_ROOT') ?? fileURLToPath(new URL('../', import.meta.url));
 assert.ok(sourceRoot && isAbsolute(sourceRoot), 'Use the absolute actual _shared graph being qualified.');
 const actual = async (name: string) => {if(name==='postgres.js')return import('./helpers/fenced-postgres.js');return wrapFixtureModule(name,await import(pathToFileURL(join(sourceRoot, name)).href));};
 const {connection, PostgresDatabase} = await actual('postgres.js');

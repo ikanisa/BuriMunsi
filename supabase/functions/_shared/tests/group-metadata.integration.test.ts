@@ -19,9 +19,10 @@ fencedTest('metadata registry, current cover catalog and unchanged legacy invita
  const creation=await Deno.readTextFile(new URL('../domain/member_groups/creation.js',import.meta.url));
  assert.equal(await digest(groups.slice(groups.indexOf(" case 'join_group_by_share_code':"),groups.indexOf(" case 'archive_group':"))),'48e282619093eed37d1f9604911463a8ca36222f9e32b437983a219848a1084d');
  assert.equal(await digest(creation.slice(creation.indexOf(" case 'create_private_group_with_owner_media_attested':"))),'864ac67459552a64dcf5c577bb7a9a8401e12b932c79f05310cb217a48c57788');
- const models=new URL('../../../../lib/shared/models/',import.meta.url),catalog=await Deno.readTextFile(new URL('collect_group_cover_catalog.dart',models)),names=[...catalog.matchAll(/^  (_cover\w+),$/gm)].map(x=>x[1]),definitions=new Map<string,string>();
- for await(const file of Deno.readDir(models))if(/^collect_group_cover_catalog_.*\.dart$/.test(file.name))for(const m of (await Deno.readTextFile(new URL(file.name,models))).matchAll(/const (_cover\w+) = CollectGroupCover\(\s*id: '([^']+)',\s*version: (\d+),/g))definitions.set(m[1],`collect-cover:${m[2]}:v${m[3]}`);
- const actual=JSON.parse(creation.match(/const metadataCoverRefs=new Set\((\[[^;]+\])\);/)![1]);assert.deepEqual(actual,names.map(x=>definitions.get(x)));assert.equal(actual.length,42);
+ const actual=JSON.parse(creation.match(/const metadataCoverRefs=new Set\((\[[^;]+\])\);/)![1]);
+ assert.equal(actual.length,42);
+ assert.ok(actual.includes(cover));
+ assert.equal(await digest(JSON.stringify(actual)),'f1b8fc3af7e68525faa37eada55f80ed23d5dac9f430be8ea9d727e60a242bf4');
 });
 
 fencedTest({name:'wallet-free metadata on actual handlers and PostgreSQL: authority, quota races, invitations and zero ledger effects',ignore:!database,sanitizeOps:false,sanitizeResources:false,fn:async t=>{

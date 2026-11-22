@@ -1,6 +1,7 @@
 // Private financial-only extraction of accepted Auth PG4 source c10d404.
 // No Deno.test/fencedTest is registered by this module. Root alone dispatches.
 import {loadReviewedPlatformFixture,MIGRATION_THIRTEEN,ROOT_SQL13_SHA256} from '../../../../scripts/supabase/testing/curated-platform-fixture.mjs';
+import {installCurrentAdminEmailFixture} from '../../../../scripts/supabase/testing/current-admin-email-fixture.mjs';
 import postgres from 'npm:postgres@3.4.7';
 import {PostgresDatabase as ActualPostgresDatabase} from '../postgres.js';
 import {createHandler as actualCreateHandler} from '../serve.js';
@@ -25,7 +26,19 @@ export async function openFixture(){
  const url=new URL(database!);assert(['127.0.0.1','localhost'].includes(url.hostname)&&(url.port==='55439'||Deno.env.get('COLLECT_CI_SYNTHETIC')==='true')&&['/collect_be02_red_3f624f3e7a6d_test', '/collect_be02_green_3f624f3e7a6d_test'].includes(url.pathname),'Only the dedicated synthetic loopback database is allowed.');
  const sql=connection(database!);await initializeSqlFixture(sql);
  const present=await sql`select to_regclass('app.users') as present`;
- if(!present[0].present){const setup=await sql.reserve();try{await setup.unsafe(await Deno.readTextFile(new URL('../../../tests/sql/00_local_auth_fixture.sql',import.meta.url)));const reviewedPlatform=await loadReviewedPlatformFixture(new URL('../../../../',import.meta.url),{includeMfaRetirementMigration:true});await reviewedPlatform.apply(text=>setup.unsafe(text));}finally{setup.release();await initializeSqlFixture(sql);}}
+ if(!present[0].present){
+  const root=new URL('../../../../',import.meta.url);
+  const reviewedPlatform=await loadReviewedPlatformFixture(root,{includeMfaRetirementMigration:true});
+  const setup=await sql.reserve();
+  try{
+   await reviewedPlatform.apply(text=>setup.unsafe(text),{includeAuth:true});
+   if(url.pathname==='/collect_be02_green_3f624f3e7a6d_test')
+    await installCurrentAdminEmailFixture(setup,root,SYNTHETIC_FENCE_SOURCE);
+  }finally{
+   setup.release();
+   await initializeSqlFixture(sql);
+  }
+ }
  // Extend only this loopback managed-Auth fixture, not a hosted schema.
  await sql.unsafe('ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS email_confirmed_at timestamptz');
  async function nextPublicId(){const row=(await sql.unsafe("SELECT lpad(min(candidate)::text,6,'0') AS id FROM(SELECT 0 AS candidate UNION ALL SELECT public_id::integer+1 FROM app.users WHERE public_id<>'999999') c WHERE candidate<1000000 AND NOT EXISTS(SELECT 1 FROM app.users WHERE public_id=lpad(candidate::text,6,'0'))"))[0];return row.id;}
@@ -129,7 +142,7 @@ export async function openFixture(){
   const validation=validateMomoExtraction(output,{raw_sender:'MTN MoMo',raw_body:body,completeness:'complete'},a);assert(validation.accepted,JSON.stringify(validation));
   const raw=await capture(owner,body,a.receiver_hash),stamp=new Date().toISOString();
   await sql`insert into app.momo_processing_jobs(raw_sms_id,receiving_account_id,mode,state,available_at,created_at,updated_at)values(${raw.id},${a.id},'historical','pending',${unix()},${stamp},${stamp})`;
-  const result=await processMomoJob({...receiptEnv(),AI:{run:async()=>{aiCalls++;return {response:output};}}},raw.id);assert(['accepted','duplicate','conflict'].includes(result.relation),JSON.stringify(result));
+  const result=await processMomoJob({...receiptEnv(),MOMO_PROCESSING_PAUSED:'false',AI:{run:async()=>{aiCalls++;return {response:output};}}},raw.id);assert(['accepted','duplicate','conflict'].includes(result.relation),JSON.stringify(result));
   return {...raw,output,result,tx:(await sql`select * from app.momo_transactions where id=${result.transaction_id}`)[0]};
  };
  const handlerPools:any[]=[],handlerWorks:any[]=[];

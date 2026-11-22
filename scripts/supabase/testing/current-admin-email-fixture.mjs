@@ -10,6 +10,7 @@ const baseline = 'dfc7a4fafb696f73d207251c9f35cb892528eecd1929552fa575996874adc3
 const fixtureNames = new Set([
   'collect_admin_history_test', 'collect_edge_test',
   'collect_edge_ci_test', 'collect_edge_storage_test',
+  'collect_be02_green_3f624f3e7a6d_test',
 ]);
 const need = (condition, code) => { if (!condition) throw new Error(code); };
 

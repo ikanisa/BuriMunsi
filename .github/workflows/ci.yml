@@ -17,9 +17,35 @@ jobs:
   source-and-edge:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    container:
+      image: postgres:17.10@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+    defaults:
+      run:
+        shell: bash
     env:
       DENO_TLS_CA_STORE: system
+      COLLECT_CI_SYNTHETIC: 'true'
+      COLLECT_TEST_PG_URL: postgres://collect_test:collect_local_fixture_only@127.0.0.1:55439/collect_schema_test
+      COLLECT_FENCE_ADMIN_DATABASE_URL: postgres://collect_test:collect_local_fixture_only@127.0.0.1:55439/postgres
+      COLLECT_MEMBER_REALTIME_ADMIN_DATABASE_URL: postgres://collect_test:collect_local_fixture_only@127.0.0.1:55439/postgres
+      COLLECT_TEST_DATABASE_URL: postgres://collect_test:collect_local_fixture_only@127.0.0.1:55439/collect_edge_test
+      COLLECT_FINANCIAL_TEST_DATABASE_URL: postgres://collect_test:collect_local_fixture_only@127.0.0.1:55439/collect_be02_green_3f624f3e7a6d_test
+      COLLECT_ADMIN_HISTORY_TEST_DATABASE_URL: postgres://collect_test:collect_local_fixture_only@127.0.0.1:55439/collect_admin_history_test
+      COLLECT_INVITATION_NOTICE_TEST_DATABASE_URL: postgres://collect_test:collect_local_fixture_only@127.0.0.1:55439/collect_invitation_notice_test
+      COLLECT_GROUPS_TEST_DATABASE_URL: postgres://collect_test:collect_local_fixture_only@127.0.0.1:55439/collect_groups_test
+      COLLECT_ADMIN_PASSWORD_POLICY_TEST_DATABASE_URL: postgres://collect_test:collect_local_fixture_only@127.0.0.1:55439/collect_admin_email_test
+      COLLECT_ADMIN_PASSWORD_POLICY_STALE_TEST_DATABASE_URL: postgres://collect_test:collect_local_fixture_only@127.0.0.1:55439/collect_admin_email_test
+      COLLECT_DIAGNOSTICS_TEST_DATABASE_URL: postgres://collect_test:collect_local_fixture_only@127.0.0.1:55439/collect_diagnostics_test
+      COLLECT_MFA_TEST_DATABASE_URL: postgres://collect_test:collect_local_fixture_only@127.0.0.1:55439/collect_mfa_test
+      COLLECT_NOTIFICATION_DELIVERY_TEST_DATABASE_URL: postgres://collect_test:collect_local_fixture_only@127.0.0.1:55439/collect_notification_delivery_test
+      COLLECT_RECEIPT_FACTS_TEST_DATABASE_URL: postgres://collect_test:collect_local_fixture_only@127.0.0.1:55439/collect_receipt_facts_test
     steps:
+      - name: Install runner prerequisites
+        run: |
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          timeout --signal=TERM --kill-after=5s 150s apt-get -o Acquire::Retries=0 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          timeout --signal=TERM --kill-after=5s 150s apt-get --yes --no-install-recommends --no-upgrade install ca-certificates git make python3 tar gzip xz-utils
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
@@ -34,12 +60,32 @@ jobs:
           bash scripts/release_secret_scan.sh
       - name: Install frozen Supabase tooling
         run: npm ci --prefix scripts/supabase --ignore-scripts --no-audit --no-fund
+      - name: Start the isolated Edge PostgreSQL fixture
+        id: postgres
+        run: sh scripts/supabase/testing/ci-native-postgres.sh start
+      - name: Create the Edge test databases
+        run: |
+          psql "$COLLECT_FENCE_ADMIN_DATABASE_URL" --no-psqlrc --no-password --set=ON_ERROR_STOP=1 <<'SQL'
+          CREATE DATABASE collect_edge_test;
+          CREATE DATABASE collect_be02_green_3f624f3e7a6d_test;
+          CREATE DATABASE collect_admin_history_test;
+          CREATE DATABASE collect_invitation_notice_test;
+          CREATE DATABASE collect_groups_test;
+          CREATE DATABASE collect_admin_email_test;
+          CREATE DATABASE collect_diagnostics_test;
+          CREATE DATABASE collect_mfa_test;
+          CREATE DATABASE collect_notification_delivery_test;
+          CREATE DATABASE collect_receipt_facts_test;
+          SQL
       - name: Check all frozen Edge entrypoints and source test suites
         run: |
           set -euo pipefail
           export PATH="$PWD/scripts/supabase/node_modules/@deno/linux-x64-glibc:$PATH"
           deno --version | grep -Eq '^deno 2[.]9[.]6 '
           make test-backend
+      - name: Stop the isolated Edge PostgreSQL fixture
+        if: ${{ always() && steps.postgres.outcome != '' && steps.postgres.outcome != 'skipped' }}
+        run: sh scripts/supabase/testing/ci-native-postgres.sh stop
 
   admin:
     runs-on: ubuntu-24.04
