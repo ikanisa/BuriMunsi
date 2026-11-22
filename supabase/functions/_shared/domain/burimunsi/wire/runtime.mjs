@@ -113,7 +113,7 @@ export function semantics(product,operation,r,expected={}) {
   function rows(list){const ids=new Set();for(const row of list){if(row.groupId!==r.binding.groupId)fail('CONTRACT_IDENTITY');if(ids.has(row.id))fail('CONTRACT_DUPLICATE');ids.add(row.id);}}
   if(data.items&&operation!=='observationReconcileBatch'){rows(data.items);if(data.totalCount<data.items.length||(data.nextCursor!==null&&!data.items.length))fail('CONTRACT_PAGE');}
   if(data.recentPayments)rows(data.recentPayments);
-  if(operation==='session'){
+  if(operation==='session'||operation==='login'){
    if(Object.hasOwn(data,'home')!==(expected.includeHome===true))fail('CONTRACT_CONTEXT');
    if(data.home)rows(data.home.recentPayments);
   }

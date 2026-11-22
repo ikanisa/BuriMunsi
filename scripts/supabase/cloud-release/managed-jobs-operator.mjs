@@ -86,6 +86,7 @@ async function inspect(db){
   c.native_provider_source_sha256,c.native_provider_model_id,c.native_provider_approval_sha256,c.native_provider_expires_at,c.native_provider_limit,c.native_provider_used,
   j.jobname,j.schedule,j.command,j.database,j.username,j.active,
   ${fastScheduleHistorySql} AS fast_migration,
+  (SELECT encode(sha256(convert_to(statements[1],'UTF8')),'hex') FROM supabase_migrations.schema_migrations WHERE version='20261122180000') AS performance_migration,
   (SELECT encode(sha256(convert_to(statements[1],'UTF8')),'hex') FROM supabase_migrations.schema_migrations WHERE version='20261122150000') AS inbox_migration,
   (SELECT count(*)::int FROM vault.decrypted_secrets WHERE name='collect_job_signing_key_v1') AS keys,
   (SELECT encode(sha256(convert_to(decrypted_secret,'UTF8')),'hex') FROM vault.decrypted_secrets WHERE id=$1::uuid AND name='collect_job_signing_key_v1') AS key_sha,
@@ -100,6 +101,11 @@ async function inspect(db){
   row.historical!==graph.counts?.sms||row.historical!==37||row.triggers_ok!==true||row.scheduler_coverage!==true)throw Error('scheduler_or_history_guard_changed');
  const inboxFile='20261122150000_burimunsi_sms_completeness.sql';
  if(row.inbox_migration && row.inbox_migration!==sha(readFileSync(new URL('../../../supabase/migrations/'+inboxFile,import.meta.url))))throw Error('scheduler_migration_changed');
+ const expectedGuards={...GUARDS};
+ if(row.performance_migration){
+  if(row.performance_migration!==sha(readFileSync(new URL('../../../supabase/migrations/20261122180000_burimunsi_internal_query_performance.sql',import.meta.url))))throw Error('scheduler_migration_changed');
+  expectedGuards['private.burimunsi_native_sms_post_candidates(integer)']='9324e45037a41ec10f750c173473752dc29187b9e72d3ae4fabb86a13ea06747';
+ }
  const guard=(await db.query(`SELECT x.signature,p.proowner::regrole::text owner,p.prosecdef,
     encode(sha256(convert_to(CASE WHEN $2 AND p.proname='burimunsi_auto_snapshot'
       AND strpos(p.prosrc,' IF NOT private._burimunsi_observation_automatable(p_source) OR private.collect_imported_native_source(p_source)')>0
@@ -109,8 +115,9 @@ async function inspect(db){
       THEN replace(p.prosrc,' WHERE private._burimunsi_observation_automatable(o.source_id) AND NOT private.collect_imported_native_source(o.source_id)',' WHERE NOT private.collect_imported_native_source(o.source_id)')
       WHEN $2 AND p.proname IN ('burimunsi_auto_snapshot','burimunsi_auto_candidates') THEN NULL ELSE p.prosrc END,'UTF8')),'hex') digest
   FROM unnest($1::text[]) x(signature) LEFT JOIN pg_proc p ON p.oid=to_regprocedure(x.signature)`,[Object.keys(GUARDS),Boolean(row.inbox_migration)])).rows;
- if(guard.length!==Object.keys(GUARDS).length||guard.some(x=>x.owner!=='postgres'||x.prosecdef!==true||x.digest!==GUARDS[x.signature]))throw Error('scheduler_or_history_guard_changed');
+ if(guard.length!==Object.keys(GUARDS).length||guard.some(x=>x.owner!=='postgres'||x.prosecdef!==true||x.digest!==expectedGuards[x.signature]))throw Error('scheduler_or_history_guard_changed');
  const expected=expectedSchedulerBodies(scheduler.sql);
+ if(row.performance_migration)expected.ops.reconcile_jobs='7178d8d2dad63f00f2503c160280d222da80869f156063419f2b3e21d6ae1554';
  if(scheduleHistory){
   expected.ops.dispatch_jobs='00e49b5d9603cd8564555252cc62b23d667fd9f611c558c46459e4b7580d9f72';
   expected.ops.activate_jobs='18fb407a536fa422aa539a15b161c75af638a295159f020eebc5af1692c188d3';

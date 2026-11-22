@@ -61,11 +61,10 @@ async function runNativeAuto(env, nativeEnv, admission, processNativeAuto, proce
     nativeAuto = {status: 'unconfirmed', code: 'native_auto_processing_unconfirmed'};
   }
 
-  // The same native SMS cycle posts matched receipts into the Collect ledger.
-  if (env.BURIMUNSI_NATIVE_AUTO_TRANSACTIONS_ENABLED !== 'true') return {nativeAuto, nativeLedger: null};
+  // Finish a bounded backlog after parsing, preserving per-receipt ordering.
   let nativeLedger;
   try {
-    nativeLedger = nativeSmsLedgerResult(await processNativeSmsLedger(nativeEnv, {limit: 1}));
+    nativeLedger = nativeSmsLedgerResult(await processNativeSmsLedger(nativeEnv, {limit: 4}));
   } catch {
     nativeLedger = {status: 'unconfirmed', code: 'native_sms_ledger_unconfirmed'};
   }
@@ -76,7 +75,17 @@ async function runPaymentSms(env, enabled, admitted, processPaymentSms) {
   if (!enabled) return null;
   if (!admitted) return {status: 'held', processed: 0};
   try {
-    return scheduledPaymentSmsResult(await processPaymentSms(env));
+    const first=scheduledPaymentSmsResult(await processPaymentSms(env));
+    if(env.BURIMUNSI_PRODUCT_MODE!=='standalone'||first.processed!==1||first.status!=='complete')return first;
+    const outcomes=[first];
+    const started=performance.now();
+    while(outcomes.length<4 && performance.now()-started<15000){
+      const next=scheduledPaymentSmsResult(await processPaymentSms(env));
+      if(next.processed===0&&next.status==='complete')break;
+      if(next.processed===1)outcomes.push(next);
+      if(next.status!=='complete')return {status:next.status,processed:outcomes.length,outcomes};
+    }
+    return outcomes.length===1 ? first : {status:'complete',processed:outcomes.length,outcomes};
   } catch {
     return {status: 'unconfirmed', processed: 0};
   }

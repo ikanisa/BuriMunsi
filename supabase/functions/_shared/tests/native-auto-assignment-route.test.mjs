@@ -6,7 +6,8 @@ import {DatabaseSync} from 'node:sqlite';
 
 registerHooks({resolve(specifier,context,next){
  if(context.parentURL?.endsWith('/domain/admin_momo.js')&&specifier==='./admin_accounts.js')
-  return {url:'data:text/javascript,'+encodeURIComponent(`export const accountDatabase=env=>env;export async function adminAccountSession(){}`),shortCircuit:true};
+  return {url:'data:text/javascript,'+encodeURIComponent(`export const accountDatabase=env=>env;
+   export const accountReadDatabase=env=>env;export async function adminAccountSession(){}`),shortCircuit:true};
  if(/\/domain\/admin_momo(?:_payment_review)?\.js$/.test(context.parentURL)&&specifier==='./mutations.js')
   return {url:'data:text/javascript,'+encodeURIComponent(`export async function retainedResponse(){return {found:false};}
    export async function mutation(env,actor,operation,rid,source,value,writes){return globalThis.__nativeRouteMutation(operation,value,writes);}`),shortCircuit:true};

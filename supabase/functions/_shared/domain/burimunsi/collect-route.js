@@ -1,3 +1,4 @@
+import {assertWorkOwner} from '../../application-fence.js';
 import {verifyToken} from '../../auth-http.js';
 import {projectSession,startOtp} from '../auth.js';
 import {ApiError} from '../core.js';
@@ -92,17 +93,17 @@ export function createCollectNativeRoute({profile,config,bridgeFactory,secrets,n
       requireActiveNativeRequest(request);await work.assert();
       return new Response(JSON.stringify(data),{status:200,headers:HEADERS});
     }
-    const compose=async(principal,local)=>{
+    const compose=async(principal,local,routeRequest=request)=>{
       requireActiveNativeRequest(request);
       requireThat(local.DB===db&&db.applicationWork===work,'request_not_admitted',503);
       const admission=Object.freeze({verified:true,...principal});
       const bridges=await bridgeFactory(Object.freeze({env:local,db,work,profile:selected,
         groupId:principal.groupId,admission}));
       requireActiveNativeRequest(request);
-      await work.assert();
+      await assertWorkOwner(work);
       requireThat(local.DB===db&&db.applicationWork===work,'request_not_admitted',503);
       const native=composePostgresNativeRequest({admission,config:{...settings,groupId:principal.groupId},db,bridges,secrets:keys,networkBucket,clock});
-      return native(request);
+      return native(routeRequest);
     };
     // Explicit protocol selection; a missing/invalid managed token never falls
     // back to PIN authority. Both modes retain the same application fence,

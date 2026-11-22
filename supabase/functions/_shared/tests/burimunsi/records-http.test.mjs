@@ -109,6 +109,31 @@ test('strict native Home, member and member-payment responses carry a posted SMS
  tx.canonicalHome=()=>assert.fail('revoked actor reached bundled Home');
  assert.equal((await fn(get('/session?include=home'))).status,401);
 });
+test('verified PIN record selector still requires a matching actor in the records snapshot',async()=>{
+ const {svc,data,tx}=records(),installation='22222222-2222-4222-8222-222222222222',requestId='11111111-1111-4111-8111-111111111111';
+ data.actor={...data.actor,sessionId:requestId,installationId:installation,name:'Synthetic operator'};
+ data.rows=[nativePosted];
+ let authCalls=0,snapshotCalls=0;
+ const readRecordActor=()=>({id:data.actor.id,groupId:data.actor.groupId,sessionId:requestId});
+ tx.reloadActor=async id=>{snapshotCalls++;assert.equal(id,requestId);return data.actor;};
+ const noop=async()=>({});
+ const origin='https://native.example.test';
+ const fn=createNativeHandler({auth:{login:noop,authenticate:async()=>{authCalls++;return data.actor;},logout:noop,changePasscode:noop,manageStaff:noop},
+  records:svc,contributions:{allocate:noop},members:{enroll:noop,setActive:noop},gateway:{status:noop,replace:noop},
+  origin,groupId:'group-1',strictContract:true,networkBucket:noop,readRecordActor});
+ const get=path=>new Request(origin+'/v1/burimunsi'+path,{headers:{
+  'x-burimunsi-installation':installation,'x-burimunsi-contract':'burimunsi.native.v1','x-burimunsi-request':requestId,
+  'x-burimunsi-generation':'1',authorization:'Bearer '+'a'.repeat(64)}});
+ assert.equal((await fn(get('/session?include=home'))).status,200);
+ assert.equal((await fn(get('/payments'))).status,200);
+ assert.deepEqual([authCalls,snapshotCalls],[0,2]);
+ assert.equal((await fn(get('/session'))).status,200);
+ assert.deepEqual([authCalls,snapshotCalls],[1,2]);
+ tx.reloadActor=async()=>({...data.actor,sessionId:'changed'});
+ tx.canonicalHome=()=>assert.fail('mismatched session reached Home');
+ assert.equal((await fn(get('/session?include=home'))).status,401);
+ assert.equal(authCalls,1);
+});
 for(const state of ['reversed','corrected'])test('native '+state+' remains readable through Home, scoped list and strict payment detail',async()=>{
  const {svc,data,tx}=records(),installation='22222222-2222-4222-8222-222222222222',requestId='11111111-1111-4111-8111-111111111111';
  data.actor={...data.actor,sessionId:requestId,installationId:installation};

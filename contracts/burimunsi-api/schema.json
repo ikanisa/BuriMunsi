@@ -761,6 +761,16 @@
           "minLength": 1,
           "maxLength": 128,
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}(?![\\s\\S])"
+        },
+        "home": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/home.data"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -2796,7 +2806,12 @@
     },
     "login.query": {
       "type": "object",
-      "properties": {},
+      "properties": {
+        "include": {
+          "type": "string",
+          "const": "home"
+        }
+      },
       "required": [],
       "additionalProperties": false
     },

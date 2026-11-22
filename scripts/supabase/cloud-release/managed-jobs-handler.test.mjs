@@ -12,9 +12,11 @@ try{
  const shared=join(dir,'supabase/functions/_shared');
  // The substitutions are fixture-only and never become the deployed patch.
  let runtime=await readFile(join(shared,'edge-runtime.js'),'utf8');
- runtime=once(runtime,'env.DB = new PostgresDatabase(connection(env.COLLECT_DATABASE_URL, env));\n    await assertRuntimeDeployment(env.DB.sql, env, standaloneCollectionId);',
-  'env.DB = globalThis.__managedJobsFixture.db;\n    await globalThis.__managedJobsFixture.check();');
- runtime=once(runtime,'backend: sqlFenceBackend(env.DB.sql, fenceConnection(env.COLLECT_DATABASE_URL, env)),',
+ runtime=once(runtime,'env.DB = new PostgresDatabase(connection(env.COLLECT_DATABASE_URL, env));',
+  'env.DB = globalThis.__managedJobsFixture.db;');
+ runtime=once(runtime,'await assertRuntimeDeployment(env.DB.sql, env, standaloneCollectionId);',
+  'await globalThis.__managedJobsFixture.check();');
+ runtime=once(runtime,'backend: sqlFenceBackend(env.DB.sql, fenceConnection(env.COLLECT_DATABASE_URL, env), this.beforeRegister),',
   'backend: globalThis.__managedJobsFixture.backend,');
  runtime=once(runtime,'env.PRIVATE_MEDIA = new SupabaseObjectBucket(env);',
   'env.PRIVATE_MEDIA = {};');

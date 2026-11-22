@@ -177,15 +177,16 @@ Deno.test('standalone compares the only database collection with the configured 
         const query = parts.join('?');
         queries.push(query);
         if (query.startsWith('SET LOCAL ROLE')) return [];
-        if (query.startsWith('SELECT private.collect_assert_deployment')) return [{allowed: true}];
-        if (query === 'SELECT id FROM app.collections LIMIT 2') return ids.map(id => ({id}));
+        if (query.startsWith('SELECT private.collect_assert_deployment') && query.includes('FROM (SELECT id FROM app.collections LIMIT 2)')) {
+          return [{allowed: true, scope_matches: ids.length === 1 && ids[0] === group}];
+        }
         throw new Error('unexpected statement');
       });
     }};
     if (ids.length === 1 && ids[0] === group) await assertRuntimeDeployment(sql, env, group);
     else await assertRejects(() => assertRuntimeDeployment(sql, env, group), Error, 'burimunsi_collection_mismatch');
     assertEquals(queries[0], 'SET LOCAL ROLE collect_runtime');
-    assertEquals(queries.length, 3);
+    assertEquals(queries.length, 2);
   }
 });
 

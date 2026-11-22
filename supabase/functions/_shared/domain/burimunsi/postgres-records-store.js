@@ -8,6 +8,7 @@ import {canonicalListingInstant,listingText} from './listing-query.js';
 import {readMemberListing} from './postgres-member-listing.js';
 import {nativePaymentListingScope,paymentAllocationFilterSql,paymentReferenceSql,paymentsSql,readCanonicalHome} from './postgres-payment-reads.js';
 import {projectLedger,projectMember,projectPayment} from './postgres-record-projections.js';
+import {claimPhonePinReadSnapshot} from './phone-pin-request.js';
 
 const MEMBERS=`SELECT u.id,m.collection_id,u.full_name,u.momo_number,m.active,m.revision,u.revision AS person_revision,m.joined_at,
  coalesce((SELECT sum(l.amount_minor) FROM app.ledger_entries l WHERE l.collection_id=m.collection_id AND l.member_id=m.user_id),0) AS balance
@@ -24,6 +25,12 @@ const LEDGER=`SELECT l.id,l.collection_id,l.member_id,l.amount_minor,l.posted_at
  WHERE l.collection_id=$1 AND l.member_id=$2`;
 const safeLike=s=>'%'+s.replaceAll('\\','\\\\').replaceAll('%','\\%').replaceAll('_','\\_')+'%';
 const localPhone=phone=>typeof phone==='string'&&phone.startsWith('+250')?'0'+phone.slice(4):phone;
+
+async function countedPage(sql,count,page,order,values){
+  const rows=await sql.unsafe(`WITH totals AS (${count}), page AS (${page})
+    SELECT page.*,totals.page_total FROM totals LEFT JOIN page ON true ORDER BY ${order}`,values);
+  return {total:pgInteger(rows[0].page_total),rows:rows[0].id===null?[]:rows};
+}
 
 /** Reuses canonical app tables, never a client or SMS-derived balance.
  * sourceReader must reuse Collect's admitted decrypt/read command and validate
@@ -43,7 +50,7 @@ export class PostgresRecordsStore {
     return this.sourceReader.revealSms(actor,request);
   }
   async withReadSnapshot(fn,{primary=false}={}){
-    return this.authority.read(async sql=>{
+    const read=async sql=>{
       if(primary){
         const check=(await sql.unsafe('SELECT pg_is_in_recovery() AS replica'))[0];
         requireThat(check?.replica===false,'command_primary_required',503);
@@ -82,12 +89,13 @@ export class PostgresRecordsStore {
           scope(g);let rows;
           if(kind==='payments')rows=await sql.unsafe(`${auto?nativePaymentListingScope:''}SELECT t.id,t.version,t.has_conflict,p.revision AS payment_revision,p.status,p.member_id,
             f.beneficiary_member_id,pm.revision AS membership_revision,u.revision AS member_revision,${paymentReference?`(${paymentReferenceSql}=$2) AS reference_match,`:''}
-            (SELECT count(*) FROM app.momo_transaction_sources bad WHERE bad.transaction_id=t.id AND bad.relation='conflict') AS conflict_count,
-            (SELECT count(*) FROM app.ledger_entries l WHERE l.payment_id=p.id AND l.collection_id=x.collection_id) AS ledger_count${auto?',x.native_source_id,native.value AS native_meta':''}
+            ${auto?'coalesce(src.conflict_count,0)':`(SELECT count(*) FROM app.momo_transaction_sources bad WHERE bad.transaction_id=t.id AND bad.relation='conflict')`} AS conflict_count,
+            ${auto?'coalesce(credit.ledger_count,0)':`(SELECT count(*) FROM app.ledger_entries l WHERE l.payment_id=p.id AND l.collection_id=x.collection_id)`} AS ledger_count${auto?',x.native_source_id,native.value AS native_meta':''}
             FROM ${auto?'payment_scope':'private.burimunsi_transaction_scopes'} x JOIN app.momo_transactions t ON t.id=x.transaction_id AND t.receiving_account_id=x.receiving_account_id
             LEFT JOIN app.momo_financial_links f ON f.transaction_id=t.id LEFT JOIN app.payments p ON p.id=f.payment_id AND p.collection_id=x.collection_id
             LEFT JOIN app.memberships pm ON pm.collection_id=x.collection_id AND pm.user_id=coalesce(p.member_id,CASE WHEN p.id IS NOT NULL THEN f.beneficiary_member_id END)
-            LEFT JOIN app.users u ON u.id=pm.user_id ${auto?'LEFT JOIN native_projection native ON native.source_id=x.native_source_id':''}
+            LEFT JOIN app.users u ON u.id=pm.user_id ${auto?`LEFT JOIN native_projection native ON native.source_id=x.native_source_id
+              LEFT JOIN payment_sources src ON src.transaction_id=t.id LEFT JOIN payment_credit credit ON credit.transaction_id=t.id`:''}
             WHERE x.collection_id=$1 ORDER BY t.id LIMIT 100001`,paymentReference?[g,paymentReference]:[g]);
           else if(kind==='ledger'){requireThat(memberId,'member_required');rows=await sql.unsafe('SELECT id FROM app.ledger_entries WHERE collection_id=$1 AND member_id=$2 ORDER BY id LIMIT 100001',[g,memberId]);}
           else if(kind==='staff')rows=await sql.unsafe('SELECT id,version FROM private.burimunsi_accounts WHERE collection_id=$1 AND role=\'staff\' ORDER BY id LIMIT 100001',[g]);
@@ -154,19 +162,27 @@ export class PostgresRecordsStore {
             where+=paymentAllocationFilterSql(auto,filter);
             // Matching uses canonical fields. Counting does not need the
             // protected native receipt projection that supplies display data.
-            total=pgInteger((await sql.unsafe('SELECT count(*) AS total FROM ('+paymentsSql(false)+where+') AS scoped',args))[0].total);
-            rows=await sql.unsafe(PAYMENTS+where+' ORDER BY t.transaction_at DESC NULLS LAST,t.id DESC LIMIT $'+(args.length+1)+' OFFSET $'+(args.length+2),[...args,limit,offset]);read=projectPayment;
+            const count='SELECT count(*) AS page_total FROM ('+paymentsSql(false)+where+') AS scoped';
+            // Keep the canonical ordering even when the role-aware display
+            // projection supplies a different transaction timestamp.
+            const page=paymentsSql(auto,{includePageOrder:true})+where+
+              ' ORDER BY t.transaction_at DESC NULLS LAST,t.id DESC LIMIT $'+(args.length+1)+' OFFSET $'+(args.length+2);
+            ({rows,total}=await countedPage(sql,count,page,'page.page_order DESC NULLS LAST,page.id DESC',[...args,limit,offset]));
+            read=projectPayment;
           }else if(kind==='ledger'){
             requireThat(memberId,'member_required');await this.memberExists(sql,g,memberId);
-            total=pgInteger((await sql.unsafe('SELECT count(*) AS total FROM app.ledger_entries WHERE collection_id=$1 AND member_id=$2',[g,memberId]))[0].total);
-            rows=await sql.unsafe(LEDGER+' ORDER BY l.posted_at DESC,l.id DESC LIMIT $3 OFFSET $4',[g,memberId,limit,offset]);read=projectLedger;
+            ({rows,total}=await countedPage(sql,'SELECT count(*) AS page_total FROM app.ledger_entries WHERE collection_id=$1 AND member_id=$2',
+              LEDGER+' ORDER BY l.posted_at DESC,l.id DESC LIMIT $3 OFFSET $4','page.posted_at DESC,page.id DESC',[g,memberId,limit,offset]));
+            read=projectLedger;
           }else if(kind==='staff'){
-            total=pgInteger((await sql.unsafe("SELECT count(*) AS total FROM private.burimunsi_accounts WHERE collection_id=$1 AND role='staff' AND NOT removed",[g]))[0].total);
-            rows=await sql.unsafe("SELECT id,collection_id,name,phone,active,version,capabilities FROM private.burimunsi_accounts WHERE collection_id=$1 AND role='staff' AND NOT removed ORDER BY name,id LIMIT $2 OFFSET $3",[g,limit,offset]);
+            const staff="FROM private.burimunsi_accounts WHERE collection_id=$1 AND role='staff' AND NOT removed";
+            ({rows,total}=await countedPage(sql,'SELECT count(*) AS page_total '+staff,
+              'SELECT id,collection_id,name,phone,active,version,capabilities '+staff+' ORDER BY name,id LIMIT $2 OFFSET $3','page.name,page.id',[g,limit,offset]));
             read=r=>({id:r.id,groupId:r.collection_id,name:r.name,phone:r.phone,active:r.active,version:pgInteger(r.version),capabilities:r.capabilities});
           }else if(kind==='audit'){
-            total=pgInteger((await sql.unsafe('SELECT count(*) AS total FROM private.burimunsi_audit WHERE collection_id=$1',[g]))[0].total);
-            rows=await sql.unsafe('SELECT id,collection_id,action,at_ms FROM private.burimunsi_audit WHERE collection_id=$1 ORDER BY at_ms DESC,id DESC LIMIT $2 OFFSET $3',[g,limit,offset]);
+            const audit='FROM private.burimunsi_audit WHERE collection_id=$1';
+            ({rows,total}=await countedPage(sql,'SELECT count(*) AS page_total '+audit,
+              'SELECT id,collection_id,action,at_ms '+audit+' ORDER BY at_ms DESC,id DESC LIMIT $2 OFFSET $3','page.at_ms DESC,page.id DESC',[g,limit,offset]));
             read=r=>({id:r.id,groupId:r.collection_id,action:r.action,at:new Date(pgInteger(r.at_ms)).toISOString()});
           }else return this.sourceReader.page(sql,query,snapshotActor);
           return {items:rows.map(read),totalCount:total,after:offset+rows.length<total?{offset:offset+rows.length}:null,asOf:at};
@@ -215,7 +231,10 @@ export class PostgresRecordsStore {
         }
       };
       return fn(ops);
-    });
+    };
+    const existing=claimPhonePinReadSnapshot(this.authority.db,this.groupId);
+    requireThat(!existing||!primary,'request_not_admitted',503);
+    return existing?read(existing):this.authority.read(read);
   }
   async memberExists(sql,group,id){requireThat((await sql.unsafe('SELECT id FROM app.memberships WHERE collection_id=$1 AND user_id=$2',[group,id])).length===1,'member_unavailable',404);}
 }

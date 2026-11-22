@@ -152,7 +152,8 @@ export async function handleBrowserPasscode(request, env, path) {
     if (issued !== true) throw credentialsDenied();
     const headers = new Headers({Cookie: '__Host-collect_admin=' + token, Origin: origin});
     const account = await browserPasscodeSession(new Request(request.url, {headers}), env);
-    return json(publicSession(account), 200, {'Set-Cookie': adminCookie(token, SESSION_SECONDS)});
+    const identity=request.headers.get('X-Collect-Owner-Identity-Version')==='1' ? await guardedOwnerSessionIdentity(env,account) : null;
+    return json({...publicSession(account,identity),...(identity?{sessionContract:2}:{})}, 200, {'Set-Cookie': adminCookie(token, SESSION_SECONDS)});
   }
   if (path === '/auth/passcode/verify') {
     const account = await browserPasscodeSession(request, env);
@@ -165,7 +166,8 @@ export async function handleBrowserPasscode(request, env, path) {
       group, account.token_hash, origin, candidate.id, candidate.credentialVersion, candidate.version);
     if (confirmed !== true) throw signedOut();
     const current = await browserPasscodeSession(request, env);
-    return json({contractVersion: 1, sessionId: current.public_id,
+    const identity=request.headers.get('X-Collect-Owner-Identity-Version')==='1' ? await guardedOwnerSessionIdentity(env,current) : null;
+    return json({contractVersion: 1, ...(identity?{session:{...publicSession(current,identity),sessionContract:2}}:{}), sessionId: current.public_id,
       passcodeVerifiedAt: iso(adminPasscodeProof(current).verifiedAt)});
   }
   if (path === '/auth/logout') {
