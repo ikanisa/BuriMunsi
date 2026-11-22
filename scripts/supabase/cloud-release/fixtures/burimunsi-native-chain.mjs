@@ -31,7 +31,7 @@ export async function installNativeChain(client,group){
   '20261020134444_collect_curated_platform_baseline.sql','20261111121000_burimunsi_private_observations.sql',
   '20261113130000_burimunsi_native_observation_dedup.sql','20261112200100_burimunsi_native_auto_transactions.sql',
   '20261113130900_burimunsi_native_sms_posting.sql','20261114102000_burimunsi_native_event_identity.sql',
-  '20261117090952_burimunsi_native_parse_review.sql','20261122181000_burimunsi_sms_completeness.sql',
+  '20261117090952_burimunsi_native_parse_review.sql','20261122191000_burimunsi_sms_completeness.sql',
   '20261117134954_burimunsi_observation_processing_status.sql','20261117180000_burimunsi_observation_reconcile_status.sql'].map(file));
  await q("SET search_path=app,pg_catalog");
  await q(base.slice(base.indexOf('CREATE FUNCTION app.json_valid'),base.indexOf('CREATE TABLE users ')));

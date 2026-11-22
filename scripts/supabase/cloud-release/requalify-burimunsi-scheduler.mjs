@@ -15,7 +15,7 @@ const must = (truth, message) => { if (!truth) throw Error(message); };
 const only = rows => { must(Array.isArray(rows) && rows.length === 1, 'expected_one_row'); return rows[0]; };
 const sqlLiteral = value => "'" + String(value).replaceAll("'", "''") + "'";
 const timestamp = () => new Date().toISOString();
-const fastMigration = new URL('../../../supabase/migrations/20261122181300_burimunsi_event_driven_jobs.sql',import.meta.url);
+const fastMigration = new URL('../../../supabase/migrations/20261122191300_burimunsi_event_driven_jobs.sql',import.meta.url);
 const evidence = name => join(ROOT, name);
 const paths = label => {
   must(slug.test(label),'invalid_evidence_name');
@@ -30,7 +30,7 @@ async function sql(query, parameters = []) {
 }
 const stateQuery = `SELECT current_user AS actor,f.project_ref,f.mode,f.epoch,f.source_sha256,
  c.enabled,j.active,j.jobname,j.schedule,j.command,j.username,j.database,
- (SELECT encode(sha256(convert_to(statements[1],'UTF8')),'hex') FROM supabase_migrations.schema_migrations WHERE version='20261122181300') AS fast_migration,
+ (SELECT encode(sha256(convert_to(statements[1],'UTF8')),'hex') FROM supabase_migrations.schema_migrations WHERE version='20261122191300') AS fast_migration,
  c.native_provider_source_sha256 AS old_source,c.native_provider_model_id AS model,
  c.native_provider_approval_sha256 AS approval,c.native_provider_used AS used,c.native_provider_limit AS cap,
  c.native_provider_expires_at AS deadline,c.readiness->>'copy_inventory_evidence_sha256' AS previous_copy,

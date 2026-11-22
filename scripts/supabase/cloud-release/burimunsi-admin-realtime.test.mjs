@@ -9,9 +9,9 @@ import {startOwnedPg17} from '../current-pg-transfer/test-support/owned-pg17.mjs
 import {handleAdmin} from '../../../supabase/functions/_shared/domain/admin_bridge.js';
 import {compileSql} from '../../../supabase/functions/_shared/postgres-compatibility-sql.js';
 
-const release=await readFile(new URL('../../../supabase/migrations/20261122181400_burimunsi_admin_realtime.sql',import.meta.url),'utf8');
+const release=await readFile(new URL('../../../supabase/migrations/20261122191400_burimunsi_admin_realtime.sql',import.meta.url),'utf8');
 const predecessor=await readFile(new URL('../../../supabase/migrations/20261022200028_collect_private_member_realtime.sql',import.meta.url),'utf8');
-const phoneAccounts=await readFile(new URL('../../../supabase/migrations/20261122160000_burimunsi_phone_operator_accounts.sql',import.meta.url),'utf8');
+const phoneAccounts=await readFile(new URL('../../../supabase/migrations/20261122190000_burimunsi_phone_operator_accounts.sql',import.meta.url),'utf8');
 function privateFunction(name,source){
  const start=source.indexOf('CREATE FUNCTION private.'+name+'(');
  assert.ok(start>=0);const tail=source.slice(start),end=tail.match(/\$(?:fn|meta)\$;/);

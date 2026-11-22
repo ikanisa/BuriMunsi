@@ -122,7 +122,7 @@ export async function verifyPhoneOperatorAccounts({owner,database,fixtureRoot}) 
   const hold=randomUUID(),args=[hold,state.epoch,state.source_sha256];
   await owner.query('SELECT private.collect_fence_begin_quiesce($1,$2,$3)',args);
   await owner.query('SELECT private.collect_fence_drain($1,$2,$3)',args);
-  await owner.query(await migration('20261122160000_burimunsi_phone_operator_accounts.sql'));
+  await owner.query(await migration('20261122190000_burimunsi_phone_operator_accounts.sql'));
   await owner.query('SELECT private.collect_fence_release_v3($1,$2,$3)',[randomUUID(),state.epoch,state.source_sha256]);
   await admitted(owner,'http_collect',async db=>{
     const current=(await db.query('SELECT * FROM private.burimunsi_pin_session_context($1,$2,$3,$4)',[token,installation,device,'staff'])).rows;

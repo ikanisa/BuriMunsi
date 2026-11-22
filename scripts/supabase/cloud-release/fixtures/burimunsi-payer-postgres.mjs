@@ -9,7 +9,7 @@ const migrations = await Promise.all([
   '20261119041100_burimunsi_payment_sms_status.sql',
   '20261119114600_burimunsi_admin_sms_health.sql',
   '20261119114700_collect_payment_display_reference.sql',
-  '20261122181100_burimunsi_payment_sms_obligations.sql',
+  '20261122191100_burimunsi_payment_sms_obligations.sql',
 ].map(name => readFile(new URL('../../../../supabase/migrations/' + name, import.meta.url), 'utf8')));
 export const fixturePaymentId = (n) => `10000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const id = fixturePaymentId;

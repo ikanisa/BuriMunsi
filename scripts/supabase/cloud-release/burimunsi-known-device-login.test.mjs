@@ -37,7 +37,7 @@ test('returning verified handsets can sign in through a shift-start burst while 
   assert.ok(from>0 && until>from);
   await db.query(previous.slice(from,until));
   await db.query("CREATE FUNCTION private.burimunsi_observation_storage_commit() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN RETURN NEW; END$$; GRANT USAGE,CREATE ON SCHEMA private TO postgres;");
-  await db.query(await migration('20261122181200_burimunsi_known_device_login_budget.sql'));
+  await db.query(await migration('20261122191200_burimunsi_known_device_login_budget.sql'));
   await db.query("SET ROLE postgres; CREATE FUNCTION private.synthetic_new_operator_rpc() RETURNS int LANGUAGE sql AS 'SELECT 1'; RESET ROLE");
   const privileges=(await db.query("SELECT has_function_privilege('anon','private.synthetic_new_operator_rpc()','execute') AS future_public,has_function_privilege('authenticated','private.burimunsi_observation_storage_commit()','execute') AS trigger_public")).rows[0];
   assert.deepEqual(privileges,{future_public:false,trigger_public:false});
