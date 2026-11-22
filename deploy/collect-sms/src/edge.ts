@@ -11,6 +11,7 @@ import {
   type GatewaySettings,
 } from "./gateway-runtime.ts";
 import type { Env } from "./types.ts";
+import { prepareGatewayRead } from "./postgres.ts";
 import { safeEqual, sha256 } from "./util.ts";
 
 const openGatewayWork = openApplicationWork as (input: {
@@ -130,7 +131,7 @@ export function createSmsGatewayHandler(
         passThroughOnException() {},
       };
       if (forReadiness) {
-        const proof = await env.DB.prepare(gatewayDatabaseReadiness).first<
+        const proof = await prepareGatewayRead(env.DB, gatewayDatabaseReadiness).first<
           { ready: boolean }
         >();
         response = proof?.ready === true
