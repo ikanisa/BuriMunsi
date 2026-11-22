@@ -2,6 +2,8 @@
 
 BuriMunsi runs group savings for its configured group. The Android Staff app handles member and payment workflows. The Android Admin Sync variant operates on the authorized receiving handset. The web Admin handles operator access, member and financial oversight, and reconciliation.
 
+For BuriMunsi support or an account deletion request, [contact support on WhatsApp at +250 788 767 816](https://wa.me/250788767816).
+
 ## Source and runtime
 
 | Surface | Maintained source |

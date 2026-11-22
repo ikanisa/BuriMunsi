@@ -43,6 +43,9 @@ describe('BuriMunsi phone and passcode sign-in', () => {
     });
     openLogin(fetchImpl);
     const check = await screen.findByRole('button', {name: 'Check session'});
+    const help = screen.getByRole('link', {name: 'WhatsApp support · +250 788 767 816'});
+    expect(help).toHaveAttribute('href', 'https://wa.me/250788767816');
+    expect(help).toHaveAttribute('rel', 'noopener noreferrer');
     expect(screen.getByLabelText('Mobile number')).toBeDisabled();
     expect(screen.getByText(/workspace could not be reached/i)).toBeInTheDocument();
     fireEvent.click(check);

@@ -127,7 +127,7 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
                         }
                     }else key(s.route,s.routeId){RouteEntrance(t(titleFor(s.route))){when(s.route){
                         Route.LOGIN->Login(s.busy||s.configurationRequired||s.passcodeChangePending||s.savedSessionPending,
-                            s.busy&&model.operation==UiOperation.SIGN_IN,model::login,onSupport,model.supportPhone!=null)
+                            s.busy&&model.operation==UiOperation.SIGN_IN,model::login,onSupport,!s.busy)
                         Route.HOME->HomeScreen(s,model)
                         Route.PAYMENTS->PaymentsScreen(s,model,openExport)
                         Route.PAYMENT->PaymentScreen(s,model)
@@ -168,7 +168,7 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
     val enabled=!s.busy&&m.screenGate==ScreenGate.OPEN
     Row(Modifier.fillMaxWidth().heightIn(min=62.dp).padding(horizontal=16.dp,vertical=6.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)){
         when(s.route){
-            Route.LOGIN->{Spacer(Modifier.weight(1f));RoundAction(R.drawable.ic_help,t("Contact admin on WhatsApp"),onSupport,enabled&&m.supportPhone!=null,size=48,tonal=false)}
+            Route.LOGIN->{Spacer(Modifier.weight(1f));RoundAction(R.drawable.ic_help,t("Contact admin on WhatsApp"),onSupport,enabled,size=48,tonal=false)}
             Route.PAYMENT,Route.MEMBER->{
                 RoundAction(R.drawable.ic_back,t("Back"),m::back,enabled,size=48,tonal=false)
                 Text(t(titleFor(s.route)),Modifier.weight(1f),fontSize=16.sp,color=BuriTheme.Muted,textAlign=TextAlign.Center)

@@ -24,16 +24,6 @@ fun main()=runBlocking {
     suspend fun idle(){withTimeout(10000){while(m.state.busy)delay(2)};delay(20);withTimeout(10000){while(m.state.busy)delay(2)}}
     idle();m.onForeground();idle()
     ck("initial foreground revalidates session",Fixture.sessionReads==1&&m.screenGate==ScreenGate.OPEN)
-    val supportReads=AtomicInteger()
-    Fixture.supportFetch={supportReads.incrementAndGet();"+250780000001"};m.onBackground();m.onForeground();idle()
-    ck("returning to records does not fetch the support contact",supportReads.get()==0&&m.supportPhone==null)
-    m.openSheet(Sheet.HELP);idle()
-    withTimeout(2000){while(m.supportPhone==null)delay(2)}
-    ck("Help fetches support once from current runtime config",m.supportPhone=="+250780000001"&&supportReads.get()==1)
-    m.onBackground();ck("background clears displayed support contact",m.supportPhone==null)
-    Fixture.supportFetch={null};m.onForeground();idle()
-    ck("offline or missing support config never invents a phone",m.supportPhone==null)
-    m.closeSheet();idle()
     m.navigate(Route.PAYMENTS);idle();m.search("payer");m.searchSubmit();idle();m.listPosition(Route.PAYMENTS,null,3,11)
     val reads=Fixture.sessionReads
     m.onBackground()
