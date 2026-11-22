@@ -66,6 +66,10 @@ fun main(){
  URL.setURLStreamHandlerFactory{p->if(p=="https")object:URLStreamHandler(){override fun openConnection(u:URL)=Connection(u)}else null}
  var count=0
  fun ck(label:String,value:Boolean){check(value){label};println("PASS $label");count++}
+ val sourceSchemas=rw.ikanisa.wire.LazyWireDefinitions(linkedMapOf("used" to "{\"type\":\"null\"}","unused" to "invalid"))
+ ck("unused route schema does not delay first validation",sourceSchemas.size==2&&sourceSchemas.keys.size==2&&
+  sourceSchemas["used"]===sourceSchemas["used"]&&sourceSchemas["missing"]==null)
+ ck("schema decoding still rejects an invalid definition when accessed",runCatching{sourceSchemas["unused"]}.isFailure)
  val observationWire=WireContract("burimunsi","test",emptyMap())
  fun envelope(data:Map<String,Any?>)=mapOf<String,Any?>("binding" to emptyMap<String,Any?>(),"data" to data)
  val observationExpected=mapOf<String,Any?>("commandRequestId" to "request-1","observationBodySha256" to "a".repeat(64))
