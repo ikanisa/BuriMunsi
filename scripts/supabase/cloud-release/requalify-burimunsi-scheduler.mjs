@@ -15,6 +15,7 @@ const must = (truth, message) => { if (!truth) throw Error(message); };
 const only = rows => { must(Array.isArray(rows) && rows.length === 1, 'expected_one_row'); return rows[0]; };
 const sqlLiteral = value => "'" + String(value).replaceAll("'", "''") + "'";
 const timestamp = () => new Date().toISOString();
+const fastMigration = new URL('../../../supabase/migrations/20261122150300_burimunsi_event_driven_jobs.sql',import.meta.url);
 const evidence = name => join(ROOT, name);
 const paths = label => {
   must(slug.test(label),'invalid_evidence_name');
@@ -29,6 +30,7 @@ async function sql(query, parameters = []) {
 }
 const stateQuery = `SELECT current_user AS actor,f.project_ref,f.mode,f.epoch,f.source_sha256,
  c.enabled,j.active,j.jobname,j.schedule,j.command,j.username,j.database,
+ (SELECT encode(sha256(convert_to(statements[1],'UTF8')),'hex') FROM supabase_migrations.schema_migrations WHERE version='20261122150300') AS fast_migration,
  c.native_provider_source_sha256 AS old_source,c.native_provider_model_id AS model,
  c.native_provider_approval_sha256 AS approval,c.native_provider_used AS used,c.native_provider_limit AS cap,
  c.native_provider_expires_at AS deadline,c.readiness->>'copy_inventory_evidence_sha256' AS previous_copy,
@@ -58,8 +60,9 @@ async function live() {
   return {state,functions,keys:new Map(secrets.map(row=>[row.name,row.value]))};
 }
 function checkIdle(s) {
+  must(!s.fast_migration || s.fast_migration===sha(readFileSync(fastMigration)),'unqualified_fast_scheduler_migration');
   must(s.actor==='postgres' && s.project_ref===PROJECT && s.mode==='open' && !s.enabled && !s.active &&
-    s.schedule==='* * * * *' && s.jobname==='collect-jobs-maintenance-v1' && s.command==='SELECT collect_ops.tick_jobs();' &&
+    s.schedule===(s.fast_migration?'1 second':'* * * * *') && s.jobname==='collect-jobs-maintenance-v1' && s.command==='SELECT collect_ops.tick_jobs();' &&
     s.username==='postgres' && s.database==='postgres' && s.guard.coverageVerified && !s.guard.blocking &&
     !s.guard.awaitingDispatches && !s.guard.unconfirmedDispatches && !s.guard.pendingNativeRequests &&
     s.active_admissions===0 && s.history_triggers===4 && s.configured_scopes===1,'unexpected_scheduler_preimage');
@@ -178,7 +181,7 @@ async function probe(p) {
       SELECT * INTO STRICT f FROM private.collect_fence_control WHERE singleton;
       SELECT * INTO STRICT c FROM collect_ops.jobs_config WHERE singleton FOR UPDATE;
       IF f.mode<>'open' OR f.epoch<>${s.epoch} OR f.source_sha256<>${literal(s.source_sha256)}
-       OR c.enabled OR NOT EXISTS(SELECT 1 FROM cron.job WHERE jobid=c.cron_job_id AND NOT active AND command='SELECT collect_ops.tick_jobs();' AND schedule='* * * * *')
+       OR c.enabled OR NOT EXISTS(SELECT 1 FROM cron.job WHERE jobid=c.cron_job_id AND NOT active AND command='SELECT collect_ops.tick_jobs();' AND schedule=${literal(s.schedule)})
        OR c.native_provider_source_sha256 IS DISTINCT FROM ${literal(s.old_source)}
        OR c.native_provider_approval_sha256 IS DISTINCT FROM ${literal(s.approval)}
        OR c.native_provider_model_id IS DISTINCT FROM ${literal(s.model)} OR c.native_provider_used<>${s.used}
@@ -223,9 +226,13 @@ async function verifyRecurring(p) {
       AND d.response_sha256=t.response_sha256 AND t.source_sha256=$1
       AND d.created_at>(SELECT created_at FROM collect_ops.jobs_dispatches WHERE id=$2::uuid)
     ORDER BY d.slot DESC LIMIT 3`,[q.sourceSha256,original.id]);
-  must(runs.length>=2 && Date.parse(runs[0].slot)-Date.parse(runs[1].slot)===60000 &&
+  const interval=runs.length>=2?Date.parse(runs[0].slot)-Date.parse(runs[1].slot):0;
+  must(runs.length>=2 && (x.state.fast_migration?interval>=1000 && interval<=75000:interval===60000) &&
     Date.now()-Date.parse(runs[0].observed_at)<180000,'two_recent_consecutive_confirmations_required');
-  const result={project:PROJECT,epoch:x.state.epoch,checkedAt:timestamp(),cronActive:x.state.active,runs,
+  const [cadence]=await sql(`SELECT count(*)::int AS ticks_in_last_ten_seconds FROM cron.job_run_details r
+     JOIN collect_ops.jobs_config c ON c.cron_job_id=r.jobid WHERE r.start_time>clock_timestamp()-interval '10 seconds'`);
+  if (x.state.fast_migration) must(cadence.ticks_in_last_ten_seconds>=5,'fast_cron_cadence_unconfirmed');
+  const result={project:PROJECT,epoch:x.state.epoch,checkedAt:timestamp(),cronActive:x.state.active,schedule:x.state.schedule,...cadence,runs,
     protectedHistory:x.state.protected_history,queuedNativeJobs:x.state.waiting_jobs,
     readyGateways:x.state.ready_gateways,lastGatewayHeartbeat:x.state.gateway_seen};
   if(!p.has('recurring')) p.put('recurring',result);

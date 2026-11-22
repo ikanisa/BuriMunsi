@@ -152,9 +152,10 @@ const settingDigests = settings =>
 export async function reviseRuntimeViaManagement(input, {api = management, ...dependencies} = {}) {
   const {migrations = [], resumeFencedRevision, acceptAncillaryRequalification,
     expectedBefore, expectedFunctions, expectedSecretPreimages, testEvidence, smsBinding} = input;
-  if (!Array.isArray(migrations) || migrations.length > 1 ||
+  if (!Array.isArray(migrations) || migrations.length > 5 ||
       migrations.some(entry => !/^\d{14}_[a-z0-9_]+\.sql$/.test(entry?.file) ||
         typeof entry.sql !== 'string' || sha(entry.sql) !== entry.sha256) ||
+      migrations.some((entry, i) => i > 0 && migrations[i - 1].file.slice(0, 14) >= entry.file.slice(0, 14)) ||
       resumeFencedRevision != null || acceptAncillaryRequalification ||
       expectedBefore?.mode !== 'open' || !Array.isArray(expectedFunctions) ||
       expectedSecretPreimages?.BURIMUNSI_PRODUCT_MODE !== sha('standalone') ||
