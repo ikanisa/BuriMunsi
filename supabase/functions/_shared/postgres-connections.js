@@ -1,5 +1,5 @@
 import postgres from 'npm:postgres@3.4.7';
-import {FENCE_IO_TIMEOUT_MS} from './application-fence.js';
+import {FENCE_IO_TIMEOUT_MS,CONTROL_ROLLBACK_ACK} from './application-fence.js';
 
 // Only Edge holds this database credential. SQL strings come from reviewed
 // server modules. Pool ownership is local to this Edge isolate.
@@ -51,9 +51,9 @@ export function leaseOwnedControlPool(createPool,{reuse=false,capacity=8}={}) {
       let returned=false;
       const tx=await entry.pool.reserve();
       return new Proxy(tx,{get(target,key){
-        if(key==='release')return()=>{
+        if(key==='release')return acknowledgement=>{
           if(returned)return;returned=true;target.release();
-          if(reuse&&!ending){idle.push(entry);occupied--;pump();}
+          if(reuse&&!ending&&acknowledgement===CONTROL_ROLLBACK_ACK){idle.push(entry);occupied--;pump();}
           else void retire(entry);
         };
         return Reflect.get(target,key,target);

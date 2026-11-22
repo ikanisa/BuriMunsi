@@ -1,7 +1,7 @@
 // New allocator branches use controlled factories, with native SQL/driver proof
 // separately retained in the exact-bound native qualification receipt.
 const runtime:any=await import('../postgres.js');
-const {reserveDatabaseConnection}=await import('../application-fence.js');
+const {reserveDatabaseConnection,CONTROL_ROLLBACK_ACK}=await import('../application-fence.js');
 const need=(v:unknown)=>{if(!v)throw Error('ALLOCATOR_FAILURE_INVARIANT');};
 const pause=(ms:number)=>new Promise<void>(r=>setTimeout(r,ms));
 async function rejected(p:Promise<any>){try{await p;}catch{return;}throw Error('UNEXPECTED_SUCCESS');}
@@ -60,7 +60,7 @@ Deno.test('confirmed release reuses one warm socket while an occupied connection
   async reserve(){return {sequence,release(){releases++;}};},async end(){ended++;}
  };},{reuse:true,capacity:2});
  const first=await pool.reserve(),other=await pool.reserve();
- const queued=pool.reserve();first.release();const next=await queued;
+ const queued=pool.reserve();first.release(CONTROL_ROLLBACK_ACK);const next=await queued;
  need(first.sequence===next.sequence&&other.sequence!==next.sequence&&created===2);
- next.release();other.release();await pool.end();need(ended===2&&releases===3);
+ next.release(CONTROL_ROLLBACK_ACK);other.release();await pool.end();need(ended===2&&releases===3);
 });

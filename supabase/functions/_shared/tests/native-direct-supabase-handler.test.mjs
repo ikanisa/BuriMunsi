@@ -10,7 +10,7 @@ import {admitDirectSupabaseNativeIngress} from '../native-direct-supabase-ingres
 const state={events:[],buckets:[],authority:[]};globalThis.__directIngressTest=state;
 const mock={
  './runtime-env.js':`export const COLLECT_SUPABASE_ORIGIN='${MANAGED_SUPABASE_ORIGIN}';export const configurePublicRuntimeEnv=e=>({...e});export const normalizeRuntimeEnv=e=>({...e});export const isGoogleProviderNavigation=()=>false;`,
- './deployment-database.js':`export const assertRuntimeDeployment=async()=>{globalThis.__directIngressTest.events.push('schema')};`,
+ './deployment-database.js':`export const assertRuntimeDeployment=async()=>{globalThis.__directIngressTest.events.push('schema')}; export const assertDatabaseIdentity=assertRuntimeDeployment;`,
  './postgres-connections.js':`export const connection=()=>{globalThis.__directIngressTest.events.push('database');return {}};export const fenceConnection=()=>({});`,
  './postgres.js':`export class PostgresDatabase{constructor(){this.sql={}}setApplicationWork(work){this.applicationWork=work}}`,
  './application-fence.js':`export const sqlFenceBackend=()=>({});export const openApplicationWork=async()=>{globalThis.__directIngressTest.events.push('fence');return {finish:async()=>{},waitUntil:p=>p}};`,

@@ -2,6 +2,7 @@ import {ApiError} from './domain/core.js';
 
 const SHA=/^[a-f0-9]{64}$/, UUID=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 export const FENCE_IO_TIMEOUT_MS=5000;
+export const CONTROL_ROLLBACK_ACK=Symbol('confirmed control rollback');
 const KINDS=new Set(['http_collect','http_admin','jobs']);
 const contexts=new WeakSet();
 const reservedDispatches=new WeakMap();
@@ -46,7 +47,7 @@ export function sqlFenceBackend(businessSql,controlSql,verifyAdmission=undefined
  return Object.freeze({register,close:(id,epoch,source,outcome,reason,dispatches,uncertain)=>call('close',[id,epoch,source,outcome,reason,dispatches,uncertain]),status:id=>call('status',[id]),
   async lease(id,epoch,source){
    const tx=await reserveDatabaseConnection(controlSql);let beginDispatched=false,released=false,cleanup=null;
-   const releaseReservation=()=>{if(released)return;released=true;tx.release();};
+   const releaseReservation=()=>{if(released)return;released=true;tx.release(CONTROL_ROLLBACK_ACK);};
    const release=()=>{
     if(!cleanup)cleanup=(async()=>{
      // BEGIN can have executed even when its acknowledgement was lost. A
