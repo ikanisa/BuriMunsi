@@ -3,6 +3,7 @@ import {ApiError,digest,stableJson,first,now,id,auditStatement} from './core.js'
 function mapped(error) {
   if(error instanceof ApiError)return error;
   const message=String(error.message??error);
+  if(/recent_passcode_required/.test(message))return new ApiError(403,'recent_passcode_required','Confirm your passcode to continue.');
   if(/recent_email_(?:verification|sign_in)_required|admin_email_(denied|authority|binding|session_changed)/.test(message))return new ApiError(403,'recent_email_sign_in_required','Verify your current Admin email before continuing.');
   if(/session_changed|fresh_auth_required/.test(message))return new ApiError(403,'session_changed','Verify your sign-in before continuing.');
   if(/mfa_required/.test(message))return new ApiError(403,'mfa_required','Complete two-step verification before continuing.');

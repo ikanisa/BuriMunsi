@@ -57,10 +57,11 @@ export function captureSetupLocation(location: Location = window.location, histo
   return {token, invite: invites[0] === 'true'};
 }
 
-export type VerificationMode = 'email' | 'authenticator';
+export type VerificationMode = 'passcode' | 'email' | 'authenticator';
 
 export function verificationPath(mode: VerificationMode, requested?: string | null): string {
-  const path = mode === 'email' ? '/admin/security/verify-email' : '/admin/security/authenticator';
+  const path = mode === 'passcode' ? '/admin/security/verify-passcode'
+    : mode === 'email' ? '/admin/security/verify-email' : '/admin/security/authenticator';
   const destination = safeAdminVerificationReturnLocation(requested);
   return destination ? `${path}?${new URLSearchParams({returnTo: destination})}` : path;
 }

@@ -14,7 +14,7 @@ const PrivacyPage = lazy(() => import('../../features/privacy/PrivacyPage').then
 function AccountSecurityRoute() {
   const session = useSession(), go = useNavigate();
   if (!session.user?.permissions.includes('account.manage')) return <UnavailablePage title="Account security" />;
-  return <AccountSecurityPage onVerify={() => go(verificationPath(session.verificationMode, session.verificationMode === 'email' ? '/admin/security' : undefined))}
+  return <AccountSecurityPage onVerify={() => go(verificationPath(session.verificationMode, '/admin/security'))}
     onAuthenticator={() => go(verificationPath('authenticator', '/admin/security'))}
     onLicenses={() => go('/admin/licenses')} onPasswordRecovery={() => go('/admin/forgot-password')}
     onSignIn={() => go('/admin/login', {replace: true})} />;
@@ -22,7 +22,8 @@ function AccountSecurityRoute() {
 
 function TeamRoute() {
   const session = useSession(), go = useNavigate();
-  return <TeamPage onVerify={() => go(verificationPath(session.verificationMode, '/admin/admin-users'))} />;
+  return <TeamPage allowRecovery={session.verificationMode !== 'passcode'} showVerification={session.verificationMode !== 'passcode'}
+    onVerify={() => go(verificationPath(session.verificationMode, '/admin/admin-users'))} />;
 }
 
 function PrivacyRoute() {

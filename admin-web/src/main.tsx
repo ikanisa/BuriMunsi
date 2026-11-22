@@ -6,8 +6,8 @@ import {registerAdminWorker} from './pwa-registration';
 import {captureSetupLocation, SessionProvider} from './session/SessionProvider';
 import './styles/admin.css';
 
-// Capture and erase one-use setup tokens before constructing a router or page.
-const setup = captureSetupLocation();
+// Erase any obsolete setup credential before routing the old link to sign-in.
+captureSetupLocation();
 if (!window.location.hash && (window.location.pathname === '/admin' ||
     (window.location.pathname.startsWith('/admin/') && !window.location.pathname.startsWith('/admin/auth/local-challenge')))) {
   // Existing path-style entries join the established hash-route form without
@@ -25,7 +25,7 @@ try {
   renderer.render(<>{hasPredecessorCustody() && <aside role="note" className="admin-previous-service">
     If you have unfinished work from the previous Admin service, keep its original tab open.
     Ask your administrator to check the original request before submitting it again.
-  </aside>}<SessionProvider config={config}><AdminApp setup={setup} /></SessionProvider></>);
+  </aside>}<SessionProvider config={config}><AdminApp /></SessionProvider></>);
   if (import.meta.env.PROD) void registerAdminWorker();
 } catch {
   renderer.render(<main className="admin-state" role="alert"><h1>Workspace unavailable</h1>

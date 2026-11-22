@@ -32,7 +32,7 @@ function openAdmin(path: string, {backend = 'supabase', failFirstCheck = false, 
     return reply({error: {code: 'not_found'}}, 404);
   };
   window.history.replaceState(null, '', '/#' + path);
-  router = makeAdminRouter(null);
+  router = makeAdminRouter();
   render(<SessionProvider config={{backend, publishableKey: backend === 'supabase' ? 'sb_publishable_' + 'a'.repeat(32) : undefined,
     captchaEnabled: false, googleEnabled: false, fetchImpl}}><RouterProvider router={router} /></SessionProvider>);
   return {requests, expiresAt};

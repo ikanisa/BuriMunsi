@@ -148,7 +148,7 @@ function CanonicalGroupEditPage({ id, request, permissions, actorId, principalId
       const currentProof = body.visibility === 'public_approved' ? publicationProof(currentDetail, currentGroup, id) : null;
       if (currentGroup.version !== validatedBody(body, canPublish).expected_version || !active() || !writeGate.current ||
           (body.visibility === 'public_approved' && (!proof || !currentProof || JSON.stringify(currentProof) !== JSON.stringify(proof)))) throw new Error('The group changed.');
-      if (!await verifyFresh() || !active() || !writeGate.current) throw new Error('Verify your email before making this change.');
+      if (!await verifyFresh() || !active() || !writeGate.current) throw new Error('Verify your account before making this change.');
       retained = await retainPending(stableIdentity, FAMILY, id, key, PERMISSION, validatedBody(body, canPublish));
       if (!active() || !writeGate.current) return;
       setPending(retained); setRetryAllowed(false);

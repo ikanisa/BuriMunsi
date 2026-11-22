@@ -25,6 +25,7 @@ const overview = {contract_version: 2, model: 'canonical_evidence_ledger', count
   metrics: Object.entries(labels).map(([key, label]) => ({key, label, status: 'measured', value: String(counts[key] ?? amounts[key])}))};
 const user = {id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', email: 'fixture@example.test', role: 'owner',
   sessionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', principalId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+  authMethod: 'phone_passcode', phone: '+250780000001', displayName: 'Fixture owner',
   financialModel: 'canonical_evidence_ledger', assuranceLevel: 1, mfaAt: null,
   permissions: ['overview.read', 'collections.read', 'users.read', 'receivers.read', 'payments.read', 'ledger.read',
     'reconciliations.read', 'sms.read', 'gateway.read', 'email.read', 'account.manage', 'admin_users.read']};
@@ -49,11 +50,22 @@ const useCookieSignIn = process.env.COLLECT_FIXTURE_SIGN_IN === '1';
 const csrfToken = 'c'.repeat(64);
 const cookieKey = 'collect_fixture_session';
 const sessionCookie = `${cookieKey}=signed-in`;
+let passcodeVerifiedAt = null;
 const mime = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.ttf': 'font/ttf', '.txt': 'text/plain; charset=utf-8'};
 function json(response, status, body, extraHeaders = {}) {
   response.writeHead(status, {'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...extraHeaders});
   response.end(JSON.stringify(body));
+}
+
+async function readFixtureBody(request) {
+  const chunks = [];
+  for await (const part of request) chunks.push(part);
+  try {return JSON.parse(Buffer.concat(chunks).toString('utf8'));} catch {return null;}
+}
+
+function signedInFixture(lifetime) {
+  return {user: {...user, passcodeVerifiedAt}, expiresAt: new Date(Date.now() + lifetime).toISOString(), csrfToken, ownerEmail: null};
 }
 
 createServer(async (request, response) => {
@@ -67,14 +79,20 @@ createServer(async (request, response) => {
   }
   if (url.pathname.startsWith('/api/')) {
     const signedIn = !useCookieSignIn || request.headers.cookie?.split(';').some(cookie => cookie.trim() === sessionCookie);
-    if (useCookieSignIn && request.method === 'POST' && ['/api/admin/auth/otp', '/api/admin/auth/verify'].includes(url.pathname)) {
-      let payload;
-      try {const chunks = []; for await (const part of request) chunks.push(part); payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));} catch {return json(response, 400, {error: {code: 'invalid_fixture'}});}
-      if (payload.email !== user.email) return json(response, 400, {error: {code: 'invalid_fixture'}});
-      if (url.pathname.endsWith('/otp')) return json(response, 200, {challenge_id: 'synthetic-fixture', retry_after: 60, expires_in: 300, delivery_status: 'accepted'});
-      if (payload.challenge_id !== 'synthetic-fixture' || payload.code !== '123456') return json(response, 401, {error: {code: 'invalid_credentials'}});
-      return json(response, 200, {user, expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(), csrfToken},
+    if (useCookieSignIn && request.method === 'POST' && url.pathname === '/api/admin/auth/phone-passcode') {
+      const payload = await readFixtureBody(request);
+      if (!payload || Object.keys(payload).sort().join(',') !== 'phone,pin' ||
+          payload.phone !== user.phone || payload.pin !== '0123') return json(response, 401, {error: {code: 'invalid_credentials'}});
+      passcodeVerifiedAt = new Date().toISOString();
+      return json(response, 200, signedInFixture(2 * 60 * 60 * 1000),
         {'Set-Cookie': `${sessionCookie}; Path=/; HttpOnly; SameSite=Strict`});
+    }
+    if (request.method === 'POST' && url.pathname === '/api/admin/auth/passcode/verify') {
+      const payload = await readFixtureBody(request);
+      if (!signedIn || request.headers['x-collect-csrf'] !== csrfToken || !payload ||
+          Object.keys(payload).join(',') !== 'pin' || payload.pin !== '0123') return json(response, 401, {error: {code: 'invalid_credentials'}});
+      passcodeVerifiedAt = new Date().toISOString();
+      return json(response, 200, {contractVersion: 1, sessionId: user.sessionId, passcodeVerifiedAt});
     }
     if (useCookieSignIn && request.method === 'POST' && url.pathname === '/api/admin/auth/logout') {
       if (!signedIn || request.headers['x-collect-csrf'] !== csrfToken) return json(response, 401, {error: {code: 'fixture_unauthorized'}});
@@ -84,12 +102,9 @@ createServer(async (request, response) => {
     if (url.pathname === '/api/admin/auth/session') {
       if (!signedIn) return json(response, 200, {user: null, expiresAt: null, csrfToken: null, ownerEmail: null});
       const lifetime = process.env.COLLECT_FIXTURE_LONG_EXPIRY === '1' ? 40 * 24 * 60 * 60 * 1000 : 2 * 60 * 60 * 1000;
-      return json(response, 200, {user, expiresAt: new Date(Date.now() + lifetime).toISOString(), csrfToken, ownerEmail: null});
+      return json(response, 200, signedInFixture(lifetime));
     }
     if (!signedIn) return json(response, 401, {error: {code: 'fixture_unauthorized'}});
-    if (url.pathname === '/api/admin/auth/email-verification') {
-      return json(response, 200, {contractVersion: 1, sessionId: user.sessionId, emailVerifiedAt: null});
-    }
     if (url.pathname === '/api/admin/core/overview') return json(response, 200, overview);
     if (url.pathname === '/api/admin/sms/receipts') {
       const offset = Number(url.searchParams.get('offset') ?? 0), limit = Number(url.searchParams.get('limit') ?? 25);

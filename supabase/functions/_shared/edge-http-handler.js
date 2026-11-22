@@ -1,5 +1,6 @@
 import {verifyDeploymentProfile} from './deployment-profile.js';
 import {BURIMUNSI_ADMIN_ORIGIN, requireStandaloneDeployment, standaloneHttpRoute, standalonePrivacyRoute} from './burimunsi-standalone.js';
+import {standalonePrivacySupport} from './burimunsi-privacy-support.js';
 import {managedAdminChallengeParent} from './admin-security.js';
 import {configurePublicRuntimeEnv, normalizeRuntimeEnv} from './runtime-env.js';
 import {openApplicationWork} from './application-fence.js';
@@ -50,7 +51,7 @@ export function createHandler(functionName, envReader = () => Deno.env.toObject(
 
       let logical = logicalRequest(request, functionName);
       const path = new URL(logical.url).pathname;
-      const challengeParent = collect ? managedAdminChallengeParent(logical, env) : null;
+      const challengeParent = collect && !standalone ? managedAdminChallengeParent(logical, env) : null;
       if (admin ? !path.startsWith('/api/admin/') : path.startsWith('/api/admin')) {
         return json({code: 'not_found'}, 404);
       }
@@ -63,6 +64,11 @@ export function createHandler(functionName, envReader = () => Deno.env.toObject(
       if (headers === null) return json({code: 'origin_denied'}, 403);
       cors = headers;
       if (request.method === 'OPTIONS') return new Response(null, {status: 204, headers: cors});
+
+      if (standalone && collect) {
+        const privacy = standalonePrivacySupport(logical, {directEdge: true, headers: cors});
+        if (privacy) return privacy;
+      }
 
       if (collect && isGatewayIngest(request.method, path) && !nativeGatewayUploadsEnabled(env)) {
         const {code, message, status} = gatewayUploadHeld();

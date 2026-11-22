@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent }
 import { Link } from 'react-router';
 import { verifySensitiveAccess } from '../../app/sensitive-access';
 import { useSession } from '../../session/SessionProvider';
+import {verificationPath} from '../../session/returnLocation';
 import { Button, Field, LoadingState } from '../../ui';
 import type { PendingIdentity } from '../core/pendingAttempt';
 import { isObject, parseCoreRow } from '../core/contracts';
@@ -94,7 +95,7 @@ export function MomoAssignmentPanel({detail, enabled = false, onUpdated}: {detai
   const accepted = detail.sources.find((source) => source.relation === 'accepted' && source.outcome === 'accepted');
   return <section className="momo-assignment"><h3>Beneficiary assignment</h3><p>The receiving account remains fixed. Assignment prepares review or links an existing payment; it does not establish provider settlement.</p>
     {message && <p role="status">{message}</p>}
-    {needsVerification && <p><Link className="operations-link" to={`/admin/security/${session.verificationMode === 'email' ? 'verify-email' : 'authenticator'}?returnTo=%2Fadmin%2Fmomo-receipts`}>Verify identity</Link></p>}
+    {needsVerification && <p><Link className="operations-link" to={verificationPath(session.verificationMode, '/admin/momo-receipts')}>{session.verificationMode === 'passcode' ? 'Verify passcode' : 'Verify identity'}</Link></p>}
     {saved && <><p>Payment reference: <code>{referenceState?.scope === scope && referenceState.paymentId === saved.paymentId ? referenceState.reference ?? 'Not available' : 'Not available'}</code></p><p>Payment ID: <code>{saved.paymentId}</code>{identity.permissions.includes('reconciliations.read') && <> · <Link className="operations-link" to={`/admin/reconciliations/${saved.paymentId}`}>Open financial review</Link></>}</p><Button onClick={onUpdated}>Refresh receipt</Button></>}
     {pending?.kind === 'foreign' && <p>Another account or session has an unresolved assignment. The original account must resolve it.</p>}
     {pending?.kind === 'owned' && <><p>Original request: <code>{pending.requestKey}</code></p><p>There is no read-only status lookup for this request. An identical retry may record the assignment if it was not already committed.</p>

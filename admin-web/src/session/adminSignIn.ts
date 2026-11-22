@@ -1,6 +1,7 @@
 import {AdminRequestError, type AdminApiClient, type AdminClientConfig, type JsonObject} from '../api/client';
 import {googleAvailable, googleAuthorizationUrl, googleChallenge, openGooglePopup, randomUrlValue, type GooglePopup} from './google';
 import {normalizeAdminEmail} from './adminEmail';
+import {normalizeLoginPhone, PASSCODE} from './phonePasscode';
 import {authorityKey} from './sessionAuthority';
 import {OTP} from './sessionPolicy';
 import type {SessionReadback} from './sessionReadback';
@@ -45,6 +46,28 @@ export class AdminSignIn {
       throw new AdminRequestError(readback.message, {outcomeUnknown: true});
     }
   }
+
+  readonly signInWithPhonePasscode = async (phone: string, pin: string): Promise<void> => {
+    this.requireAvailable('signing in again');
+    const normalizedPhone = normalizeLoginPhone(phone);
+    if (!PASSCODE.test(pin)) throw new Error('Enter your four-digit passcode.');
+    this.session.clear();
+    const epoch = this.session.epoch();
+    const current = () => this.session.epoch() === epoch;
+    const message = 'Sign-in could not be confirmed. Check your session before trying again.';
+    const body = await this.session.request('auth/phone-passcode', {
+      body: {phone: normalizedPhone, pin},
+      authenticated: false,
+    }, {isCurrent: current, receiveCsrf: () => undefined});
+    let expected: AdminUser;
+    try {expected = parseAdminUser(body);} catch {throw new AdminRequestError(message, {outcomeUnknown: true});}
+    if (expected.role === 'staff') throw new AdminRequestError(message, {outcomeUnknown: true});
+    await this.confirmSignIn({
+      isCurrent: current,
+      matches: user => loginIdentityKey(user) === loginIdentityKey(expected),
+      message,
+    });
+  };
 
   get googleSignInAvailable(): boolean {
     return typeof window !== 'undefined' && googleAvailable(this.session.config().backend, this.session.config().googleEnabled, this.session.config().supabaseProjectOrigin, window.location.origin);

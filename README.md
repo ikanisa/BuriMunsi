@@ -28,13 +28,15 @@ make admin-fixture
 node admin-web/tests/browser/smoke.mjs build/admin-web-fixture
 ```
 
-`make admin-web-build` requires the approved Supabase publishable key and the public production CAPTCHA configuration. The build command supplies the exact dedicated profile. Keep provider secrets outside this checkout. `make native-build NATIVE_OUTPUT=/absolute/path/to/new-evidence` produces the isolated native test and qualification artifacts. Follow [testing-candidate compilation](native/burimunsi/configuration/testing-candidate.md) for a configured unsigned release build.
+`make admin-web-build` requires the approved Supabase publishable key. The build command supplies the exact dedicated profile. Keep provider secrets outside this checkout. `make native-build NATIVE_OUTPUT=/absolute/path/to/new-evidence` produces the isolated native test and qualification artifacts. Follow [testing-candidate compilation](native/burimunsi/configuration/testing-candidate.md) for a configured unsigned release build.
 
 ## Internal access and SMS receiving
 
-People sign in to the Android app with a phone number and passcode managed by
-BuriMunsi. The Admin adds Staff by phone number. Leaving the passcode field
-blank at creation uses the configured `BURIMUNSI_DEFAULT_STAFF_PIN` secret.
+People sign in to the Android app with a mobile number and passcode managed
+by BuriMunsi. The existing Admin uses the same credentials on the dedicated
+web Admin and confirms the passcode for sensitive actions. The Admin adds
+Staff by phone number for mobile access. Leaving the passcode field blank at
+creation uses the configured `BURIMUNSI_DEFAULT_STAFF_PIN` secret.
 
 The Admin account has M-Money SMS access. Staff SMS access is off. The receiving
 app uses one active receiving SIM at a time on the current handset. The Admin

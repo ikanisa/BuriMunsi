@@ -1,5 +1,5 @@
 import {MANAGED_SUPABASE_ORIGIN} from '../../../supabase/functions/_shared/deployment-profile.js';
-import {standalonePrivacyRoute} from '../../../supabase/functions/_shared/burimunsi-standalone.js';
+import {standaloneAdminRoute} from '../../../supabase/functions/_shared/burimunsi-standalone.js';
 import {managedBrowserCookies} from './transport-cookies.js';
 import {refuse} from './transport-failure.js';
 
@@ -73,9 +73,7 @@ export function admitRequest(request, rawTarget, frontendOrigin, {browserAdminCo
   if (route.path + route.query !== canonical) refuse(400, 'proxy_path_invalid');
   if (!METHODS.has(request.method)) refuse(405, 'proxy_method_invalid');
   const method = request.method === 'OPTIONS' ? request.headers.get('Access-Control-Request-Method') : request.method;
-  if (burimunsi && !adminRoute &&
-      !(route.logicalPath === CHALLENGE && ['GET', 'HEAD'].includes(method)) &&
-      !standalonePrivacyRoute(method, route.logicalPath)) refuse(404, 'proxy_route_not_allowed');
+  if (burimunsi && (!adminRoute || !standaloneAdminRoute(method, route.logicalPath))) refuse(404, 'proxy_route_not_allowed');
   for (const name of SPOOFED_AUTHORITY) if (request.headers.has(name)) refuse(400, 'proxy_authority_invalid');
 
   const callback = route.functionName === 'collect-api' && route.logicalPath === GOOGLE_CALLBACK && request.method === 'GET';

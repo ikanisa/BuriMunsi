@@ -1,7 +1,6 @@
 import {Component, Suspense, useCallback, type ReactNode} from 'react';
 import {Navigate, Outlet, useLocation, useNavigate, type RouteObject} from 'react-router';
 import {LoginPage} from '../session/LoginPage';
-import {ForgotPasswordPage, PasswordSetupPage} from '../session/PasswordRecoveryPages';
 import {publicSessionPaths, safeAdminReturnLocation} from '../session/returnLocation';
 import {useSession, type SessionContextValue} from '../session/SessionProvider';
 import {AdminShell, type AdminNavItem} from '../layout/AdminShell';
@@ -36,7 +35,8 @@ export function ProtectedShell({navigation}: {navigation: readonly AdminNavItem[
   const user = session.user;
   const permitted = navigation.filter(item => canOpenAdminPath(item.path, user));
   return <AdminShell navigation={permitted} currentPath={`${location.pathname}${location.search}`}
-    identity={{name: user.email, role: user.role === 'owner' ? 'Owner' : user.role === 'admin' ? 'Admin' : 'Staff'}}
+    identity={{name: session.verificationMode === 'passcode' ? user.displayName ?? user.phone ?? 'BuriMunsi account' : user.email,
+      role: user.role === 'owner' ? 'Owner' : user.role === 'admin' ? 'Admin' : 'Staff'}}
     onSignOut={() => {void session.signOut().catch(() => undefined);}}>
     {canOpenAdminPath(location.pathname, user) ? <ScreenBoundary key={location.pathname}><Suspense fallback={<LoadingState label="Opening workspace" />}><Outlet /></Suspense></ScreenBoundary> : <ErrorState title="Access unavailable"
       message="Your account cannot open this page." />}
@@ -54,8 +54,7 @@ function LoginRoute() {
   const go = useNavigate(), location = useLocation();
   const destination = safeAdminReturnLocation(new URLSearchParams(location.search).get('returnTo')) ?? '/admin';
   const onSignedIn = useCallback(() => go(destination, {replace: true}), [destination, go]);
-  const onForgotPassword = useCallback(() => go(`/admin/forgot-password?${new URLSearchParams({returnTo: destination})}`), [destination, go]);
-  return <SessionState><LoginPage onSignedIn={onSignedIn} onForgotPassword={onForgotPassword} /></SessionState>;
+  return <SessionState><LoginPage onSignedIn={onSignedIn} /></SessionState>;
 }
 
 export function SessionRedirectRoute() {
@@ -64,23 +63,11 @@ export function SessionRedirectRoute() {
   return <Navigate to={destination} replace />;
 }
 
-function ForgotPasswordRoute() {
-  const go = useNavigate(), location = useLocation();
-  const destination = safeAdminReturnLocation(new URLSearchParams(location.search).get('returnTo'));
-  return <SessionState><ForgotPasswordPage onBackToLogin={() => go(`/admin/login${destination ? `?${new URLSearchParams({returnTo: destination})}` : ''}`)} /></SessionState>;
-}
-
-function SetupRoute({setup}: {setup: {token: string; invite: boolean} | null}) {
-  const go = useNavigate();
-  return <SessionState><PasswordSetupPage setup={setup} onBackToLogin={() => go('/admin/login')}
-    onRequestReset={() => go('/admin/forgot-password')} /></SessionState>;
-}
-
-export function publicSessionRoutes(setup: {token: string; invite: boolean} | null): RouteObject[] {
+export function publicSessionRoutes(): RouteObject[] {
   return [
     {path: publicSessionPaths.login, element: <LoginRoute />},
-    {path: publicSessionPaths.forgotPassword, element: <ForgotPasswordRoute />},
-    {path: publicSessionPaths.setup, element: <SetupRoute setup={setup} />},
+    {path: publicSessionPaths.forgotPassword, element: <Navigate to={publicSessionPaths.login} replace />},
+    {path: publicSessionPaths.setup, element: <Navigate to={publicSessionPaths.login} replace />},
     {path: publicSessionPaths.redirect, element: <SessionRedirectRoute />},
   ];
 }

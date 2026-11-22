@@ -42,7 +42,10 @@ export function checkNativeAuthority(context: NativeAccessContext) {
 
 export async function verifyNativeFresh(context: NativeAccessContext) {
   checkNativeAuthority(context);
-  if (!await context.verifyFresh()) throw new Error('Verify your current owner email before continuing.');
+  if (!await context.verifyFresh()) {
+    const method = context.user.authMethod === 'phone_passcode' ? 'passcode' : 'email';
+    throw new Error(`Verify your current owner ${method} before continuing.`);
+  }
   checkNativeAuthority(context);
 }
 

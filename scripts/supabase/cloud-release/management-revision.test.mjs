@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {PROJECT, sha} from './access.mjs';
-import {reviseRuntimeViaManagement} from './management-revision.mjs';
+import {renderManagementMigration, reviseRuntimeViaManagement} from './management-revision.mjs';
 
 const previous = 'a'.repeat(64), next = 'b'.repeat(64), gateway = 'c'.repeat(64);
 const previousApproval = 'd'.repeat(64), candidateApproval = 'e'.repeat(64);
@@ -128,7 +128,7 @@ test('Management transport runs the real initial revision using only bound singl
   assert.equal(f.records.at(-1), 'revision-fixture-revision-complete.json');
 });
 
-test('Management transport refuses migration, resume and unbound standalone configuration', async () => {
+test('Management transport refuses unreviewed migration, resume and unbound standalone configuration', async () => {
   const f = fixture();
   for (const input of [{migrations: [{}]}, {resumeFencedRevision: 'prior'},
     {acceptAncillaryRequalification: true}, {expectedSecretPreimages: null},
@@ -137,6 +137,20 @@ test('Management transport refuses migration, resume and unbound standalone conf
       api() { assert.fail('unsupported operation reached the provider'); },
     }), /initial_standalone_management_revision_required/);
   }
+});
+
+test('a reviewed forward migration is rendered as one fenced, history-bound statement', () => {
+  const before = [{version:'20261122000000', name:'synthetic_predecessor', sha256:previous, entries:1}];
+  const sql = 'BEGIN;\nCREATE TABLE private.synthetic_migration_fixture (id bigint);\nCOMMIT;\n';
+  const entry = {version:'20261122000100',name:'synthetic_candidate',sql,sha256:sha(sql)};
+  const fence = {mode:'fenced',epoch:10,operation_id:'00000000-0000-4000-8000-000000000001',source_sha256:previous};
+  const rendered = renderManagementMigration(entry,before,fence);
+  assert.match(rendered,/^DO \$release_[0-9a-f]{24}\$/);
+  assert.match(rendered,/LOCK TABLE supabase_migrations.schema_migrations IN EXCLUSIVE MODE/);
+  assert.match(rendered,/INSERT INTO supabase_migrations.schema_migrations/);
+  assert.ok(rendered.includes(sha('20261122000000:synthetic_predecessor:'+previous)));
+  assert.throws(() => renderManagementMigration({...entry,sha256:next},before,fence), /management_migration_preimage_invalid/);
+  assert.throws(() => renderManagementMigration(entry,before,{...fence,mode:'open'}), /management_migration_preimage_invalid/);
 });
 
 test('Management transport verifies PostgreSQL project, owner, version and transaction isolation first', async () => {

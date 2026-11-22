@@ -42,12 +42,20 @@ export async function boundedResponseBody(response: Response, maximumBytes: numb
   return new TextDecoder('utf-8', {fatal: true}).decode(bytes);
 }
 
-function safeErrorMessage(status: number, code: string | undefined, mutation: boolean, path: string): string {
+function safeErrorMessage(status: number, code: string | undefined, mutation: boolean, path: string, phonePasscodeOnly?: true): string {
+  if (path === 'auth/phone-passcode' && (status === 401 || status === 403 || code === 'invalid_credentials')) {
+    return 'Check your mobile number and passcode.';
+  }
+  if (path === 'auth/passcode/verify' && (status === 401 || code === 'invalid_credentials')) return 'Check your four-digit passcode.';
+  if (code === 'recent_passcode_required' || phonePasscodeOnly && code === 'recent_email_sign_in_required') {
+    return 'Verify your passcode before continuing.';
+  }
+  if (code === 'try_again_later') return 'Too many attempts. Please wait before trying again.';
   if (code === 'proxy_outcome_unknown') return 'The result is unknown. Check the original request before continuing.';
   if (code === 'recent_email_sign_in_required') return 'Verify your email before making this change.';
-  if (code === 'password_recovery_required') return 'Use the email password recovery link to set or recover your password.';
-  if (code === 'admin_access_not_approved') return 'This email does not have Admin access. Contact your super admin.';
-  if (code === 'invalid_credentials' && (path === 'auth/verify' || path === 'auth/email/verify')) return 'That code is invalid or expired. Use the latest email code.';
+  if (!phonePasscodeOnly && code === 'password_recovery_required') return 'Use the email password recovery link to set or recover your password.';
+  if (!phonePasscodeOnly && code === 'admin_access_not_approved') return 'This email does not have Admin access. Contact your super admin.';
+  if (!phonePasscodeOnly && code === 'invalid_credentials' && (path === 'auth/verify' || path === 'auth/email/verify')) return 'That code is invalid or expired. Use the latest email code.';
   if (status === 401) return path === 'auth/login' ? 'The email or password is incorrect.' : 'Sign in again to continue.';
   if (status === 403) return mutation ? 'You do not have permission to make this change.' : 'You do not have permission to view these records.';
   if (status === 409) return 'The request conflicts with the current state. Check the original request and refresh the details.';
@@ -62,10 +70,10 @@ export function decodeResponse(
   raw: string | undefined,
   path: string,
   options: AdminRequestOptions,
-  statusPolicy: {mutation: boolean; checksCredentials: boolean; mfaRecovery: boolean},
+  statusPolicy: {mutation: boolean; checksCredentials: boolean; mfaRecovery: boolean; phonePasscodeOnly?: true},
   onUnauthorized: () => void,
 ): JsonObject {
-  const {mutation, checksCredentials, mfaRecovery} = statusPolicy;
+  const {mutation, checksCredentials, mfaRecovery, phonePasscodeOnly} = statusPolicy;
   if (response.status === 401 && mfaRecovery) throw new AdminRequestError('Authenticator recovery could not be confirmed. Keep the original recovery reference.', {statusCode: 401, outcomeUnknown: true});
   if (response.status === 401 && !checksCredentials) {
     if (path === 'auth/session' && options.expectedStatus === undefined) return {user: null};
@@ -83,7 +91,7 @@ export function decodeResponse(
   if (!isJsonObject(parsed)) throw new AdminRequestError('The service response could not be verified.', {statusCode: response.status, outcomeUnknown: mutation});
   const result = parsed;
   const code = errorCode(result);
-  if (!response.ok) throw new AdminRequestError(safeErrorMessage(response.status, code, mutation, path), {statusCode: response.status, code, outcomeUnknown: code === 'proxy_outcome_unknown' || (mutation && response.status >= 500), otpReceiptBody: path === 'auth/otp' && code === 'email_delivery_unknown' ? result : undefined});
+  if (!response.ok) throw new AdminRequestError(safeErrorMessage(response.status, code, mutation, path, phonePasscodeOnly), {statusCode: response.status, code, outcomeUnknown: code === 'proxy_outcome_unknown' || (mutation && response.status >= 500), otpReceiptBody: path === 'auth/otp' && code === 'email_delivery_unknown' ? result : undefined});
   if (options.expectedStatus !== undefined && response.status !== options.expectedStatus) throw new AdminRequestError('The current response could not be confirmed.', {statusCode: response.status, outcomeUnknown: mutation});
   return result;
 }

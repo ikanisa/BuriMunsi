@@ -4,8 +4,6 @@ import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {readFile} from 'node:fs/promises';
 import {build, version} from 'esbuild';
-import {harness, FRONT, PATH} from '../../../test/fixtures/local-challenge-parent-harness.mjs';
-import {renderLocalChallengeDocument} from '../src/local-challenge.mjs';
 import {STATIC_RECOVERY_SCRIPT} from '../src/static-recovery.js';
 import {recoveryDom} from './fixtures/static-handoff-harness.mjs';
 
@@ -28,53 +26,16 @@ const {default: worker} = await import('data:text/javascript;base64,' + Buffer.f
 const profile = JSON.parse(await readFile(new URL('../wrangler.burimunsi.jsonc', import.meta.url))).vars;
 const origin = profile.ADMIN_ORIGIN;
 const bundleSha = createHash('sha256').update(code).digest('hex');
-const presentation = html => html.replace(/<script nonce="[a-f0-9]+">[\s\S]*?<\/script>/, '')
-  .replaceAll(/nonce="[a-f0-9]+"/g, 'nonce="RENDER_NONCE"');
-
-test('actual kept-name Admin bundle executes its isolated BuriMunsi inline parent', async t => {
+test('actual kept-name Admin bundle excludes the retired BuriMunsi challenge controller', async t => {
   t.diagnostic(`esbuild ${version}; keepNames=true; format=esm; target=es2024; bundle_sha256=${bundleSha}`);
   let staticDispatches = 0;
   const env = {...profile,
     ASSETS: {fetch() { staticDispatches++; throw Error('Parent must not fall back to assets'); }}};
-  let parent;
-  const f = await harness({origin, render: async request => {
-    parent = await worker.fetch(request, env);
-    assert.equal(parent.status, 200);
-    assert.equal(parent.headers.get('Cache-Control'), 'private, no-store, max-age=0, no-transform');
-    assert.equal(parent.headers.get('Permissions-Policy'), 'loopback-network=(self), local-network=(), camera=(), microphone=(), geolocation=()');
-    assert.equal(parent.headers.has('Set-Cookie'), false);
-    return parent;
-  }});
-  // The harness VM intentionally has no esbuild helper globals. Bootstrap must
-  // actually register listeners before any human interaction or fixture fetch.
-  assert.equal(f.elements['pairing-form'].listeners.has('submit'), true);
-  assert.equal(f.calls.length, 0); assert.equal(f.frame(), undefined);
-  const plain = renderLocalChallengeDocument(new Request(origin + PATH), {origin, allowedOrigins: [origin]});
-  assert.equal(presentation(f.html), presentation(await plain.text()));
-  const nonce = f.html.match(/<script nonce="([a-f0-9]{48})">/)[1];
-  assert.equal(parent.headers.get('Content-Security-Policy'), `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self' http://127.0.0.1:*; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'`);
-  await f.connect(); assert.equal(f.calls.length, 1);
-  const frame = f.frame(); assert.ok(frame);
-  assert.equal(new URL(frame.src).origin, origin);
-  assert.equal(new URL(frame.src).searchParams.get('parent_origin'), origin);
-  assert.equal(f.elements.status.dataset.state, 'verifying');
-  const candidate = {type: 'collect.turnstile.v1', attempt_id: f.descriptor.attempt_id,
-    token: 'SYNTHETIC_BUNDLED_PARENT_NOT_PROVIDER_VERIFIED'};
-  // Reject token-shaped messages from a foreign origin.
-  await f.candidate(candidate, {origin: FRONT});
-  assert.equal(f.calls.length, 1);
-  await f.candidate(candidate);
-  await f.window.emit('message', {origin, source: frame.contentWindow, data: candidate});
-  await f.connect();
-  assert.equal(f.calls.length, 2);
-  assert.equal(f.calls[1].options.method, 'POST');
-  assert.equal(f.calls[1].body.token, candidate.token);
-  assert.equal(f.calls[1].body.operation, f.descriptor.operation);
-  assert.equal(f.calls[1].options.credentials, 'omit');
-  assert.equal(f.calls[1].url.includes(candidate.token), false);
-  assert.equal(f.frame(), undefined); assert.equal(f.timers.size, 0);
-  assert.equal(f.elements.status.dataset.state, 'complete');
-  assert.match(f.elements.status.textContent, /terminal for the sign-in result/);
+  const retired = await worker.fetch(new Request(origin + '/admin/auth/local-challenge'), env);
+  assert.equal(retired.status, 404);
+  assert.equal((await retired.json()).error.code, 'not_found');
+  assert.doesNotMatch(code, /collect\.admin\.human_challenge\.pairing\.v1/);
+  assert.doesNotMatch(code, /\/v1\/privacy\/email\/challenge/);
   assert.equal(staticDispatches, 0);
 });
 

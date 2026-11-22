@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent }
 import { Link } from 'react-router';
 import { verifySensitiveAccess } from '../../app/sensitive-access';
 import { useSession } from '../../session/SessionProvider';
+import {verificationPath} from '../../session/returnLocation';
 import { Button, Field, LoadingState } from '../../ui';
 import type { PendingIdentity } from '../core/pendingAttempt';
 import type { MomoDetail } from './momoContracts';
@@ -74,7 +75,7 @@ export function MomoConflictReviewPanel({detail, enabled = false, onUpdated}: {d
   };
   return <section className="momo-assignment"><h3>Conflicting evidence</h3><p>Review retains the original accepted facts and dismisses only the listed conflicting attempts. It does not change financial records or confirm provider settlement.</p>
     {message && <p role="status">{message}</p>}
-    {needsVerification && <p><Link className="operations-link" to={`/admin/security/${session.verificationMode === 'email' ? 'verify-email' : 'authenticator'}?returnTo=%2Fadmin%2Fmomo-receipts`}>Verify identity</Link></p>}
+    {needsVerification && <p><Link className="operations-link" to={verificationPath(session.verificationMode, '/admin/momo-receipts')}>{session.verificationMode === 'passcode' ? 'Verify passcode' : 'Verify identity'}</Link></p>}
     {saved && <Button onClick={onUpdated}>Refresh receipt</Button>}
     {pending?.kind === 'foreign' && <p>Another account or session has an unresolved conflict review. The original account must resolve it.</p>}
     {pending?.kind === 'owned' && <><p>Original request: <code>{pending.requestKey}</code></p><p>There is no read-only status lookup for this request. An identical retry may record the review if it was not already committed.</p>

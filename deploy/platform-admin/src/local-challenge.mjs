@@ -1,26 +1,15 @@
 import {PARENT_CONTROLLER_SOURCE} from './local-challenge-controller.mjs';
+import {isLocalChallengePath, LOCAL_CHALLENGE_PATH as PATH} from './local-challenge-route.mjs';
 import {BURIMUNSI_ADMIN_ORIGIN} from './admin-session-realm.js';
 
 // Dedicated human-only parent document. The host must opt in to this route;
 // importing this module neither starts a listener nor changes global headers.
 const ADMIN = 'https://platform-admin.collect.ikanisa.com';
-const PATH = '/admin/auth/local-challenge';
 const ORIGINS = new Set([ADMIN, 'https://admin-supabase-qa.collect.ikanisa.com']);
-
-function parentPath(path) {
-  // Decode only to recognize and reject aliases; never admit a decoded route.
-  let candidate = path;
-  for (let pass = 0; pass < 2; pass++) {
-    if (candidate.toLowerCase().replace(/\\/g, '/').replace(/\/{2,}/g, '/').startsWith(PATH)) return true;
-    try { const decoded = decodeURIComponent(candidate); if (decoded === candidate) break; candidate = decoded; }
-    catch { return candidate.toLowerCase().startsWith('/admin/auth/local-challenge'); }
-  }
-  return candidate.toLowerCase().replace(/\\/g, '/').replace(/\/{2,}/g, '/').startsWith(PATH);
-}
 
 export function renderLocalChallengeDocument(request, options = {}) {
   const url = new URL(request.url);
-  if (!parentPath(url.pathname)) return null;
+  if (!isLocalChallengePath(url.pathname)) return null;
   const validOptions = options !== null && typeof options === 'object' &&
     Object.getPrototypeOf(options) === Object.prototype &&
     Object.keys(options).every(key => ['origin', 'allowedOrigins'].includes(key));

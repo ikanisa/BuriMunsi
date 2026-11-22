@@ -17,7 +17,7 @@ export function isLegacyTeamOwner(actor: AdminUser): boolean {
 }
 
 export function isTeamManager(actor: AdminUser, mode: VerificationMode): boolean {
-  return mode === 'email' ? hasTeamManagementGrant(actor) && isVerifiedCurrentOwner(actor) : isLegacyTeamOwner(actor);
+  return mode === 'authenticator' ? isLegacyTeamOwner(actor) : hasTeamManagementGrant(actor) && isVerifiedCurrentOwner(actor);
 }
 
 export function isTeamTargetEmail(email: unknown, actor: Pick<AdminUser, 'email'>, mode: VerificationMode): email is string {

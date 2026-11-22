@@ -25,9 +25,10 @@ verifies the installed worker's static cache.
 
 Run `make admin-web-build` with the approved `SUPABASE_PUBLISHABLE_KEY` and the
 public CAPTCHA settings matching the backend. The command supplies the exact
-`burimunsi-admin-production` deployment profile and keeps email sign-in on the
-dedicated same-origin transport. The compiler accepts only the validated public
-client values.
+`burimunsi-admin-production` deployment profile. Browser sign-in and sensitive
+verification use the existing BuriMunsi mobile number and passcode with the
+dedicated same-origin cookie transport. Staff sign in through the Android app.
+The compiler accepts the validated public client values.
 
 The site is `build/admin-web/`. The paired `build/admin-web.json` binds its bytes
 to the source and public configuration. Set `ADMIN_PWA_BUILD_DIR` to a fresh

@@ -10,6 +10,7 @@ import {adminManagedMfa} from './admin_managed_mfa.js';
 import {adminMfaPorts,resolveAdminMfaCandidate,logoutAdminMfaCandidate,recoverAdminMfaIntent,logoutAdminMfaIntent} from './admin_mfa_bff.js';
 import {adminAccountSession,adminInternalRequest,issueAdminSession,logoutAdminSession,adminMfaEnabled} from './admin_session.js';
 import {ADMIN_COOKIE_SECONDS} from './admin_bff_tokens.js';
+import {handleBrowserPasscode, standaloneBrowserPasscode} from './admin_browser_passcode.js';
 import {readAdminTeam,manageAdminTeam} from './admin_team.js';
 import {failAdminAccount as fail} from './admin_account_support/errors.js';
 
@@ -23,6 +24,7 @@ const adminMfaRecovery=env=>adminMfaEnabled(env)||env.COLLECT_ADMIN_TOTP_RECOVER
 export async function handleAdminAccounts(request,env,ctx) {
  const full=new URL(request.url).pathname;if(!full.startsWith('/api/admin/'))return null;const path=full.slice('/api/admin'.length);
  if(!path.startsWith('/auth/')&&path!=='/team'&&!path.startsWith('/team/'))return null;
+ if(standaloneBrowserPasscode(env)&&path.startsWith('/auth/'))return handleBrowserPasscode(request,env,path);
  validateAdminOrigin(request,env);
  const mfaPath=path==='/auth/mfa'||path.startsWith('/auth/mfa/');
  if(mfaPath&&!adminMfaEnabled(env))throw new ApiError(410,'mfa_not_available','Verify your email to confirm sensitive changes.');

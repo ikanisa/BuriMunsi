@@ -71,19 +71,26 @@ try {
 
   const desktop = await open({ width: 1440, height: 900 }, 'block');
   const { page } = desktop;
+  await page.goto(origin + '/admin/forgot-password');
+  await page.getByRole('heading', { name: 'Welcome to BuriMunsi' }).waitFor();
+  assert.equal(new URL(page.url()).hash, '#/admin/login');
   await page.goto(origin + '/admin');
   await page.getByRole('heading', { name: 'Welcome to BuriMunsi' }).waitFor();
-  await page.getByLabel('Email', { exact: true }).fill('fixture@example.test');
-  await page.getByRole('button', { name: 'Send sign-in code' }).click();
-  await page.getByRole('heading', { name: 'Check your email' }).waitFor();
-  await page.getByLabel('6-digit code', { exact: true }).fill('123456');
-  await page.getByRole('button', { name: 'Verify and sign in' }).click();
+  assert.equal(await page.getByLabel('Email', { exact: true }).count(), 0);
+  await page.getByLabel('Mobile number', { exact: true }).fill('0780 000 001');
+  await page.getByLabel('Four-digit passcode', { exact: true }).fill('0123');
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   const overview = page.getByRole('heading', { name: 'Operations overview' });
   await overview.waitFor();
   const cookies = await desktop.context.cookies(origin);
   assert(cookies.some(cookie => cookie.name === 'collect_fixture_session' && cookie.httpOnly));
   assert(!String(await page.evaluate(() => document.cookie)).includes('collect_fixture_session'));
   await page.reload();
+  await overview.waitFor();
+  await page.goto(origin + '/admin/security/verify-passcode?returnTo=%2Fadmin');
+  await page.getByRole('heading', { name: 'Verify your passcode' }).waitFor();
+  await page.getByLabel('Four-digit passcode', { exact: true }).fill('0123');
+  await page.getByRole('button', { name: 'Verify passcode', exact: true }).click();
   await overview.waitFor();
 
   const receipts = requestUrl => requestUrl.origin === origin && requestUrl.pathname === '/api/admin/sms/receipts';
@@ -122,7 +129,7 @@ try {
     const body = await response.json();
     const { id, principalId, email, permissions } = body.user;
     return route.fulfill({ response, json: { ...body, ownerEmail: email,
-      user: { ...body.user, permissions: [...permissions, 'admin_users.manage', 'receivers.manage'] },
+      user: { ...body.user, passcodeVerifiedAt: null, permissions: [...permissions, 'admin_users.manage', 'receivers.manage'] },
       ownerIdentity: { schemaVersion: 1, adminId: id, principalId, email } } });
   });
   const protectedReads = [];
@@ -132,8 +139,8 @@ try {
   });
 
   await sessionPage.goto(origin + '/admin/security/authenticator?' + new URLSearchParams({ returnTo: '/admin/burimunsi?draft=private' }));
-  await sessionPage.getByRole('heading', { name: 'Verify your email' }).waitFor();
-  assert.equal(new URL(sessionPage.url()).hash, '#/admin/security/verify-email?returnTo=%2Fadmin%2Fburimunsi');
+  await sessionPage.getByRole('heading', { name: 'Verify your passcode' }).waitFor();
+  assert.equal(new URL(sessionPage.url()).hash, '#/admin/security/verify-passcode?returnTo=%2Fadmin%2Fburimunsi');
   await sessionPage.getByRole('button', { name: 'Back', exact: true }).click();
   await sessionPage.getByRole('heading', { name: 'Access unavailable' }).waitFor();
   assert.equal(new URL(sessionPage.url()).hash, '#/admin/burimunsi');
@@ -141,8 +148,8 @@ try {
   nextSession = 'owner';
   await sessionPage.reload();
   await sessionPage.getByRole('heading', { name: 'BuriMunsi access' }).waitFor();
-  await sessionPage.getByRole('button', { name: 'Verify email', exact: true }).click();
-  await sessionPage.getByRole('heading', { name: 'Verify your email' }).waitFor();
+  await sessionPage.getByRole('button', { name: 'Verify passcode', exact: true }).click();
+  await sessionPage.getByRole('heading', { name: 'Verify your passcode' }).waitFor();
   await sessionPage.getByRole('button', { name: 'Back', exact: true }).click();
   await sessionPage.getByRole('heading', { name: 'BuriMunsi access' }).waitFor();
 
@@ -236,7 +243,7 @@ try {
   assert.deepEqual(denied, []);
   console.log(JSON.stringify({
     status: 'pass', environment: 'synthetic_loopback',
-    checks: ['otp_sign_in_and_httponly_cookie', 'reload_restores_session', 'keyboard_receipt_navigation', 'sms_read_failure_retry',
+    checks: ['obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'reload_restores_session', 'passcode_step_up_and_readback', 'keyboard_receipt_navigation', 'sms_read_failure_retry',
       'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
       'verification_preserves_safe_destination_and_rechecks_owner', 'failed_session_recheck_drops_old_owner_grant', 'expired_request_and_history_return_require_sign_in',
       'mobile_drawer_traps_and_restores_focus_and_reflows', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only'],

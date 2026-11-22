@@ -68,15 +68,13 @@ Deno.test('standalone preserves native and dedicated Admin admission without bro
     ['collect-api', '/v1/burimunsi/session/login', 'POST', project, 204],
     ['collect-api', '/v1/momo/gateway/profile', 'GET', project, 204],
     ['collect-api', '/v1/rpc/get_public_runtime_config', 'POST', project, 204],
-    ['collect-api', '/v1/security/challenge?parent_origin=' + encodeURIComponent(BURIMUNSI_ADMIN_ORIGIN), 'GET', BURIMUNSI_ADMIN_ORIGIN, 204],
-    ['collect-api', '/v1/security/challenge?parent_origin=' + encodeURIComponent(legacyAdmin), 'GET', legacyAdmin, 403],
-    ['collect-api', '/v1/security/challenge?parent_origin=' + encodeURIComponent(legacyQA), 'GET', legacyQA, 403],
-    ['collect-api', '/privacy/account-deletion/assets/client.js', 'GET', BURIMUNSI_ADMIN_ORIGIN, 204],
-    ['collect-api', '/v1/privacy/email/challenge', 'POST', BURIMUNSI_ADMIN_ORIGIN, 204],
-    ['collect-api', '/v1/rpc/get_current_account_deletion_request_status_v1', 'POST', BURIMUNSI_ADMIN_ORIGIN, 204],
-    ['collect-api', '/v1/privacy/email/challenge', 'POST', 'https://other.example', 403],
+    ['collect-api', '/privacy/account-deletion/assets/style.css', 'GET', BURIMUNSI_ADMIN_ORIGIN, 204],
+    ['collect-api', '/privacy/account-deletion', 'GET', 'https://other.example', 403],
     ['collect-api', '/v1/momo/gateway/profile', 'GET', BURIMUNSI_ADMIN_ORIGIN, 403],
+    ['admin-api', '/api/admin/auth/phone-passcode', 'POST', BURIMUNSI_ADMIN_ORIGIN, 204],
+    ['admin-api', '/api/admin/auth/passcode/verify', 'POST', BURIMUNSI_ADMIN_ORIGIN, 204],
     ['admin-api', '/api/admin/auth/session', 'GET', BURIMUNSI_ADMIN_ORIGIN, 204],
+    ['admin-api', '/api/admin/auth/logout', 'POST', BURIMUNSI_ADMIN_ORIGIN, 204],
     ['admin-api', '/api/admin/auth/session', 'GET', project, 204],
     ['admin-api', '/api/admin/auth/session', 'GET', legacyAdmin, 403],
     ['admin-api', '/api/admin/auth/session', 'GET', legacyQA, 403],
@@ -94,13 +92,13 @@ Deno.test('standalone preserves native and dedicated Admin admission without bro
   for (const origin of [legacyAdmin, legacyQA]) {
     const oldSession = request('admin-api', '/api/admin/auth/session', 'GET', origin);
     assertEquals(adminSessionOriginMatches(oldSession, env, profile, {origin}), false);
-    const login = request('admin-api', '/api/admin/auth/otp', 'POST', origin, {});
+    const login = request('admin-api', '/api/admin/auth/phone-passcode', 'POST', origin, {});
     login.headers.set('X-Collect-Requested-With', 'collect-admin');
     const handler = createHandler('admin-api', () => env, {standalone: true, reportHealth: () => false});
     assertEquals((await handler(login)).status, 403);
   }
   for (const origin of [BURIMUNSI_ADMIN_ORIGIN, project]) {
-    const login = request('admin-api', '/api/admin/auth/otp', 'POST', origin, {});
+    const login = request('admin-api', '/api/admin/auth/phone-passcode', 'POST', origin, {});
     login.headers.set('X-Collect-Requested-With', 'collect-admin');
     assertEquals(validateAdminOrigin(login, env), origin);
     assertEquals(adminSessionOriginMatches(
@@ -108,6 +106,67 @@ Deno.test('standalone preserves native and dedicated Admin admission without bro
     ), true);
   }
   assertEquals(adminSessionOriginMatches(sessionRequest, {...env, BURIMUNSI_PRODUCT_MODE: undefined}, profile, {origin: BURIMUNSI_ADMIN_ORIGIN}), false);
+});
+
+Deno.test('standalone rejects old Admin and direct member authentication before work or preflight admission', async () => {
+  const routes = {
+    'admin-api': [
+      ['POST', '/api/admin/auth/otp'], ['POST', '/api/admin/auth/verify'], ['POST', '/api/admin/auth/login'],
+      ['POST', '/api/admin/auth/forgot-password'], ['POST', '/api/admin/auth/complete-password'],
+      ['POST', '/api/admin/auth/change-password'], ['GET', '/api/admin/auth/email-verification'],
+      ['POST', '/api/admin/auth/email/request'], ['POST', '/api/admin/auth/email/verify'],
+      ['POST', '/api/admin/auth/google/start'], ['POST', '/api/admin/auth/google/exchange'],
+      ['GET', '/api/admin/auth/mfa/factors'], ['POST', '/api/admin/auth/mfa/verify'],
+      ['POST', '/api/admin/auth/mfa/recover'], ['GET', '/api/admin/auth/user'],
+      ['POST', '/api/admin/burimunsi/access'],
+      ['POST', '/api/admin/team/invite'], ['GET', '/api/admin/team/invitation-status'],
+      ['POST', '/api/admin/team/7dfc16fb-b3b8-4c2d-b6f8-bcbfd8025001/resend'],
+      ['GET', '/api/admin/team/v2'], ['GET', '/api/admin/team/v2/invitation-status'], ['POST', '/api/admin/team/v2/invite'],
+      ['POST', '/api/admin/auth/session'], ['GET', '/api/admin/auth/phone-passcode'],
+    ],
+    'collect-api': [
+      ['POST', '/v1/burimunsi/managed/email-otp'], ['POST', '/v1/auth/otp'], ['POST', '/v1/auth/verify'],
+      ['GET', '/v1/security/challenge?parent_origin=' + encodeURIComponent(BURIMUNSI_ADMIN_ORIGIN)],
+      ['POST', '/v1/auth/logout'], ['POST', '/v1/privacy/email/challenge'], ['POST', '/v1/privacy/email/verify'],
+      ['POST', '/v1/privacy/email/status'], ['POST', '/v1/privacy/email/cancel'],
+      ['POST', '/v1/rpc/request_account_deletion_v1'], ['POST', '/v1/rpc/get_account_deletion_request_status_v1'],
+      ['POST', '/v1/rpc/get_current_account_deletion_request_status_v1'],
+      ['POST', '/v1/rpc/get_account_deletion_review_status_v1'], ['GET', '/privacy/account-deletion/assets/client.js'],
+    ],
+  };
+  for (const [surface, paths] of Object.entries(routes)) {
+    const handler = createHandler(surface, () => env, {standalone: true, reportHealth: () => false});
+    for (const [method, path] of paths) {
+      const opts = request(surface, path, 'OPTIONS', BURIMUNSI_ADMIN_ORIGIN);
+      opts.headers.set('Access-Control-Request-Method', method);
+      const actual = request(surface, path, method, BURIMUNSI_ADMIN_ORIGIN, method === 'POST' ? {} : undefined);
+      for (const attempt of [actual, opts]) {
+        const response = await handler(attempt);
+        assertEquals(response.status, 404, `${attempt.method} ${path}`);
+        assertEquals(await response.json(), {code: 'not_found'});
+        assertEquals(response.headers.get('Access-Control-Allow-Origin'), null);
+      }
+    }
+  }
+});
+
+Deno.test('standalone direct deletion information remains available without account, database or OTP script', async () => {
+  const handler = createHandler('collect-api', () => env, {standalone: true, reportHealth: () => false});
+  const path = '/privacy/account-deletion';
+  const response = await handler(request('collect-api', path, 'GET'));
+  assertEquals(response.status, 200);
+  assertEquals(response.headers.get('X-Collect-Document'), 'burimunsi.privacy.support.v1');
+  const document = await response.text();
+  const style = '/functions/v1/collect-api' + path + '/assets/style.css';
+  assertEquals(document.includes(`href="${style}"`), true);
+  assertEquals(document.includes('Contact support about account deletion'), true);
+  assertEquals(/<form\b|<script\b|@collect\.ikanisa\.com/i.test(document), false);
+  const head = await handler(request('collect-api', path, 'HEAD'));
+  assertEquals(head.status, 200);
+  assertEquals(await head.text(), '');
+  const stylesheet = await handler(request('collect-api', path + '/assets/style.css', 'GET'));
+  assertEquals(stylesheet.status, 200);
+  assertEquals(stylesheet.headers.get('Content-Type'), 'text/css; charset=utf-8');
 });
 
 Deno.test('standalone compares the only database collection with the configured scope under the runtime role', async () => {
@@ -130,24 +189,12 @@ Deno.test('standalone compares the only database collection with the configured 
   }
 });
 
-Deno.test('standalone retains bounded phone privacy verification without member or email OTP enrollment', async () => {
-  const send = (body: unknown) => logicalRequest(request('collect-api', '/v1/auth/otp', 'POST', undefined, body), 'collect-api');
-  for (const body of [{surface: 'member', phone: '+250780000000'}, {surface: 'admin', phone: '+250780000000', allow_registration: false, should_create_user: false},
-    {surface: 'member', email: 'test@example.invalid', allow_registration: false, should_create_user: false}]) {
-    await assertRejects(() => handleAuth(send(body), env), Error, 'does not exist');
+Deno.test('standalone generic member auth dispatcher refuses all old identity operations before parsing', async () => {
+  for (const [path, method] of [['otp', 'POST'], ['verify', 'POST'], ['refresh', 'POST'], ['logout', 'POST'],
+    ['user', 'GET'], ['google/start', 'POST'], ['google/callback', 'GET']]) {
+    const logical = logicalRequest(request('collect-api', '/v1/auth/' + path, method), 'collect-api');
+    await assertRejects(() => handleAuth(logical, env), Error, 'does not exist');
   }
-  const phone = '+250780000000';
-  const verify = request('collect-api', '/v1/auth/verify', 'POST', undefined, {
-    surface: 'member', phone, challenge_id: '7dfc16fb-b3b8-4c2d-b6f8-bcbfd8025001', code: '000000',
-  });
-  let scoped = false;
-  const prepare = (query: string) => ({bind: (...values: unknown[]) => ({first: async () => {
-    scoped = query.includes("pending.identity_type='phone' AND pending.registration_allowed=0 AND pending.identity_value=?") &&
-      values.at(-1) === phone;
-    return null;
-  }})});
-  await assertRejects(() => handleAuth(logicalRequest(verify, 'collect-api'), {...env, DB: {prepare}}), Error, 'request a new code');
-  assertEquals(scoped, true);
 });
 
 Deno.test('standalone rejects an unrelated gateway before pairing or contact writes', async () => {

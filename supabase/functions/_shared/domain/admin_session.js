@@ -1,6 +1,6 @@
 import {ApiError,json,first,digest} from './core.js';
 import {loadAdminEmailAccount} from './admin_email_auth.js';
-import {bindAdminEmailActor} from './admin_email_policy.js';
+import {adminPasscodeProof, bindAdminEmailActor} from './admin_email_policy.js';
 import {verifyToken,claimsOf} from '../auth-http.js';
 import {projectSession} from './auth.js';
 import {adminAccountSession as legacySession,adminPublicUser,adminCookie} from './admin_accounts_legacy.js';
@@ -10,6 +10,7 @@ import {decryptAdminTokens,finishAdminProviderLogout,ADMIN_COOKIE_SECONDS} from 
 import {failAdminAccount as fail} from './admin_account_support/errors.js';
 import {refreshAdminSession} from './admin_session_refresh.js';
 import {admitAdminSession} from './admin_session_admission.js';
+import {browserPasscodeSession, standaloneBrowserPasscode} from './admin_browser_passcode.js';
 
 const unix=()=>Math.floor(Date.now()/1000);
 export const adminMfaEnabled=env=>env.COLLECT_ADMIN_TOTP_ENABLED==='true';
@@ -40,6 +41,7 @@ export async function logoutAdminSession(request,env){
  return json({ok:true,providerLogout},200,{'Set-Cookie':adminCookie()});
 }
 export async function adminAccountSession(request,env,required=true) {
+ if(standaloneBrowserPasscode(env))return browserPasscodeSession(request,env,required);
  const origin=validateAdminOrigin(request,env);const token=adminCookieToken(request);if(!token){if(required)fail('unauthenticated',401);return null;}
  // An expired projection can only be renewed by the original cookie and the
  // real provider session. A revoked account/session is rejected before any
@@ -84,11 +86,25 @@ export async function adminAccountSession(request,env,required=true) {
  await loadAdminEmailAccount(env,account);env.ADMIN_ACCOUNT=account;return account;
 }
 export async function adminInternalRequest(request,env,account,path,method=request.method,value=null) {
- const headers=new Headers(request.headers);headers.delete('Cookie');headers.set('Authorization','Bearer '+account.supabaseTokens.access_token);headers.set('Content-Type','application/json');headers.delete('Content-Length');
+ const headers=new Headers(request.headers);headers.delete('Cookie');headers.delete('Authorization');
+ if(!adminPasscodeProof(account))headers.set('Authorization','Bearer '+account.supabaseTokens.access_token);
+ headers.set('Content-Type','application/json');headers.delete('Content-Length');
  return new Request(new URL(path,request.url),{method,headers,...(['GET','HEAD'].includes(method)?{}:{body:JSON.stringify(value??{})})});
 }
 export async function adminCanonicalActor(request,env,account,permission=null) {
  if(permission&&!account.permissions.includes(permission))fail('permission_required');
+ if(standaloneBrowserPasscode(env)){
+  const proof=adminPasscodeProof(account);if(!proof)fail('unauthenticated',401);
+  const actor={userId:account.principal_id,sessionId:account.auth_session_id,surface:'admin',
+   assuranceLevel:1,aal:'aal1',authAt:account.auth_at,mfaAt:null,mfaFactorId:null,
+   permissions:new Set(account.permissions),
+   user:{id:account.principal_id,email:account.email,phone:proof.phone,
+    user_metadata:{full_name:proof.name},
+    app_metadata:{provider:'burimunsi_phone_passcode',roles:['admin'],permissions:[...account.permissions]}},
+  };
+  env.AUTH_ACTOR=actor;
+  return bindAdminEmailActor(actor,account);
+ }
  const verified=await verifyToken(env,account.supabaseTokens.access_token);const actor=await projectSession(env,verified,{surface:'admin'});actor.permissions=new Set([...actor.permissions].filter(v=>account.permissions.includes(v)));return bindAdminEmailActor(actor,account);
 }
 export async function issueAdminSession(request, env, data, {emailChallengeId = null} = {}) {

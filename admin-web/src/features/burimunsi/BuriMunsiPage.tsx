@@ -2,6 +2,7 @@ import {featureAuthorityKey} from '../../app/authority';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Button, Card, EmptyState, ErrorState, LoadingState, PageHeader } from '../../ui';
 import { isVerifiedCurrentOwner, sensitiveVerificationDeadline, useSession, type SessionContextValue } from '../../session/SessionProvider';
+import {verificationProofTime} from '../../session/sessionPolicy';
 import { clearPending, type PendingIdentity } from '../core/pendingAttempt';
 import { parseBuriScopes, type BuriDirectory, type BuriProvisioning, type BuriScope } from './contracts';
 import { GUARDED_OPERATOR_FAMILY, parseBuriOutcome, parseBuriPending, type BuriPending } from './recovery';
@@ -34,10 +35,13 @@ export function BuriMunsiPage(props: BuriMunsiPageProps) {
   return <BuriMunsiAccess key={scope} {...props} session={session} scope={scope} />;
 }
 
-function BuriMunsiAccess({session, scope, onBack, onVerify, operatorPreparationEnabled = false, operatorApprovalEnabled = false, nativeAdministrationEnabled = false, nativeRevocationEnabled = false, nativePinEnabled = false, nativeGrantEnabled = false, readOnlyReview = false, verificationLabel = 'Verify email'}: BuriMunsiPageProps & {session: SessionContextValue; scope: string}) {
+function BuriMunsiAccess({session, scope, onBack, onVerify, operatorPreparationEnabled = false, operatorApprovalEnabled = false, nativeAdministrationEnabled = false, nativeRevocationEnabled = false, nativePinEnabled = false, nativeGrantEnabled = false, readOnlyReview = false, verificationLabel}: BuriMunsiPageProps & {session: SessionContextValue; scope: string}) {
   const user = session.user, epoch = session.epoch;
+  const usesPasscode = session.verificationMode === 'passcode';
+  const proofLabel = usesPasscode ? 'passcode' : 'email';
+  const hasPendingVerification = () => !usesPasscode && session.sensitiveEmailRecovery() !== null;
   const identity: PendingIdentity | null = user ? {id: user.id, sessionId: user.sessionId, email: user.email, role: user.role, permissions: user.permissions, expiresAt: user.expiresAt} : null;
-  const owner = !!user && session.status === 'authenticated' && session.verificationMode === 'email' && user.financialModel === 'canonical_evidence_ledger' && isVerifiedCurrentOwner(user);
+  const owner = !!user && session.status === 'authenticated' && session.verificationMode !== 'authenticator' && user.financialModel === 'canonical_evidence_ledger' && isVerifiedCurrentOwner(user);
   const allowed = owner && ['admin_users.manage', 'receivers.manage', 'receivers.read'].every(permission => user!.permissions.includes(permission));
   const authority = useRef(scope), selectedRef = useRef(''), busy = useRef(false), liveSession = useRef(session), revokeGate = useRef(nativeRevocationEnabled), pinGate = useRef(nativePinEnabled), grantGate = useRef(nativeGrantEnabled), reviewGate = useRef(readOnlyReview), approvalGate = useRef(operatorApprovalEnabled), nativeAdminGate = useRef(nativeAdministrationEnabled);
   useLayoutEffect(() => {authority.current = scope; return () => {authority.current = '';};}, [scope]);
@@ -49,31 +53,34 @@ function BuriMunsiAccess({session, scope, onBack, onVerify, operatorPreparationE
   useLayoutEffect(() => {nativeAdminGate.current = nativeAdministrationEnabled;}, [nativeAdministrationEnabled]);
   useLayoutEffect(() => {reviewGate.current = readOnlyReview;}, [readOnlyReview]);
   const [, setProofTick] = useState(0);
-  const proofDeadline = user && session.verificationMode === 'email' ? sensitiveVerificationDeadline(user, 'supabase') : null;
+  const proofDeadline = user && session.verificationMode !== 'authenticator' ? sensitiveVerificationDeadline(user, 'supabase') : null;
   useEffect(() => {
     if (proofDeadline === null) return;
     const timer = window.setTimeout(() => setProofTick(value => value + 1), Math.max(0, proofDeadline - Date.now() + 1));
     return () => window.clearTimeout(timer);
   }, [proofDeadline, scope]);
   const active = () => !!user && authority.current === scope && allowed && session.isCurrentAuthority(epoch, user.id, user.sessionId);
-  const fresh = () => !!user && active() && session.sensitiveEmailRecovery() === null && session.isRecentSensitiveVerification(epoch, user.id, user.sessionId);
+  const fresh = () => !!user && active() && !hasPendingVerification() && session.isRecentSensitiveVerification(epoch, user.id, user.sessionId);
   const [data, setData] = useState<ScopeData | null>(null), [selected, setSelected] = useState(''), [group, setGroup] = useState<GroupData | null>(null), [outcomes, setOutcomes] = useState<Record<string, string>>({});
   const [state, setState] = useState<'ready' | 'loading'>('ready'), [message, setMessage] = useState('');
-  const freshView = !!user && allowed && session.isCurrentAuthority(epoch, user.id, user.sessionId) && session.sensitiveEmailRecovery() === null && session.isRecentSensitiveVerification(epoch, user.id, user.sessionId);
-  const scopeData = data?.scope === scope && data.proofAt === user?.emailVerifiedAt && freshView ? data : null;
-  const groupData = group?.scope === scope && group.proofAt === user?.emailVerifiedAt && group.collectionId === selected && freshView ? group : null;
+  const freshView = !!user && allowed && session.isCurrentAuthority(epoch, user.id, user.sessionId) && !hasPendingVerification() && session.isRecentSensitiveVerification(epoch, user.id, user.sessionId);
+  const proofTime = user && verificationProofTime(user);
+  const scopeData = data?.scope === scope && data.proofAt === proofTime && freshView ? data : null;
+  const groupData = group?.scope === scope && group.proofAt === proofTime && group.collectionId === selected && freshView ? group : null;
   const displayedGroup = useRef<GroupData | null>(null);
   useLayoutEffect(() => {
     displayedGroup.current = groupData;
     return () => {displayedGroup.current = null;};
   }, [groupData]);
-  const proofCurrent = (verifiedAt: string) => fresh() && liveSession.current.user?.emailVerifiedAt === verifiedAt;
+  const currentProofTime = () => liveSession.current.user && verificationProofTime(liveSession.current.user);
+  const proofCurrent = (verifiedAt: string) => fresh() && currentProofTime() === verifiedAt;
   const groupCurrent = (collection: string, verifiedAt: string) => selectedRef.current === collection && proofCurrent(verifiedAt);
   const currentAction = () => !reviewGate.current && !!groupData && displayedGroup.current === groupData &&
     groupCurrent(groupData.collectionId, groupData.proofAt);
   const recheck = async () => {
-    if (!active() || session.sensitiveEmailRecovery() !== null || !await session.recheckSensitiveEmailVerification() || !fresh()) throw new Error('Verify your current owner email before continuing.');
-    const verifiedAt = liveSession.current.user?.emailVerifiedAt;
+    const recheckProof = usesPasscode ? session.recheckSensitivePasscode : session.recheckSensitiveEmailVerification;
+    if (!active() || hasPendingVerification() || !await recheckProof?.() || !fresh()) throw new Error(`Verify your current owner ${proofLabel} before continuing.`);
+    const verifiedAt = currentProofTime();
     if (!verifiedAt) throw new Error('Verification unavailable');
     return verifiedAt;
   };
@@ -94,7 +101,7 @@ function BuriMunsiAccess({session, scope, onBack, onVerify, operatorPreparationE
       if (new Set(pending.map(value => `${value.kind}:${value.requestId}`)).size !== pending.length || !proofCurrent(verifiedAt)) throw new Error('Access changed');
       const initial = pending.find(value => groups.some(item => item.id === value.collectionId))?.collectionId ?? (groups.length === 1 ? groups[0].id : '');
       setData({scope, proofAt: verifiedAt, groups, pending}); setSelected(initial); selectedRef.current = initial; setGroup(null); setOutcomes({});
-    } catch {if (active()) {setData(null); setGroup(null); setMessage('Owner verification, prepared groups or retained requests could not be confirmed. Verify your email and try again.');}}
+    } catch {if (active()) {setData(null); setGroup(null); setMessage(`Owner verification, prepared groups or retained requests could not be confirmed. Verify your ${proofLabel} and try again.`);}}
     finally {busy.current = false; if (active()) setState('ready');}
   };
   const loadGroup = async () => {
@@ -160,11 +167,11 @@ function BuriMunsiAccess({session, scope, onBack, onVerify, operatorPreparationE
   if (!user || session.status !== 'authenticated') return <>{header}<ErrorState title="Sign-in required" message="Sign in to view this workspace." /></>;
   if (!owner) return <>{header}<ErrorState title="Owner identity unavailable" message="A protected owner identity bound to this session is required to open BuriMunsi access." /></>;
   if (!allowed) return <>{header}<ErrorState title="Access unavailable" message="Your owner account needs current team and receiving-phone permissions." /></>;
-  return <>{header}<Card><div className="core-detail"><h2>Owner verification</h2><p>Access is limited to the current protected owner with a recent email verification.</p>
+  return <>{header}<Card><div className="core-detail"><h2>Owner verification</h2><p>Access requires the protected owner and a recent {proofLabel} verification.</p>
     {message && <p role="alert">{message}</p>}{state === 'loading' && <LoadingState label="Checking BuriMunsi access" />}
-    {!freshView && <p>Verify your current owner email before viewing these records.</p>}
-    {session.sensitiveEmailRecovery() !== null && <p>Resolve the original email verification request before continuing.</p>}
-    <Button type="button" disabled={state !== 'ready' || session.sensitiveEmailRecovery() !== null} onClick={() => void loadScopes()}>{scopeData ? 'Refresh prepared groups' : 'Check verification and load groups'}</Button>{onVerify && !freshView && <Button type="button" disabled={state !== 'ready'} onClick={onVerify}>{verificationLabel}</Button>}
+    {!freshView && <p>Verify your current owner {proofLabel} before viewing these records.</p>}
+    {hasPendingVerification() && <p>Resolve the original verification request before continuing.</p>}
+    <Button type="button" disabled={state !== 'ready' || hasPendingVerification()} onClick={() => void loadScopes()}>{scopeData ? 'Refresh prepared groups' : 'Check verification and load groups'}</Button>{onVerify && !freshView && <Button type="button" disabled={state !== 'ready'} onClick={onVerify}>{verificationLabel ?? `Verify ${proofLabel}`}</Button>}
   </div></Card>
   {scopeData && <><Card><div className="core-detail"><h2>Prepared groups</h2>{scopeData.groups.length === 0 ? <EmptyState title="No prepared groups" description="Prepare a receiving group before reviewing BuriMunsi access." /> : <>
     <label>Group<select className="admin-input" value={selected} disabled={state !== 'ready'} onChange={event => {setSelected(event.target.value); selectedRef.current = event.target.value; setGroup(null); setOutcomes({});}}><option value="">Select a group</option>{scopeData.groups.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>

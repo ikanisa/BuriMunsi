@@ -1,6 +1,8 @@
 import {useEffect, useLayoutEffect, useRef, useState} from 'react';
 import type {AdminRequest} from '../../api/client';
 import {sensitiveVerificationDeadline, type AdminUser} from '../../session/SessionProvider';
+import {verificationProofTime} from '../../session/sessionPolicy';
+import type {VerificationMode} from '../../session/returnLocation';
 import {Button, Card, ErrorState, LoadingState, PageHeader, StatusBadge} from '../../ui';
 import {
   canStartPrivacyClaim, privacyIntentApplies,
@@ -19,11 +21,11 @@ const applicableNow = (intent: PrivacyPending, detail: PrivacyDetail) => privacy
 const alreadyRecorded = 'The original operation was recorded. No data was erased. Refresh reviews for current evidence.';
 
 export function PrivacyPage({user, epoch, verificationMode, request, verifyFresh, isCurrentAuthority, onVerify, allowActions = false}: {
-  user: AdminUser; epoch: number; verificationMode: 'email' | 'authenticator'; request: AdminRequest;
+  user: AdminUser; epoch: number; verificationMode: VerificationMode; request: AdminRequest;
   verifyFresh: () => Promise<boolean>; isCurrentAuthority: (epoch: number, actorId: string, sessionId: string) => boolean; onVerify: () => void; allowActions?: boolean;
 }) {
-  const proof = verificationMode === 'email' ? user.emailVerifiedAt : user.assuranceLevel === 2 ? user.mfaAt : null;
-  const proofUntil = sensitiveVerificationDeadline(user, verificationMode === 'email' ? 'supabase' : 'cloudflare') ?? NaN;
+  const proof = verificationMode === 'authenticator' ? user.assuranceLevel === 2 ? user.mfaAt : null : verificationProofTime(user);
+  const proofUntil = sensitiveVerificationDeadline(user, verificationMode === 'authenticator' ? 'cloudflare' : 'supabase') ?? NaN;
   const proofAt = Number.isFinite(proofUntil) && proof ? Math.min(Date.parse(proof), user.mfaRequired && user.mfaAt ? Date.parse(user.mfaAt) : Infinity) : NaN;
   const [context, setContext] = useState<RetentionContext | null>(null);
   const [page, setPage] = useState<PrivacyPageData | null>(null);

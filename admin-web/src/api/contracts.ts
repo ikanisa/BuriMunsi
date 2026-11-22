@@ -17,6 +17,7 @@ export function isAdminPublishableKey(value: unknown): value is string {
 
 export interface AdminClientConfig {
   backend: AdminBackend;
+  phonePasscodeOnly?: true;
   /** A public publishable key, never a service-role or secret key. */
   publishableKey?: string;
   captchaEnabled: boolean;

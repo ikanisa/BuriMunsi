@@ -2,6 +2,7 @@ import {useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent} f
 import {Link} from 'react-router';
 import {verifySensitiveAccess} from '../../app/sensitive-access';
 import {useSession} from '../../session/SessionProvider';
+import {verificationPath} from '../../session/returnLocation';
 import {Button, Field, LoadingState} from '../../ui';
 import { listPending, type PendingIdentity } from '../core/pendingAttempt';
 import type {MomoSourceJob} from './momoContracts';
@@ -132,7 +133,7 @@ function SourceWorkflow({sourceId, source, candidate, kind, enabled, onClose, on
   };
   return <section className="momo-assignment-review" aria-label={label(kind)}><h4>{label(kind)}</h4><p>Source: <code>{sourceId}</code></p>
     {loading && <LoadingState label="Checking source request recovery" />}{message && <p role="status">{message}</p>}
-    {needsVerification && <p><Link className="operations-link" to={`/admin/security/${session.verificationMode === 'email' ? 'verify-email' : 'authenticator'}?returnTo=%2Fadmin%2Fmomo-receipts`}>Verify identity</Link></p>}
+    {needsVerification && <p><Link className="operations-link" to={verificationPath(session.verificationMode, '/admin/momo-receipts')}>{session.verificationMode === 'passcode' ? 'Verify passcode' : 'Verify identity'}</Link></p>}
     {pending?.kind === 'foreign' && <p>Another account or session has an unresolved request. Its original owner must review it.</p>}
     {pending?.kind === 'owned' && <><p>Original request: <code>{pending.requestKey}</code></p><p>There is no read-only result lookup. Retrying the same request may perform the action if it was not already recorded.</p>{pending.attempt ? <Button onClick={beginRetry} disabled={busy || review !== null}>Review original request</Button> : <p>The original intent or principal is unavailable. Keep the reference and contact an authorized operator.</p>}</>}
     {saved && <Button onClick={onUpdated}>Refresh source records</Button>}

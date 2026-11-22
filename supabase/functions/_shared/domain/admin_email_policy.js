@@ -11,13 +11,14 @@ const epoch=()=>Math.floor(Date.now()/1000);
 const fields=['id','principal_id','auth_user_id','auth_session_id','token_hash','public_id','origin','auth_version'];
 const denied=()=>new ApiError(403,'recent_email_sign_in_required','Verify your current Admin email before continuing.');
 const unavailable=()=>new ApiError(503,'admin_email_verification_unavailable','Your email verification could not be confirmed.');
-function binding(account){
- if(!account||!fields.every(key=>Object.hasOwn(account,key))||
+function binding(account,passcode=false){
+ const keys=passcode?fields.filter(key=>key!=='auth_user_id'):fields;
+ if(!account||!keys.every(key=>Object.hasOwn(account,key))||
   !['id','principal_id'].every(key=>collectId(account[key]))||
-  !['auth_user_id','auth_session_id','public_id'].every(key=>uuid.test(account[key]??''))||
+  !(passcode?['auth_session_id','public_id']:['auth_user_id','auth_session_id','public_id']).every(key=>uuid.test(account[key]??''))||
   !/^[a-f0-9]{64}$/.test(account.token_hash??'')||!Number.isSafeInteger(account.auth_version)||account.auth_version<1||
   typeof account.origin!=='string'||!account.origin)throw unavailable();
- return Object.fromEntries(fields.map(key=>[key,account[key]]));
+ return Object.fromEntries(keys.map(key=>[key,account[key]]));
 }
 export function attestAdminEmailAccount(account,status){
  const captured=binding(account);
@@ -26,9 +27,18 @@ export function attestAdminEmailAccount(account,status){
    Number.isSafeInteger(status.email_verified_at)&&status.email_verified_at>0&&status.email_verified_at<=epoch()&&uuid.test(status.proof_id??'')))throw unavailable();
  attestations.set(account,{account,binding:captured,at:status.email_verified_at,proofId:status.proof_id});return account;
 }
+export function attestAdminPasscodeAccount(account,status){
+ const captured=binding(account,true);
+ if(status?.sessionId!==account.auth_session_id||status.publicId!==account.public_id||
+  status.adminId!==account.id||status.principalId!==account.principal_id||
+  !collectId(status.collectionId)||!Number.isSafeInteger(status.verifiedAt)||
+  status.verifiedAt<=0||status.verifiedAt>epoch()||!uuid.test(status.proofId??''))throw unavailable();
+ attestations.set(account,{account,binding:captured,at:status.verifiedAt,passcode:Object.freeze({...status})});
+ return account;
+}
 function current(subject){
  const proof=subject&&attestations.get(subject);if(!proof)return null;
- if(!fields.every(key=>proof.account[key]===proof.binding[key]))return null;
+ if(!Object.keys(proof.binding).every(key=>proof.account[key]===proof.binding[key]))return null;
  if(subject!==proof.account&&(subject.surface!=='admin'||subject.userId!==proof.binding.principal_id||subject.sessionId!==proof.binding.auth_session_id))return null;
  return proof;
 }
@@ -37,18 +47,25 @@ export function bindAdminEmailActor(actor,account){
  if(!proof||actor?.surface!=='admin'||actor.userId!==account.principal_id||actor.sessionId!==account.auth_session_id)throw denied();
  attestations.set(actor,proof);return actor;
 }
-export function adminEmailVerifiedAt(subject){return current(subject)?.at??null;}
+export function adminPasscodeProof(subject){return current(subject)?.passcode??null;}
+export function adminEmailVerifiedAt(subject){const proof=current(subject);return proof?.passcode?null:proof?.at??null;}
 export function adminEmailProofId(subject){return current(subject)?.proofId??null;}
 export function hasFreshAdminEmail(subject,maxAge=300){
  const proof=current(subject),at=proof?.at,now=epoch();
  return Number.isSafeInteger(maxAge)&&maxAge>0&&maxAge<=300&&Number.isSafeInteger(at)&&at>0&&at<=now&&now-at<=maxAge;
 }
-export function requireFreshAdminEmail(subject,maxAge=300){if(!hasFreshAdminEmail(subject,maxAge))throw denied();return current(subject);}
+export function requireFreshAdminEmail(subject,maxAge=300){
+ if(!hasFreshAdminEmail(subject,maxAge)){
+  if(adminPasscodeProof(subject))throw new ApiError(403,'recent_passcode_required','Confirm your passcode to continue.');
+  throw denied();
+ }
+ return current(subject);
+}
 export function adminEmailState(account){
- if(!current(account))throw unavailable();const at=adminEmailVerifiedAt(account);
+ if(!current(account)||adminPasscodeProof(account))throw unavailable();const at=adminEmailVerifiedAt(account);
  return {contractVersion:1,sessionId:account.public_id,emailVerifiedAt:at===null?null:new Date(at*1000).toISOString()};
 }
-export function adminEmailArguments(account){binding(account);return [account.id,account.token_hash,account.origin,account.public_id];}
+export function adminEmailArguments(account){binding(account,Boolean(adminPasscodeProof(account)));return [account.id,account.token_hash,account.origin,account.public_id];}
 // The minimum remains the requested sensitive-operation policy. The SQL Admin
 // branch checks independent email proof; actual AAL and MFA evidence stay real.
 export function requestedAdminEmail(actor,minimumAssurance){

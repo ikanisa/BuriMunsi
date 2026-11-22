@@ -239,5 +239,13 @@
     },
     "change": "Require the dedicated BuriMunsi Admin host and explicit production profile for all requests.",
     "deployed": false
+  },
+  "burimunsi_phone_passcode_successor": {
+    "source_sha256s": {
+      "index.js": "18a84b4c01f6cdb14de5420ee230b9571c5d802d9de8946302eda2986eb0e53d",
+      "transport-request.js": "fcc9cc6b3c070ccd5134b0a618b814e9bce24d1bdb0a1c29e5080a58b462bf1f"
+    },
+    "change": "Admit the BuriMunsi phone-passcode session contract, retire legacy authentication, invitation, login challenge and managed token export routes, and serve the public account deletion support page directly.",
+    "deployed": false
   }
 }

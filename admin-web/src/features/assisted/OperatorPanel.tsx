@@ -1,4 +1,5 @@
 import {useEffect, useRef, useState} from 'react';
+import {verifySensitiveAccess} from '../../app/sensitive-access';
 import {useSession} from '../../session/SessionProvider';
 import type {PendingAttempt} from '../core/pendingAttempt';
 import {Button, Card, Dialog, Field} from '../../ui';
@@ -11,7 +12,7 @@ const observationLabel = (value: AssistedObservation) => value === 'observed_sen
 
 export function OperatorPanel({jobs, allowWrites, sender, onBusyChange, onRefresh}: {jobs: readonly AssistedJob[]; allowWrites: boolean; sender?: AssistedSmsSender; onBusyChange: (busy: boolean) => void; onRefresh: () => void}) {
   const session = useSession(), actor = session.user!, epoch = session.epoch;
-  const [operator] = useState(() => new AssistedOperator({allowWrites, epoch, identity: {id: actor.id, sessionId: actor.sessionId, email: actor.email, role: actor.role, permissions: actor.permissions, expiresAt: actor.expiresAt, principalId: actor.principalId!}, request: session.request, verifyFresh: session.verificationMode === 'email' ? session.recheckSensitiveEmailVerification : async () => session.isRecentSensitiveVerification(epoch, actor.id, actor.sessionId), isCurrent: () => document.visibilityState === 'visible' && session.isRecentSensitiveVerification(epoch, actor.id, actor.sessionId), sender}));
+  const [operator] = useState(() => new AssistedOperator({allowWrites, epoch, identity: {id: actor.id, sessionId: actor.sessionId, email: actor.email, role: actor.role, permissions: actor.permissions, expiresAt: actor.expiresAt, principalId: actor.principalId!}, request: session.request, verifyFresh: () => verifySensitiveAccess(session, actor), isCurrent: () => document.visibilityState === 'visible' && session.isRecentSensitiveVerification(epoch, actor.id, actor.sessionId), sender}));
   const [view, setView] = useState(() => operator.view()), [pending, setPending] = useState<PendingAttempt[] | null>(null);
   const [lookupId, setLookupId] = useState(''), [lookup, setLookup] = useState<OperatorManualLookup | null>(null);
   const [busy, setBusy] = useState(false), [message, setMessage] = useState(''), [error, setError] = useState('');

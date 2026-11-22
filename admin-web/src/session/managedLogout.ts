@@ -10,10 +10,11 @@ interface ManagedLogout {
   original: AdminUser | null;
   current: () => boolean;
   confirmAnonymous: () => Promise<boolean>;
+  confirmCookieCleared?: true;
 }
 
 /** Reconcile the original session and its retained intent before clearing local authority. */
-export async function confirmManagedLogout({request, original, current, confirmAnonymous}: ManagedLogout): Promise<void> {
+export async function confirmManagedLogout({request, original, current, confirmAnonymous, confirmCookieCleared}: ManagedLogout): Promise<void> {
   let pending = readLogoutIntents();
   const reserve = async (sessionId: string) => {
     const fingerprint = await logoutFingerprint(sessionId);
@@ -50,6 +51,12 @@ export async function confirmManagedLogout({request, original, current, confirmA
     ? await request('auth/logout', {body: {factor_id: recovery.factor_id, challenge_id: recovery.challenge_id, verification_id: recovery.verification_id}, authenticated: false, mfaRecovery: true})
     : await request('auth/logout', {body: {}, authenticated: false});
   if (!current() || result.ok !== true) throw new AdminRequestError('Sign-out was not confirmed.', {outcomeUnknown: true});
+  if (confirmCookieCleared) {
+    const body = await request('auth/session', {authenticated: false, expectedStatus: 200});
+    if (!current() || parseLogoutSessionId(body, Date.now()) !== null) {
+      throw new AdminRequestError('Sign-out was not confirmed.', {outcomeUnknown: true});
+    }
+  }
   clearLogoutIntent(fingerprint);
   // A successful exact-session logout revokes this recovery capability too.
   try {

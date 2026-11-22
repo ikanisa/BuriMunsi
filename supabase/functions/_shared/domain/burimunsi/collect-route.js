@@ -1,6 +1,7 @@
 import {verifyToken} from '../../auth-http.js';
 import {projectSession,startOtp} from '../auth.js';
 import {ApiError} from '../core.js';
+import {BURIMUNSI_PRODUCT_MODE} from '../../burimunsi-standalone.js';
 import {MANAGED_EMAIL_OTP_PATH,admitManagedEmailOtp} from './managed-email-otp.js';
 import {applicationWork,applicationWorkTuple} from '../../application-fence.js';
 import {canonicalProfile,validateDeploymentProfile,verifyDeploymentProfile} from '../../deployment-profile.js';
@@ -82,9 +83,11 @@ export function createCollectNativeRoute({profile,config,bridgeFactory,secrets,n
     const db=env?.DB,work=applicationWork(env),tuple=applicationWorkTuple(work);
     requireThat(db?.applicationWork===work&&work.kind==='http_collect'&&tuple[2]===env.BUILD_SOURCE_ID,
       'request_not_admitted',503);
+    const phonePasscodeOnly=env.BURIMUNSI_PRODUCT_MODE===BURIMUNSI_PRODUCT_MODE;
     // Only this exact route precedes managed session verification. Its separate
     // device/identity proof and durable budgets precede any privileged OTP send.
     if(url.pathname===MANAGED_EMAIL_OTP_PATH){
+      requireThat(!phonePasscodeOnly,'not_found',404);
       const {admission,email}=await admitManagedEmailOtp(request,env,{profile:selected,networkBucket});
       const data=await startOtp(env,{email,surface:'admin'},{nativeAdmission:admission});
       requireActiveNativeRequest(request);await work.assert();
@@ -106,6 +109,7 @@ export function createCollectNativeRoute({profile,config,bridgeFactory,secrets,n
     // back to PIN authority. Both modes retain the same application fence,
     // shared principal checks, collection scope and canonical ledger adapters.
     if(request.headers.get('X-BuriMunsi-Auth')==='phone_pin')return withPhonePinRequest({request,env},compose);
+    requireThat(!phonePasscodeOnly,'managed_session_required',401);
     return withManagedRequest({request,env,groupId:settings.groupId,resolveGroup,requireGroupAssertion:true},compose);
   };
   compositions.add(handler);

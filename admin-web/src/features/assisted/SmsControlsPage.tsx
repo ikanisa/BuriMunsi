@@ -25,9 +25,10 @@ export function SmsControlsPage({onVerify, allowPolicyChanges = false, allowPoli
 interface Loaded {access: SmsAccessState; history: SmsHistoryPage | null; historyError: string; policy: SmsPolicyState | null; policyError: string; detail: SmsDecisionDetail | SmsMaterializationStatus | null; detailError: string}
 function Controls({onVerify, allowPolicyChanges, allowPolicyEnabling, allowAccessChanges}: {onVerify: () => void; allowPolicyChanges: boolean; allowPolicyEnabling: boolean; allowAccessChanges: boolean}) {
   const session = useSession(), user = session.user!;
-  const {epoch, request, recheckSensitiveEmailVerification, isRecentSensitiveVerification, verificationMode} = session;
+  const {epoch, request, isRecentSensitiveVerification, verificationMode} = session;
+  const recheckProof = verificationMode === 'passcode' ? session.recheckSensitivePasscode : session.recheckSensitiveEmailVerification;
   const actorId = user.id, principalId = user.principalId!, sessionId = user.sessionId, canReadPolicy = user.permissions.includes('assisted_sms.manage');
-  const deadline = sensitiveVerificationDeadline(user, verificationMode === 'email' ? 'supabase' : 'cloudflare') ?? 0;
+  const deadline = sensitiveVerificationDeadline(user, verificationMode === 'authenticator' ? 'cloudflare' : 'supabase') ?? 0;
   const [clock, setClock] = useState(() => Date.now()), [foreground, setForeground] = useState(() => document.visibilityState === 'visible');
   const [revision, setRevision] = useState(0), [groupInput, setGroupInput] = useState(''), [group, setGroup] = useState<string | null>(null), [inputError, setInputError] = useState('');
   const [selected, setSelected] = useState<SmsHistoryItem | null>(null);
@@ -44,7 +45,7 @@ function Controls({onVerify, allowPolicyChanges, allowPolicyEnabling, allowAcces
     authorityEpoch: epoch,
     identity: {id: actorId, sessionId, email: user.email, role: user.role, permissions: user.permissions, expiresAt: user.expiresAt, principalId},
     request,
-    verifyFresh: verificationMode === 'email' ? recheckSensitiveEmailVerification : async () => isRecentSensitiveVerification(epoch, actorId, sessionId),
+    verifyFresh: async () => verificationMode === 'authenticator' ? isRecentSensitiveVerification(epoch, actorId, sessionId) : await recheckProof?.() === true,
     isCurrent: () => document.visibilityState === 'visible' && isRecentSensitiveVerification(epoch, actorId, sessionId),
   });
   const context = (): SmsPolicyContext => ({
@@ -75,7 +76,7 @@ function Controls({onVerify, allowPolicyChanges, allowPolicyEnabling, allowAcces
     const current = () => active && isRecentSensitiveVerification(epoch, actorId, sessionId);
     void (async () => {
       try {
-        if (verificationMode === 'email' && !(await recheckSensitiveEmailVerification())) throw new Error('Verify your email before continuing.');
+        if (verificationMode !== 'authenticator' && !await recheckProof?.()) throw new Error(`Verify your ${verificationMode} before continuing.`);
         if (!current()) return;
         const access = parseSmsAccess(await request('notification-operator/access', {method: 'GET', authenticated: true}), actorId, principalId);
         if (!current()) return;
@@ -108,7 +109,7 @@ function Controls({onVerify, allowPolicyChanges, allowPolicyEnabling, allowAcces
       } catch {if (current()) setResult({key, error: 'Current receipt SMS access could not be loaded.'});}
     })();
     return () => {active = false;};
-  }, [actorId, allowed, canReadPolicy, epoch, group, isRecentSensitiveVerification, key, pageCursor, principalId, recheckSensitiveEmailVerification, request, selected, sessionId, verificationMode]);
+  }, [actorId, allowed, canReadPolicy, epoch, group, isRecentSensitiveVerification, key, pageCursor, principalId, recheckProof, request, selected, sessionId, verificationMode]);
   const current = result?.key === key ? result : null;
   function searchGroup(event: FormEvent) {
     event.preventDefault(); if (busy) return; const value = groupInput.trim();
@@ -194,7 +195,7 @@ function Controls({onVerify, allowPolicyChanges, allowPolicyEnabling, allowAcces
     } finally {if (task === lifecycle.current) setBusy(false);}
   }
   return <><PageHeader title="SMS controls" subtitle="Review current receipt SMS access and group policy." actions={<Button icon="refresh" disabled={!allowed || !current || busy || reopenRequired} onClick={() => setRevision((value) => value + 1)}>Refresh</Button>} />
-    {!foreground ? <Card><p>Controls are hidden while this tab is inactive.</p></Card> : !allowed ? <Card><h2>Verification required</h2><p>{verificationMode === 'email' ? 'Verify your email to open these controls.' : 'Verify your authenticator to open these controls.'}</p><Button onClick={onVerify}>{verificationMode === 'email' ? 'Verify email' : 'Verify authenticator'}</Button></Card> : reopenRequired ? <Card><h2>Reopen SMS controls</h2><p>{actionMessage}</p>{actionError && <p role="alert">{actionError}</p>}<Button disabled={busy} onClick={() => {setReopenRequired(false); setActionMessage(''); setRevision((value) => value + 1);}}>Reopen controls</Button></Card> :
+    {!foreground ? <Card><p>Controls are hidden while this tab is inactive.</p></Card> : !allowed ? <Card><h2>Verification required</h2><p>Verify your {verificationMode} to open these controls.</p><Button onClick={onVerify}>Verify {verificationMode}</Button></Card> : reopenRequired ? <Card><h2>Reopen SMS controls</h2><p>{actionMessage}</p>{actionError && <p role="alert">{actionError}</p>}<Button disabled={busy} onClick={() => {setReopenRequired(false); setActionMessage(''); setRevision((value) => value + 1);}}>Reopen controls</Button></Card> :
       <>{!current ? <LoadingState label="Loading SMS controls" /> : 'error' in current ? <ErrorState message={current.error} onRetry={() => setRevision((value) => value + 1)} /> : <>
         {actionError && <p role="alert">{actionError}</p>}{actionMessage && <p role="status">{actionMessage}</p>}
         <Card><h2>Current account access</h2><p><StatusBadge tone={current.data.access.canOperate ? 'success' : 'neutral'}>{current.data.access.canOperate ? 'Operator access available' : 'Operator access unavailable'}</StatusBadge></p><p>Read access: {current.data.access.readGranted ? 'Granted' : 'Not granted'}<br />Manage access: {current.data.access.manageGranted ? 'Granted' : 'Not granted'}<br />Recorded decision revision: {current.data.access.revision}</p>{allowAccessChanges ? <>{!current.data.access.canOperate && <Button disabled={busy} onClick={() => {setAccessConfirmed(false); setConfirm('enable-access');}}>Enable my SMS access</Button>}{(current.data.access.readGranted || current.data.access.manageGranted) && <Button variant="danger" disabled={busy} onClick={() => setConfirm('disable-access')}>Remove my SMS access</Button>}</> : <p>Changes to account access are currently unavailable.</p>}</Card>

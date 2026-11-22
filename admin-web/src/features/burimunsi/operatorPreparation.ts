@@ -1,3 +1,4 @@
+import {normalizeLoginPhone} from '../../session/phonePasscode';
 import type { BuriDirectory, BuriSharedOperator } from './contracts';
 import {CAPABILITIES, validOperatorCapabilities, type OperatorCapability} from '../../../../supabase/functions/_shared/domain/burimunsi/operator-access.mjs';
 
@@ -17,16 +18,6 @@ export interface BuriApprovalDraft {
 }
 export interface BuriApprovalDraftInput {phone: string; role: string; capabilities: readonly string[]; active: boolean;}
 function fail(message: string): never {throw new Error(message);}
-function loginPhone(value: string): string {
-  if (value.length > 40 || !/^[+0-9 ()-]+$/.test(value)) return fail('Enter a Rwanda login phone number.');
-  let phone = value.trim().replace(/[ ()-]/g, '');
-  if (phone.startsWith('00')) phone = `+${phone.slice(2)}`;
-  if (/^0\d{9}$/.test(phone)) phone = `+250${phone.slice(1)}`;
-  else if (/^\d{9}$/.test(phone)) phone = `+250${phone}`;
-  else if (/^250\d{9}$/.test(phone)) phone = `+${phone}`;
-  if (!/^\+2507[2389]\d{7}$/.test(phone)) return fail('Enter a Rwanda login phone number.');
-  return phone;
-}
 
 /** Prepare a preview only. It does not create a request, retain data, or send it. */
 export function prepareBuriApproval(directory: BuriDirectory, principalId: string, input: BuriApprovalDraftInput): BuriApprovalDraft {
@@ -44,5 +35,5 @@ export function prepareBuriApproval(directory: BuriDirectory, principalId: strin
   if (!validOperatorCapabilities(input.role, input.capabilities)) return fail('Choose the permitted access for this role.');
   const expectedVersion = existing?.version ?? 0;
   if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || expectedVersion >= Number.MAX_SAFE_INTEGER) return fail('The current approval version could not be confirmed.');
-  return {collectionId: directory.collectionId, operator, phone: loginPhone(input.phone), role: input.role, capabilities: [...input.capabilities].sort(), active: input.active, expectedVersion};
+  return {collectionId: directory.collectionId, operator, phone: normalizeLoginPhone(input.phone), role: input.role, capabilities: [...input.capabilities].sort(), active: input.active, expectedVersion};
 }

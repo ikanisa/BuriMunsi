@@ -26,19 +26,19 @@ const navigation: readonly AdminNavItem[] = [
   {label: 'Privacy requests', path: '/admin/privacy-requests', section: 'Administration', icon: 'lock'},
   {label: 'Admins and staff', path: '/admin/admin-users', section: 'Administration', icon: 'users'},
   {label: 'BuriMunsi access', path: '/admin/burimunsi', section: 'Administration', icon: 'lock'},
-  {label: 'Password and security', path: '/admin/security', section: 'Administration', icon: 'settings'},
+  {label: 'Account security', path: '/admin/security', section: 'Administration', icon: 'settings'},
 ];
 
-export function makeAdminRouter(setup: {token: string; invite: boolean} | null) {
+export function makeAdminRouter() {
   return createHashRouter([
     {path: '/', element: <Navigate to="/admin" replace />},
-    ...publicSessionRoutes(setup),
+    ...publicSessionRoutes(),
     {path: '/admin', caseSensitive: true, element: <ProtectedShell navigation={navigation} />, children: workspaceRoutes},
     {path: '*', element: <UnavailablePage title="Page unavailable" />},
   ]);
 }
 
-export function AdminApp({setup}: {setup: {token: string; invite: boolean} | null}) {
-  const router = useMemo(() => makeAdminRouter(setup), [setup]);
+export function AdminApp() {
+  const router = useMemo(() => makeAdminRouter(), []);
   return <RouterProvider router={router} />;
 }

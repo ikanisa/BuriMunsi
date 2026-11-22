@@ -1,69 +1,145 @@
 import {fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {describe, expect, it, vi} from 'vitest';
 import {LoginPage} from '../../src/session/LoginPage';
-import {SessionProvider} from '../../src/session/SessionProvider';
+import {AdminSessionController, SessionProvider} from '../../src/session/SessionProvider';
 
 const publishableKey = 'sb_publishable_' + 'a'.repeat(32);
 const csrf = 'c'.repeat(64);
-const account = {id: 'operator-one', email: 'a@example.com', role: 'staff', sessionId: 'session-one', permissions: ['overview.read'], assuranceLevel: 1, mfaAt: null, financialModel: 'canonical_evidence_ledger'};
-const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), {status, headers: {'Content-Type': 'application/json'}});
+const account = {id: 'operator-one', email: 'operator@example.test', role: 'admin', sessionId: 'session-one',
+  permissions: ['overview.read'], principalId: 'principal-one', assuranceLevel: 1, mfaAt: null,
+  authMethod: 'phone_passcode', phone: '+250780000001', financialModel: 'canonical_evidence_ledger'};
+const reply = (body: unknown, status = 200) => Response.json(body, {status});
+const anonymous = () => reply({user: null, expiresAt: null, csrfToken: null, ownerEmail: null});
+const signedIn = (user = account) => reply({user: {...user, passcodeVerifiedAt: new Date(Date.now() - 1000).toISOString()},
+  expiresAt: new Date(Date.now() + 3_600_000).toISOString(), csrfToken: csrf, ownerEmail: null});
 
-describe('email sign-in', () => {
-  it('shows an initial session error and requires a fresh check before sign-in', async () => {
+function openLogin(fetchImpl: typeof fetch, challenge = vi.fn()) {
+  const onSignedIn = vi.fn();
+  render(<SessionProvider config={{backend: 'supabase', phonePasscodeOnly: true, publishableKey,
+    captchaEnabled: true, googleEnabled: true, acquireCaptcha: challenge, fetchImpl}}>
+    <LoginPage onSignedIn={onSignedIn} />
+  </SessionProvider>);
+  return onSignedIn;
+}
+
+function submit() {
+  fireEvent.change(screen.getByLabelText('Mobile number'), {target: {value: '0780 000 001'}});
+  fireEvent.change(screen.getByLabelText('Four-digit passcode'), {target: {value: '0123'}});
+  fireEvent.click(screen.getByRole('button', {name: 'Sign in'}));
+}
+
+describe('BuriMunsi phone and passcode sign-in', () => {
+  it('requires session readback after an initial connection failure', async () => {
     let calls = 0;
-    const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {
-      if (String(url).endsWith('/auth/session') && ++calls === 1) throw new TypeError('offline');
-      return reply({user: null, expiresAt: null, csrfToken: null});
+    const fetchImpl = vi.fn(async () => {
+      if (++calls === 1) throw new TypeError('offline');
+      return anonymous();
     });
-    render(<SessionProvider config={{backend: 'supabase', publishableKey, captchaEnabled: false, googleEnabled: false, fetchImpl}}><LoginPage onSignedIn={() => undefined} onForgotPassword={() => undefined} /></SessionProvider>);
+    openLogin(fetchImpl);
     const check = await screen.findByRole('button', {name: 'Check session'});
-    expect(screen.getByLabelText('Email')).toBeDisabled();
+    expect(screen.getByLabelText('Mobile number')).toBeDisabled();
     expect(screen.getByText(/workspace could not be reached/i)).toBeInTheDocument();
     fireEvent.click(check);
-    expect(await screen.findByRole('button', {name: 'Send sign-in code'})).toBeInTheDocument();
-    expect(screen.getByLabelText('Email')).toBeEnabled();
+    expect(await screen.findByRole('button', {name: 'Sign in'})).toBeInTheDocument();
+    expect(screen.getByLabelText('Mobile number')).toBeEnabled();
     expect(calls).toBe(2);
   });
 
-  it('requests a real challenge, verifies it once and confirms the cookie session', async () => {
-    let signedIn = false;
-    const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
-    const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {
-      const path = String(url);
-      if (path.endsWith('/auth/session')) return signedIn ? reply({user: account, expiresAt, csrfToken: csrf}) : reply({user: null, expiresAt: null, csrfToken: null});
-      if (path.endsWith('/auth/otp')) return reply({challenge_id: 'challenge-123', retry_after: 60, expires_in: 300, delivery_status: 'accepted'});
-      if (path.endsWith('/auth/verify')) {signedIn = true; return reply({user: account, expiresAt, csrfToken: csrf});}
-      if (path.endsWith('/auth/email-verification')) return reply({contractVersion: 1, sessionId: 'session-one', emailVerifiedAt: null});
-      return reply({error: {code: 'not_found'}}, 404);
+  it('sends only the normalized phone and passcode once, then confirms the exact cookie session', async () => {
+    let authenticated = false;
+    const challenge = vi.fn();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/auth/session')) return authenticated ? signedIn() : anonymous();
+      expect(path).toBe('/api/admin/auth/phone-passcode');
+      expect(JSON.parse(String(init?.body))).toEqual({phone: '+250780000001', pin: '0123'});
+      expect(init?.credentials).toBe('same-origin');
+      authenticated = true;
+      return signedIn();
     });
-    const onSignedIn = vi.fn();
-    render(<SessionProvider config={{backend: 'supabase', publishableKey, captchaEnabled: false, googleEnabled: false, fetchImpl}}><LoginPage onSignedIn={onSignedIn} onForgotPassword={() => undefined} /></SessionProvider>);
+    const onSignedIn = openLogin(fetchImpl, challenge);
     await waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
-    fireEvent.change(screen.getByLabelText('Email'), {target: {value: 'a@example.com'}});
-    fireEvent.click(screen.getByRole('button', {name: 'Send sign-in code'}));
-    const code = await screen.findByLabelText('6-digit code');
-    fireEvent.change(code, {target: {value: '123456'}});
-    fireEvent.click(screen.getByRole('button', {name: 'Verify and sign in'}));
-    await waitFor(() => expect(onSignedIn).toHaveBeenCalled());
-    expect(fetchImpl.mock.calls.filter(([url]) => String(url).endsWith('/auth/verify'))).toHaveLength(1);
-    expect(fetchImpl.mock.calls.filter(([url]) => String(url).endsWith('/auth/email-verification'))).toHaveLength(1);
+    expect(screen.getByLabelText('Four-digit passcode')).toHaveAttribute('type', 'password');
+    expect(screen.queryByLabelText('Email')).toBeNull();
+    expect(screen.queryByText(/google|reset your password|send.*code/i)).toBeNull();
+    submit();
+    await waitFor(() => expect(onSignedIn).toHaveBeenCalledOnce());
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      '/api/admin/auth/session', '/api/admin/auth/phone-passcode', '/api/admin/auth/session',
+    ]);
+    expect(challenge).not.toHaveBeenCalled();
   });
 
-  it('does not resubmit an OTP verification after a lost response', async () => {
-    const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {
-      const path = String(url);
-      if (path.endsWith('/auth/session')) return reply({user: null, expiresAt: null, csrfToken: null});
-      if (path.endsWith('/auth/otp')) return reply({challenge_id: 'challenge-123', retry_after: 60, expires_in: 300, delivery_status: 'accepted'});
-      if (path.endsWith('/auth/verify')) throw new TypeError('connection lost');
-      return reply({error: {code: 'not_found'}}, 404);
+  it('never resubmits a lost sign-in request while the operator checks the session', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/auth/session')) return anonymous();
+      throw new TypeError('connection lost');
     });
-    render(<SessionProvider config={{backend: 'supabase', publishableKey, captchaEnabled: false, googleEnabled: false, fetchImpl}}><LoginPage onSignedIn={() => undefined} onForgotPassword={() => undefined} /></SessionProvider>);
+    openLogin(fetchImpl);
     await waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
-    fireEvent.change(screen.getByLabelText('Email'), {target: {value: 'a@example.com'}});
-    fireEvent.click(screen.getByRole('button', {name: 'Send sign-in code'}));
-    fireEvent.change(await screen.findByLabelText('6-digit code'), {target: {value: '123456'}});
-    fireEvent.click(screen.getByRole('button', {name: 'Verify and sign in'}));
+    submit();
+    fireEvent.click(await screen.findByRole('button', {name: 'Check session'}));
+    await screen.findByRole('button', {name: 'Sign in'});
+    expect(fetchImpl.mock.calls.filter(([url]) => String(url).endsWith('/auth/phone-passcode'))).toHaveLength(1);
+    expect(screen.getByLabelText('Four-digit passcode')).toHaveValue('');
+  });
+
+  it('rejects a different cookie session after a successful sign-in response', async () => {
+    let attempted = false;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/auth/session')) return attempted ? signedIn({...account, sessionId: 'different-session'}) : anonymous();
+      attempted = true;
+      return signedIn();
+    });
+    const onSignedIn = openLogin(fetchImpl);
+    await waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    submit();
     expect(await screen.findByRole('button', {name: 'Check session'})).toBeInTheDocument();
-    expect(fetchImpl.mock.calls.filter(([url]) => String(url).endsWith('/auth/verify'))).toHaveLength(1);
+    expect(onSignedIn).not.toHaveBeenCalled();
+  });
+
+  it.each([{...account, role: 'staff'}, {...account, authMethod: 'email_otp'}])('does not restore unsupported cookie authority', async user => {
+    const fetchImpl = vi.fn(async () => signedIn(user));
+    const onSignedIn = openLogin(fetchImpl);
+    await waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
+    expect(screen.getByRole('button', {name: 'Sign in'})).toBeInTheDocument();
+    expect(onSignedIn).not.toHaveBeenCalled();
+  });
+});
+
+describe('BuriMunsi passcode verification', () => {
+  it.each([true, false])('requires independent readback of a new proof on the same session (%s)', async matches => {
+    const original = new Date(Date.now() - 310_000).toISOString();
+    const verified = new Date(Date.now() - 1000).toISOString();
+    const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
+    const fetchPaths: string[] = [];
+    let verifiedRequest = false;
+    const controller = new AdminSessionController({backend: 'supabase', phonePasscodeOnly: true, publishableKey,
+      captchaEnabled: true, googleEnabled: false, fetchImpl: async (input, init) => {
+        const path = String(input);
+        fetchPaths.push(path);
+        if (path.endsWith('/auth/session')) return reply({
+          user: {...account, passcodeVerifiedAt: verifiedRequest && matches ? verified : original},
+          expiresAt, csrfToken: csrf, ownerEmail: null,
+        });
+        expect(path).toBe('/api/admin/auth/passcode/verify');
+        expect(new Headers(init?.headers).get('X-Collect-CSRF')).toBe(csrf);
+        expect(JSON.parse(String(init?.body))).toEqual({pin: '0123'});
+        verifiedRequest = true;
+        return reply({contractVersion: 1, sessionId: account.sessionId, passcodeVerifiedAt: verified});
+      }});
+    try {
+      await controller.refresh();
+      const {epoch} = controller.getSnapshot();
+      expect(controller.isRecentSensitiveVerification(epoch, account.id, account.sessionId)).toBe(false);
+      if (matches) {
+        await controller.verifySensitivePasscode('0123');
+        expect(controller.isRecentSensitiveVerification(epoch, account.id, account.sessionId)).toBe(true);
+      } else {
+        await expect(controller.verifySensitivePasscode('0123')).rejects.toMatchObject({outcomeUnknown: true});
+        expect(controller.isRecentSensitiveVerification(epoch, account.id, account.sessionId)).toBe(false);
+      }
+      expect(fetchPaths).toEqual(['/api/admin/auth/session', '/api/admin/auth/passcode/verify', '/api/admin/auth/session']);
+    } finally {controller.stop();}
   });
 });

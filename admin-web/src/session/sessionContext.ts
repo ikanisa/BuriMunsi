@@ -18,6 +18,7 @@ export interface SessionContextValue extends SessionSnapshot {
   request: AdminRequest;
   refresh: () => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
+  signInWithPhonePasscode?: (phone: string, pin: string) => Promise<void>;
   signOut: () => Promise<void>;
   googleSignInAvailable: boolean;
   signInWithGoogle: () => Promise<void>;
@@ -30,6 +31,8 @@ export interface SessionContextValue extends SessionSnapshot {
   clearLocalSession: () => void;
   isCurrentAuthority: (epoch: number, actorId: string, sessionId: string) => boolean;
   isRecentSensitiveVerification: (epoch: number, actorId: string, sessionId: string) => boolean;
+  recheckSensitivePasscode?: () => Promise<boolean>;
+  verifySensitivePasscode?: (pin: string) => Promise<void>;
   verificationMode: VerificationMode;
   requestSensitiveEmailVerification: () => Promise<OtpReceipt>;
   verifySensitiveEmailVerification: (challengeId: string, code: string) => Promise<void>;

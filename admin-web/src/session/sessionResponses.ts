@@ -14,6 +14,10 @@ export interface AdminUser {
   mfaAvailable?: boolean;
   mfaRequired?: boolean;
   emailVerifiedAt: string | null;
+  authMethod?: 'phone_passcode';
+  passcodeVerifiedAt?: string | null;
+  displayName?: string;
+  phone?: string;
   principalId: string | null;
   financialModel: 'transaction_journals' | 'canonical_evidence_ledger';
   /** Server-attested protected owner, available only from auth/session. */
@@ -84,10 +88,37 @@ export function parseAdminUser(body: JsonObject, now = Date.now()): AdminUser {
 
 export function parseSessionUser(body: JsonObject, now: number): AdminUser {
   const user = parseAdminUser(body, now);
+  const result = body.user as JsonObject;
   const proof = parseOwnerIdentitySession(body);
   const ownerIdentity = proof && user.role === 'owner' && proof.adminId === user.id &&
     proof.principalId === user.principalId && proof.email === user.email ? proof : null;
-  return {...user, ownerIdentity};
+  return {
+    ...user, ownerIdentity,
+    ...(result.authMethod === 'phone_passcode' ? {
+      authMethod: 'phone_passcode',
+      passcodeVerifiedAt: parsePasscodeTime(result.passcodeVerifiedAt, now),
+    } : {}),
+    ...(typeof result.displayName === 'string' && result.displayName.length <= 160 && result.displayName.trim()
+      ? {displayName: result.displayName.trim()} : {}),
+    ...(typeof result.phone === 'string' && /^\+2507[2389]\d{7}$/.test(result.phone) ? {phone: result.phone} : {}),
+  };
+}
+
+function parsePasscodeTime(value: unknown, now: number): string | null {
+  if (value === null) return null;
+  if (typeof value !== 'string' || !/(?:Z|\+00:00)$/.test(value) || !Number.isFinite(Date.parse(value)) || Date.parse(value) > now + 60_000) {
+    throw new Error('Invalid passcode verification time.');
+  }
+  return value;
+}
+
+export function parsePasscodeProof(body: JsonObject, user: AdminUser, now: number): string {
+  if (Object.keys(body).length !== 3 || body.contractVersion !== 1 || body.sessionId !== user.sessionId) {
+    throw new Error('Invalid passcode verification response.');
+  }
+  const at = parsePasscodeTime(body.passcodeVerifiedAt, now);
+  if (at === null) throw new Error('Passcode verification is unavailable.');
+  return at;
 }
 
 export function parseAuthenticatorSession(body: JsonObject, now: number): AdminUser {

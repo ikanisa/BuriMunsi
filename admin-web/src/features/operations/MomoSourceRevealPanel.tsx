@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { verifySensitiveAccess } from '../../app/sensitive-access';
 import { useSession, type AdminUser, type SessionContextValue } from '../../session/SessionProvider';
+import {verificationPath} from '../../session/returnLocation';
 import { Button, Field } from '../../ui';
 import type { MomoSourceJob } from './momoContracts';
 import type { MomoExtraction } from './momoSourceActions';
@@ -51,7 +52,7 @@ function MomoSourceRevealSession({source, session, user, onCandidate}: {source: 
   };
   return <section className="momo-assignment" aria-label="Original source access"><h3>Original source</h3><p>Viewing this message records your reason and access. The message is evidence and does not by itself credit a contribution or confirm provider settlement.</p>
     {message && <p role="status">{message}</p>}
-    {needsVerification && <p><Link className="operations-link" to={`/admin/security/${session.verificationMode === 'email' ? 'verify-email' : 'authenticator'}?returnTo=%2Fadmin%2Fmomo-receipts`}>Verify identity</Link></p>}
+    {needsVerification && <p><Link className="operations-link" to={verificationPath(session.verificationMode, '/admin/momo-receipts')}>{session.verificationMode === 'passcode' ? 'Verify passcode' : 'Verify identity'}</Link></p>}
     {!content && <form className="operations-action-form" onSubmit={review}><Field label="Reason to review the original source" htmlFor="momo-source-reason"><input id="momo-source-reason" className="admin-input" value={reason} onChange={(event) => setReason(event.target.value)} minLength={8} maxLength={500} required disabled={busy || reviewReason !== null} /></Field><Button type="submit" disabled={busy || reviewReason !== null}>Review source access</Button></form>}
     {reviewReason && <section className="momo-assignment-review" aria-label="Confirm source access"><h4>Confirm source access</h4><p>Source reference: <code>{source.raw_sms_id}</code></p><p>Reason: {reviewReason}</p><p>Each access is separately recorded. There is no request status lookup for this access.</p><label><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} disabled={busy} /> I confirm this source review.</label><div className="momo-assignment-actions"><Button onClick={() => {setReviewReason(null); setConfirmed(false);}} disabled={busy}>Cancel</Button><Button variant="primary" onClick={() => void reveal()} disabled={!confirmed || busy}>View original SMS</Button></div></section>}
     {content && <section aria-label="Revealed original source"><h4>Original SMS evidence</h4><p>Sender: {content.sender}</p><pre className="operations-source-content">{content.body}</pre><Button onClick={() => setContent(null)}>Hide message</Button></section>}

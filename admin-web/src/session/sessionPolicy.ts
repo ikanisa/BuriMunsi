@@ -3,12 +3,20 @@ import type {AdminUser} from './sessionResponses';
 
 export const OTP = /^[0-9]{6}$/;
 
+export function verificationProofTime(user: AdminUser): string | null {
+  return user.authMethod === 'phone_passcode' ? user.passcodeVerifiedAt ?? null : user.emailVerifiedAt;
+}
+
 /** Earliest expiry of the server-issued proofs required by this account policy. */
 export function sensitiveVerificationDeadline(user: AdminUser, backend: AdminBackend, now = Date.now()): number | null {
   const expires = Date.parse(user.expiresAt);
   if (!Number.isFinite(now) || !Number.isFinite(expires) || expires <= now) return null;
   let verified: number;
-  if (backend === 'supabase') {
+  if (user.authMethod === 'phone_passcode') {
+    const passcode = user.passcodeVerifiedAt == null ? NaN : Date.parse(user.passcodeVerifiedAt);
+    if (!Number.isFinite(passcode) || passcode > now) return null;
+    verified = passcode;
+  } else if (backend === 'supabase') {
     if (!user.emailVerifiedAt || !/(?:Z|\+00:00)$/.test(user.emailVerifiedAt)) return null;
     const email = Date.parse(user.emailVerifiedAt); if (!Number.isFinite(email) || email > now) return null;
     verified = email;

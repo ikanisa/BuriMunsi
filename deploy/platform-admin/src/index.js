@@ -1,6 +1,7 @@
-import {renderLocalChallengeDocument} from './local-challenge.mjs';
+import {isLocalChallengePath} from './local-challenge-route.mjs';
 import {createCollectTransport} from './supabase-transport.js';
 import {verifyDeploymentProfile} from '../../../supabase/functions/_shared/deployment-profile.js';
+import {standalonePrivacySupport} from '../../../supabase/functions/_shared/burimunsi-privacy-support.js';
 import {versionedStatic} from './static-recovery.js';
 import {BURIMUNSI_ADMIN_ORIGIN, BURIMUNSI_ADMIN_PROFILE_ID} from './admin-session-realm.js';
 
@@ -64,11 +65,9 @@ export function createAdminWorker({fetchImpl = (request, init) => globalThis.fet
       } catch {
         return failure(503, 'backend_configuration_invalid', 'The workspace backend is unavailable.');
       }
-      const parent = renderLocalChallengeDocument(request, {
-        origin: BURIMUNSI_ADMIN_ORIGIN, allowedOrigins: [BURIMUNSI_ADMIN_ORIGIN],
-      });
-      if (parent) return parent;
-      if (hasRoot(url.pathname, '/.well-known')) {
+      const privacy = standalonePrivacySupport(request);
+      if (privacy) return privacy;
+      if (hasRoot(url.pathname, '/.well-known') || isLocalChallengePath(url.pathname)) {
         return failure(404, 'not_found', 'This service route is unavailable.');
       }
       if (MANAGED_ROOTS.some(root => hasRoot(url.pathname, root))) {

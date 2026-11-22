@@ -19,13 +19,10 @@ function fixture(origin = BURI) {
   return {calls, env, async handle(path = PATH, options = {}) { return worker.fetch(new Request(origin + path, options), env); }, worker};
 }
 
-test('dedicated Admin host serves the human parent before SPA or backend dispatch', async () => {
+test('dedicated Admin host retires the human parent before SPA or backend dispatch', async () => {
   const f = fixture(); const response = await f.handle();
-  assert.equal(response.status, 200);
-  const html = await response.text();
-  assert.match(html, /<title>Security verification · BuriMunsi<\/title>/);
-  assert.doesNotMatch(html, /OLD_SPA_FALLBACK/);
-  assert.equal(response.headers.get('Content-Type'), 'text/html; charset=utf-8');
+  assert.equal(response.status, 404);
+  assert.equal((await response.json()).error.code, 'not_found');
   assert.deepEqual(f.calls, {backend: 0, legacy: 0, assets: 0});
 });
 
@@ -53,21 +50,18 @@ test('profile origins are explicit, exact and bounded before the parent is serve
 });
 
 test('parent security headers permit only nonce scripts/styles and explicit loopback human handoff', async () => {
-  for (const origin of [BURI]) {
-    const f = fixture(origin), response = await f.handle(); const html = await response.text();
-    const nonce = html.match(/<script nonce="([a-f0-9]{48})">/)[1];
-    assert.equal(response.headers.get('Cache-Control'), 'private, no-store, max-age=0, no-transform');
-    for (const name of ['CDN-Cache-Control', 'Surrogate-Control']) assert.equal(response.headers.get(name), 'no-store');
-    assert.equal(response.headers.get('X-Content-Type-Options'), 'nosniff');
-    assert.equal(response.headers.get('Referrer-Policy'), 'no-referrer');
-    assert.equal(response.headers.get('Cross-Origin-Resource-Policy'), 'same-origin');
-    assert.equal(response.headers.get('Cross-Origin-Opener-Policy'), 'same-origin');
-    assert.equal(response.headers.get('X-Frame-Options'), 'DENY');
-    assert.equal(response.headers.get('Permissions-Policy'), 'loopback-network=(self), local-network=(), camera=(), microphone=(), geolocation=()');
-    assert.equal(response.headers.get('Content-Security-Policy'), `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self' http://127.0.0.1:*; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'`);
-    assert.equal(response.headers.has('Set-Cookie'), false);
-    assert.deepEqual(f.calls, {backend: 0, legacy: 0, assets: 0});
-  }
+  const response = renderLocalChallengeDocument(new Request(PROD + PATH)); const html = await response.text();
+  const nonce = html.match(/<script nonce="([a-f0-9]{48})">/)[1];
+  assert.equal(response.headers.get('Cache-Control'), 'private, no-store, max-age=0, no-transform');
+  for (const name of ['CDN-Cache-Control', 'Surrogate-Control']) assert.equal(response.headers.get(name), 'no-store');
+  assert.equal(response.headers.get('X-Content-Type-Options'), 'nosniff');
+  assert.equal(response.headers.get('Referrer-Policy'), 'no-referrer');
+  assert.equal(response.headers.get('Cross-Origin-Resource-Policy'), 'same-origin');
+  assert.equal(response.headers.get('Cross-Origin-Opener-Policy'), 'same-origin');
+  assert.equal(response.headers.get('X-Frame-Options'), 'DENY');
+  assert.equal(response.headers.get('Permissions-Policy'), 'loopback-network=(self), local-network=(), camera=(), microphone=(), geolocation=()');
+  assert.equal(response.headers.get('Content-Security-Policy'), `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self' http://127.0.0.1:*; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'`);
+  assert.equal(response.headers.has('Set-Cookie'), false);
 });
 
 test('current Admin host refuses retained suspicious parent forms without SPA fallback', async () => {
@@ -76,19 +70,20 @@ test('current Admin host refuses retained suspicious parent forms without SPA fa
     '/admin/auth/%6cocal-challenge', '/admin/auth/local%2dchallenge', '/admin//auth/local-challenge',
     '/ADMIN/AUTH/LOCAL-CHALLENGE', PATH + '%252fextra', PATH + '%zz']) {
     const response = await f.handle(path); assert.equal(response.status, 404, path);
-    assert.equal(response.headers.get('Content-Type'), 'application/json; charset=utf-8');
+    assert.equal(response.headers.get('Content-Type'), 'application/json');
   }
-  for (const suffix of ['?port=45123', '?', '#token', '#']) assert.equal((await f.handle(PATH + suffix)).status, 400);
+  for (const suffix of ['?port=45123', '?', '#token', '#']) assert.equal((await f.handle(PATH + suffix)).status, 404);
   assert.deepEqual(f.calls, {backend: 0, legacy: 0, assets: 0});
 });
 
-test('host parent method, Host and origin checks cannot acquire another authority', async () => {
-  const f = fixture();
+test('the retained renderer still guards method, Host, and origin outside dedicated production', async () => {
+  const render = init => renderLocalChallengeDocument(new Request(PROD + PATH, init));
   for (const method of ['HEAD', 'POST', 'PUT', 'DELETE', 'OPTIONS']) {
-    const response = await f.handle(PATH, {method}); assert.equal(response.status, 405); assert.equal(response.headers.get('Allow'), 'GET');
+    const response = render({method}); assert.equal(response.status, 405); assert.equal(response.headers.get('Allow'), 'GET');
   }
-  for (const [headers, status] of [[{Host: 'other.example'}, 421], [{Origin: PROD}, 403],
-    [{Origin: 'null'}, 403], [{'Sec-Fetch-Site': 'cross-site'}, 403]]) assert.equal((await f.handle(PATH, {headers})).status, status);
+  for (const [headers, status] of [[{Host: 'other.example'}, 421], [{Origin: BURI}, 403],
+    [{Origin: 'null'}, 403], [{'Sec-Fetch-Site': 'cross-site'}, 403]]) assert.equal(render({headers}).status, status);
+  const f = fixture();
   assert.equal((await f.worker.fetch(new Request(PROD + PATH), f.env)).status, 403);
   const invalid = fixture('https://admin-supabase-qa2.collect.ikanisa.com');
   assert.equal((await invalid.handle()).status, 403); assert.deepEqual(invalid.calls, {backend: 0, legacy: 0, assets: 0});
@@ -106,7 +101,7 @@ test('the BuriMunsi shell is available and legacy mode is refused', async () => 
   assert.deepEqual(legacy.calls, {backend: 0, legacy: 0, assets: 0});
 });
 
-test('the BuriMunsi host routes the challenge through its own Worker', () => {
+test('the BuriMunsi host evaluates route closures before any asset fallback', () => {
   assert.equal(config.assets.run_worker_first, true);
   assert.equal(config.vars.ADMIN_ORIGIN, BURI);
   assert.equal(config.vars.COLLECT_BACKEND, 'supabase');

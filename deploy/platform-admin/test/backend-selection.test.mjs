@@ -4,7 +4,6 @@ import {readFile, readdir} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import worker, {createAdminWorker} from '../src/index.js';
 import {SUPABASE_ORIGIN, createCollectTransport} from '../src/supabase-transport.js';
-import {renderedDocument, GATEWAY_CSP} from './fixtures/document-renderers.mjs';
 
 const config = JSON.parse(await readFile(new URL('../wrangler.burimunsi.jsonc', import.meta.url)));
 const origin = config.vars.ADMIN_ORIGIN;
@@ -54,14 +53,14 @@ test('explicit Supabase selection uses the nominated project once without touchi
 });
 
 test('Supabase entrypoint binds cold Admin reads to its configured frontend with no service fallback', async () => {
-  for (const method of ['GET', 'HEAD']) {
+  for (const [path, method] of [['/api/admin/auth/session', 'GET'], ['/api/admin/team', 'HEAD']]) {
     let calls = 0;
     const entry = createAdminWorker({fetchImpl: async upstream => {
       calls++; assert.equal(upstream.headers.get('Origin'), origin);
       assert.equal(upstream.headers.get('Cookie'), '__Host-collect_admin=fixture');
       return new Response(null, {status: 204, headers: {'Set-Cookie': cookie}});
     }});
-    const response = await entry.fetch(req('/api/admin/auth/session', {method,
+    const response = await entry.fetch(req(path, {method,
       headers: {'Sec-Fetch-Site': 'same-origin', Cookie: '__Host-burimunsi_admin_rrlduytparvsjfmegalh=fixture'},
     }), environment(supabaseEnv));
     assert.equal(response.status, 204); assert.equal(calls, 1);
@@ -134,23 +133,15 @@ test('entrypoint rejects caller authority spoofing without an upstream effect', 
   assert.equal(calls, 0);
 });
 
-test('entrypoint restores only qualified challenge and privacy documents with HEAD semantics', async () => {
-  const docs = [['/v1/security/challenge', 'challenge'],
-    ['/functions/v1/collect-api/privacy/account-deletion/', 'privacy']];
-  for (const [path, kind] of docs) {
-    const document = await renderedDocument(kind, origin);
+test('entrypoint retires both upstream challenge aliases without provider or static fallback', async () => {
+  const entry = createAdminWorker({fetchImpl: forbidden});
+  for (const path of ['/v1/security/challenge', '/functions/v1/collect-api/v1/security/challenge']) {
     for (const method of ['GET', 'HEAD']) {
-      let calls = 0;
-      const entry = createAdminWorker({fetchImpl: async () => { calls++; return document.reply({method}); }});
       const response = await entry.fetch(req(path, {method}), environment(supabaseEnv));
-      assert.equal(response.status, 200); assert.equal(response.headers.get('Content-Type'), 'text/html; charset=utf-8');
-      assert.equal(await response.text(), method === 'HEAD' ? '' : document.html); assert.equal(calls, 1);
-      if (method === 'HEAD') assert.equal(response.headers.get('Content-Security-Policy'), GATEWAY_CSP);
-      else assert.doesNotMatch(response.headers.get('Content-Security-Policy'), /(?:^|;)\s*sandbox(?:;|$)/);
+      assert.equal(response.status, 404);
+      assert.match(response.headers.get('Content-Type'), /^application\/json/);
     }
   }
-  const entry = createAdminWorker({fetchImpl: async () => new Response('<html>unqualified</html>', {headers: {'Content-Type': 'text/plain'}})});
-  assert.equal((await entry.fetch(req('/v1/security/challenge'), environment(supabaseEnv))).status, 502);
 });
 
 test('post-dispatch mutation uncertainty stays explicit and never falls back to Cloudflare', async () => {
@@ -159,7 +150,7 @@ test('post-dispatch mutation uncertainty stays explicit and never falls back to 
     calls++; assert.equal(request.headers.get('Idempotency-Key'), 'fixture-uncertain');
     return new Response('{}', {headers: {'Set-Cookie': cookie + '; Domain=.ikanisa.com'}});
   }});
-  const response = await entry.fetch(req('/api/admin/team/invite', {method: 'POST', body: '{}', headers: {Origin: origin, 'Idempotency-Key': 'fixture-uncertain'}}), environment(supabaseEnv));
+  const response = await entry.fetch(req('/api/admin/auth/phone-passcode', {method: 'POST', body: '{}', headers: {Origin: origin, 'Idempotency-Key': 'fixture-uncertain'}}), environment(supabaseEnv));
   assert.equal(response.status, 502); assert.equal(calls, 1);
   assert.deepEqual(await response.json(), {code: 'proxy_outcome_unknown', reason: 'proxy_cookie_invalid'});
 });
@@ -178,7 +169,8 @@ test('integrated transport bytes retain the recorded current source identity', a
   const files = {...provenance.request_boundary_refactor.source_sha256s,
     ...provenance.frontend_session_realm_successor.source_sha256s,
     ...provenance.burimunsi_admin_successor.source_sha256s,
-    ...provenance.standalone_admin_successor.source_sha256s};
+    ...provenance.standalone_admin_successor.source_sha256s,
+    ...provenance.burimunsi_phone_passcode_successor.source_sha256s};
   const expected = (await readdir(source))
     .filter(name => /^(?:index|admin-session-realm|supabase-transport|transport-[\w-]+)\.js$/.test(name)).sort();
   assert.deepEqual(Object.keys(files).sort(), expected);

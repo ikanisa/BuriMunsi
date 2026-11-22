@@ -4,6 +4,7 @@ import {AdminRequestError, isAdminPublishableKey, isVerificationUuid, type Admin
 const KEY = /^[A-Za-z0-9._:-]{8,200}$/;
 const CAPTCHA_PATHS = new Set(['auth/otp', 'auth/login', 'auth/forgot-password', 'auth/email/request']);
 const SESSION_AUTH_PATHS = new Set(['auth/session', 'auth/email-verification', 'auth/otp', 'auth/verify', 'auth/login', 'auth/logout', 'auth/forgot-password', 'auth/complete-password', 'auth/google/start', 'auth/google/exchange', 'auth/mfa/recover']);
+const PHONE_SESSION_PATHS = new Set(['auth/session', 'auth/phone-passcode', 'auth/passcode/verify', 'auth/logout']);
 
 function validMfaRecovery(body: JsonObject | undefined): boolean {
   return !!body && typeof body === 'object' && !Array.isArray(body) &&
@@ -45,11 +46,15 @@ export function admitRequest(config: AdminClientConfig, path: string, options: A
   if (mfaRecovery && (config.backend !== 'supabase' || method !== 'POST' || !['auth/mfa/recover', 'auth/logout'].includes(path) ||
       !validMfaRecovery(options.body) || options.idempotencyKey !== undefined || options.reviewReason !== undefined)) throw new TypeError('Invalid MFA recovery request.');
   if (path === 'auth/mfa/recover' && !mfaRecovery) throw new TypeError('MFA recovery requires the original intent.');
-  if (!authenticated && !SESSION_AUTH_PATHS.has(path)) throw new TypeError('The request requires an authenticated session.');
+  if (!authenticated && !SESSION_AUTH_PATHS.has(path) && path !== 'auth/phone-passcode') throw new TypeError('The request requires an authenticated session.');
+  if (config.phonePasscodeOnly && path.startsWith('auth/') && !PHONE_SESSION_PATHS.has(path)) {
+    throw new AdminRequestError('This sign-in action is unavailable.');
+  }
   if (!['GET', 'POST', 'PATCH'].includes(method) || (method === 'GET' && options.body !== undefined)) throw new TypeError('Invalid Admin request method.');
   if (options.idempotencyKey !== undefined && !KEY.test(options.idempotencyKey)) throw new TypeError('Invalid request reference.');
   if (options.reviewReason !== undefined && (options.reviewReason.trim().length < 8 || options.reviewReason.length > 1000 || /[\r\n]/.test(options.reviewReason))) throw new TypeError('Invalid review reason.');
-  return {target, method, mutation, authenticated, mfaRecovery, checksCredentials: path === 'auth/verify' || path === 'auth/login'};
+  return {target, method, mutation, authenticated, mfaRecovery, phonePasscodeOnly: config.phonePasscodeOnly,
+    checksCredentials: path === 'auth/verify' || path === 'auth/login' || path === 'auth/phone-passcode' || path === 'auth/passcode/verify'};
 }
 
 type AdmittedRequest = ReturnType<typeof admitRequest>;

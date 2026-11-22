@@ -131,6 +131,7 @@ test('an arbitrary env function cannot install a native composition',async()=>{
 });
 test('configured PIN login refuses foreign browser origin and query data before native auth',async()=>{
   const f=await fixture();try{
+    f.env.BURIMUNSI_PRODUCT_MODE='standalone';
     f.mount();
     for(const [query,origin,code,status] of [
       ['', 'https://unrelated.example.test', 'origin_denied', 403],
@@ -147,6 +148,20 @@ test('configured PIN login refuses foreign browser origin and query data before 
       assert.equal(response.status,status);
       assert.deepEqual(await response.json(),{contractVersion:CONTRACT_VERSION,ok:false,error:{code}});
     }
+    assert.equal(f.state.providerCalls,0);assert.equal(f.state.bridgeCalls,0);
+    assert.equal(f.state.projectionQueries.length,0);assert.equal(f.nativeState.transactions,0);
+  }finally{await f.close();}
+});
+test('standalone PIN admission rejects managed native sessions and email OTP before provider or database work',async()=>{
+  const f=await fixture();try{
+    f.env.BURIMUNSI_PRODUCT_MODE='standalone';
+    f.mount();
+    const managed=await collectNativeRoute(f.request(),f.env);
+    assert.equal(managed.status,401);assert.equal((await managed.json()).error.code,'managed_session_required');
+    const mixed=await collectNativeRoute(f.request('/session',{'X-BuriMunsi-Auth':'phone_pin'}),f.env);
+    assert.equal(mixed.status,401);assert.equal((await mixed.json()).error.code,'invalid_credentials');
+    const email=await collectNativeRoute(new Request(PROFILE.supabase_origin+'/v1/burimunsi/managed/email-otp',{method:'POST'}),f.env);
+    assert.equal(email.status,404);assert.equal((await email.json()).error.code,'not_found');
     assert.equal(f.state.providerCalls,0);assert.equal(f.state.bridgeCalls,0);
     assert.equal(f.state.projectionQueries.length,0);assert.equal(f.nativeState.transactions,0);
   }finally{await f.close();}

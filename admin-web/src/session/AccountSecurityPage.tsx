@@ -22,6 +22,16 @@ export function AccountSecurityPage({onVerify, onAuthenticator, onLicenses, onPa
   const [unknown, setUnknown] = useState(false);
   const requiresEmail = session.verificationMode === 'email';
 
+  if (session.verificationMode === 'passcode') {
+    return <>
+      <PageHeader title="Account security" subtitle="Verify your BuriMunsi account for sensitive changes." />
+      <Card className="admin-security-links">
+        <Button onClick={onVerify}>Verify passcode</Button>
+        <Button onClick={onLicenses}>Open-source licenses</Button>
+      </Card>
+    </>;
+  }
+
   function clearCredentials() {
     setCurrent('');
     setPassword('');

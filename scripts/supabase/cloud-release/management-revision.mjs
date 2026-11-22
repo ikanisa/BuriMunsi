@@ -1,6 +1,7 @@
 // Supabase Management API SQL over independent, owner-authorized transactions.
 // https://supabase.com/docs/reference/api/v1-run-a-query
 import {management, PROJECT, record, sha} from './access.mjs';
+import {body as migrationBody} from './migrations.mjs';
 import {requireRevisionSchedulerReady, requireSecretPreimages, reviseRuntime} from './revise-runtime.mjs';
 
 const identity = "SELECT session_user,current_user,current_database(),current_setting('server_version_num')::int AS version,current_setting('transaction_isolation') AS isolation,(SELECT project_ref FROM private.collect_fence_control WHERE singleton) AS project";
@@ -13,6 +14,73 @@ const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(value);
 const epoch = value => (typeof value === 'number' || typeof value === 'string' && /^\d+$/.test(value)) &&
   Number.isSafeInteger(Number(value)) && Number(value) >= 0;
+
+function literal(value) {
+  const delimiter = '$release_' + sha(value).slice(0, 24) + '$';
+  if (value.includes(delimiter)) throw Error('management_migration_delimiter_collision');
+  return delimiter + value + delimiter;
+}
+
+export function renderManagementMigration(entry, before, bound) {
+  if (!Array.isArray(before) || !before.length ||
+      before.some(row => !/^\d{14}$/.test(row.version) || !/^[a-z0-9_]+$/.test(row.name) ||
+        !digest(row.sha256) || row.entries !== 1) ||
+      !/^\d{14}$/.test(entry?.version) || !/^[a-z0-9_]+$/.test(entry?.name) ||
+      typeof entry.sql !== 'string' || sha(entry.sql) !== entry.sha256 ||
+      before.at(-1).version >= entry.version || bound?.mode !== 'fenced' ||
+      !uuid(bound.operation_id) || !epoch(bound.epoch) || !digest(bound.source_sha256)) {
+    throw Error('management_migration_preimage_invalid');
+  }
+  const historySha = sha(before.map(row => [row.version, row.name, row.sha256].join(':')).join('\n'));
+  const statements = `
+BEGIN
+  PERFORM pg_catalog.set_config('lock_timeout','5s',true);
+  PERFORM pg_catalog.set_config('statement_timeout','90s',true);
+  PERFORM pg_catalog.pg_advisory_xact_lock(7346371,11);
+  LOCK TABLE supabase_migrations.schema_migrations IN EXCLUSIVE MODE;
+  PERFORM pg_catalog.pg_advisory_xact_lock(7346371,1);
+  PERFORM pg_catalog.pg_advisory_xact_lock(7346371,2);
+  IF NOT EXISTS (
+    SELECT 1 FROM private.collect_fence_control WHERE singleton
+      AND project_ref=${literal(PROJECT)} AND mode='fenced'
+      AND operation_id=${literal(bound.operation_id)}::uuid AND epoch=${Number(bound.epoch)}
+      AND source_sha256=${literal(bound.source_sha256)} FOR UPDATE
+  ) THEN RAISE EXCEPTION 'management_migration_fence_changed'; END IF;
+  IF NOT (
+    SELECT count(*)=${before.length}
+      AND count(*) FILTER (WHERE version IS NULL OR name IS NULL OR statements[1] IS NULL
+                            OR cardinality(statements) IS DISTINCT FROM 1)=0
+      AND encode(sha256(convert_to(string_agg(version||':'||name||':'||
+        encode(sha256(convert_to(statements[1],'UTF8')),'hex'),E'\\n'
+        ORDER BY version COLLATE "C"),'UTF8')),'hex')=${literal(historySha)}
+    FROM supabase_migrations.schema_migrations
+  ) THEN RAISE EXCEPTION 'management_migration_history_changed'; END IF;
+  EXECUTE ${literal(migrationBody(entry.sql))};
+  INSERT INTO supabase_migrations.schema_migrations(version,name,statements)
+    VALUES (${literal(entry.version)},${literal(entry.name)},ARRAY[${literal(entry.sql)}]::text[]);
+END;
+`;
+  return 'DO ' + literal(statements) + ';';
+}
+
+async function applyManagementMigration(api, db, entry, {before}) {
+  const {rows: [bound]} = await db.query(fence);
+  const query = renderManagementMigration(entry, before, bound);
+  const after = [...before,{version:entry.version,name:entry.name,sha256:entry.sha256,entries:1}];
+  let requestFailure;
+  try {
+    await api('database/query', {method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({query,read_only:false})});
+  } catch (error) {
+    requestFailure = error;
+  }
+  const observed = (await db.query(history)).rows;
+  if (JSON.stringify(observed) === JSON.stringify(after)) return after;
+  if (requestFailure && JSON.stringify(observed) === JSON.stringify(before)) throw requestFailure;
+  const unknown=Error('management_migration_outcome_unconfirmed');
+  unknown.outcome='commit_requires_reconciliation';
+  throw unknown;
+}
 const transitions = new Map([
   ...['begin_quiesce', 'drain_v3', 'release_v3'].map(action => [
     `SELECT private.collect_fence_${action}($1,$2,$3)${action === 'release_v3' ? '' : ' v'}`,
@@ -84,7 +152,9 @@ const settingDigests = settings =>
 export async function reviseRuntimeViaManagement(input, {api = management, ...dependencies} = {}) {
   const {migrations = [], resumeFencedRevision, acceptAncillaryRequalification,
     expectedBefore, expectedFunctions, expectedSecretPreimages, testEvidence, smsBinding} = input;
-  if (!Array.isArray(migrations) || migrations.length !== 0 ||
+  if (!Array.isArray(migrations) || migrations.length > 1 ||
+      migrations.some(entry => !/^\d{14}_[a-z0-9_]+\.sql$/.test(entry?.file) ||
+        typeof entry.sql !== 'string' || sha(entry.sql) !== entry.sha256) ||
       resumeFencedRevision != null || acceptAncillaryRequalification ||
       expectedBefore?.mode !== 'open' || !Array.isArray(expectedFunctions) ||
       expectedSecretPreimages?.BURIMUNSI_PRODUCT_MODE !== sha('standalone') ||
@@ -94,8 +164,9 @@ export async function reviseRuntimeViaManagement(input, {api = management, ...de
   const initialSecrets = (await api('secrets')).json();
   requireSecretPreimages(expectedSecretPreimages, initialSecrets);
   const smsEnabled = initialSecrets.some(row => row.name === 'COLLECT_SMS_ENABLED' && row.value === sha('true'));
+  const applyMigration = (db, entry, state) => applyManagementMigration(api, db, entry, state);
   if (!smsEnabled && !smsBinding) {
-    return reviseRuntime(input, {...dependencies, api, open: () => openRevisionDatabase(api)});
+    return reviseRuntime(input, {...dependencies, api, applyMigration, open: () => openRevisionDatabase(api)});
   }
   if (!smsEnabled || !smsBinding || Object.keys(smsBinding).sort().join('|') !==
       'candidateApprovalSha256|gatewayReleaseSha256|previousApprovalSha256' ||
@@ -148,7 +219,7 @@ export async function reviseRuntimeViaManagement(input, {api = management, ...de
     return response;
   };
   const {save = record} = dependencies;
-  return reviseRuntime(input, {...dependencies, api: scopedApi,
+  return reviseRuntime(input, {...dependencies, api: scopedApi, applyMigration,
     async open() {
       revisionDatabase = await openRevisionDatabase(api);
       return revisionDatabase;

@@ -7,21 +7,19 @@ export const MANAGED_PRODUCTION_PROFILE_SHA256 = '55ea350d7bf9ddef3e98022952bfe1
 const privacyDocuments = new Set([
   '/privacy/account-deletion',
   '/privacy/account-deletion/',
-  '/privacy/account-deletion/assets/client.js',
   '/privacy/account-deletion/assets/style.css',
 ]);
-const privacyActions = new Set([
-  '/v1/auth/otp',
-  '/v1/auth/verify',
-  '/v1/auth/logout',
-  '/v1/privacy/email/challenge',
-  '/v1/privacy/email/verify',
-  '/v1/privacy/email/status',
-  '/v1/privacy/email/cancel',
-  '/v1/rpc/request_account_deletion_v1',
-  '/v1/rpc/get_account_deletion_request_status_v1',
-  '/v1/rpc/get_current_account_deletion_request_status_v1',
-  '/v1/rpc/get_account_deletion_review_status_v1',
+const adminAuthMethods = new Map([
+  ['/api/admin/auth/phone-passcode', 'POST'],
+  ['/api/admin/auth/session', 'GET'],
+  ['/api/admin/auth/passcode/verify', 'POST'],
+  ['/api/admin/auth/logout', 'POST'],
+]);
+const retiredAdminRoutes = new Set([
+  '/api/admin/burimunsi/access',
+  '/api/admin/team/invite',
+  '/api/admin/team/invitation-status',
+  '/api/admin/team/v2',
 ]);
 const gatewayReads = new Set(['/v1/momo/gateway/profile', '/v1/momo/gateway/status']);
 const gatewayWrites = new Set(['/v1/momo/gateway/pair', '/v1/momo/gateway/ingest', '/v1/momo/gateway/heartbeat']);
@@ -49,29 +47,27 @@ export function requireStandaloneDeployment(env) {
 }
 
 export function standalonePrivacyRoute(method, path) {
-  return ['GET', 'HEAD'].includes(method) && privacyDocuments.has(path) ||
-    method === 'POST' && privacyActions.has(path);
+  return ['GET', 'HEAD'].includes(method) && privacyDocuments.has(path);
+}
+
+export function standaloneAdminRoute(method, path) {
+  if (!path.startsWith('/api/admin/')) return false;
+  if (path === '/api/admin/auth' || path.startsWith('/api/admin/auth/')) {
+    return adminAuthMethods.has(path) && adminAuthMethods.get(path) === method;
+  }
+  if (retiredAdminRoutes.has(path) || path.startsWith('/api/admin/team/v2/') ||
+      /^\/api\/admin\/team\/[0-9a-f-]{36}\/resend$/.test(path)) return false;
+  return !(method === 'POST' && reservedAdminCreates.has(path));
 }
 
 export function standaloneHttpRoute(functionName, request) {
   const path = new URL(request.url).pathname;
   const method = request.method === 'OPTIONS' ? request.headers.get('Access-Control-Request-Method') : request.method;
-  if (functionName === 'admin-api') {
-    return path.startsWith('/api/admin/') &&
-      !(method === 'POST' && reservedAdminCreates.has(path));
-  }
+  if (functionName === 'admin-api') return standaloneAdminRoute(method, path);
   if (functionName !== 'collect-api') return false;
+  if (path === '/v1/burimunsi/managed' || path.startsWith('/v1/burimunsi/managed/')) return false;
   if (path === '/v1/burimunsi' || path.startsWith('/v1/burimunsi/')) return true;
   if (path === '/health' || gatewayReads.has(path)) return method === 'GET';
-  if (path === '/v1/security/challenge') return ['GET', 'HEAD'].includes(method);
   if (path === '/v1/rpc/get_public_runtime_config' || gatewayWrites.has(path)) return method === 'POST';
   return standalonePrivacyRoute(method, path);
-}
-
-// The retained browser portal is the sole consumer of the generic phone OTP
-// endpoint on this surface. Email verification uses its own account route.
-export function standalonePrivacyPhoneBody(path, body) {
-  if (path !== '/v1/auth/otp' && path !== '/v1/auth/verify') return true;
-  if (body?.surface !== 'member' || typeof body.phone !== 'string' || Object.hasOwn(body, 'email')) return false;
-  return path !== '/v1/auth/otp' || body.allow_registration === false && body.should_create_user === false;
 }

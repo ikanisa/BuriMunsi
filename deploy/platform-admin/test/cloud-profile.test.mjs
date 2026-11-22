@@ -62,9 +62,9 @@ test('sibling configured frontend does not gain Admin request authority',async()
   assert.equal(calls,0);
 });
 
-test('Cloud Admin human challenge renders only at its configured Admin origin without an automatic provider request',async()=>{
+test('Cloud Admin refuses the retired human challenge without contacting a provider',async()=>{
   let calls=0;const worker=createAdminWorker({fetchImpl:async()=>{calls++;throw Error('Unexpected provider');}});
   const response=await worker.fetch(request('/admin/auth/local-challenge'),env);
-  assert.equal(response.status,200);assert.match(response.headers.get('Content-Security-Policy'),/frame-ancestors 'none'/);
-  assert.match(await response.text(),/https:\/\/burimunsi-admin\.ikanisa\.com/);assert.equal(calls,0);
+  assert.equal(response.status,404);assert.equal((await response.json()).error.code,'not_found');
+  assert.equal(calls,0);
 });

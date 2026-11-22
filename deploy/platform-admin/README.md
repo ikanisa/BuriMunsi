@@ -5,10 +5,11 @@ BuriMunsi React PWA in `build/admin-web` and to the approved managed Supabase
 project. The Worker requires that origin and the exact
 `burimunsi-admin-production` profile on every entry.
 
-Browser API requests use the same origin. The Worker admits Admin APIs, the
-security challenge and the account-deletion routes. It bounds the request and
-response bodies, translates the host-only BuriMunsi session cookie for the
-Admin API, and preserves request identifiers and outcome-unknown responses.
+Browser API requests use the same origin. The Worker admits Admin APIs and
+serves public account-deletion guidance. Admin sign-in uses the BuriMunsi
+mobile number and passcode. The Worker bounds request and response bodies,
+translates the host-only BuriMunsi session cookie for the Admin API, and
+preserves request identifiers and outcome-unknown responses.
 Collect mobile association and member routes are refused at the Worker.
 
 Run `npm test` from this directory. The current integrated transport digest is

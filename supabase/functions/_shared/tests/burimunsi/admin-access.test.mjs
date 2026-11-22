@@ -17,7 +17,7 @@ import {createAdminWorker} from '../../../../../deploy/platform-admin/src/index.
 import {BURIMUNSI_ADMIN_COOKIE} from '../../../../../deploy/platform-admin/src/admin-session-realm.js';
 import {profile as managedProfile} from '../../../../../scripts/supabase/cloud-release/migrations.mjs';
 await import('../helpers/node-postgres-import.mjs');
-const {logicalRequest}=await import('../../serve.js');
+const {createHandler}=await import('../../serve.js');
 
 const ORIGIN='https://admin.native-access.example.invalid',PROJECT='https://rrlduytparvsjfmegalh.supabase.co';
 const AUTH='20000000-0000-4000-8000-000000000001',SID='20000000-0000-4000-8000-000000000002';
@@ -160,31 +160,33 @@ test('changed deployment source is not an admitted token exchange',()=>fixture(a
 test('managed session denial cannot create a new projection',()=>fixture(async({state,call})=>{state.managed=false;const {response}=await call();assert.equal(response.status,401);assert.equal(state.nativeReads,0);}));
 test('existing unrelated Admin routes keep their dispatcher',()=>fixture(async({call})=>{const {response}=await call({path:'/api/other'});assert.equal(response,null);}));
 
-test('native BFF access survives the dedicated Admin proxy and managed function URL projection',()=>fixture(async({f,env,request,token})=>{
+test('dedicated Admin proxy and standalone Edge reject the retired native BFF token export',()=>fixture(async({env,request,state})=>{
  const config = JSON.parse(await readFile(new URL(
   '../../../../../deploy/platform-admin/wrangler.burimunsi.jsonc', import.meta.url), 'utf8')).vars;
  const backendEnv = {...env, APP_ENVIRONMENT: 'production', ADMIN_ORIGIN: PROJECT,
   COLLECT_DEPLOYMENT_PROFILE: managedProfile, COLLECT_DEPLOYMENT_PROFILE_SHA256: await digest(managedProfile),
   BURIMUNSI_PRODUCT_MODE: 'standalone'};
- f.execute('UPDATE app.admin_sessions SET origin=?', config.ADMIN_ORIGIN);
- let dispatches=0;
- const proxy=createAdminWorker({fetchImpl:async upstream=>{
-  dispatches++;assert.equal(upstream.url,PROJECT+'/functions/v1/admin-api/api/admin/burimunsi/access');
-  assert.equal(upstream.headers.get('X-BuriMunsi-Device'),DEVICE);
-  assert.equal(upstream.headers.get('Cookie'), '__Host-collect_admin=' + COOKIE);
-  const logical=logicalRequest(upstream,'admin-api');
-  assert.equal(new URL(logical.url).origin,PROJECT);
-  return handleAdmin(logical,backendEnv,{});
- }});
- const native = request(), headers = new Headers(native.headers);
+ let dispatches=0, admissions=0;
+ const edge=createHandler('admin-api',()=>backendEnv,{standalone:true,reportHealth:()=>false,
+  openWork:async()=>{admissions++;throw Error('Retired route must not admit application work');}});
+ const proxy=createAdminWorker({fetchImpl:async upstream=>{dispatches++;return edge(upstream);}});
+ const native = request(), headers = new Headers(native.headers), body = await native.text();
+ const pathname = new URL(native.url).pathname;
  headers.set('Origin', config.ADMIN_ORIGIN);
+ const direct = await edge(new Request(PROJECT + '/functions/v1/admin-api' + pathname, {
+  method: native.method, headers, body,
+ }));
+ assert.equal(direct.status,404);
+ assert.deepEqual(await direct.json(),{code:'not_found'});
  headers.set('Cookie', BURIMUNSI_ADMIN_COOKIE + '=' + COOKIE);
- const browser = new Request(config.ADMIN_ORIGIN + new URL(native.url).pathname, {
-  method: native.method, headers, body: await native.text(),
+ const browser = new Request(config.ADMIN_ORIGIN + pathname, {
+  method: native.method, headers, body,
  });
  const response=await proxy.fetch(browser,{...config,ASSETS:{fetch(){throw Error('No static fallback');}}});
- assert.equal(response.status,200,await response.clone().text());assert.equal((await response.json()).accessToken,token);
- assert.equal(dispatches,1);assert.equal(response.headers.get('Pragma'),'no-cache');
+ assert.equal(response.status,404);
+ assert.deepEqual(await response.json(),{code:'proxy_route_not_allowed'});
+ assert.equal(dispatches,0);assert.equal(admissions,0);
+ assert.equal(state.authCalls,0);assert.equal(state.queries.length,0);
 }));
 
 test('native admin on its assigned receiving installation can use the managed bridge',()=>fixture(async({f,call})=>{

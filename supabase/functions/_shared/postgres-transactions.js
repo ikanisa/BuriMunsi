@@ -1,4 +1,6 @@
 import {applicationWorkTuple,fenceFailure,reserveDatabaseConnection} from './application-fence.js';
+import {adminPasscodeProof} from './domain/admin_email_policy.js';
+import {ApiError} from './domain/core.js';
 
 function setLocalLimits(tx) {
   return tx`select pg_catalog.set_config('statement_timeout','15s',true),pg_catalog.set_config('lock_timeout','5s',true)`;
@@ -7,6 +9,8 @@ function setLocalLimits(tx) {
 // Request-scoped PostgreSQL transactions share the original admission and claims.
 // The compatibility adapter translates SQL dialects and statement results.
 export class PostgresTransactions {
+  #browserPasscode = null;
+
   constructor(sql, claims = {}, work = null) {
     this.sql = sql;
     this.claims = claims;
@@ -20,6 +24,25 @@ export class PostgresTransactions {
 
   setClaims(claims) {
     this.claims = claims;
+  }
+
+  setBrowserPasscodeAccount(account) {
+    const proof = adminPasscodeProof(account);
+    if (!proof || this.applicationWork?.kind !== 'http_admin') throw new Error('browser_passcode_admission_required');
+    this.#browserPasscode = Object.freeze([proof.collectionId, account.token_hash, account.origin]);
+  }
+
+  async #applyBrowserPasscode(tx) {
+    if (this.#browserPasscode === null) return;
+    let result;
+    try {
+      result = await tx.unsafe('SELECT private.burimunsi_browser_pin_set_context($1,$2,$3) AS result', this.#browserPasscode);
+    } catch (error) {
+      if (error?.code !== '42501') throw error;
+    }
+    if (result?.[0]?.result !== true) {
+      throw new ApiError(401,'unauthenticated','Your session has ended. Sign in again.');
+    }
   }
 
   async readContext(tx, {isolation = 'repeatable read'} = {}) {
@@ -38,7 +61,12 @@ export class PostgresTransactions {
     if (mode?.transaction_read_only !== readOnly || mode?.transaction_isolation !== isolation) throw fenceFailure(null);
     await tx`set local role collect_runtime`;
     await tx`select pg_catalog.set_config('search_path','app,public,pg_catalog',true),pg_catalog.set_config('request.jwt.claims',${JSON.stringify(this.claims)},true),pg_catalog.set_config('collect.edge_verified','true',true)`;
+    if (work.kind === 'http_admin') {
+      const [id, epoch, source] = applicationWorkTuple(work);
+      await tx`select pg_catalog.set_config('collect.fence_admission_id',${id},true),pg_catalog.set_config('collect.fence_epoch',${String(epoch)},true),pg_catalog.set_config('collect.fence_source_sha256',${source},true)`;
+    }
     await setLocalLimits(tx);
+    await this.#applyBrowserPasscode(tx);
   }
 
   async context(tx, claims = this.claims) {
@@ -58,6 +86,7 @@ export class PostgresTransactions {
       throw fenceFailure(error);
     }
     await setLocalLimits(tx);
+    await this.#applyBrowserPasscode(tx);
   }
 
   transaction(fn) {

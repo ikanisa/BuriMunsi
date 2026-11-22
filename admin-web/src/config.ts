@@ -40,7 +40,7 @@ export function readAdminConfig(environment: PublicEnvironment, actualOrigin: st
   }
   return {
     backend, captchaEnabled, googleEnabled,
-    ...(backend === 'supabase' ? {publishableKey: publishableKey as string, supabaseProjectOrigin: SUPABASE_PROJECT_ORIGIN} : {}),
+    ...(backend === 'supabase' ? {phonePasscodeOnly: true, publishableKey: publishableKey as string, supabaseProjectOrigin: SUPABASE_PROJECT_ORIGIN} : {}),
     ...(captchaEnabled ? {acquireCaptcha: acquireSameOriginCaptcha, cancelCaptcha: cancelSameOriginCaptcha} : {}),
   };
 }

@@ -6,6 +6,7 @@ import {InvitationRecoveryPanel, TeamManager} from './ManagedTeamPanel';
 import type {TeamMutationContext} from './managedTeamMutations';
 import {sensitiveVerificationDeadline, useSession, type AdminUser, type SessionContextValue} from './SessionProvider';
 import {authorityKey} from './sessionAuthority';
+import {verificationProofTime} from './sessionPolicy';
 import {invitationStatus, parseTeam, teamDirectoryPath, type Team} from './teamDirectory';
 import {isLegacyTeamOwner, isTeamManager} from './teamPolicy';
 import './auth.css';
@@ -28,7 +29,7 @@ export function TeamPage(props: TeamPageProps) {
   const session = useSession(), actor = session.user, mode = session.verificationMode;
   const [deadlineTick, setDeadlineTick] = useState(0);
   const expiry = actor ? Date.parse(actor.expiresAt) : null;
-  const proofDeadline = actor ? sensitiveVerificationDeadline(actor, mode === 'email' ? 'supabase' : 'cloudflare') : null;
+  const proofDeadline = actor ? sensitiveVerificationDeadline(actor, mode === 'authenticator' ? 'cloudflare' : 'supabase') : null;
   useEffect(() => {
     const now = Date.now();
     const future = [expiry, proofDeadline].filter((value): value is number => value !== null && value >= now);
@@ -40,7 +41,7 @@ export function TeamPage(props: TeamPageProps) {
     return <ErrorState title="Access unavailable" message="Your account cannot view team access." />;
   }
   const fresh = hasCurrentTeamVerification(session, actor);
-  const scope = JSON.stringify([session.epoch, authorityKey(actor), actor.expiresAt, actor.emailVerifiedAt, mode,
+  const scope = JSON.stringify([session.epoch, authorityKey(actor), actor.expiresAt, verificationProofTime(actor), mode,
     fresh, props.managedInvitationVersion, props.allowMutations, props.allowRecovery, props.cloudflareRecoveryVersion]);
   return <TeamWorkspace key={scope} actor={actor} session={session} fresh={fresh} {...props} />;
 }
@@ -52,20 +53,20 @@ const accessStatus = {
   revoked: {label: 'Access removed', tone: 'neutral'},
 } as const;
 
-function TeamDirectoryCard({team, changesUnavailable}: {team: Team; changesUnavailable: boolean}) {
+function TeamDirectoryCard({team, changesUnavailable, showInvitations}: {team: Team; changesUnavailable: boolean; showInvitations: boolean}) {
   return <Card className="admin-security-card">
     <h2>Team members</h2>
     {changesUnavailable && <p>Team access changes are currently unavailable.</p>}
     {team.members.length === 0 ? <EmptyState title="No team members" /> :
       <div className="admin-table-wrap"><table className="admin-table">
-        <thead><tr><th scope="col">Account</th><th scope="col">Role</th><th scope="col">Status</th><th scope="col">Invitation</th></tr></thead>
+        <thead><tr><th scope="col">Account</th><th scope="col">Role</th><th scope="col">Status</th>{showInvitations && <th scope="col">Invitation</th>}</tr></thead>
         <tbody>{team.members.map(member => {
           const status = accessStatus[member.status];
           return <tr key={member.id}>
             <td><strong>{member.displayName || member.publicId || member.email}</strong><br /><span>{member.email}</span></td>
             <td>{roleNames[member.role]}</td>
             <td><StatusBadge tone={status.tone}>{status.label}</StatusBadge></td>
-            <td>{invitationStatus(member.emailStatus, member.invitationKind) ?? '—'}</td>
+            {showInvitations && <td>{invitationStatus(member.emailStatus, member.invitationKind) ?? '—'}</td>}
           </tr>;
         })}</tbody>
       </table></div>}
@@ -143,7 +144,7 @@ function TeamWorkspace({
     {displayed === null && <LoadingState label="Loading team access" />}
     {displayed?.error && <ErrorState title="Team access unavailable" message={displayed.error} onRetry={refresh} />}
     {team && <>
-      <TeamDirectoryCard team={team} changesUnavailable={team.canManage && (usesEmail ? !managedWrites :
+      <TeamDirectoryCard team={team} showInvitations={verificationMode !== 'passcode'} changesUnavailable={team.canManage && (usesEmail ? !managedWrites :
         !allowMutations || cloudflareRecoveryVersion !== 1)} />
       {managedWrites && <TeamManager context={managedContext} team={team} onChanged={resolved} />}
       {allowRecovery && fresh && team.canRecoverInvitations && <InvitationRecoveryPanel context={managedContext} onResolved={resolved} />}

@@ -65,27 +65,10 @@ def configuration(env: dict[str, str], root: Path) -> tuple[dict, dict]:
         raise ValueError("BuriMunsi Admin requires its own same-origin transport")
     defines = {**frontend, "COLLECT_BACKEND": "supabase", "APP_ENVIRONMENT": "production",
                **public_profile_defines(env)}
-    captcha = env.get("AUTH_CAPTCHA_ENABLED", "false")
-    if captcha not in ("true", "false"):
-        raise ValueError("AUTH_CAPTCHA_ENABLED must be true or false")
-    provider = env.get("AUTH_CAPTCHA_PROVIDER", "turnstile" if captcha == "true" else "")
-    site_key = env.get("AUTH_CAPTCHA_SITE_KEY", "")
-    # Disabled CAPTCHA has no active provider or site key. Do not serialize
-    # stale configuration values into the public compiler input.
-    if captcha == "false":
-        provider, site_key = "", ""
-    if captcha == "true" and (provider != "turnstile" or not re.fullmatch(r"[A-Za-z0-9_-]{10,200}", site_key)):
-        raise ValueError("Enabled CAPTCHA requires Turnstile and its public site key")
-    # These documented public dummy keys do not qualify production protection.
-    if site_key in {
-            "1x00000000000000000000AA", "2x00000000000000000000AB",
-            "1x00000000000000000000BB", "2x00000000000000000000BB",
-            "3x00000000000000000000FF"}:
-        raise ValueError("Production Admin builds cannot use a public CAPTCHA test key")
-    defines.update({"AUTH_CAPTCHA_ENABLED": captcha, "AUTH_CAPTCHA_PROVIDER": provider,
-                    "AUTH_CAPTCHA_SITE_KEY": site_key})
+    defines.update({"AUTH_CAPTCHA_ENABLED": "false", "AUTH_CAPTCHA_PROVIDER": "",
+                    "AUTH_CAPTCHA_SITE_KEY": ""})
     if env.get("GOOGLE_AUTH_ENABLED", "false") != "false":
-        raise ValueError("BuriMunsi Admin uses the approved email sign-in flow")
+        raise ValueError("BuriMunsi Admin uses mobile number and passcode")
     defines["GOOGLE_AUTH_ENABLED"] = "false"
     key = env.get("SUPABASE_PUBLISHABLE_KEY", "")
     project = origin(env.get("SUPABASE_URL", PROJECT_ORIGIN))
@@ -106,7 +89,7 @@ def configuration(env: dict[str, str], root: Path) -> tuple[dict, dict]:
         "financial_model": "canonical_evidence_ledger",
         "financial_contract_version": 2,
         "provider_settlement_available": False,
-        "authentication": "supabase_auth_cookie_with_email_verification",
+        "authentication": "burimunsi_phone_passcode_cookie",
         "data_strategy": "preserve_existing_source",
         "legacy_data_import_required": True,
         "minimum_core_schema_migration": BASELINE,

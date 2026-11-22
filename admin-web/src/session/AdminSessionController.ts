@@ -10,7 +10,8 @@ import {OTP, sensitiveVerificationDeadline} from './sessionPolicy';
 import {MANAGED_MFA_TRANSITION_QUALIFIED} from './mfaQualification';
 import type {PasswordChangeOutcome, SessionSnapshot} from './sessionContext';
 import {readAdminSession, readSessionEmailProof, type SessionReadback} from './sessionReadback';
-import type {AdminUser} from './sessionResponses';
+import {parsePasscodeProof, type AdminUser} from './sessionResponses';
+import {PASSCODE} from './phonePasscode';
 import {LOGOUT_INTENT_PREFIX, readLogoutIntents} from './logoutIntent';
 import {readMfaRecoveryIntent, type MfaRecoveryIntent} from './mfaRecovery';
 import {MFA_TRANSITION_PREFIX} from './mfaTransition';
@@ -209,6 +210,7 @@ export class AdminSessionController {
   readonly cancelGoogleSignIn = this.signInFlow.cancelGoogleSignIn;
   readonly signInWithGoogle = this.signInFlow.signInWithGoogle;
   readonly signIn = this.signInFlow.signIn;
+  readonly signInWithPhonePasscode = this.signInFlow.signInWithPhonePasscode;
   readonly requestEmailOtp = this.signInFlow.requestEmailOtp;
   readonly verifyEmailOtp = this.signInFlow.verifyEmailOtp;
   readonly requestPasswordReset = this.signInFlow.requestPasswordReset;
@@ -284,6 +286,11 @@ export class AdminSessionController {
         await this.confirmedAnonymous();
         return false;
       }
+      if (this.config.phonePasscodeOnly && (user.authMethod !== 'phone_passcode' || user.role === 'staff' || !session.csrfToken)) {
+        if (readback) throw new AdminRequestError(readback.message, {outcomeUnknown: true});
+        await this.confirmedAnonymous(current);
+        return false;
+      }
       // Apply the exchange identity before exposing the session or rebinding
       // the saved requests associated with the previous browser authority.
       if (readback && !readback.matches(user)) throw new AdminRequestError(readback.message, {outcomeUnknown: true});
@@ -296,7 +303,7 @@ export class AdminSessionController {
         this.stopTimers();
         this.emit('loading');
       }
-      if (this.config.backend === 'supabase') {
+      if (this.config.backend === 'supabase' && !this.config.phonePasscodeOnly) {
         const verifiedAt = await readSessionEmailProof(this.api.request, user, current);
         if (!current()) return false;
         user = {...user, emailVerifiedAt: this.emailVerification.sessionProof(verifiedAt)};
@@ -353,6 +360,7 @@ export class AdminSessionController {
         original,
         current,
         confirmAnonymous: () => this.confirmedAnonymous(current),
+        confirmCookieCleared: this.config.phonePasscodeOnly,
       });
     } catch (failure) {
       if (current()) this.emit('error', LOGOUT_UNCONFIRMED, true);
@@ -377,6 +385,40 @@ export class AdminSessionController {
     if (!this.isCurrentAuthority(epoch, actorId, sessionId) || !this.user) return false;
     const now = Date.now(), deadline = sensitiveVerificationDeadline(this.user, this.config.backend, now);
     return deadline !== null && deadline >= now;
+  };
+
+  readonly recheckSensitivePasscode = async (): Promise<boolean> => {
+    const actor = this.user, epoch = this.epoch;
+    if (!actor || actor.authMethod !== 'phone_passcode' || !this.isCurrentAuthority(epoch, actor.id, actor.sessionId)) return false;
+    const key = authorityKey(actor);
+    const current = () => this.isCurrentAuthority(epoch, actor.id, actor.sessionId);
+    return await this.restoreSession({
+      isCurrent: current,
+      matches: candidate => authorityKey(candidate) === key,
+      message: 'Your session changed. Open this page again.',
+    }) && this.isRecentSensitiveVerification(epoch, actor.id, actor.sessionId);
+  };
+
+  readonly verifySensitivePasscode = async (pin: string): Promise<void> => {
+    const actor = this.user, epoch = this.epoch;
+    if (!actor || actor.authMethod !== 'phone_passcode' || !PASSCODE.test(pin)) {
+      throw new AdminRequestError('Enter your four-digit passcode.');
+    }
+    const key = authorityKey(actor);
+    const current = () => this.isCurrentAuthority(epoch, actor.id, actor.sessionId) && this.user !== null && authorityKey(this.user) === key;
+    if (!current()) throw new AdminRequestError('Your session changed. Open this page again.');
+    const body = await this.request('auth/passcode/verify', {body: {pin}});
+    const message = 'Passcode verification could not be confirmed. Check your session before trying again.';
+    let verifiedAt: string;
+    try {verifiedAt = parsePasscodeProof(body, actor, Date.now());}
+    catch {throw new AdminRequestError(message, {outcomeUnknown: true});}
+    if (!current() || !await this.restoreSession({
+      isCurrent: current,
+      matches: candidate => authorityKey(candidate) === key && candidate.passcodeVerifiedAt === verifiedAt,
+      message,
+    }) || !this.isRecentSensitiveVerification(epoch, actor.id, actor.sessionId)) {
+      throw new AdminRequestError(message, {outcomeUnknown: true});
+    }
   };
   readonly changePassword = async (currentPassword: string, newPassword: string): Promise<PasswordChangeOutcome> => {
     const actor = this.user;

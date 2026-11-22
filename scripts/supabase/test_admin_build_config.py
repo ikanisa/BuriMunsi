@@ -38,7 +38,7 @@ class AdminBuildConfigurationTests(unittest.TestCase):
         self.assertEqual(defines["GOOGLE_AUTH_ENABLED"], "false")
         self.assertEqual(metadata["backend"], "supabase")
         self.assertEqual(metadata["supabase_hosting"], "managed")
-        self.assertEqual(metadata["authentication"], "supabase_auth_cookie_with_email_verification")
+        self.assertEqual(metadata["authentication"], "burimunsi_phone_passcode_cookie")
         self.assertEqual(metadata["supabase_project_ref"], PROJECT_ORIGIN.split(".")[0].removeprefix("https://"))
         self.assertFalse(metadata["supabase_qualification_complete"])
         self.assertFalse(metadata["operating_actions_available"])
@@ -70,14 +70,6 @@ class AdminBuildConfigurationTests(unittest.TestCase):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 configuration(self.env | changes, self.root)
 
-    def test_public_turnstile_test_keys_are_refused(self):
-        for key in ("1x00000000000000000000AA", "2x00000000000000000000AB",
-                    "1x00000000000000000000BB", "2x00000000000000000000BB",
-                    "3x00000000000000000000FF"):
-            env = self.env | {"AUTH_CAPTCHA_ENABLED": "true", "AUTH_CAPTCHA_SITE_KEY": key}
-            with self.subTest(key=key), self.assertRaisesRegex(ValueError, "test key"):
-                configuration(env, self.root)
-
     def test_empty_or_changed_migration_cannot_reuse_identity(self):
         _, before = configuration(self.env, self.root)
         self.migration.write_text("-- changed fixture\nselect 2;\n")
@@ -103,20 +95,10 @@ class AdminBuildConfigurationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             configuration(self.env, self.root)
 
-    def test_captcha_public_configuration_is_explicit_and_validated(self):
-        defines, _ = configuration(self.env, self.root)
-        self.assertEqual(defines["AUTH_CAPTCHA_ENABLED"], "false")
-        stale = self.env | {"AUTH_CAPTCHA_PROVIDER": "turnstile", "AUTH_CAPTCHA_SITE_KEY": "1x00000000000000000000AA"}
+    def test_stale_captcha_public_configuration_cannot_enable_it(self):
+        stale = self.env | {"AUTH_CAPTCHA_ENABLED": "true", "AUTH_CAPTCHA_PROVIDER": "turnstile",
+                            "AUTH_CAPTCHA_SITE_KEY": "synthetic_public_site_key"}
         disabled, _ = configuration(stale, self.root)
+        self.assertEqual(disabled["AUTH_CAPTCHA_ENABLED"], "false")
         self.assertEqual(disabled["AUTH_CAPTCHA_PROVIDER"], "")
         self.assertEqual(disabled["AUTH_CAPTCHA_SITE_KEY"], "")
-        # Opaque syntax fixture only; no provider or release acceptance is run.
-        enabled = self.env | {"AUTH_CAPTCHA_ENABLED":"true", "AUTH_CAPTCHA_SITE_KEY":"synthetic_public_site_key"}
-        defines, _ = configuration(enabled, self.root)
-        self.assertEqual(defines["AUTH_CAPTCHA_ENABLED"], "true")
-        self.assertEqual(defines["AUTH_CAPTCHA_PROVIDER"], "turnstile")
-        self.assertEqual(defines["AUTH_CAPTCHA_SITE_KEY"], enabled["AUTH_CAPTCHA_SITE_KEY"])
-        for changes in ({"AUTH_CAPTCHA_ENABLED":"yes"}, {"AUTH_CAPTCHA_SITE_KEY":""},
-                        {"AUTH_CAPTCHA_PROVIDER":"unknown"}):
-            with self.subTest(changes=changes), self.assertRaises(ValueError):
-                configuration(enabled | changes, self.root)
