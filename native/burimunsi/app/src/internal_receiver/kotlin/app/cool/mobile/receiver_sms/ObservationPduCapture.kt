@@ -28,6 +28,7 @@ internal object ObservationPduCapture {
                 val control=config.controlState(owner);val consent=config.consent(owner)?:return@owner false
                 val profile=config.profile(owner,now)?:return@owner false
                 if(control.paused||!consent.canCapture(permitted(app))||at<=0||at>now+300_000L)return@owner false
+                if(ObservationReceivingSim.classify(app,owner,subscription)!=ObservationLegacyOwnership.Decision.UNOWNED)return@owner false
                 val evidence=PduInboxCorrelation.capture(UUID.randomUUID().toString(),owner,installation,profile,at,
                     subscription,format,senders,times,bodies,pdus)?:return@owner false
                 if(!permitted(app)||config.controlState(owner)!=control||config.consent(owner)!=consent||

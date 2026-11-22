@@ -72,7 +72,7 @@ internal object ObservationCapture {
         }}catch(_:Exception){null}
     }
     fun retain(context:Context,session:ObservationSessionOwner,profileFingerprint:String,stableSourceId:String,sender:String,body:String,mode:String,complete:Boolean,
-        serviceCentreAt:String?,inboxReceivedAt:String?,subscriptionId:Int?):Result {
+        serviceCentreAt:String?,inboxReceivedAt:String?,subscriptionId:Int?,confirmedMissingKey:String?=null):Result {
         if(BuildConfig.IS_QUALIFICATION||!BuildConfig.IS_GATEWAY||!permitted(context))return Result.UNAVAILABLE
         val rowId=stableSourceId.takeIf{Regex("inbox:[1-9][0-9]{0,18}").matches(it)}
             ?.substringAfter(':')?.toLongOrNull()?:return Result.UNAVAILABLE
@@ -88,6 +88,7 @@ internal object ObservationCapture {
             val sourceKey=ObservationSourceIdentity.inbox(installation,owner,rowId,inboxReceivedAt)
             val androidId=Settings.Secure.getString(app.contentResolver,Settings.Secure.ANDROID_ID)?:return@withObservationOwner Result.UNAVAILABLE
             val stableKey=ObservationSourceIdentity.reinstallStable(androidId,collection,rowId,inboxReceivedAt?:return@withObservationOwner Result.UNAVAILABLE)
+            if(confirmedMissingKey!=null&&confirmedMissingKey!=stableKey)return@withObservationOwner Result.UNAVAILABLE
             if(HeldRecoveryJournal.protects(app,owner,installation,Values.sha256(androidId),stableKey))
                 return@withObservationOwner Result.AMBIGUOUS
             val item=SmsObservation(UUID.randomUUID().toString(),sender,body,mode,complete,
@@ -96,9 +97,13 @@ internal object ObservationCapture {
             if(!item.valid(profile,now))return@withObservationOwner Result.UNAVAILABLE
             val journal=ObservationJournal(ObservationStateStore(app))
             val prior=journal.seen(owner,sourceKey,rowId,Values.sha256(body))
-            if(prior==null&&ObservationReplayGuard.ambiguous(app,owner,rowId))return@withObservationOwner Result.AMBIGUOUS
+            if(confirmedMissingKey!=null&&prior==null&&ObservationStateStore(app).read().seen.any{
+                it.owner.collectionId==collection&&it.owner!=owner&&it.inboxRowId==rowId&&
+                    (it.inboxReceivedAt==null||it.inboxReceivedAt==inboxReceivedAt)
+            })return@withObservationOwner Result.AMBIGUOUS
+            if(confirmedMissingKey==null&&prior==null&&ObservationReplayGuard.ambiguous(app,owner,rowId))return@withObservationOwner Result.AMBIGUOUS
             val stored=ObservationConsent.whilePermitted(consent,{permitted(app)&&!config.paused(owner)}){
-                journal.append(owner,sourceKey,rowId,item,profile,now)
+                journal.append(owner,sourceKey,rowId,item,profile,now,confirmedMissing=confirmedMissingKey!=null)
             }?:return@withObservationOwner Result.UNAVAILABLE
             // The existing inbox request remains unchanged. Optional local PDU evidence
             // attaches only to that durable identity and cannot block incomplete sync.

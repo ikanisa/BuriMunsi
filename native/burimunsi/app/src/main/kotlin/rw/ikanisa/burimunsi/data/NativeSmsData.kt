@@ -33,24 +33,20 @@ internal class NativeSmsData(
         checkContract(result==revision,"invalid_consent_response")
         return result
     }
+    fun recoverHeldObservation(observation:SmsObservation,generation:Long):Boolean {
+        val body=observationBody(observation).put("expectedConsentGeneration",generation)
+        val value=JSONObject(requestOwned(observationSession(),"POST","/sms/observations/recover-held",body))
+        val ack=ObservationAck(value.getString("requestId"),value.getString("sourceId"),value.getString("bodySha256"),
+            value.getString("status"),value.getInt("financialEffects"))
+        checkContract(value.getString("autoProcessing")=="held"&&ObservationAcknowledgement.matches(observation,ack),"invalid_observation_ack")
+        return true
+    }
     fun submitObservation(observation:SmsObservation):ObservationAck {
-        val body=JSONObject().put("requestId",observation.requestId).put("rawSender",observation.rawSender)
-            .put("rawBody",observation.rawBody).put("sourceMode",observation.sourceMode).put("complete",observation.complete)
-            .put("capturedAt",observation.capturedAt).put("serviceCentreAt",observation.serviceCentreAt?:JSONObject.NULL)
-            .put("inboxReceivedAt",observation.inboxReceivedAt?:JSONObject.NULL).put("subscriptionId",observation.subscriptionId?:JSONObject.NULL)
-        observation.sourceKey?.let{body.put("sourceKey",it)}
-        val value=JSONObject(requestOwned(observationSession(),"POST","/sms/observations",body))
+        val value=JSONObject(requestOwned(observationSession(),"POST","/sms/observations",observationBody(observation)))
         val ack=ObservationAck(value.getString("requestId"),value.getString("sourceId"),value.getString("bodySha256"),
             value.getString("status"),value.getInt("financialEffects"))
         checkContract(ObservationAcknowledgement.matches(observation,ack),"invalid_observation_ack")
         return ack
-    }
-    private fun reconciliationItem(request:ObservationReconcileRequest):JSONObject {
-        checkContract(Regex("[a-f0-9]{64}").matches(request.sourceKey)&&Regex("[a-f0-9]{64}").matches(request.bodySha256),
-            "invalid_observation_source")
-        return JSONObject().put("sourceKey",request.sourceKey).put("bodySha256",request.bodySha256)
-            .put("rawSender",request.rawSender).put("serviceCentreAt",request.serviceCentreAt?:JSONObject.NULL)
-            .put("inboxReceivedAt",request.inboxReceivedAt).put("subscriptionId",request.subscriptionId?:JSONObject.NULL)
     }
     private fun reconcileReply(key:String,row:JSONObject,latest:String?=null):ObservationReconcileReply {
         val state=row.getString("state")
@@ -73,11 +69,12 @@ internal class NativeSmsData(
         readObservationProof("POST","reconcile",reconciliationItem(request)){value->
             reconcileReply(request.sourceKey,value,value.nullString("latestRecordedSourceId"))
         }
-    fun reconcileObservations(requests:List<ObservationReconcileRequest>):List<ObservationReconcileReply> {
+    fun reconcileObservations(requests:List<ObservationReconcileRequest>,runId:String?=null):List<ObservationReconcileReply> {
         checkContract(requests.size in 1..20&&requests.map{it.sourceKey}.distinct().size==requests.size,"invalid_observation_reconciliation")
         val items=JSONArray()
         requests.forEach{items.put(reconciliationItem(it))}
         val body=JSONObject().put("items",items)
+        runId?.let{body.put("runId",Values.requestId(it))}
         checkContract(body.toString().toByteArray(Charsets.UTF_8).size<=8192,"invalid_observation_reconciliation")
         return readObservationProof("POST","reconcile-batch",body){value->
             val rows=value.getJSONArray("items")
@@ -89,6 +86,25 @@ internal class NativeSmsData(
         val count=value.getInt("recordedCount");val recorded=value.getBoolean("hasRecorded");val revision=value.getString("revision")
         checkContract(count in 0..100_000&&recorded==(count>0)&&Regex("[a-f0-9]{64}").matches(revision),"invalid_observation_reconciliation")
         ObservationReconcileStatus(value.getBoolean("hasPending"),recorded,count,revision,value.getBoolean("hasUnmatchedCanonical"))
+    }
+    fun verifiedObservationStatus(): ObservationReconcileStatus = readObservationProof("GET", "reconcile-verified-status") { value ->
+        val count = value.getInt("recordedCount")
+        val recorded = value.getBoolean("hasRecorded")
+        val revision = value.getString("revision")
+        checkContract(value.getString("scope") == "verified_collection" && count in 0..100_000 &&
+            recorded == (count > 0) && Regex("[a-f0-9]{64}").matches(revision), "invalid_observation_reconciliation")
+        ObservationReconcileStatus(value.getBoolean("hasPending"), recorded, count, revision, value.getBoolean("hasUnmatchedCanonical"))
+    }
+    fun reportInboxCheck(check: ObservationInboxCheck) {
+        val body = JSONObject().put("runId", check.runId).put("expectedConsentGeneration", check.expectedConsentGeneration)
+            .put("state", check.state).put("candidateCount", check.candidateCount).put("missingCount", check.missingCount)
+            .put("pendingCount", check.pendingCount).put("phoneLatestKey", check.phoneLatestKey ?: JSONObject.NULL)
+            .put("parsedLatestKey", check.parsedLatestKey ?: JSONObject.NULL)
+            .put("collectionRevision", check.collectionRevision ?: JSONObject.NULL)
+        readObservationProof("POST", "inbox-check", body) { value ->
+            checkContract(value.getString("runId") == check.runId && value.getString("state") == check.state,
+                "invalid_observation_reconciliation")
+        }
     }
     /** A quarantine page is a distinct source stream, never a canonical SMS/payment page. */
     fun observationPage(q:String="",cursor:String?=null,limit:Int?=null):Page<ObservationListRow> {

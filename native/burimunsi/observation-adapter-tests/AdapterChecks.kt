@@ -17,9 +17,15 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Synthetic JVM-only integration checks for the real capture, scan and coordinator classes. */
-fun main() {
+fun main(args:Array<String>) {
  var checks=0
- fun test(name:String,block:()->Unit){block();checks++;println("PASS $name")}
+ val failures=mutableListOf<String>()
+ fun test(name:String,block:()->Unit){
+  try{block();checks++;println("PASS $name")}catch(failure:Throwable){
+   val line=failure.stackTrace.firstOrNull{it.fileName=="AdapterChecks.kt"}?.lineNumber
+   failures.add("$name (line $line)");println("FAIL $name (line $line)")
+  }
+ }
  val adminA=ObservationOwner("group-1","admin-1");val adminB=ObservationOwner("group-1","admin-2")
  val installation="50000000-0000-4000-8000-000000000001"
  val body="You have received 1000 RWF from EXAMPLE (*****001) at 2026-10-08 15:15:20. Balance: 2000 RWF. FT Id: 123456789."
@@ -73,6 +79,49 @@ fun main() {
    val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
    check(!result.completed&&e.repository.requests.isEmpty()&&SecureStore.data[name]==original)
    check(HeldRecoveryJournal.hasUncertain(e.context,adminA,installation,Values.sha256("1234567890abcdef")))
+  }
+ }
+ if(args.isNotEmpty()){
+  require(args.size in 2..3&&args[0]=="--emulator-sms")
+  test("Android telephony emulator inbox row survives offline capture, processing, restart and a same-identity repair") {
+   val rowData=JSONObject(java.io.File(args[1]).readText())
+   val sender=rowData.getString("address");val text=rowData.getString("body");val sub=rowData.getInt("sub_id")
+   check(sender.removePrefix("+")=="15555219877")
+   val masked=text=="You have received 1000 RWF from EXAMPLE (*****001) at 2026-11-22 15:00:00. Balance: 2000 RWF. FT Id: 987654321."
+   val full=Regex("""You have received 1000 RWF from EXAMPLE \(\+250780000001\) at \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\. Balance: 2000 RWF\. FT Id: 987654322\.""").matches(text)
+   check(masked||full)
+   val e=setup();ReceiverFixture.subscriptions=setOf(sub)
+   e.approved.put("senders",JSONArray().put(sender));ObservationConfigStore(e.context).saveProfile(adminA,e.approved,System.currentTimeMillis())
+   fun cycle(online:Boolean=true)=ObservationSyncCycle.run(e.context,online,restore={e.repository},stopped={false})
+   check(cycle().completed)
+   val id=rowData.getLong("_id");val received=rowData.getLong("date")
+   val handset=mapOf("_id" to id,"address" to sender,"body" to text,"date" to received,"date_sent" to rowData.getLong("date_sent"),"sub_id" to sub)
+   e.context.contentResolver.rows=listOf(handset);ObservationInboxRevision.changed()
+   val localStarted=System.nanoTime()
+   check(!cycle(false).completed&&pending(adminA).size==1&&e.repository.requests.isEmpty())
+   val localQueueMs=(System.nanoTime()-localStarted)/1_000_000.0
+   val original=pending(adminA).single().observation
+   check(original.rawBody==text && original.sourceKey==cloudKey(adminA,id,received))
+   val onlineStarted=System.nanoTime()
+   check(cycle().completed)
+   val adapterUploadMs=(System.nanoTime()-onlineStarted)/1_000_000.0
+   check(cycle().completed&&e.repository.requests.size==1)
+   e.repository.retainedSources.remove(original.sourceKey);e.repository.retainedSourceKeys.remove(original.sourceKey)
+   check(!cycle().completed&&pending(adminA).single().observation==original)
+   check(cycle().completed&&pending(adminA).isEmpty()&&e.repository.requests.size==2)
+   val report=e.repository.reports.last()
+   check(report.state=="verified"&&report.candidateCount==1&&report.phoneLatestKey==original.sourceKey&&report.parsedLatestKey==original.sourceKey)
+   if(args.size==3){
+    val payloads=JSONArray();e.repository.requests.forEach{payloads.put(rw.ikanisa.burimunsi.data.observationBody(it))}
+    val source=e.repository.reconciliationRequests.last()
+    val proof=JSONObject().put("type","emulator-provider-and-receiver-adapter").put("offlineRetained",1)
+     .put("candidateCount",report.candidateCount).put("simulatedServerSourceCount",e.repository.retainedSources.size)
+     .put("hostQueueRetentionMs",localQueueMs).put("hostUploadAndVerifyMs",adapterUploadMs)
+     .put("handset",rowData).put("uploads",payloads).put("latestWitness",rw.ikanisa.burimunsi.data.reconciliationItem(source))
+     .put("phoneLatestKey",report.phoneLatestKey).put("parsedLatestKey",report.parsedLatestKey)
+     .put("runId",report.runId).put("expectedConsentGeneration",report.expectedConsentGeneration)
+    java.io.File(args[2]).writeText(proof.toString())
+   }
   }
  }
  test("capture cannot recreate an uncertain held source with a new ID for either operator"){
@@ -565,6 +614,15 @@ fun main() {
   e.context.contentResolver.rows=listOf(row(30));ObservationRecovery(e.context).scan()
   check(pending(adminA).isEmpty()&&JSONObject(cursor(e.context)!!).getLong("lastId")==0L)
   val before=cursor(e.context)
+  val expectedGateway=MomoGatewayPolicy.captureId(installation,"binding-1","M-Money",body,time,3)
+  val gap=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
+  check(!gap.completed&&gap.more&&ReceiverFixture.retainedCaptureId==expectedGateway&&e.repository.requests.isEmpty())
+  check(e.repository.reconciliationBatches.flatten().single().gatewayEnvelopeId==expectedGateway)
+  val phoneKey=cloudKey(adminA,30)
+  e.repository.retainedSources[phoneKey]="canonical-gateway-source";e.repository.parserStates["canonical-gateway-source"]="parsed"
+  val healed=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
+  check(healed.completed&&e.repository.reports.last().phoneLatestKey==phoneKey&&e.repository.requests.isEmpty())
+  check(e.repository.reconciliationRequests.single().gatewayEnvelopeId==expectedGateway&&e.repository.pageCalls==0)
   ReceiverFixture.retainedCaptureId=MomoGatewayPolicy.captureId(installation,"binding-1","M-Money",body,time,3)
   ReceiverFixture.retainedBodyHash=Values.sha256(body)
   ReceiverFixture.afterSourceLookup={ObservationConfigStore(e.context).saveConsent(adminA,ObservationConsentState(ObservationConsentRevision(false,2),true))}
@@ -698,8 +756,8 @@ fun main() {
  test("continuous failures back off finitely and successful pending work resets the delay") {
   val retry=ContinuousSyncRetry();check(retry.next(false,true)==15000L);check(retry.next(false,true)==30000L)
   repeat(8){check(retry.next(false,true)==60000L)}
-  check(retry.next(true,true)==2000L&&retry.next(true,false)==30000L&&retry.next(false,true)==15000L)
-  check(retry.next(false,true,progress=true)==2000L&&retry.next(false,true)==15000L)
+  check(retry.next(true,true)==0L&&retry.next(true,false)==30000L&&retry.next(false,true)==15000L)
+  check(retry.next(false,true,progress=true)==0L&&retry.next(false,true)==15000L)
  }
  test("an empty phone requires an authoritative empty Cloud reservation status") {
   val e=setup()
@@ -726,17 +784,83 @@ fun main() {
   ObservationStateStore.unreadable=false
   check(pending(adminA).size==1)
  }
- test("the latest exact source is checked after the complete sweep and cached only briefly") {
+ test("an acknowledged interior source missing from Cloud reuses its original durable request exactly once") {
+  val e=setup();e.context.contentResolver.rows=listOf(row(10),row(11),row(12))
+  fun cycle()=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
+  check(cycle().completed)
+  val original=e.repository.requests[1]
+  e.repository.retainedSources.remove(original.sourceKey);e.repository.retainedSourceKeys.remove(original.sourceKey)
+  val missing=cycle();check(!missing.completed && missing.more)
+  check(e.repository.reports.last().let{it.state=="incomplete"&&it.missingCount==1&&it.candidateCount==3})
+  check(pending(adminA).single().observation==original)
+  check(cycle().completed && cycle().completed)
+  check(e.repository.requests.count{it.sourceKey==original.sourceKey}==2 && e.repository.requests.last()==original)
+  check(e.repository.retainedSources.size==3 && e.repository.reports.last().runId!=e.repository.reports.first().runId)
+ }
+ test("an interior source awaiting parsing or review prevents a matching latest SMS from passing") {
+  val e=setup();e.context.contentResolver.rows=listOf(row(14),row(15))
+  fun cycle()=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
+  check(cycle().completed)
+  val older=e.repository.retainedSources.getValue(cloudKey(adminA,14))
+  for(state in listOf("pending","retrying","needs_review","conflict","historical","security","unknown")){
+   e.repository.parserStates[older]=state
+   check(!cycle().completed)
+   val report=e.repository.reports.last()
+   check(report.state=="incomplete"&&report.pendingCount==1&&report.phoneLatestKey==report.parsedLatestKey)
+  }
+  e.repository.parserStates[older]="duplicate"
+  check(cycle().completed&&e.repository.requests.size==2)
+ }
+ test("a pinned receiving SIM excludes another SIM and an unidentified subscription keeps the check open") {
+  val e=setup();e.context.contentResolver.rows=listOf(row(31));ObservationRecovery(e.context).scan()
+  ReceiverFixture.subscriptions=setOf(3,4)
+  e.context.contentResolver.rows=listOf(row(31),row(32)+("sub_id" to 4)+("date" to time+5))
+  var cycle=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
+  check(cycle.completed&&e.repository.requests.size==1&&e.repository.reports.last().candidateCount==1)
+  e.context.contentResolver.rows=e.context.contentResolver.rows+listOf(row(33)+("sub_id" to null));ObservationInboxRevision.changed()
+  cycle=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
+  check(!cycle.completed&&e.repository.requests.size==1&&e.repository.reports.last().pendingCount==1)
+ }
+ test("first authorized historical sources are automatically retained under their original consent and held for review") {
+  val e=setup();app.cool.mobile.BuildConfig.CLOUD_HOLD_EXISTING_INBOX=true
+  try{
+   e.context.contentResolver.rows=listOf(row(35))
+   val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
+   check(!result.completed&&e.repository.heldRequests.size==1&&e.repository.requests.isEmpty())
+   val key=e.repository.heldRequests.single().sourceKey!!
+   check(e.repository.parserStates[e.repository.retainedSources[key]]=="historical")
+   ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
+   check(e.repository.heldRequests.size==1&&e.repository.reports.last().pendingCount==1)
+  }finally{app.cool.mobile.BuildConfig.CLOUD_HOLD_EXISTING_INBOX=false}
+ }
+ test("an old key-only baseline starts a new held review under today's grant and never credits automatically") {
+  val e=setup();app.cool.mobile.BuildConfig.CLOUD_HOLD_EXISTING_INBOX=true
+  try{
+   e.context.contentResolver.rows=listOf(row(36));ObservationRecovery(e.context).scan()
+   SecureStore.data.keys.filter{it.startsWith("observation-held-enrollment-")}.forEach{SecureStore.data.remove(it)}
+   check(!ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false}).completed)
+   check(e.repository.heldRequests.single().sourceKey==cloudKey(adminA,36)&&e.repository.requests.isEmpty())
+   val marker=SecureStore.data.entries.single{it.key.startsWith("observation-held-admission-")}
+   check(JSONObject(marker.value).getString("basis")=="current_consent_review")
+  }finally{app.cool.mobile.BuildConfig.CLOUD_HOLD_EXISTING_INBOX=false}
+ }
+ test("known pending parser work uses bounded sub-second first retry and a completed backlog starts immediately") {
+  val retry=ContinuousSyncRetry()
+  check(retry.next(false,true,awaitingParser=true)==500L&&retry.next(false,true,awaitingParser=true)==1000L)
+  repeat(12){check(retry.next(false,true,awaitingParser=true)<=16_000L)}
+  check(retry.next(false,true,progress=true)==0L&&retry.next(false,true,awaitingParser=true)==500L)
+ }
+ test("every processing pass checks the parser and republishes current phone evidence") {
   val e=setup();android.os.SystemClock.fixed=1_000L;e.context.contentResolver.rows=listOf(row(801))
   val first=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
   check(first.completed&&e.repository.requests.size==1&&e.repository.reconciliationRequests.size==1&&pending(adminA).isEmpty())
   android.os.SystemClock.fixed=300_999L
   val cached=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
-  check(cached.completed&&e.repository.reconciliationRequests.size==1)
-  check(cached.healthProof==first.healthProof&&checkNotNull(cached.healthProof).verifiedAt==1_000L)
+  check(cached.completed&&e.repository.reconciliationRequests.size==2)
+  check(checkNotNull(cached.healthProof).verifiedAt==300_999L && e.repository.reports.count{it.state=="verified"}==2)
   android.os.SystemClock.fixed=301_000L
   val renewed=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
-  check(renewed.completed&&e.repository.reconciliationRequests.size==2)
+  check(renewed.completed&&e.repository.reconciliationRequests.size==3)
  }
  test("a receiver control cannot revive a cached reconciliation or an expired notification") {
   val e=setup();android.os.SystemClock.fixed=1_000L;e.context.contentResolver.rows=listOf(row(801))
@@ -771,22 +895,22 @@ fun main() {
   val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
   check(!result.completed&&result.more&&result.progress&&ObservationSyncDiagnostics.snapshot()!!.fence==ObservationSyncDiagnostics.Fence.RECONCILE_CHANGED)
   val next=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
-  check(!next.completed&&e.repository.requests.size==2&&pending(adminA).isEmpty()&&
-   ObservationSyncDiagnostics.snapshot()!!.fence==ObservationSyncDiagnostics.Fence.RECONCILE_ORDER_UNCERTAIN)
+  check(next.completed&&e.repository.requests.size==2&&pending(adminA).isEmpty()&&
+   e.repository.reports.last().phoneLatestKey==cloudKey(adminA,820,time+1000))
  }
  test("the phone latest uses received time and row identity even for identical messages") {
   val e=setup();e.context.contentResolver.rows=listOf(row(830)+("date" to (time+10)),row(831)+("date" to (time+10)),row(999)+("date" to (time-10)))
   val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
   val expected=ObservationSourceIdentity.reinstallStable("1234567890abcdef",adminA.collectionId,831,Instant.ofEpochMilli(time+10).toString())
-  check(!result.completed&&e.repository.reconciliationRequests.single().sourceKey==expected&&e.repository.requests.size==3&&
-   ObservationSyncDiagnostics.snapshot()!!.fence==ObservationSyncDiagnostics.Fence.RECONCILE_ORDER_UNCERTAIN)
+  check(result.completed&&e.repository.reconciliationRequests.single().sourceKey==expected&&e.repository.requests.size==3)
+  check(e.repository.reports.last().phoneLatestKey==expected&&e.repository.reports.last().parsedLatestKey==expected)
  }
  test("an inbox provider that ignores descending order cannot select an older message") {
   val e=setup();e.context.contentResolver.ignoreDescendingOrder=true
   e.context.contentResolver.rows=listOf(row(831)+("date" to (time-100)),row(830)+("date" to (time+100)))
   val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
   val expected=ObservationSourceIdentity.reinstallStable("1234567890abcdef",adminA.collectionId,830,Instant.ofEpochMilli(time+100).toString())
-  check(!result.completed&&e.repository.reconciliationRequests.single().sourceKey==expected)
+  check(result.completed&&e.repository.reconciliationRequests.single().sourceKey==expected)
  }
  test("latest lookup falls back to an unfiltered inbox without syncing unrelated senders") {
   val e=setup();e.context.contentResolver.rejectFilteredSelection=true
@@ -800,8 +924,8 @@ fun main() {
    e.context.contentResolver.rows=listOf(row(900)+("date" to (time+1000)));ObservationRecovery(e.context).scan()
    e.context.contentResolver.rows=listOf(row(900)+("date" to (time+1000)),row(901)+("date" to (time-1000)))
    val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
-   check(!result.completed&&ObservationSyncDiagnostics.snapshot()!!.fence==ObservationSyncDiagnostics.Fence.AUDIT_UNCONFIRMED)
-   check(e.repository.requests.size==1&&e.repository.reconciliationRequests.isEmpty())
+   check(!result.completed&&result.more&&e.repository.reports.last().missingCount==1)
+   check(e.repository.requests.size==1&&e.repository.heldRequests.size==1&&e.repository.reconciliationRequests.isEmpty())
   }finally{app.cool.mobile.BuildConfig.CLOUD_HOLD_EXISTING_INBOX=false}
  }
  test("an earlier unseen phone SMS is uploaded before a matching newest can complete") {
@@ -810,7 +934,7 @@ fun main() {
   e.context.contentResolver.rows=listOf(row(909)+("date" to (time-1000)),row(910)+("date" to (time+1000)))
   ObservationInboxRevision.changed()
   val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
-  check(!result.completed&&e.repository.requests.size==2&&e.repository.requests[1].inboxReceivedAt==Instant.ofEpochMilli(time-1000).toString())
+  check(result.completed&&e.repository.requests.size==2&&e.repository.requests[1].inboxReceivedAt==Instant.ofEpochMilli(time-1000).toString())
   check(pending(adminA).isEmpty())
  }
  test("an earlier backfill is audited without assuming server retention order is phone chronology") {
@@ -820,8 +944,8 @@ fun main() {
   e.context.contentResolver.rows=listOf(row(914)+("date" to (time-1000)),row(915)+("date" to (time+1000)))
   ObservationInboxRevision.changed()
   val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
-  check(!result.completed&&pending(adminA).isEmpty()&&e.repository.requests.size==2&&e.repository.reconciliationRequests.size==2)
-  check(ObservationSyncDiagnostics.snapshot()!!.fence==ObservationSyncDiagnostics.Fence.RECONCILE_ORDER_UNCERTAIN)
+  check(result.completed&&pending(adminA).isEmpty()&&e.repository.requests.size==2&&e.repository.reconciliationRequests.size==2)
+  check(e.repository.reports.last().phoneLatestKey==e.repository.reports.last().parsedLatestKey)
  }
  test("missing Cloud evidence never recreates an acknowledged SMS; order alone does not imply a gap") {
   for(kind in listOf("missing","order")){
@@ -832,8 +956,8 @@ fun main() {
     else ObservationReconcileReply(key,"matched","source-1","source-other")
    android.os.SystemClock.fixed=301_001L
    val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
-   check(!result.completed&&e.repository.requests.size==1&&pending(adminA).isEmpty())
-   check(ObservationSyncDiagnostics.snapshot()!!.fence==if(kind=="missing")ObservationSyncDiagnostics.Fence.RECONCILE_MISSING else ObservationSyncDiagnostics.Fence.RECONCILE_ORDER_UNCERTAIN)
+   check(result.completed==(kind=="order")&&e.repository.requests.size==1&&pending(adminA).isEmpty())
+   if(kind=="missing")check(ObservationSyncDiagnostics.snapshot()!!.fence==ObservationSyncDiagnostics.Fence.RECONCILE_MISSING)
   }
  }
  test("a changed owner or revoked permission after the Cloud response cannot confirm sync") {
@@ -859,7 +983,7 @@ fun main() {
  test("a healthy bounded sweep continues quickly without claiming completion") {
   val e=setup();e.context.contentResolver.rows=(1L..210L).map{row(it)}
   val first=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
-  check(!first.completed&&first.more&&first.progress&&ContinuousSyncRetry().next(first.completed,first.more,first.progress)==2_000L)
+  check(!first.completed&&first.more&&first.progress&&ContinuousSyncRetry().next(first.completed,first.more,first.progress)==0L)
   var completed=first
   repeat(20){if(!completed.completed)completed=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})}
   check(completed.completed&&pending(adminA).isEmpty()&&e.repository.requests.size==210)
@@ -960,13 +1084,13 @@ fun main() {
   val second=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
   check(second.completed&&e.repository.reconciliationRequests.size==2)
  }
- test("a completed large audit is reused until inbox revision changes") {
+ test("a completed large audit rechecks every source on the next logical run") {
   val e=setup();e.context.contentResolver.rows=(1L..210L).map{row(it)}
   var result=ObservationCycleResult(false,false);repeat(20){if(!result.completed)result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})}
   check(result.completed&&e.repository.requests.size==210)
   val batches=e.repository.reconciliationBatches.size;val pages=e.repository.pageCalls
-  check(ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false}).completed)
-  check(e.repository.reconciliationBatches.size==batches&&e.repository.pageCalls==pages)
+  val fresh=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
+  check(!fresh.completed&&fresh.more&&e.repository.reconciliationBatches.size>batches&&e.repository.pageCalls==pages)
   e.context.contentResolver.rows=e.context.contentResolver.rows+row(211);ObservationInboxRevision.changed()
   result=ObservationCycleResult(false,false);repeat(20){if(!result.completed)result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})}
   check(result.completed&&e.repository.requests.size==211&&e.repository.reconciliationBatches.size>batches)
@@ -982,8 +1106,7 @@ fun main() {
   val store=SecureStore(e.context,heldName);val held=JSONObject(store.read()!!)
   held.getJSONArray("keys").put(oldKey);store.write(held.toString())
   val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
-  check(!result.completed&&e.repository.reconciliationRequests.size==2&&
-   ObservationSyncDiagnostics.snapshot()!!.fence==ObservationSyncDiagnostics.Fence.RECONCILE_ORDER_UNCERTAIN)
+  check(result.completed&&e.repository.reconciliationRequests.size==2&&e.repository.reports.last().state=="verified")
  }
  test("detached inbox monitoring invalidates a completed audit even if the newest SMS is unchanged") {
   val e=setup();e.context.contentResolver.rows=listOf(row(1950),row(1951))
@@ -1002,14 +1125,16 @@ fun main() {
   check(!result.completed&&e.repository.requests.size==1&&pending(adminA).isEmpty()&&
    ObservationSyncDiagnostics.snapshot()!!.fence==ObservationSyncDiagnostics.Fence.OBSERVER_UNAVAILABLE)
  }
- test("a missing evicted identity is audited but never recreated") {
+ test("a confirmed missing evicted identity is repaired with the same handset source key") {
   val e=setup();ObservationRecovery(e.context).scan()
   ObservationStateStore.value=ObservationJournalState(emptyList(),seedSeen(adminA,2L..1025L))
   e.context.contentResolver.rows=listOf(row(1),row(1025));val latest=cloudKey(adminA,1025)
   e.repository.retainedSources[latest]="source-latest";e.repository.retainedSourceKeys.add(latest)
   val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
   check(!result.completed&&e.repository.requests.isEmpty()&&e.repository.reconciliationBatches.flatten().any{it.sourceKey==cloudKey(adminA,1)})
-  check(pending(adminA).isEmpty())
+  check(pending(adminA).single().observation.sourceKey==cloudKey(adminA,1))
+  check(ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false}).completed)
+  check(e.repository.retainedSources.size==2 && e.repository.requests.size==1)
  }
  test("an owner switch cannot recreate another owner's acknowledged missing source") {
   val e=setup();check(!ObservationReplayGuard.ambiguous(e.context,adminA,1))
@@ -1081,7 +1206,7 @@ fun main() {
   e.repository.poisonSourceKeys=setOf(cloudKey(adminA,1602))
   val recovery=ObservationRecovery(e.context);recovery.resetAudit();var audit=ObservationRecovery.Audit.MORE
   repeat(5){if(audit==ObservationRecovery.Audit.MORE)audit=recovery.auditPage(e.repository)}
-  check(audit==ObservationRecovery.Audit.UNCONFIRMED&&e.repository.reconciliationBatches.size==2&&
+  check(audit==ObservationRecovery.Audit.UNCONFIRMED&&e.repository.reconciliationBatches.size>=2&&
    e.repository.reconciliationBatches.last().first().sourceKey==cloudKey(adminA,1605)&&e.repository.requests.isEmpty())
  }
  test("duplicate or missing source IDs cannot confirm an audit") {
@@ -1097,7 +1222,8 @@ fun main() {
    val recovery=ObservationRecovery(e.context)
    check(recovery.auditPage(e.repository)==ObservationRecovery.Audit.MORE)
    val audit=recovery.auditPage(e.repository)
-   check(audit==ObservationRecovery.Audit.UNCONFIRMED&&e.repository.requests.isEmpty())
+   check(audit==if(kind=="missing")ObservationRecovery.Audit.REPAIRED else ObservationRecovery.Audit.UNCONFIRMED)
+   check(e.repository.requests.isEmpty())
   }
  }
  test("permission revoked between page read and batch dispatch sends no witness") {
@@ -1301,5 +1427,6 @@ fun main() {
   check(HeldRecoveryJournal.hasRecords(e.context)&&SecureStore.data[name]==original)
   SecureStore.beforeDirectoryRead=null
  }
+ check(failures.isEmpty()){failures.joinToString("\n")}
  println("PASS $checks actual-adapter host checks with synthetic doubles")
 }

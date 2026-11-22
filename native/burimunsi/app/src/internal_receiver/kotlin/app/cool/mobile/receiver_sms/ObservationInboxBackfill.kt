@@ -101,7 +101,7 @@ internal class ObservationInboxBackfill(
                 val eligible=candidate&&!ReceiptCandidate.accepts(sender,body,profile.receipt)
                 val advanced=if(eligible)ObservationLegacyOwnership.withDecision(app,owner,id,received,sender,body,sub){decision->
                     val retained=when(decision){
-                        ObservationLegacyOwnership.Decision.HOLD->true
+                        ObservationLegacyOwnership.Decision.HOLD,ObservationLegacyOwnership.Decision.OTHER_SIM->true
                         ObservationLegacyOwnership.Decision.OWNED->{ObservationLegacyOwnership.retained(app,sender,body,sent,received,sub);true}
                         ObservationLegacyOwnership.Decision.UNOWNED->{
                             val result=ObservationCapture.retain(app,session,fingerprint,"inbox:$id",sender,body,"catch_up",false,

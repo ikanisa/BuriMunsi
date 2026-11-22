@@ -23,7 +23,7 @@ internal class ObservationRecovery(context:Context) {
     companion object {
         private val lock = Any()
         private const val PAGE = 100
-        private const val MAX_LATEST_SCAN = 20_000
+        private const val MAX_LATEST_SCAN = 100_000
     }
     private val heldInbox = ObservationHeldInbox(app, config)
     private val audit = ObservationInboxAudit(app, config, heldInbox, lock)
@@ -31,7 +31,7 @@ internal class ObservationRecovery(context:Context) {
 
     internal enum class Backfill { COMPLETE, MORE, BLOCKED }
     internal enum class Scan { COMPLETE, MORE, BLOCKED }
-    internal enum class Audit { COMPLETE, MORE, YIELD, RETRY, UNCONFIRMED, BLOCKED }
+    internal enum class Audit { COMPLETE, MORE, YIELD, RETRY, REPAIRED, AWAITING_PARSER, UNCONFIRMED, BLOCKED }
     internal data class LatestWitness(val session:ObservationSessionOwner,val profileFingerprint:String,val legacyHold:Boolean?,
         val consent:ObservationConsentState,val control:ObservationConfigStore.Control,val rowId:Long,val localSourceKey:String,
         val request:ObservationReconcileRequest,val protected:Boolean=false) {
@@ -58,19 +58,27 @@ internal class ObservationRecovery(context:Context) {
         val seen=NativeRepository.withObservationOwner(app,session){_,_->journal.seenSnapshot(owner)}?:return Scan.BLOCKED
         val seenByKey=seen.entries.associateBy{it.sourceKey}
         val revision=ObservationInboxRevision.snapshot();val epoch=ObservationInboxRevision.epoch()
-        val scope=Values.sha256(listOf(owner.collectionId,owner.accountId,session.generation.toString(),profile.fingerprint(),
+        val scope=Values.sha256(listOf(owner.collectionId,owner.accountId,profile.fingerprint(),
             profile.legacyHold.toString(),consent.revision.enabled.toString(),consent.revision.generation.toString(),
             consent.confirmed.toString(),control.paused.toString(),control.revision.toString(),Values.sha256(device))
             .joinToString(""){"${it.length}:$it"})
         val store=rescanStore(owner,profile.legacyHold==true||heldInbox.legacyExists(owner.collectionId));var stored=store.read()
+        var wrap=false
         val last=stored?.let{raw->
             val v=JSONObject(raw);val fields=v.keys().asSequence().toSet()
             checkContract((fields==setOf("collectionId","accountId","lastId")||
-                fields==setOf("collectionId","accountId","lastId","scope","epoch","revision"))&&
+                fields==setOf("collectionId","accountId","lastId","scope","epoch","revision")||
+                fields==setOf("collectionId","accountId","lastId","scope","epoch","revision","needsWrap"))&&
                 v.getString("collectionId")==owner.collectionId&&v.getString("accountId")==owner.accountId&&v.getLong("lastId")>=0,
                 "observation_cursor_unavailable")
-            if(fields.size==6&&v.getString("scope")==scope&&v.getString("epoch")==epoch&&v.getLong("revision")==revision)
-                v.getLong("lastId") else 0L
+            if(!v.has("scope")||v.getString("scope")!=scope)0L else {
+                val sameEpoch=v.getString("epoch")==epoch
+                if(sameEpoch&&v.getLong("revision")!=revision)0L else {
+                    val cursor=v.getLong("lastId")
+                    wrap=cursor>0 && (!sameEpoch || v.optBoolean("needsWrap",false))
+                    cursor
+                }
+            }
         }?:0L
         fun save(expected:Long,next:Long):Boolean=NativeRepository.withObservationOwner(app,session){group,account->
             if(stopped()||!observationInboxPermitted(app)||owner!=ObservationOwner(group,account)||config.controlState(owner)!=control||
@@ -80,7 +88,7 @@ internal class ObservationRecovery(context:Context) {
                 val current=store.read()
                 if(current!=stored)false else{
                     val text=JSONObject().put("collectionId",owner.collectionId).put("accountId",owner.accountId).put("lastId",next)
-                        .put("scope",scope).put("epoch",epoch).put("revision",revision).toString()
+                        .put("scope",scope).put("epoch",epoch).put("revision",revision).put("needsWrap",wrap && next>0).toString()
                     store.write(text);if(store.read()!=text)false else{stored=text;true}
                 }
             }
@@ -103,9 +111,9 @@ internal class ObservationRecovery(context:Context) {
                 val advanced=if(key in keys||!candidate)ObservationLegacyOwnership.withoutControlTransition(app){save(position,id)}?:false
                 else ObservationLegacyOwnership.withDecision(app,owner,id,received,sender,body,sub){decision->
                     val retained=when(decision){
-                        // Protected rows are never replayed. The independent
-                        // Cloud audit carries their unresolved status forward.
-                        ObservationLegacyOwnership.Decision.HOLD->true
+                        // The online audit verifies protected sources independently.
+                        // This offline scanner cannot dispatch an uncertain historical source.
+                        ObservationLegacyOwnership.Decision.HOLD,ObservationLegacyOwnership.Decision.OTHER_SIM->true
                         ObservationLegacyOwnership.Decision.OWNED->{ObservationLegacyOwnership.retained(app,sender,body,sent,received,sub);true}
                         ObservationLegacyOwnership.Decision.UNOWNED->{
                             val receivedAt=Instant.ofEpochMilli(received).toString()
@@ -126,7 +134,7 @@ internal class ObservationRecovery(context:Context) {
                 position=id;count++
             }
         }
-        if(count<PAGE){if(ObservationLegacyOwnership.withoutControlTransition(app){save(position,0)}!=true)return Scan.BLOCKED;return Scan.COMPLETE}
+        if(count<PAGE){if(ObservationLegacyOwnership.withoutControlTransition(app){save(position,0)}!=true)return Scan.BLOCKED;return if(wrap)Scan.MORE else Scan.COMPLETE}
         return Scan.MORE
     }
     fun backfill(stopped: () -> Boolean = { false }): Backfill = backfill.run(stopped)
@@ -193,6 +201,7 @@ internal class ObservationRecovery(context:Context) {
     fun sweepScope(stopped: () -> Boolean = { false }): String? = audit.sweepScope(stopped)
     fun resetAudit() = audit.resetAudit()
     fun auditStartedAt(): Long? = audit.auditStartedAt()
+    fun completedCheck() = audit.completedCheck()
     fun auditRevision(): String? = audit.auditRevision()
 
     fun auditPage(
@@ -231,7 +240,7 @@ internal class ObservationRecovery(context:Context) {
             val cursor = queryObservationInbox(app, 0, profile.receipt.senders, order = ObservationInboxOrder.NEWEST)
                 ?: return@synchronized Latest.Blocked
             data class PhoneRow(val id:Long,val received:Long,val sender:String,val body:String,val sent:Long?,val sub:Int?)
-            var newest:PhoneRow?=null
+            val newestBySubscription=mutableMapOf<Int?,PhoneRow>()
             cursor.use{
                 val idCol=it.getColumnIndexOrThrow("_id");val dateCol=it.getColumnIndexOrThrow("date")
                 val senderCol=it.getColumnIndexOrThrow("address");val bodyCol=it.getColumnIndexOrThrow("body")
@@ -247,23 +256,27 @@ internal class ObservationRecovery(context:Context) {
                     val sent=if(sentCol<0||it.isNull(sentCol))null else it.getLong(sentCol).takeIf{v->v>0}
                     val sub=if(subCol<0||it.isNull(subCol))null else it.getInt(subCol).takeIf{v->v>=0}
                     if(profile.receipt.senders.none{it.equals(sender,ignoreCase=true)})continue
-                    val previous=newest
+                    val previous=newestBySubscription[sub]
                     if(previous==null||received>previous.received||received==previous.received&&id>previous.id)
-                        newest=PhoneRow(id,received,sender,body,sent,sub)
+                        newestBySubscription[sub]=PhoneRow(id,received,sender,body,sent,sub)
                 }
             }
-            val row=newest
+            val row=newestBySubscription.values.sortedWith(compareByDescending<PhoneRow>{it.received}.thenByDescending{it.id})
+                .firstOrNull{ObservationLegacyOwnership.classify(app,owner,it.id,it.received,it.sender,it.body,it.sub)!=ObservationLegacyOwnership.Decision.OTHER_SIM}
             if(row!=null){
                 if(!ObservationCandidate.accepts(row.sender,row.body,profile.receipt))return@synchronized Latest.Held
                 val key=heldInboxSourceKey(device,owner.collectionId,row.id,row.received)
-                val decision=if(key in heldKeys)ObservationLegacyOwnership.Decision.HOLD else
-                    ObservationLegacyOwnership.classify(app,owner,row.id,row.received,row.sender,row.body,row.sub)
+                val decision=ObservationLegacyOwnership.classify(app,owner,row.id,row.received,row.sender,row.body,row.sub)
+                if(decision==ObservationLegacyOwnership.Decision.HOLD || decision==ObservationLegacyOwnership.Decision.OTHER_SIM)return@synchronized Latest.Held
                 if(!current())return@synchronized Latest.Blocked
                 val receivedAt=Instant.ofEpochMilli(row.received).toString()
-                val request=ObservationReconcileRequest(key,Values.sha256(row.body),row.sender,row.sent?.let{v->Instant.ofEpochMilli(v).toString()},receivedAt,row.sub)
+                val gateway=if(decision==ObservationLegacyOwnership.Decision.OWNED)
+                    ObservationLegacyOwnership.gatewayEnvelopeId(app,owner,row.id,row.received,row.sender,row.body,row.sent,row.sub)
+                        ?:return@synchronized Latest.Blocked else null
+                val request=ObservationReconcileRequest(key,Values.sha256(row.body),row.sender,row.sent?.let{v->Instant.ofEpochMilli(v).toString()},receivedAt,row.sub,gateway)
                 val local=ObservationSourceIdentity.inbox(installation,owner,row.id,receivedAt)
                 return@synchronized Latest.Ready(LatestWitness(session,profile.fingerprint(),profile.legacyHold,consent,control,row.id,local,request,
-                    decision!=ObservationLegacyOwnership.Decision.UNOWNED))
+                    key in heldKeys||decision!=ObservationLegacyOwnership.Decision.UNOWNED))
             }
             // The caller must independently confirm that the Cloud is empty.
             if(!current())Latest.Blocked else Latest.Empty(session,profile.fingerprint(),profile.legacyHold,consent,control,Values.sha256(device))

@@ -75,7 +75,7 @@ internal object ObservationGateway {
         return NativeRepository.withObservationOwner(context){group,account->
             val owner=ObservationOwner(group,account);val config=ObservationConfigStore(context)
             val paused=config.paused(owner)
-            val permitted=listOf(Manifest.permission.RECEIVE_SMS,Manifest.permission.READ_SMS).all{
+            val permitted=listOf(Manifest.permission.RECEIVE_SMS,Manifest.permission.READ_SMS,Manifest.permission.READ_PHONE_STATE).all{
                 context.checkSelfPermission(it)==PackageManager.PERMISSION_GRANTED
             }
             val consent=config.consent(owner)

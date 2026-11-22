@@ -55,6 +55,10 @@ def _adapt_sms_capture_journal(text: str) -> str:
 
 
 def _adapt_sms_queue_store(text: str) -> str:
+    text = replace_once(text, 'reserveItems: Int = 0): AppendResult =', 'reserveItems: Int = 0, confirmedMissingId: String? = null): AppendResult =')
+    text = replace_once(text, 'return@synchronized if (prior == ReceiptAckPolicy.sha256(envelope.optString("raw_body")))\n                        AppendResult.DUPLICATE else AppendResult.FAILED',
+        'if (prior != ReceiptAckPolicy.sha256(envelope.optString("raw_body"))) return@synchronized AppendResult.FAILED\n'
+        '                    if (confirmedMissingId != envelopeId) return@synchronized AppendResult.DUPLICATE')
     text = replace_once(text, '            val envelopeId = envelope.optString("id", "")', '''            val envelopeId = envelope.optString("id", "")
             if (envelopeId.isBlank() || envelope.opt("raw_body") !is String || envelope.optString("raw_body").isBlank())
                 return@synchronized AppendResult.FAILED''')

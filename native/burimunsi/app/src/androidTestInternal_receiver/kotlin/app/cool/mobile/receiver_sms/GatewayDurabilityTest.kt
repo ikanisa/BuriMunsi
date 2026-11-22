@@ -92,6 +92,13 @@ class GatewayDurabilityTest {
         assertEquals(0, reopened.readForOwner(owner).length())
         assertTrue(reopened.acknowledgeDurable(owner, proof))
         assertEquals(SmsQueueStore.AppendResult.DUPLICATE, reopened.appendIfCapacity(row, 4))
+        val id=row.getString("id")
+        assertEquals(SmsQueueStore.AppendResult.DUPLICATE,reopened.appendIfCapacity(row,4,confirmedMissingId="other"))
+        assertEquals(SmsQueueStore.AppendResult.STORED,reopened.appendIfCapacity(row,4,confirmedMissingId=id))
+        assertEquals(SmsQueueStore.AppendResult.DUPLICATE,reopened.appendIfCapacity(row,4,confirmedMissingId=id))
+        assertEquals(1,SmsQueueStore(context).readForOwner(owner).length())
+        assertTrue(reopened.acknowledgeDurable(owner,proof))
+        assertEquals(0,SmsQueueStore(context).readForOwner(owner).length())
     }
     @Test fun capacityPreservesExistingEvidenceAndLiveReserve() {
         val queue = SmsQueueStore(context)
@@ -156,6 +163,12 @@ class GatewayDurabilityTest {
         assertTrue(reopened.pending(ObservationOwner("different-group","synthetic-admin")).isEmpty())
         assertFalse(reopened.acknowledge(scope,observation.requestId,ObservationAck(observation.requestId,"synthetic-source","0".repeat(64),"source_unresolved",0)))
         assertEquals(1,reopened.pending(scope).size)
+        val ack=ObservationAck(observation.requestId,"synthetic-source",Values.sha256(observation.rawBody),"source_unresolved",0)
+        assertTrue(reopened.acknowledge(scope,observation.requestId,ack))
+        val candidate=observation.copy(requestId=UUID.randomUUID().toString(),capturedAt=java.time.Instant.now().toString())
+        assertEquals(ObservationAppend.STORED,reopened.append(scope,source,rowId,candidate,profile,now,confirmedMissing=true))
+        assertEquals(ObservationAppend.DUPLICATE,reopened.append(scope,source,rowId,candidate,profile,now,confirmedMissing=true))
+        assertEquals(observation,ObservationJournal(ObservationStateStore(context)).pending(scope).single().observation)
     }
     @Test fun corruptObservationCiphertextDoesNotResetTheQueue() {
         val file=File(root,"buri-observation-journal.v1");file.writeText("synthetic-corrupt-ciphertext")
@@ -301,6 +314,7 @@ class GatewayDurabilityTest {
         val retry=ContinuousSyncRetry()
         assertEquals(15000L,retry.next(false,true));assertEquals(30000L,retry.next(false,true))
         repeat(8){assertEquals(60000L,retry.next(false,true))}
-        assertEquals(2000L,retry.next(true,true));assertEquals(15000L,retry.next(false,true))
+        assertEquals(0L,retry.next(true,true));assertEquals(15000L,retry.next(false,true))
+        assertEquals(500L,retry.next(false,true,awaitingParser=true))
     }
 }

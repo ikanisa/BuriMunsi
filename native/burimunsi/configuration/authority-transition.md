@@ -9,14 +9,7 @@ Keystore UIDs prevent those apps from loading the previous apps' local sessions,
 device credentials or queued work. This is a fresh installation and does not
 move or resolve those records. A matching URL does not establish a working backend.
 
-The receiver holds exact identities of the phone's existing inbox rows at its
-first authorized scan, even when the server reports no legacy records. Later
-insertions can be processed normally. Messages already present at that scan are
-not automatically backfilled, including any received after installation but
-before the scan. They remain on the phone and need an authorized reconciliation;
-no backfill control is claimed here. If the inbox cannot be safely snapshotted,
-the scan stays blocked. Independent server-side deduplication and proof of a
-single active receiver are still required before enabling live financial work.
+The first authorized scan records the existing inbox identities and the scoped consent under which they were observed. A receiver cycle compares each approved sender and receiving SIM row against server custody and parsing, including the newest phone receipt ordered by received time and inbox row ID. It requeues a confirmed gap with its original source identity. Paired receipts use the paired gateway and observation-only receipts use the consented observation transport. The historical recovery endpoint retains an eligible first-scan receipt under its recorded consent and holds it for review. For a key-only baseline, the receiver can open a new current-consent historical review. A previous in-flight command with uncertain original consent stays on hold. Admin receives the most recent online check, including missing or unparsed receipts.
 
 Before live use, complete and verify the following for each installation:
 

@@ -75,7 +75,7 @@ data class ObservationAck(val requestId:String,val sourceId:String,val bodySha25
 /** Metadata used to compare one phone inbox source with its retained Cloud source. */
 data class ObservationReconcileRequest(
     val sourceKey:String,val bodySha256:String,val rawSender:String,val serviceCentreAt:String?,
-    val inboxReceivedAt:String,val subscriptionId:Int?,
+    val inboxReceivedAt:String,val subscriptionId:Int?,val gatewayEnvelopeId:String?=null,
 ) {
     override fun toString()="ObservationReconcileRequest(redacted)"
 }
@@ -91,4 +91,13 @@ object ObservationAcknowledgement {
     fun matches(observation:SmsObservation, ack:ObservationAck):Boolean =
         ack.requestId==observation.requestId && runCatching{Values.id(ack.sourceId);true}.getOrDefault(false) &&
         ack.bodySha256==Values.sha256(observation.rawBody) && ack.status=="source_unresolved" && ack.financialEffects==0
+}
+
+/** One scoped handset sweep. Checkpoints carry only counts and opaque source identities. */
+data class ObservationInboxCheck(
+    val runId: String, val expectedConsentGeneration: Long, val state: String,
+    val candidateCount: Int = 0, val missingCount: Int = 0, val pendingCount: Int = 0,
+    val phoneLatestKey: String? = null, val parsedLatestKey: String? = null, val collectionRevision: String? = null,
+) {
+    override fun toString() = "ObservationInboxCheck(state=$state)"
 }

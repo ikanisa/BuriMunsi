@@ -7,6 +7,7 @@ import rw.ikanisa.burimunsi.data.ApiClient
 import rw.ikanisa.burimunsi.data.ApiFailure
 import rw.ikanisa.burimunsi.data.NativeRepository
 import rw.ikanisa.burimunsi.storage.DeviceProvisioning
+import rw.ikanisa.burimunsi.core.SmsSourceRef
 import rw.ikanisa.burimunsi.core.ObservationJournal
 import rw.ikanisa.burimunsi.core.ObservationOwner
 import rw.ikanisa.burimunsi.core.ObservationSessionOwner
@@ -15,7 +16,7 @@ import app.cool.mobile.receiver_sms.ObservationSyncDiagnostics.Phase
 import app.cool.mobile.receiver_sms.ObservationSyncDiagnostics.Stop
 
 internal data class ObservationCycleResult(val completed:Boolean,val more:Boolean,val problem:String?=null,val busy:Boolean=false,
-    val progress:Boolean=false,val healthProof:ObservationHealthProof?=null)
+    val progress:Boolean=false,val healthProof:ObservationHealthProof?=null,val awaitingParser:Boolean=false)
 
 /** The existing observation pipeline, executed once with one process-wide finite lease.
  * Both JobScheduler and the foreground supervisor use this same runner/journal.
@@ -29,9 +30,9 @@ internal object ObservationSyncCycle {
     private var verified:Verified?=null
     private var captureProof:SweepProof?=null
     private var auditProof:SweepProof?=null
-    private enum class ComparisonStep { STATUS, SOURCE, FINAL }
+    private enum class ComparisonStep { STATUS, SOURCE, PROCESSING, FINAL, REPORT }
     private data class ComparisonProgress(val latest:ObservationRecovery.Latest,val inboxRevision:Long,
-        val cloudRevision:String,val startedAt:Long,val step:ComparisonStep,val authority:Long,val recordedCount:Int?=null)
+        val cloudRevision:String,val startedAt:Long,val step:ComparisonStep,val authority:Long,val recordedCount:Int?=null,val sourceId:String?=null)
     private var comparisonProgress:ComparisonProgress?=null
     private enum class Comparison { MATCHED, PENDING, MORE, YIELD, UNCONFIRMED }
     private fun cachedSweep(recovery:ObservationRecovery,stopped:()->Boolean,inboxRevision:Long):Boolean {
@@ -83,9 +84,7 @@ internal object ObservationSyncCycle {
         val proof=auditProof?:return reject(Fence.AUDIT_UNCONFIRMED)
         val expectedRevision=proof.cloudRevision?:return reject(Fence.AUDIT_UNCONFIRMED)
         val authority=ObservationAuthorityRevision.stable()?:return reject(Fence.RECONCILE_CHANGED)
-        val now=SystemClock.elapsedRealtime();val cached=verified
-        if(cached!=null&&cached.authority==authority&&cached.audit==proof&&cached.witness==latest&&cached.inboxRevision==inboxRevision&&ObservationInboxRevision.observerActive()&&
-            ObservationInboxRevision.snapshot()==inboxRevision&&now>=cached.at&&now-cached.at<RECHECK_AFTER_MS)return Comparison.MATCHED
+        val now=SystemClock.elapsedRealtime()
         verified=null;diagnostic.phase(Phase.RECONCILE_REMOTE)
         val existing=comparisonProgress?.takeIf{it.authority==authority&&it.latest==latest&&it.inboxRevision==inboxRevision&&
             it.cloudRevision==expectedRevision&&now>=it.startedAt&&now-it.startedAt<RECHECK_AFTER_MS}
@@ -100,7 +99,7 @@ internal object ObservationSyncCycle {
         if(stopped())return interrupted(Fence.RECONCILE_CHANGED)
         return when(progress.step){
             ComparisonStep.STATUS->{
-                val status=repo.observationReconcileStatus()
+                val status=repo.verifiedObservationStatus()
                 if(!sameLocal())return reject(Fence.RECONCILE_CHANGED)
                 if(status.hasPending||status.hasUnmatchedCanonical||status.revision!=expectedRevision)
                     return reject(Fence.AUDIT_UNCONFIRMED)
@@ -115,20 +114,39 @@ internal object ObservationSyncCycle {
                 if(!sameLocal())return reject(Fence.RECONCILE_CHANGED)
                 if(reply.sourceKey!=witness.request.sourceKey||reply.state!="matched"||reply.sourceId==null)
                     return reject(Fence.RECONCILE_MISSING)
-                // The displayed Cloud list is retention-ordered.
-                if(reply.latestRecordedSourceId!=reply.sourceId)return reject(Fence.RECONCILE_ORDER_UNCERTAIN)
+                // Reconciliation pages proved every row. Compare the phone's chronological head by
+                // source key. An older SMS repaired today may be the last row inserted in the database.
+                if(recovery.completedCheck()?.parsedLatestKey!=witness.request.sourceKey)
+                    return reject(Fence.RECONCILE_ORDER_UNCERTAIN)
+                comparisonProgress=progress.copy(step=ComparisonStep.PROCESSING,sourceId=reply.sourceId)
+                Comparison.MORE
+            }
+            ComparisonStep.PROCESSING->{
+                val source=SmsSourceRef.Observation(progress.sourceId ?: return reject(Fence.RECONCILE_MISSING))
+                if(repo.observationProcessing(listOf(source))[source]?.status !in setOf("parsed","duplicate")){
+                    recovery.completedCheck()?.let{repo.reportInboxCheck(it.copy(state="incomplete",pendingCount=1,parsedLatestKey=null))}
+                    return reject(Fence.RECONCILE_PENDING)
+                }
+                if(!sameLocal())return reject(Fence.RECONCILE_CHANGED)
                 comparisonProgress=progress.copy(step=ComparisonStep.FINAL)
                 Comparison.MORE
             }
             ComparisonStep.FINAL->{
                 diagnostic.phase(Phase.RECONCILE_RECHECK)
-                val status=repo.observationReconcileStatus()
+                val status=repo.verifiedObservationStatus()
                 if(!sameLocal())return reject(Fence.RECONCILE_CHANGED)
                 if(status.hasPending||status.hasUnmatchedCanonical||status.revision!=expectedRevision||
                     status.recordedCount!=progress.recordedCount)return reject(Fence.AUDIT_UNCONFIRMED)
                 val checkedAt=SystemClock.elapsedRealtime()
                 if(checkedAt<progress.startedAt||checkedAt-progress.startedAt>=RECHECK_AFTER_MS)
                     return reject(Fence.RECONCILE_UNAVAILABLE)
+                comparisonProgress=progress.copy(step=ComparisonStep.REPORT)
+                Comparison.MORE
+            }
+            ComparisonStep.REPORT->{
+                val report=recovery.completedCheck()?:return reject(Fence.AUDIT_UNCONFIRMED)
+                repo.reportInboxCheck(report)
+                if(!sameLocal())return reject(Fence.RECONCILE_CHANGED)
                 comparisonProgress=null;verified=Verified(latest,progress.startedAt,inboxRevision,proof,authority);Comparison.MATCHED
             }
         }
@@ -170,6 +188,9 @@ internal object ObservationSyncCycle {
             // witness/cached approved profile. API outages must not starve local
             // retention just because Android reports a validated Internet link.
             val recovery=ObservationRecovery(app)
+            // Each completed processing cycle starts a fresh server run, including an unchanged phone.
+            // A bounded unfinished sweep may continue on the next JobScheduler or service invocation.
+            if(verified!=null){verified=null;auditProof=null;comparisonProgress=null;recovery.resetAudit()}
             val cachedAtStart=cachedSweep(recovery,stopped,inboxRevision)
             var backfill=ObservationRecovery.Backfill.COMPLETE
             if(!cachedAtStart){
@@ -256,6 +277,14 @@ internal object ObservationSyncCycle {
                                 auditProof=null;diagnostic.reject(Fence.AUDIT_UNCONFIRMED)
                                 return finish(ObservationCycleResult(false,true,"sync_unconfirmed"))
                             }
+                            ObservationRecovery.Audit.REPAIRED->{
+                                auditProof=null;diagnostic.reject(Fence.RECONCILE_MISSING)
+                                return finish(ObservationCycleResult(false,true,"sync_unconfirmed",progress=true))
+                            }
+                            ObservationRecovery.Audit.AWAITING_PARSER->{
+                                auditProof=null;diagnostic.reject(Fence.RECONCILE_PENDING)
+                                return finish(ObservationCycleResult(false,true,"sync_unconfirmed",awaitingParser=true))
+                            }
                             ObservationRecovery.Audit.UNCONFIRMED->{
                                 auditProof=null;diagnostic.reject(Fence.AUDIT_UNCONFIRMED)
                                 return finish(ObservationCycleResult(false,false,"sync_unconfirmed"))
@@ -282,7 +311,7 @@ internal object ObservationSyncCycle {
                 if(stopped())return continueAfterBudget(recovery,scope,true)
             }
             var comparison=Comparison.MORE;var compareAdvanced=false
-            repeat(3){
+            repeat(5){
                 if(comparison==Comparison.MORE){
                     if(stopped())return continueAfterBudget(recovery,scope,compareAdvanced)
                     comparison=compareLatest(app,recovery,repo,stopped,budgetExpired,diagnostic,inboxRevision)

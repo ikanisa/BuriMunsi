@@ -35,7 +35,20 @@ class NativeRepository() {
  var pendingReservation=false;var unmatchedCanonical=false;var statusFailure:Exception?=null;var statusRevisionOverride:String?=null;var statusCalls=0
  var afterStatus:((Int)->Unit)?=null
  var statusReplyOverride:((Int,ObservationReconcileStatus)->ObservationReconcileStatus)?=null
+ private val issuedSourceIds=mutableMapOf<String,String>()
  val requests=mutableListOf<SmsObservation>()
+ val reports=mutableListOf<ObservationInboxCheck>()
+ val heldRequests=mutableListOf<SmsObservation>()
+ fun recoverHeldObservation(item:SmsObservation,generation:Long):Boolean {
+  check(generation==consent.generation);heldRequests.add(item)
+  val key=checkNotNull(item.sourceKey);val id=retainedSources.getOrPut(key){"source-${retainedSources.size+1}"}
+  retainedSourceKeys.add(key);parserStates[id]="historical";return true
+ }
+ val parserStates=mutableMapOf<String,String>()
+ var reportFailure:Exception?=null
+ fun verifiedObservationStatus()=observationReconcileStatus()
+ fun reportInboxCheck(check:ObservationInboxCheck){reportFailure?.let{throw it};reports.add(check)}
+ fun observationProcessing(ids:List<SmsSourceRef.Observation>)=ids.associateWith{ObservationProcessing(parserStates[it.id]?:"parsed",false)}
  fun observationConsent():ObservationConsentRevision{consentFailure?.let{throw it};val value=consent;val action=afterConsentRead;afterConsentRead=null;action?.invoke();return value}
  fun setObservationConsent(value:ObservationConsentRevision):ObservationConsentRevision{val action=duringConsentSet;duringConsentSet=null;action?.invoke();consent=value;return value}
  fun observationProfile():JSONObject {profileFailure?.let{throw it};val action=afterProfileRead;afterProfileRead=null;action?.invoke();return profile}
@@ -45,7 +58,7 @@ class NativeRepository() {
   if(value.requestId in unresolvedIds)throw ObservationUploadUnresolved(unresolvedReportedId?:value.requestId)
   if(failSubmit)throw ApiFailure("observation_unavailable",503,true)
   val source=if(!invalidAck&&value.sourceKey!=null){
-   retainedSourceKeys.add(value.sourceKey);retainedSources.getOrPut(value.sourceKey){if(distinctSourceIds)"source-${retainedSources.size+1}" else "source-1"}
+   retainedSourceKeys.add(value.sourceKey);retainedSources.getOrPut(value.sourceKey){issuedSourceIds.getOrPut(value.sourceKey){if(distinctSourceIds)"source-${issuedSourceIds.size+1}" else "source-1"}}
   }else "source-1"
   return ObservationAck(value.requestId,source,if(invalidAck)"0".repeat(64)else Values.sha256(value.rawBody),"source_unresolved",0)
  }
@@ -56,7 +69,7 @@ class NativeRepository() {
   return reconcileOverride?:if(existing!=null)ObservationReconcileReply(value.sourceKey,"matched",existing,newest)
    else ObservationReconcileReply(value.sourceKey,"missing",null,newest)
  }
- fun reconcileObservations(values:List<ObservationReconcileRequest>):List<ObservationReconcileReply> {
+ fun reconcileObservations(values:List<ObservationReconcileRequest>,runId:String?=null):List<ObservationReconcileReply> {
   reconciliationBatches.add(values.toList());val action=afterBatch;afterBatch=null;action?.invoke()
   batchFailure?.let{throw it}
   if(values.any{it.sourceKey in poisonSourceKeys})throw ApiFailure("observation_item_conflict",409)

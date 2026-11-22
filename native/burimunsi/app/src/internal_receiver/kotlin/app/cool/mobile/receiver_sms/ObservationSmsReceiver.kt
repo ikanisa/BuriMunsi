@@ -21,9 +21,9 @@ class ObservationSmsReceiver:BroadcastReceiver() {
         // SMS itself is not assumed to grant foreground-start permission. The
         // supervisor starts only from a visible task or an OS/user exemption.
         runCatching{BuriContinuousSupervisor.start(context.applicationContext)}
-        // The default SMS app may insert the row after this broadcast. A delayed
-        // local scan and periodic recovery use the stable inbox row identity.
-        try{ObservationBackground.signalLocal(context.applicationContext,2_000)}catch(_:Exception){/* Periodic recovery remains scheduled. */}
+        // Scan immediately. A separate provider-change wake catches a row inserted after this broadcast.
+        runCatching{ObservationBackground.watchInbox(context.applicationContext)}
+        try{ObservationBackground.signalLocal(context.applicationContext)}catch(_:Exception){/* Periodic recovery remains scheduled. */}
         val app=context.applicationContext;val at=System.currentTimeMillis()
         val session=try{NativeRepository.observationOwner(app)}catch(_:Exception){null}?:return
         if(!busy.compareAndSet(false,true))return // Inbox catch-up remains available.
@@ -41,7 +41,7 @@ class ObservationSmsReceiver:BroadcastReceiver() {
             }catch(_:Exception){/* The inbox path preserves an unverified candidate. */}
             finally{
                 busy.set(false)
-                try{ObservationBackground.signalLocal(app,2_000)}catch(_:Exception){}
+                try{ObservationBackground.signalLocal(app)}catch(_:Exception){}
                 pending.finish()
             }
         }}catch(_:RuntimeException){busy.set(false);pending.finish()}
