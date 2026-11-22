@@ -1,5 +1,6 @@
 import {useCallback, useState} from 'react';
 import {useSession} from '../../session/SessionProvider';
+import {canDisplaySessionRecords} from '../../session/sessionContext';
 import {Button, Card, ErrorState, LoadingState} from '../../ui';
 import {receiptLabels, reasonLabels} from '../overview/smsOversightContract';
 import {MomoTable, momoReadOptions} from './MomoRecordViews';
@@ -10,9 +11,9 @@ import {useOperationRead} from './useOperationRead';
 
 export function ReceiverSmsPanel() {
   const session = useSession(), request = session.request;
-  const enabled = session.status === 'authenticated' && !!session.user?.permissions.includes('sms.read');
+  const enabled = canDisplaySessionRecords(session) && !!session.user?.permissions.includes('sms.read');
   const load = useCallback(async () => receiverCollections(await request('momo/observations/collections')), [request]);
-  const {result, retry} = useOperationRead(String(session.epoch), enabled, load, momoReadOptions);
+  const {result, retry} = useOperationRead(String(session.epoch), enabled, load, {...momoReadOptions, live:false});
   const [selection, setSelection] = useState('');
   if (!enabled) return null;
   if (!result) return <LoadingState label="Loading receiver collections" />;

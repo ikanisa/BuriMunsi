@@ -1,4 +1,8 @@
 import {act,render,screen,waitFor,within} from '@testing-library/react';
+import {once} from 'node:events';
+import {createRequire} from 'node:module';
+import {OperationsLiveContext, operationsStreams} from '../../src/features/operations/operationsLiveContext';
+import {SUPABASE_PROJECT_ORIGIN} from '../../src/config';
 import {MemoryRouter} from 'react-router';
 import {describe,expect,it,vi} from 'vitest';
 import {MomoReceiptsPage} from '../../src/features/operations/MomoReceiptsPage';
@@ -42,6 +46,38 @@ describe('BuriMunsi receiver observations',()=>{
     await act(async()=>finish(page));
     await waitFor(()=>expect(reads).toBe(3));
     expect(fixture.request.mock.calls.at(-1)?.[0]).toBe(path);
+  });
+  it('renders the changed payer outcome through the private socket and the normal scoped HTTP list',async()=>{
+    const {WebSocket,WebSocketServer}=createRequire(import.meta.url)('ws') as typeof import('ws');
+    const server=new WebSocketServer({host:'127.0.0.1',port:0}); await once(server,'listening');
+    const address=server.address();if(!address || typeof address==='string')throw Error('No local fixture port.');
+    const port=address.port;
+    const topic='buri:ops:'+'b'.repeat(64), issued=vi.fn(), changed=vi.fn();
+    vi.stubGlobal('WebSocket',class extends WebSocket{
+      constructor(url:string,protocols?:string | string[]){const target=new URL(url);super('ws://127.0.0.1:'+port+target.pathname+target.search,protocols);}
+    });
+    let delivered=false, reads=0;
+    fixture.request.mockReset().mockImplementation(async(path,options)=>{
+      if(path==='sync/live'){issued(options.body);return {topic,expiresAt:new Date(Date.now()+120000).toISOString()};}
+      if(path==='momo/observations/collections')return {contractVersion:1,asOf:time,items:[{collectionId:group,label:'Test group'}]};
+      expect(path).toContain('collectionId='+group);reads++;
+      return {...page,items:[{...page.items[0],payerStatus:delivered?'delivered':'pending'}]};
+    });
+    server.on('connection',socket=>socket.on('message',raw=>{
+      const frame=JSON.parse(raw.toString());if(frame.event!=='phx_join')return;
+      expect(frame.topic).toBe('realtime:'+topic);expect(frame.payload.config.private).toBe(true);
+      socket.send(JSON.stringify({topic:frame.topic,event:'phx_reply',ref:frame.ref,join_ref:frame.join_ref,payload:{status:'ok',response:{}}}));
+      changed.mockImplementation(()=>socket.send(JSON.stringify({topic:frame.topic,event:'broadcast',ref:null,
+        payload:{type:'broadcast',event:'operations_changed',payload:{changed:true}}})));
+    }));
+    const streams=operationsStreams({origin:SUPABASE_PROJECT_ORIGIN,publishableKey:'sb_publishable_synthetic_test_only',request:fixture.request});
+    const view=render(<OperationsLiveContext.Provider value={streams}><MemoryRouter><MomoReceiptsPage /></MemoryRouter></OperationsLiveContext.Provider>);
+    try{
+      await screen.findByText('Pending');await waitFor(()=>expect(reads).toBeGreaterThanOrEqual(2));
+      expect(issued).toHaveBeenCalledExactlyOnceWith({collectionId:group});expect(server.clients.size).toBe(1);
+      delivered=true;changed();
+      expect(await screen.findByText('Reported delivered')).toBeVisible();expect(screen.getByText('100000000172')).toBeVisible();
+    }finally{view.unmount();server.clients.forEach(socket=>socket.terminate());await new Promise<void>(done=>server.close(()=>done()));vi.unstubAllGlobals();}
   });
   it('rejects mixed collection rows and an asserted match with a missing SMS',()=>{
     expect(()=>receiverPage(page,'another-group')).toThrow();

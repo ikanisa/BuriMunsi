@@ -1,4 +1,5 @@
-import {useCallback, useEffect, useRef, useState} from 'react';
+import {useCallback, useContext, useEffect, useRef, useState} from 'react';
+import {InteractionSuspendedContext} from '../../ui/useFocusScope';
 import {useVisibleOperationsRefresh} from '../operations/useVisibleOperationsRefresh';
 import type {AdminRequest} from '../../api/client';
 import {Button, Card, ErrorState, LoadingState} from '../../ui';
@@ -22,7 +23,7 @@ function QueueCounts<Key extends string>({labels, counts}: {labels: Record<Key, 
 
 /** Metadata only: a stale sample never presents counts as current. */
 export function SmsOversight({request, permissions, authorityKey}: {request: AdminRequest; permissions: readonly string[]; authorityKey: string}) {
-  const allowed = permissions.includes('system_health.read');
+  const allowed = permissions.includes('system_health.read'), suspended = useContext(InteractionSuspendedContext);
   const [revision, setRevision] = useState(0), [now, setNow] = useState(Date.now);
   const [state, setState] = useState<{scope: string; access: string; sample: Oversight | null; error: boolean} | null>(null);
   const inFlight = useRef<AbortController | null>(null), invalidated = useRef(false);
@@ -31,11 +32,11 @@ export function SmsOversight({request, permissions, authorityKey}: {request: Adm
     if (inFlight.current) {if (changed) invalidated.current = true;}
     else setRevision(value => value + 1);
   }, []);
-  useVisibleOperationsRefresh(allowed, 5000, refresh);
+  useVisibleOperationsRefresh(allowed && !suspended, 5000, refresh);
   const access = JSON.stringify([authorityKey, permissions.includes('sms.read')]), scope = JSON.stringify([access, revision]);
   const current = state?.scope === scope || (state?.access === access && !state?.error) ? state : null;
   useEffect(() => {
-    if (!allowed) return;
+    if (!allowed || suspended) return;
     const controller = new AbortController(); inFlight.current = controller;
     invalidated.current = false;
     void request('oversight/health?evidenceVersion=2', {authenticated: true, expectedStatus: 200, signal: controller.signal})
@@ -48,7 +49,7 @@ export function SmsOversight({request, permissions, authorityKey}: {request: Adm
         if (invalidated.current && document.visibilityState === 'visible' && navigator.onLine) setRevision(value => value + 1);
       });
     return () => {controller.abort(); if (inFlight.current === controller) inFlight.current = null;};
-  }, [access, allowed, request, scope]);
+  }, [access, allowed, request, scope, suspended]);
   if (!allowed) return null;
   const sample = current?.sample;
   const checked = sample ? Date.parse(sample.checkedAt) : NaN;

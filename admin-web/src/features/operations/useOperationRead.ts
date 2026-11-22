@@ -12,7 +12,7 @@ export function useOperationRead<T>(
   key: string,
   enabled: boolean,
   load: () => Promise<T>,
-  {pollMs, collectionId, invalidResponse = 'The workspace response could not be verified.'}: {pollMs?: number; collectionId?: string; invalidResponse?: string} = {},
+  {pollMs, collectionId, live = false, invalidResponse = 'The workspace response could not be verified.'}: {pollMs?: number; collectionId?: string; live?: boolean; invalidResponse?: string} = {},
 ) {
   const suspended = useContext(InteractionSuspendedContext);
   const [result, setResult] = useState<(OperationReadState<T> & {scope: string}) | null>(null);
@@ -55,11 +55,14 @@ export function useOperationRead<T>(
   }, [pollMs]);
 
   const refresh = useCallback((invalidated: boolean) => {
-    if (invalidated && flight.current) pending.current = flight.current.key;
-    else retry();
-  }, [retry]);
-  useVisibleOperationsRefresh(enabled && !suspended, pollMs, refresh, collectionId);
+    if (flight.current) {
+      if (invalidated) pending.current = flight.current.key;
+      return;
+    }
+    setAttempt(value => value + 1);
+  }, []);
+  useVisibleOperationsRefresh(enabled && !suspended, pollMs, refresh, collectionId, live);
 
-  const sameScope = pollMs !== undefined && result?.scope === key && result.status === 'success';
+  const sameScope = (pollMs !== undefined || live) && result?.scope === key && result.status === 'success';
   return {result: enabled && (result?.key === attemptKey || sameScope) ? result : null, retry};
 }

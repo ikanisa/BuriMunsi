@@ -1,5 +1,6 @@
-import {createContext, useContext, useEffect, useState, useSyncExternalStore, type ReactNode} from 'react';
+import {createContext, useContext, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode} from 'react';
 import type {AdminClientConfig} from '../api/client';
+import {OperationsLiveContext, operationsStreams} from '../features/operations/operationsLiveContext';
 import {AdminSessionController} from './AdminSessionController';
 import type {SessionContextValue} from './sessionContext';
 
@@ -21,6 +22,11 @@ export function SessionProvider({config, children}: {config: AdminClientConfig; 
     void controller.refresh().catch(() => undefined);
     return () => controller.stop();
   }, [controller]);
+  const liveAuthority = snapshot.status === 'authenticated' && snapshot.user?.permissions.includes('sms.read')
+    ? JSON.stringify([snapshot.epoch, snapshot.user.id, snapshot.user.sessionId]) : null;
+  const live = useMemo(() => liveAuthority && config.backend === 'supabase' && config.supabaseProjectOrigin && config.publishableKey
+    ? operationsStreams({request:controller.request, origin:config.supabaseProjectOrigin, publishableKey:config.publishableKey}) : null,
+  [liveAuthority, config.backend, config.supabaseProjectOrigin, config.publishableKey, controller]);
   const value: SessionContextValue = {
     ...snapshot,
     request: controller.request,
@@ -51,7 +57,7 @@ export function SessionProvider({config, children}: {config: AdminClientConfig; 
     cancelSensitiveEmailVerification: controller.cancelSensitiveEmailVerification,
     verifyAuthenticator: controller.verifyAuthenticator,
   };
-  return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
+  return <SessionContext.Provider value={value}><OperationsLiveContext.Provider value={live}>{children}</OperationsLiveContext.Provider></SessionContext.Provider>;
 }
 
 export function useSession(): SessionContextValue {
