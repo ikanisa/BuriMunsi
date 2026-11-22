@@ -126,3 +126,15 @@ test('opted-in staff phone edit requests protected PIN retention without accepti
 });
 test('the admin account cannot be removed by staff-lifecycle commands',async()=>{const {svc,actor}=await signed();await assert.rejects(svc.manageStaff(actor,{action:'remove',id:actor.id,expectedVersion:1,requestId:crypto.randomUUID()}),/staff_unavailable/)});
 test('real HMAC/PBKDF2 credential path passes assigned phone authentication',async()=>{const real=new PinHasher({pepper:new Uint8Array(32).fill(17),pepperId:'test-pepper'});const {svc,store}=setup({hasher:real});store.a.pinHash=await real.hash(store.a.phone,'0123');const session=await svc.login(login,N);assert.equal((await svc.authenticate(session.token,I)).id,store.a.id)});
+
+test('standalone creates use the configured default and historical explicit receipts still replay',async()=>{
+ const {svc,store,actor}=await signed({defaultStaffPin:'9127'});
+ const historical=create();
+ const oldResult=await svc.manageStaff(actor,historical);
+ const standalone=new NativeAuthService({store,hasher,groupId:G,clock:()=>NOW,defaultStaffPin:'9127',defaultOnlyOnCreate:true});
+ assert.deepEqual(await standalone.manageStaff(actor,historical),oldResult);
+ await assert.rejects(standalone.manageStaff(actor,{...historical,requestId:crypto.randomUUID()}),/invalid_staff_command/);
+ const {pin,...fresh}=create();
+ const created=await standalone.manageStaff(actor,{...fresh,phone:'+250780009876'});
+ assert.equal(store.accounts.find(row=>row.id===created.id).pinHash.pin,'9127');
+});

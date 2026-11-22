@@ -1,23 +1,24 @@
 import {Card, StatusBadge} from '../../ui';
 import {directoryOperatorRows, type BuriDirectory, type BuriProvisioning} from './contracts';
 
-export function BuriDirectoryView({directory, provisioning, provisioningError}: {
+export function BuriDirectoryView({directory, provisioning, provisioningError, phoneAccounts = false}: {
   directory: BuriDirectory;
   provisioning: BuriProvisioning | null;
   provisioningError: boolean;
+  phoneAccounts?: boolean;
 }) {
   const operators = directoryOperatorRows(directory);
   return <>
     <Card><div className="core-detail">
-      <h2>Collect operators</h2>
+      <h2>{phoneAccounts ? 'BuriMunsi operators' : 'Collect operators'}</h2>
       {!directory.configured && <p>The BuriMunsi group and receiving account need to be configured before approving access.</p>}
       {operators.length === 0 ? <p>No Collect accounts or approvals are recorded for this group.</p> :
         <div className="admin-table-wrap" role="region" aria-label="BuriMunsi operator records" tabIndex={0}>
           <table className="admin-table">
-            <thead><tr><th scope="col">Account</th><th scope="col">Collect role</th><th scope="col">BuriMunsi access</th><th scope="col">Capabilities</th></tr></thead>
+            <thead><tr><th scope="col">Account</th><th scope="col">{phoneAccounts ? 'Role' : 'Collect role'}</th><th scope="col">BuriMunsi access</th><th scope="col">Capabilities</th></tr></thead>
             <tbody>{operators.map(({operator, approval}) => <tr key={operator.principalId}>
-              <td>{operator.displayName || operator.email}<br />{operator.email}</td>
-              <td>{operator.role}</td>
+              <td>{operator.displayName || (phoneAccounts ? operator.principalId : operator.email)}<br />{phoneAccounts ? approval?.phone ?? operator.principalId : operator.email}</td>
+              <td>{phoneAccounts ? (approval ? (approval.role === 'admin' ? 'Admin' : 'Staff') : 'Unassigned') : operator.role}</td>
               <td>{approval ? <>
                 <StatusBadge tone={approval.active ? 'success' : 'warning'}>{approval.active ? 'Recorded enabled' : 'Recorded disabled'}</StatusBadge>
                 <br />{approval.role} · {approval.phone}<br />Collect status: {approval.sharedStatus}

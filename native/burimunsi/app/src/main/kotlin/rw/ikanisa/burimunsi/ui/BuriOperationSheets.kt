@@ -48,9 +48,10 @@ import rw.ikanisa.burimunsi.core.*
     val ready=Presentation.validName(name)&&normalized!=null&&(pin.isEmpty()||runCatching{Values.pin(pin)}.isSuccess)
     Panel(footer={Primary(t(if(existing==null)"Create staff"else "Save changes"),{m.saveStaff(name,phone,pin,enroll,allocate);pin=""},ready&&!s.busy&&!s.offline&&!s.pending,working=s.busy&&m.operation==UiOperation.COMMAND)}){
         item{Entry(t("Name"),name,{m.editDraft("name",it)},enabled=!s.busy,nextFocus=phoneFocus,placeholder="Full name")}
-        item{Entry(t("Phone number"),phone,{m.editDraft("phone",it)},phone=true,enabled=!s.busy,fieldFocus=phoneFocus,nextFocus=pinFocus)}
-        item{Entry(t(if(existing==null)"Passcode"else "New passcode"),pin,{pin=it.filter{ch->ch in '0'..'9'}.take(4)},pin=true,enabled=!s.busy,imeAction=ImeAction.Done,fieldFocus=pinFocus,
-            placeholder=if(existing!=null)"Leave blank to keep current"else "Leave blank for default")}
+        item{Entry(t("Phone number"),phone,{m.editDraft("phone",it)},phone=true,enabled=!s.busy,fieldFocus=phoneFocus,
+            nextFocus=if(existing!=null)pinFocus else null,imeAction=if(existing!=null)ImeAction.Next else ImeAction.Done)}
+        if(existing!=null)item{Entry(t("New passcode"),pin,{pin=it.filter{ch->ch in '0'..'9'}.take(4)},pin=true,enabled=!s.busy,imeAction=ImeAction.Done,fieldFocus=pinFocus,
+            placeholder="Leave blank to keep current")}
         item{CheckRow(t("Allocate unmatched payments"),allocate,!s.busy){m.editDraft("allocate",it.toString())}}
         item{CheckRow(t("Enroll members"),enroll,!s.busy){m.editDraft("enroll",it.toString())}}
         if(existing!=null)item{Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(12.dp)){

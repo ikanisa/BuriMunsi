@@ -447,7 +447,8 @@ class NativeUiContractTest {
         panelButton("Edit staff","Save changes").assertIsEnabled().performClick()
         ui.runOnIdle{check(c.staffSaveCalls==1&&c.lastStaffPhone=="+250780000002"&&c.lastStaffPin.isEmpty())}
         ui.runOnIdle{c.state=c.state.copy(sheetId=null,selectedStaff=null,draft=mapOf("name" to "Example Staff","phone" to "+250780000002"))}
-        ui.onNodeWithText("Leave blank for default",useUnmergedTree=true).assertExists()
+        ui.onNodeWithText("Passcode",useUnmergedTree=true).assertDoesNotExist()
+        ui.onNodeWithText("New passcode",useUnmergedTree=true).assertDoesNotExist()
         panelButton("Add staff","Create staff").assertIsEnabled().performClick()
         ui.runOnIdle{check(c.staffSaveCalls==2&&c.lastStaffPin.isEmpty())}
         field("Passcode").performScrollTo().performTextInput("26")
@@ -653,18 +654,16 @@ class NativeUiContractTest {
         ui.onNodeWithText("Paired receiving code").performScrollTo().assertExists()
         ui.onNodeWithText("31415").performScrollTo().assertExists()
     }
-    @Test fun supportActionsUseOnlyAnAvailableRuntimeContact(){
+    @Test fun supportUsesThePublishedWhatsAppNumberFromHelpAndSignIn(){
         val c=FakeController(Route.SETTINGS);var calls=0;show(c,onSupport={calls++})
         ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Help") and hasClickAction())
         ui.onNodeWithText("Help").performClick()
-        panelButton("Help","WhatsApp").assertIsNotEnabled()
-        ui.onNode(hasText("Unavailable") and hasAnyAncestor(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.PaneTitle,"Help"))).assertExists()
-        ui.runOnIdle{c.supportPhone="+250780000001"}
+        ui.onNodeWithText("+250 788 767 816").assertIsDisplayed()
         panelButton("Help","WhatsApp").assertIsEnabled().performClick();ui.runOnIdle{check(calls==1)}
-        ui.runOnIdle{c.state=UiState();c.supportPhone=null}
-        ui.onNodeWithContentDescription("Contact admin on WhatsApp").assertIsNotEnabled()
-        ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Contact admin") and hasClickAction())
-        button("Contact admin").assertIsNotEnabled()
+        ui.runOnIdle{c.state=UiState(configurationRequired=true)}
+        ui.onNodeWithContentDescription("Contact admin on WhatsApp").assertIsEnabled().performClick()
+        ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Contact admin on WhatsApp") and hasClickAction())
+        button("Contact admin on WhatsApp").assertIsEnabled().performClick();ui.runOnIdle{check(calls==3)}
     }
     @Test fun twoHundredPercentTypePreservesCompleteMoneyAndAccessibleIdentity(){
         val c=FakeController(Route.PAYMENTS)
@@ -763,7 +762,6 @@ private class FakeController(route:Route,role:Role=Role.ADMIN):BuriController{
     private val person=Member("member-1","EXAMPLE PERSON WITH A VERY LONG FULL NAME","+250780000001",10000,true,1)
     private val pay=Payment("tx-1",person.name,"*********816",10000,"2026-10-08 15:15:20","90000000001","posted",1,person.id,person.phone,"sms-1")
     override var screenGate by mutableStateOf(ScreenGate.OPEN)
-    override var supportPhone:String? by mutableStateOf(null)
     override var notificationAccessGranted:Boolean? by mutableStateOf(null)
     override var continuousSyncRunning:Boolean? by mutableStateOf(true)
     override var continuousSyncProblem:String? by mutableStateOf(null)

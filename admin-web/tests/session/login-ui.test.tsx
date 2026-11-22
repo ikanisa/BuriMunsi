@@ -43,6 +43,9 @@ describe('BuriMunsi phone and passcode sign-in', () => {
     });
     openLogin(fetchImpl);
     const check = await screen.findByRole('button', {name: 'Check session'});
+    const help = screen.getByRole('link', {name: 'WhatsApp support · +250 788 767 816'});
+    expect(help).toHaveAttribute('href', 'https://wa.me/250788767816');
+    expect(help).toHaveAttribute('rel', 'noopener noreferrer');
     expect(screen.getByLabelText('Mobile number')).toBeDisabled();
     expect(screen.getByText(/workspace could not be reached/i)).toBeInTheDocument();
     fireEvent.click(check);
@@ -106,6 +109,20 @@ describe('BuriMunsi phone and passcode sign-in', () => {
       expect(onSignedIn).not.toHaveBeenCalled();
     }
     expect(fetchImpl.mock.calls.map(([path]) => path)).toEqual(['/api/admin/auth/session', '/api/admin/auth/phone-passcode']);
+  });
+
+  it.each(['admin', 'staff'])('opens a managed %s session directly from its phone sign-in response', async role => {
+    const accountId = '11111111-1111-4111-8111-111111111111';
+    const user = {...account, email: null, accountId, role, passcodeVerifiedAt: new Date(Date.now() - 1000).toISOString()};
+    const adminIdentity = {schemaVersion: 1, accountId, role, adminId: user.id, principalId: user.principalId, collectionId: 'group-one'};
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/auth/session') ? anonymous() :
+      reply({sessionContract: 2, user, csrfToken: csrf, expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        ownerEmail: null, ...(role === 'admin' ? {adminIdentity} : {})}));
+    const onSignedIn = openLogin(fetchImpl);
+    await waitFor(() => expect(fetchImpl).toHaveBeenCalledOnce());
+    submit();
+    await waitFor(() => expect(onSignedIn).toHaveBeenCalledOnce());
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual(['/api/admin/auth/session', '/api/admin/auth/phone-passcode']);
   });
 
   it('rejects a different cookie session after a successful sign-in response', async () => {

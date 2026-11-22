@@ -1,7 +1,7 @@
 import {ApiError,json,readJson,uuid} from './core.js';
 import {adminAccountSession} from './admin_accounts.js';
 import {adminEmailArguments} from './admin_email_policy.js';
-import {BURI_ADMIN_PRIVATE_HEADERS as headers,requireBuriMunsiOwner} from './admin_burimunsi_authority.js';
+import {BURI_ADMIN_PRIVATE_HEADERS as headers,requireBuriMunsiAdmin,rethrowWorkflowSessionFailure} from './admin_burimunsi_authority.js';
 import {PostgresNativeAuthority} from './burimunsi/postgres-authority.js';
 import {PostgresNativeWorkGrants} from './burimunsi/postgres-native-work-grants.js';
 import {selectAdminCollection} from './burimunsi/admin-scope-selection.js';
@@ -10,11 +10,10 @@ const BASE='/api/admin/burimunsi/native-work-grants';
 const fail=(status,code,message)=>{throw new ApiError(status,code,message);};
 const exact=(body,required,optional=[])=>body&&typeof body==='object'&&!Array.isArray(body)&&
  required.every(k=>Object.hasOwn(body,k))&&Object.keys(body).every(k=>required.includes(k)||optional.includes(k));
-function known(error){
+function known(error,env){
  if(error instanceof ApiError)throw error;
- if(['recent_email_sign_in_required','recent_email_verification_required'].includes(error?.message))
-  fail(403,'recent_email_sign_in_required','Verify your current Admin email before continuing.');
- if(error?.code==='42501')fail(403,'native_work_authority_denied','The owner, policy or financial permission changed.');
+ rethrowWorkflowSessionFailure(error,env);
+ if(error?.code==='42501')fail(403,'native_work_authority_denied','The administrator, policy or financial permission changed.');
  if(error?.code==='23505')fail(409,'native_work_request_conflict','The original request or worker grant changed.');
  if(['22023','22P02'].includes(error?.code))fail(400,'invalid_request','Check the worker grant details.');
 }
@@ -30,8 +29,8 @@ export async function adminBuriMunsiNativeWork(request,env){
  for(const k of url.searchParams.keys())if(k!=='collectionId'||url.searchParams.getAll(k).length!==1)fail(400,'invalid_request','Choose one collection.');
  if(request.method==='POST'&&url.search)fail(400,'invalid_request','Use the worker action without filters.');
  const account=await adminAccountSession(request,env);
- await requireBuriMunsiOwner({request,env,account,permissions:['admin_users.manage','receivers.manage'],
-  ownerMessage:'The Collect owner manages worker access.',
+ await requireBuriMunsiAdmin({request,env,account,permissions:['admin_users.manage','receivers.manage'],
+  adminMessage:'An administrator manages worker access.',
   unavailableCode:'native_work_unavailable',unavailableMessage:'Worker access is unavailable for this deployment.'});
  const body=request.method==='POST'?await readJson(request,2048):null;
  const group=await selectAdminCollection({env,account,requested:body?.collectionId??url.searchParams.get('collectionId')});
@@ -39,7 +38,7 @@ export async function adminBuriMunsiNativeWork(request,env){
  if(recovery){
   const requestId=uuid(recovery[1]);
   try{return json({requestId,...await service.lookup(requestId)},200,headers);}
-  catch(error){known(error);fail(503,'native_work_unavailable','The original worker request could not be confirmed.');}
+  catch(error){known(error,env);fail(503,'native_work_unavailable','The original worker request could not be confirmed.');}
  }
  if(!body||body.collectionId!==group)fail(409,'burimunsi_scope_changed','The selected group changed. Refresh before continuing.');
  const operation=body.operation,issue=operation==='issue';
@@ -57,7 +56,7 @@ export async function adminBuriMunsiNativeWork(request,env){
   const receipt=issue?await service.issue({requestId,grantId,owner:body.owner,version:body.version,policyVersion:body.policyVersion,
     expiresAt:body.expiresAt,...(Object.hasOwn(body,'enabled')?{enabled:body.enabled}:{})}):await service.revoke({requestId,grantId});
   return json({requestId,...receipt},200,headers);
- }catch(error){known(error);
+ }catch(error){known(error,env);
   return json({requestId,outcome:'operation_unknown',error:{code:'native_work_request_unknown',
    message:'The worker action was not confirmed. Check the original request before trying again.'}},503,headers);
  }

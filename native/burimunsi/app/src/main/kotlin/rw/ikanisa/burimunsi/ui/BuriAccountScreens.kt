@@ -106,7 +106,7 @@ import rw.ikanisa.burimunsi.core.Role
             Entry(t("Passcode"),pin,{pin=it.filter{ch->ch in '0'..'9'}.take(4)},pin=true,revealPin=true,enabled=!busy,imeAction=ImeAction.Done,fieldFocus=pinFocus,onDone={if(ready&&!busy){login(phone,pin);pin=""}});Spacer(Modifier.height(29.dp))
         }
         item{Primary(t(if(signingIn)"Signing in…" else "Sign in"),{login(phone,pin);pin=""},ready&&!busy,icon=R.drawable.ic_arrow,iconTrailing=true,working=signingIn)}
-        item{TextButton(support,Modifier.fillMaxWidth().heightIn(min=48.dp).padding(top=12.dp),enabled=supportAvailable&&!busy){Text(t("Contact admin"),color=if(supportAvailable&&!busy)BuriTheme.Blue else BuriTheme.Muted,fontSize=15.sp)}}
+        item{TextButton(support,Modifier.fillMaxWidth().heightIn(min=48.dp).padding(top=12.dp),enabled=supportAvailable){Text(t("Contact admin on WhatsApp"),color=if(supportAvailable)BuriTheme.Blue else BuriTheme.Muted,fontSize=15.sp)}}
     }
 }
 

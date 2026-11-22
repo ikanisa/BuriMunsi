@@ -1,4 +1,5 @@
 import {BURIMUNSI_ADMIN_ORIGIN, standalonePrivacyRoute} from './burimunsi-standalone.js';
+import {burimunsiSupport} from './burimunsi-support.js';
 import {privacyPortalCss} from './domain/privacy_portal_style.js';
 
 const pathRoot = '/privacy/account-deletion';
@@ -11,7 +12,7 @@ function supportDocument(stylesheetPath) {
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Account deletion · BuriMunsi</title><link rel="stylesheet" href="${stylesheetPath}"></head>
 <body><div id="page"><header><a class="identity" href="${BURIMUNSI_ADMIN_ORIGIN}/">BuriMunsi</a></header>
 <main><h1>Account deletion</h1><p>Contact BuriMunsi support to request an account deletion review without installing the app.</p>
-<p><a href="mailto:info@ikanisa.com?subject=BuriMunsi%20account%20deletion">Contact support about account deletion</a></p>
+<p><a href="${burimunsiSupport.url}" rel="noreferrer">Contact support on WhatsApp at ${burimunsiSupport.phone}</a></p>
 <p class="notice">Submitting a request starts a review. Your account stays accessible while we review which data can be deleted and which financial records must be retained.</p>
 <p class="muted">Keep your passcode and identity documents private. Support will explain how to verify your identity securely.</p></main></div></body></html>`;
 }

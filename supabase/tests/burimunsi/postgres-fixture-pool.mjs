@@ -53,8 +53,15 @@ export async function ownedFixturePool({root, socket, port, database, user, clus
   async function reserve() {
     const client = await pool.connect();
     const unsafe = async (statement, values = []) => {
-      const result = await client.query(statement, values);
-      assert(!Array.isArray(result), 'Use fixtureScript for multiple SQL statements');
+      let result = await client.query(statement, values);
+      if (Array.isArray(result)) {
+        // Runtime admission and transaction setup batch SET LOCAL and fixed
+        // set_config/advisory-lock statements. Other scripts stay explicit.
+        const setup = statement.split(';').map(part=>part.trim()).filter(Boolean);
+        assert(values.length === 0 && setup.every(part=>/^(?:SET LOCAL |SELECT pg_catalog\.(?:set_config|pg_advisory_xact_lock_shared)\()/.test(part)),
+          'Use fixtureScript for multiple SQL statements');
+        result=result.at(-1);
+      }
       Object.defineProperty(result.rows, 'count', {value:result.rowCount ?? 0});
       return result.rows;
     };

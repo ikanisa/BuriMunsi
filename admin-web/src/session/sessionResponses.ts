@@ -1,6 +1,6 @@
 /* eslint-disable no-control-regex -- Reject control characters in session identifiers. */
 import {AdminRequestError, isJsonObject, isVerificationUuid, type JsonObject} from '../api/contracts';
-import {isAdminIdentityId, isVerifiedCurrentOwner, parseOwnerIdentitySession, type AdminOwnerIdentity} from './ownerIdentity';
+import {hasScopedAdminAuthority, isAdminIdentityId, isVerifiedCurrentOwner, parseOwnerIdentitySession, parseScopedAdminIdentity, type AdminOwnerIdentity, type ScopedAdminIdentity} from './ownerIdentity';
 
 export interface AdminUser {
   id: string;
@@ -15,6 +15,8 @@ export interface AdminUser {
   mfaRequired?: boolean;
   emailVerifiedAt: string | null;
   authMethod?: 'phone_passcode';
+  accountId?: string;
+  adminIdentity?: ScopedAdminIdentity | null;
   passcodeVerifiedAt?: string | null;
   displayName?: string;
   phone?: string;
@@ -52,12 +54,17 @@ function isCsrfToken(value: unknown): value is string {
 export function parseAdminUser(body: JsonObject, now = Date.now()): AdminUser {
   const user = body.user;
   if (!isJsonObject(user) || typeof user.id !== 'string' || !user.id ||
-      typeof user.email !== 'string' || typeof user.sessionId !== 'string' || !user.sessionId ||
+      (typeof user.email !== 'string' && !(user.authMethod === 'phone_passcode' && isVerificationUuid(user.accountId) && user.email == null)) ||
+      typeof user.sessionId !== 'string' || !user.sessionId ||
       !Array.isArray(user.permissions) || !user.permissions.every(permission => typeof permission === 'string')) {
     throw new Error('Invalid account response.');
   }
   if (user.role !== 'owner' && user.role !== 'admin' && user.role !== 'staff') {
     throw new Error('Invalid account role.');
+  }
+  if (user.accountId !== undefined && (user.authMethod !== 'phone_passcode' || !isVerificationUuid(user.accountId) ||
+      (user.role !== 'admin' && user.role !== 'staff') || typeof user.phone !== 'string' || !/^\+2507[2389]\d{7}$/.test(user.phone))) {
+    throw new Error('Invalid phone account.');
   }
   if (typeof body.expiresAt !== 'string' || !Number.isFinite(Date.parse(body.expiresAt)) || Date.parse(body.expiresAt) <= now) {
     throw new Error('Expired account response.');
@@ -80,9 +87,10 @@ export function parseAdminUser(body: JsonObject, now = Date.now()): AdminUser {
     throw new Error('Invalid account verification.');
   }
   return {
-    id: user.id, email: user.email, role: user.role, sessionId: user.sessionId,
+    id: user.id, email: typeof user.email === 'string' ? user.email : '', role: user.role, sessionId: user.sessionId,
     expiresAt: body.expiresAt, permissions: Object.freeze([...user.permissions] as string[]),
     assuranceLevel: level, mfaAt, mfaAvailable, mfaRequired, emailVerifiedAt: null, principalId, financialModel,
+    ...(typeof user.accountId === 'string' ? {accountId: user.accountId, phone: user.phone as string} : {}),
   };
 }
 
@@ -93,7 +101,7 @@ export function parseSessionUser(body: JsonObject, now: number): AdminUser {
   const ownerIdentity = proof && user.role === 'owner' && proof.adminId === user.id &&
     proof.principalId === user.principalId && proof.email === user.email ? proof : null;
   return {
-    ...user, ownerIdentity,
+    ...user, ownerIdentity, ...(user.accountId ? {adminIdentity: parseScopedAdminIdentity(body.adminIdentity, user)} : {}),
     ...(result.authMethod === 'phone_passcode' ? {
       authMethod: 'phone_passcode',
       passcodeVerifiedAt: parsePasscodeTime(result.passcodeVerifiedAt, now),
@@ -106,8 +114,11 @@ export function parseSessionUser(body: JsonObject, now: number): AdminUser {
 
 export function parsePhoneLoginSession(body: JsonObject, phone: string, now = Date.now()) {
   const user = parseSessionUser(body, now);
+  const boundIdentity = user.accountId
+    ? !!user.principalId && (user.role === 'staff' ? body.adminIdentity == null : hasScopedAdminAuthority(user))
+    : isVerifiedCurrentOwner(user);
   if (!hasSessionFields(body) || body.sessionContract !== 2 || !isCsrfToken(body.csrfToken) ||
-      !isVerifiedCurrentOwner(user) || user.authMethod !== 'phone_passcode' || user.phone !== phone ||
+      !boundIdentity || user.authMethod !== 'phone_passcode' || user.phone !== phone ||
       !user.passcodeVerifiedAt) throw new Error('Invalid BuriMunsi sign-in session.');
   return {user, csrfToken: body.csrfToken};
 }

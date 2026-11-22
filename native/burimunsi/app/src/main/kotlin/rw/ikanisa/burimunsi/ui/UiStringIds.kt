@@ -430,7 +430,7 @@ internal val UiStringIds:Map<String,Int> = mapOf(
     "Passcode change not confirmed. Sign in again." to R.string.ui_bd28bc97d7c3,
     "Name or last three digits" to R.string.ui_bdbfcf526966,
     "Use another Collect account" to R.string.ui_bdfac0a6853f,
-    "Received inconsistent records. Refresh or contact support." to R.string.ui_bdfdc5781a4c,
+    "Received inconsistent records. Refresh or contact support on WhatsApp at +250 788 767 816." to R.string.ui_bdfdc5781a4c,
     "One active receiver." to R.string.ui_be5af41ae8c0,
     "Sort" to R.string.ui_bec69036aa27,
     "Unable to read this file. Check its format and try again." to R.string.ui_bfae8254b264,

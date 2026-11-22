@@ -12,14 +12,8 @@ const privacyDocuments = new Set([
 const adminAuthMethods = new Map([
   ['/api/admin/auth/phone-passcode', 'POST'],
   ['/api/admin/auth/session', 'GET'],
-  ['/api/admin/auth/passcode/verify', 'POST'],
+  ['/api/admin/auth/passcode/change', 'POST'],
   ['/api/admin/auth/logout', 'POST'],
-]);
-const retiredAdminRoutes = new Set([
-  '/api/admin/burimunsi/access',
-  '/api/admin/team/invite',
-  '/api/admin/team/invitation-status',
-  '/api/admin/team/v2',
 ]);
 const gatewayReads = new Set(['/v1/momo/gateway/profile', '/v1/momo/gateway/status']);
 const gatewayWrites = new Set(['/v1/momo/gateway/pair', '/v1/momo/gateway/ingest', '/v1/momo/gateway/heartbeat']);
@@ -56,8 +50,11 @@ export function standaloneAdminRoute(method, path) {
   if (path === '/api/admin/auth' || path.startsWith('/api/admin/auth/')) {
     return adminAuthMethods.has(path) && adminAuthMethods.get(path) === method;
   }
-  if (retiredAdminRoutes.has(path) || path.startsWith('/api/admin/team/v2/') ||
-      /^\/api\/admin\/team\/[0-9a-f-]{36}\/resend$/.test(path)) return false;
+  if (path === '/api/admin/team' || path.startsWith('/api/admin/team/')) {
+    return path === '/api/admin/team' ? method === 'GET' : method === 'POST' &&
+      (path === '/api/admin/team/accounts' || /^\/api\/admin\/team\/accounts\/[0-9a-f-]{36}\/access$/.test(path));
+  }
+  if (path === '/api/admin/burimunsi/access') return false;
   return !(method === 'POST' && reservedAdminCreates.has(path));
 }
 

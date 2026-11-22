@@ -1,4 +1,5 @@
 import {useEffect, useLayoutEffect, useRef, useState, type FormEvent} from 'react';
+import {hasSmsManagementAuthority} from './smsControlRecovery';
 import {sensitiveVerificationDeadline, useSession} from '../../session/SessionProvider';
 import type {PendingAttempt} from '../core/pendingAttempt';
 import {Button, Card, Dialog, EmptyState, ErrorState, Field, LoadingState, PageHeader, StatusBadge} from '../../ui';
@@ -18,7 +19,7 @@ function historyKind(value: SmsHistoryKind) {return value === 'access' ? 'Accoun
 /** Changes require explicit deployment qualification; all gates default off. */
 export function SmsControlsPage({onVerify, allowPolicyChanges = false, allowPolicyEnabling = false, allowAccessChanges = false}: {onVerify: () => void; allowPolicyChanges?: boolean; allowPolicyEnabling?: boolean; allowAccessChanges?: boolean}) {
   const session = useSession(), user = session.user;
-  if (!user || user.role !== 'owner' || user.email !== 'info@ikanisa.com' || !user.permissions.includes('admin_users.manage') || !isSmsControlId(user.id) || !isSmsControlId(user.principalId) || !isSmsControlId(user.sessionId)) return <><PageHeader title="SMS controls" /><ErrorState title="Access unavailable" message="This page requires current owner access." /></>;
+  if (!user || !hasSmsManagementAuthority(user, user.accountId ? user : undefined) || !user.permissions.includes('admin_users.manage') || !isSmsControlId(user.id) || !isSmsControlId(user.principalId) || !isSmsControlId(user.sessionId)) return <><PageHeader title="SMS controls" /><ErrorState title="Access unavailable" message={user?.accountId ? "This page requires Admin access." : "This page requires current owner access."} /></>;
   return <Controls key={JSON.stringify([session.epoch, user.id, user.sessionId, user.principalId])} onVerify={onVerify} allowPolicyChanges={allowPolicyChanges} allowPolicyEnabling={allowPolicyEnabling} allowAccessChanges={allowAccessChanges} />;
 }
 
@@ -42,7 +43,7 @@ function Controls({onVerify, allowPolicyChanges, allowPolicyEnabling, allowAcces
   const key = `${epoch}:${pageCursor?.after_created_at ?? ''}:${pageCursor?.after_request_id ?? ''}:${group ?? ''}:${selected?.requestId ?? ''}:${revision}`;
   const allowed = foreground && clock <= deadline && isRecentSensitiveVerification(epoch, actorId, sessionId);
   const proofContext = () => ({
-    authorityEpoch: epoch,
+    authorityEpoch: epoch, scopedActor: user.accountId ? user : undefined,
     identity: {id: actorId, sessionId, email: user.email, role: user.role, permissions: user.permissions, expiresAt: user.expiresAt, principalId},
     request,
     verifyFresh: async () => verificationMode === 'authenticator' ? isRecentSensitiveVerification(epoch, actorId, sessionId) : await recheckProof?.() === true,
@@ -114,6 +115,9 @@ function Controls({onVerify, allowPolicyChanges, allowPolicyEnabling, allowAcces
   function searchGroup(event: FormEvent) {
     event.preventDefault(); if (busy) return; const value = groupInput.trim();
     if (!isSmsControlId(value)) {setInputError('Enter a valid group UUID.'); return;}
+    if (user.adminIdentity && value.toLowerCase() !== user.adminIdentity.collectionId.toLowerCase()) {
+      setInputError('This Admin account cannot open that group.'); return;
+    }
     setInputError(''); setGroup(value.toLowerCase()); setRevision((value) => value + 1);
   }
   async function disable(expected: SmsPolicyState) {
@@ -195,7 +199,7 @@ function Controls({onVerify, allowPolicyChanges, allowPolicyEnabling, allowAcces
     } finally {if (task === lifecycle.current) setBusy(false);}
   }
   return <><PageHeader title="SMS controls" subtitle="Review current receipt SMS access and group policy." actions={<Button icon="refresh" disabled={!allowed || !current || busy || reopenRequired} onClick={() => setRevision((value) => value + 1)}>Refresh</Button>} />
-    {!foreground ? <Card><p>Controls are hidden while this tab is inactive.</p></Card> : !allowed ? <Card><h2>Verification required</h2><p>Verify your {verificationMode} to open these controls.</p><Button onClick={onVerify}>Verify {verificationMode}</Button></Card> : reopenRequired ? <Card><h2>Reopen SMS controls</h2><p>{actionMessage}</p>{actionError && <p role="alert">{actionError}</p>}<Button disabled={busy} onClick={() => {setReopenRequired(false); setActionMessage(''); setRevision((value) => value + 1);}}>Reopen controls</Button></Card> :
+    {!foreground ? <Card><p>Controls are hidden while this tab is inactive.</p></Card> : !allowed ? <Card>{user.accountId ? <p>Sign in again to open these controls.</p> : <><h2>Verification required</h2><p>Verify your {verificationMode} to open these controls.</p><Button onClick={onVerify}>Verify {verificationMode}</Button></>}</Card> : reopenRequired ? <Card><h2>Reopen SMS controls</h2><p>{actionMessage}</p>{actionError && <p role="alert">{actionError}</p>}<Button disabled={busy} onClick={() => {setReopenRequired(false); setActionMessage(''); setRevision((value) => value + 1);}}>Reopen controls</Button></Card> :
       <>{!current ? <LoadingState label="Loading SMS controls" /> : 'error' in current ? <ErrorState message={current.error} onRetry={() => setRevision((value) => value + 1)} /> : <>
         {actionError && <p role="alert">{actionError}</p>}{actionMessage && <p role="status">{actionMessage}</p>}
         <Card><h2>Current account access</h2><p><StatusBadge tone={current.data.access.canOperate ? 'success' : 'neutral'}>{current.data.access.canOperate ? 'Operator access available' : 'Operator access unavailable'}</StatusBadge></p><p>Read access: {current.data.access.readGranted ? 'Granted' : 'Not granted'}<br />Manage access: {current.data.access.manageGranted ? 'Granted' : 'Not granted'}<br />Recorded decision revision: {current.data.access.revision}</p>{allowAccessChanges ? <>{!current.data.access.canOperate && <Button disabled={busy} onClick={() => {setAccessConfirmed(false); setConfirm('enable-access');}}>Enable my SMS access</Button>}{(current.data.access.readGranted || current.data.access.manageGranted) && <Button variant="danger" disabled={busy} onClick={() => setConfirm('disable-access')}>Remove my SMS access</Button>}</> : <p>Changes to account access are currently unavailable.</p>}</Card>

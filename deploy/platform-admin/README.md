@@ -6,7 +6,10 @@ project. The Worker requires that origin and the exact
 `burimunsi-admin-production` profile on every entry.
 
 Browser API requests use the same origin. The Worker admits Admin APIs and
-serves public account-deletion guidance. Admin sign-in uses the BuriMunsi
+serves public [account-deletion guidance](https://burimunsi-admin.ikanisa.com/privacy/account-deletion).
+The standalone `collect-api` Edge function serves the same page. Both direct
+requests to [BuriMunsi support on WhatsApp at +250 788 767 816](https://wa.me/250788767816).
+Admin sign-in uses the BuriMunsi
 mobile number and passcode. The Worker bounds request and response bodies,
 translates the host-only BuriMunsi session cookie for the Admin API, and
 preserves request identifiers and outcome-unknown responses.

@@ -6,12 +6,12 @@ export function orderedPermissions(values: readonly string[]): string[] {
 
 export function workspaceAuthorityFields(user: AdminUser) {
   return [user.id, user.sessionId, user.email, user.role, orderedPermissions(user.permissions),
-    user.assuranceLevel, user.mfaAt, user.principalId, user.financialModel] as const;
+    user.assuranceLevel, user.mfaAt, user.principalId, user.financialModel, user.accountId ?? null, user.accountId ? user.phone : null] as const;
 }
 
 export function authorityKey(user: AdminUser): string {
   return JSON.stringify([...workspaceAuthorityFields(user), user.mfaAvailable ?? false,
-    user.mfaRequired ?? false, user.ownerIdentity ?? null]);
+    user.mfaRequired ?? false, user.ownerIdentity ?? null, user.adminIdentity ?? null]);
 }
 
 export function matchesPredecessorAuthenticator(before: AdminUser, after: AdminUser, now = Date.now()): boolean {
