@@ -57,7 +57,7 @@ def fingerprint_source_files(base: Path) -> list[Path]:
 
 def source_fingerprint() -> dict:
     rows = []
-    for base in (ROOT, OVERLAY / 'upstream/collect'):
+    for base in (ROOT, OVERLAY / 'vendor/receiver-compat'):
         for path in fingerprint_source_files(base):
             rows.append({'path': path.relative_to(OVERLAY).as_posix(), 'sha256': sha(path)})
     encoded = json.dumps(rows, sort_keys=True).encode()

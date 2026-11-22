@@ -10,7 +10,7 @@ PROJECT = 'rrlduytparvsjfmegalh'
 REQUIRED = ('schema', 'handlers', 'data', 'objects', 'authentication', 'authorization',
             'financial', 'providers', 'native', 'ai', 'privacy', 'recovery', 'operations', 'clients')
 SOURCE_PATHS = ('supabase', 'scripts', 'tools', 'lib', 'admin-web', 'deploy', 'android', 'ios',
-                'native/burimunsi', 'upstream/collect', 'web', 'assets', 'content', 'contracts',
+                'native/burimunsi', 'vendor/receiver-compat', 'web', 'assets', 'content', 'contracts',
                 'test', 'integration_test', 'third_party', '.github', 'pubspec.yaml', 'pubspec.lock',
                 'Makefile', '.fvmrc', '.dvmrc', '.supabase-cli-version', '.env.example', 'AGENTS.md')
 IGNORED = {'node_modules', '.cache', 'build', '.dart_tool', '.gradle', 'Pods', '.symlinks', '__pycache__', '.wrangler'}

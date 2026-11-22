@@ -11,7 +11,7 @@ import {ORIGINS,MARKER,receipt,request,sha} from '../src/contract.mjs';
 import {fixture} from './http_fixture.mjs';
 import {privateTestRoot} from './private_test_root.mjs';
 const ROOT=await privateTestRoot();
-const PRODUCTION_COOKIE='__Host-collect_admin_rrlduytparvsjfmegalh';
+const PRODUCTION_COOKIE='__Host-burimunsi_admin_rrlduytparvsjfmegalh';
 
 test('HTTP redirects, non-JSON, oversized and malformed UTF8 bodies never become authentication or operation results',async()=>{
   const cases = [

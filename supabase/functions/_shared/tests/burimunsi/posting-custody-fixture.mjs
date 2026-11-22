@@ -6,7 +6,7 @@ import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {PostgresPostingCustody} from '../../domain/burimunsi/postgres-posting-custody.js';
 import {canonicalJson,sha256} from '../../domain/burimunsi/values.js';
-const url=new URL('../../../../../upstream/collect/supabase/functions/_shared/domain/encryption.js',import.meta.url);
+const url=new URL('../../../../../vendor/receiver-compat/supabase/functions/_shared/domain/encryption.js',import.meta.url);
 const original=readFileSync(url,'utf8');
 export const encryptionBlob=createHash('sha1').update('blob '+Buffer.byteLength(original)+'\0').update(original).digest('hex');
 const code=original.replace("import {ApiError} from './core.js';","class ApiError extends Error { constructor(status,code,message){super(message);this.status=status;this.code=code;} }");

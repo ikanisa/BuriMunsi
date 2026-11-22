@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Extract pinned receiver sources with a closed, paired Buri runtime upload gate.
 
-Use the bundled exact Collect snapshot by default, or an explicit checkout (never
-mix missing checkout files with the bundle). Output is a dedicated build directory.
+Use the pinned receiver sources owned by this repository. Output is a dedicated build directory.
 A lock excludes cooperating writers; source/build trees must be exclusively owned.
 A crash during promotion can leave a backup/lock and fail the build closed; it does
 not authorize deleting unrelated files or silently regenerating altered outputs.
@@ -23,7 +22,7 @@ from receiver_adaptations import queue_disposition, reliability_adapt, replace_o
 NATIVE = Path(__file__).absolute().parents[1]
 PACKAGE = NATIVE.parents[1]
 MANIFEST = NATIVE / 'integration/receiver-sources.json'
-BUNDLED_ROOT = PACKAGE / 'upstream/collect'
+BUNDLED_ROOT = PACKAGE / 'vendor/receiver-compat'
 PROVENANCE = 'receiver-provenance.json'
 
 
@@ -210,10 +209,9 @@ def extract(collect_root: Path | None, output: Path, manifest_path: Path = MANIF
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--collect-root', type=Path, help='Explicit pinned checkout; default: bundled exact sources.')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    result = extract(args.collect_root, args.output)
+    result = extract(None, args.output)
     print(json.dumps({**result, 'uploadHoldPreserved': False, 'upstreamUploadHoldPreserved': True,
                       'runtimeUploadAdmission': 'paired_resumed_receiver_v1', 'defaultUploadAdmission': False, 'upstreamModified': False,
                       'scope': 'Deterministic source extraction only; not an Android build.'}, indent=2))

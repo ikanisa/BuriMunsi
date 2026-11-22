@@ -11,7 +11,7 @@ export async function fixture({origin=ORIGINS[0]}={}) {
   const sidecar=session=>({contractVersion:1,sessionId:session.public,emailVerifiedAt:session.emailVerifiedAt===null?null:new Date(session.emailVerifiedAt).toISOString()});
   function createSession(proof){const next=randomBytes(32).toString('hex'),session={canonical:randomUUID(),public:randomUUID(),expires:state.now+3600000,aal:1,mfa:null,emailVerifiedAt:proof?state.now:null,role:'owner',permissions:['assisted_sms.read','assisted_sms.manage']};state.sessions.set(next,session);state.current=session;return {next,session};}
   function captcha(body,purpose){const proof=state.captchas.get(body.captcha_token);state.captchas.delete(body.captcha_token);return proof&&proof.origin===origin&&proof.purpose===purpose&&proof.expires>Date.now();}
-  const cookieName=origin===ORIGINS[0]?'__Host-collect_admin_rrlduytparvsjfmegalh':'__Host-collect_admin';
+  const cookieName='__Host-burimunsi_admin_rrlduytparvsjfmegalh';
   const cookie=token=>`${cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${token?'3600':'0'}; Secure`;
   state.sessionCookie=cookie;
   function addJob(){const job={id:randomUUID(),payment:randomUUID(),state:'queued',fence:0,createdAt:new Date(state.now).toISOString(),destination:'+250788123456',body:'Collect: your contribution is recorded. This is an internal receipt, not provider settlement.'};state.jobs.set(job.id,job);return job;}

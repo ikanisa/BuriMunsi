@@ -6,12 +6,10 @@ import { parseArgs } from 'node:util';
 import { packagePwa, verifyPwaPackage } from './package-pwa.mjs';
 import { artifactIdentity, readBuildFile, sourceIdentity } from './build-identity.mjs';
 import { publicConfiguration } from './build-configuration.mjs';
-import { burimunsiAdminBrand } from '../src/product-brand.mjs';
 
 const root = await fs.realpath(fileURLToPath(new URL('../../', import.meta.url)));
 const packageRoot = join(root, 'admin-web');
-const outputPaths = { fixture: 'build/admin-web-fixture', qualification: 'build/admin-web-qualification' };
-const associationFiles = ['assetlinks.json', 'apple-app-site-association'];
+const outputPaths = { fixture: 'build/admin-web-fixture' };
 const json = (value) => JSON.stringify(value, null, 2) + '\n';
 
 async function verify(output, action) {
@@ -53,21 +51,11 @@ async function build(output, mode) {
     npm(['run', 'notices', '--', '--check']);
     npm(['exec', '--no', '--', 'vite', 'build', '--outDir', raw],
       { ...env, ...defines, NODE_ENV: 'production', ADMIN_ASSET_BASE: './' });
-    const burimunsi = defines.VITE_ADMIN_PRODUCT === 'burimunsi';
-    if (burimunsi) {
-      await fs.copyFile(join(packageRoot, 'src/ui/assets/burimunsi-432.png'), join(raw, burimunsiAdminBrand.icon));
-    }
     if (JSON.stringify(await sourceIdentity(root)) !== JSON.stringify(source)) {
       throw new Error('React Admin sources changed during compilation.');
     }
     const staged = join(staging, 'site');
     await packagePwa(raw, staged, { publicBuild: metadata });
-    if (!burimunsi) {
-      await fs.mkdir(join(staged, '.well-known'));
-      for (const name of associationFiles) {
-        await fs.copyFile(join(root, 'web', '.well-known', name), join(staged, '.well-known', name));
-      }
-    }
     const receipt = {
       format: 'collect.react-admin.build.v1', source, backend: metadata?.backend ?? 'unconfigured',
       build_config_sha256: metadata?.public_build_config_sha256,
@@ -101,8 +89,8 @@ try {
   const { positionals } = parseArgs({ options: { json: { type: 'boolean' } }, allowPositionals: true });
   const [action = 'production', ...argumentsAfterAction] = positionals;
   const [directory = process.env.ADMIN_PWA_BUILD_DIR ?? join(root, outputPaths[action] ?? 'build/admin-web'), ...rest] = argumentsAfterAction;
-  if (rest.length || !['production', 'qualification', 'fixture', 'verify', 'verify-ci', 'verify-hosting'].includes(action)) {
-    throw new Error('Usage: build-admin.mjs [production|qualification|fixture|verify|verify-ci|verify-hosting] [build-directory] [--json]');
+  if (rest.length || !['production', 'fixture', 'verify', 'verify-ci', 'verify-hosting'].includes(action)) {
+    throw new Error('Usage: build-admin.mjs [production|fixture|verify|verify-ci|verify-hosting] [build-directory] [--json]');
   }
   const output = resolve(root, directory);
   const parent = resolve(output, '..');

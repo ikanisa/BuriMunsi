@@ -712,7 +712,7 @@ class TestingCandidateReadiness(unittest.TestCase):
         self.base=pathlib.Path(self.tmp.name).resolve();self.overlay=self.base/'source'
         native=self.overlay/'native/burimunsi';native.mkdir(parents=True)
         (native/'source.txt').write_text('qualification source')
-        upstream=self.overlay/'upstream/collect';upstream.mkdir(parents=True);(upstream/'receiver.kt').write_text('qualified receiver')
+        upstream=self.overlay/'vendor/receiver-compat';upstream.mkdir(parents=True);(upstream/'receiver.kt').write_text('qualified receiver')
         self.root=native;self.evidence=self.base/'evidence';self.evidence.mkdir()
         for name,value in [('ROOT',native),('OVERLAY',self.overlay)]:
             p=patch.object(n,name,value);p.start();self.addCleanup(p.stop)

@@ -16,8 +16,7 @@ function report(status, fields) {
 try {
   const { environment, admin_origin: expectedOrigin, asset_manifest_sha256: assetId } =
     JSON.parse(await readFile(join(output, 'version.json'), 'utf8'));
-  const profile = process.argv.includes('--qualification') ? 'qualification' : 'production';
-  if (environment !== profile) throw new Error(`The live check requires a ${profile}-profile React Admin build.`);
+  if (environment !== 'production') throw new Error('The live check requires a production BuriMunsi Admin build.');
   const url = new URL(process.env.ADMIN_PWA_LIVE_URL ?? expectedOrigin);
   if (url.protocol !== 'https:' || url.origin !== expectedOrigin || url.username || url.password || url.port ||
       url.pathname !== '/' || url.search || url.hash) {

@@ -7,21 +7,23 @@ import {renderLocalChallengeDocument} from '../src/local-challenge.mjs';
 const QA = 'https://admin-supabase-qa.collect.ikanisa.com';
 const PROD = 'https://platform-admin.collect.ikanisa.com';
 const PATH = '/admin/auth/local-challenge';
+const config = JSON.parse(await readFile(new URL('../wrangler.burimunsi.jsonc', import.meta.url)));
+const BURI = config.vars.ADMIN_ORIGIN;
 const PROJECT = 'https://rrlduytparvsjfmegalh.supabase.co';
-function fixture(origin = QA) {
+function fixture(origin = BURI) {
   const calls = {backend: 0, legacy: 0, assets: 0};
   const worker = createAdminWorker({fetchImpl: async () => { calls.backend++; throw Error('No backend on parent route'); }});
-  const env = {ADMIN_ORIGIN: origin, COLLECT_BACKEND: 'supabase', SUPABASE_URL: PROJECT,
+  const env = {...config.vars, ADMIN_ORIGIN: origin,
     PLATFORM_API: {fetch: async () => { calls.legacy++; throw Error('No legacy fallback'); }},
     ASSETS: {fetch: async () => { calls.assets++; return new Response('OLD_SPA_FALLBACK', {headers: {'Content-Type': 'text/html'}}); }}};
   return {calls, env, async handle(path = PATH, options = {}) { return worker.fetch(new Request(origin + path, options), env); }, worker};
 }
 
-test('actual QA Admin host serves the human parent before SPA or backend dispatch', async () => {
+test('dedicated Admin host serves the human parent before SPA or backend dispatch', async () => {
   const f = fixture(); const response = await f.handle();
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /<title>Security verification · Collect<\/title>/);
+  assert.match(html, /<title>Security verification · BuriMunsi<\/title>/);
   assert.doesNotMatch(html, /OLD_SPA_FALLBACK/);
   assert.equal(response.headers.get('Content-Type'), 'text/html; charset=utf-8');
   assert.deepEqual(f.calls, {backend: 0, legacy: 0, assets: 0});
@@ -51,7 +53,7 @@ test('profile origins are explicit, exact and bounded before the parent is serve
 });
 
 test('parent security headers permit only nonce scripts/styles and explicit loopback human handoff', async () => {
-  for (const origin of [QA, PROD]) {
+  for (const origin of [BURI]) {
     const f = fixture(origin), response = await f.handle(); const html = await response.text();
     const nonce = html.match(/<script nonce="([a-f0-9]{48})">/)[1];
     assert.equal(response.headers.get('Cache-Control'), 'private, no-store, max-age=0, no-transform');
@@ -89,28 +91,24 @@ test('host parent method, Host and origin checks cannot acquire another authorit
     [{Origin: 'null'}, 403], [{'Sec-Fetch-Site': 'cross-site'}, 403]]) assert.equal((await f.handle(PATH, {headers})).status, status);
   assert.equal((await f.worker.fetch(new Request(PROD + PATH), f.env)).status, 403);
   const invalid = fixture('https://admin-supabase-qa2.collect.ikanisa.com');
-  assert.equal((await invalid.handle()).status, 503); assert.deepEqual(invalid.calls, {backend: 0, legacy: 0, assets: 0});
+  assert.equal((await invalid.handle()).status, 403); assert.deepEqual(invalid.calls, {backend: 0, legacy: 0, assets: 0});
   assert.deepEqual(f.calls, {backend: 0, legacy: 0, assets: 0});
 });
 
-test('unrelated Admin app pages and explicit legacy mode preserve their existing routing', async () => {
+test('the BuriMunsi shell is available and legacy mode is refused', async () => {
   const f = fixture(); const response = await f.handle('/admin/login');
   assert.equal(await response.text(), 'OLD_SPA_FALLBACK');
   assert.equal(response.headers.get('Cache-Control'), 'no-store, no-transform');
   assert.equal(response.headers.has('Permissions-Policy'), false); assert.equal(response.headers.has('Content-Security-Policy'), false);
   assert.deepEqual(f.calls, {backend: 0, legacy: 0, assets: 1});
-  const legacy = fixture(PROD); legacy.env.COLLECT_BACKEND = 'cloudflare';
-  assert.equal(await (await legacy.handle()).text(), 'OLD_SPA_FALLBACK');
-  assert.deepEqual(legacy.calls, {backend: 0, legacy: 0, assets: 1});
+  const legacy = fixture(); legacy.env.COLLECT_BACKEND = 'cloudflare';
+  assert.equal((await legacy.handle()).status, 503);
+  assert.deepEqual(legacy.calls, {backend: 0, legacy: 0, assets: 0});
 });
 
-test('Supabase production and QA templates use the bounded parent-first selector', async () => {
-  for (const [name, origin] of [['wrangler.supabase.jsonc', PROD], ['wrangler.supabase-qa.jsonc', QA]]) {
-    const configuration = JSON.parse(await readFile(new URL('../' + name, import.meta.url), 'utf8'));
-    assert.equal(configuration.assets.run_worker_first.filter(path => path === '/admin/auth/local-challenge*').length, 1, name);
-    assert.equal(configuration.assets.run_worker_first.some(path => path === '/admin/*' || path === '/admin/auth/*'), false, name);
-    assert.equal(configuration.vars.ADMIN_ORIGIN, origin, name);
-    assert.equal(configuration.vars.COLLECT_BACKEND, 'supabase', name);
-    assert.equal(configuration.vars.SUPABASE_URL, PROJECT, name);
-  }
+test('the BuriMunsi host routes the challenge through its own Worker', () => {
+  assert.equal(config.assets.run_worker_first, true);
+  assert.equal(config.vars.ADMIN_ORIGIN, BURI);
+  assert.equal(config.vars.COLLECT_BACKEND, 'supabase');
+  assert.equal(config.vars.SUPABASE_URL, PROJECT);
 });

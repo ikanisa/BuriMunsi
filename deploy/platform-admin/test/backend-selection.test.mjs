@@ -6,36 +6,25 @@ import worker, {createAdminWorker} from '../src/index.js';
 import {SUPABASE_ORIGIN, createCollectTransport} from '../src/supabase-transport.js';
 import {renderedDocument, GATEWAY_CSP} from './fixtures/document-renderers.mjs';
 
-const origin = 'https://platform-admin.collect.ikanisa.com';
+const config = JSON.parse(await readFile(new URL('../wrangler.burimunsi.jsonc', import.meta.url)));
+const origin = config.vars.ADMIN_ORIGIN;
 const cookie = '__Host-collect_admin=opaque_fixture; Path=/; Secure; HttpOnly; SameSite=Strict';
-const browserCookie = cookie.replace('__Host-collect_admin=', '__Host-collect_admin_rrlduytparvsjfmegalh=');
+const browserCookie = cookie.replace('__Host-collect_admin=', '__Host-burimunsi_admin_rrlduytparvsjfmegalh=');
 const req = (path, init) => new Request(origin + path, init);
 const forbidden = () => { throw new Error('Unexpected service use'); };
-const supabaseEnv = {ADMIN_ORIGIN: origin, COLLECT_BACKEND: 'supabase', SUPABASE_URL: SUPABASE_ORIGIN};
+const supabaseEnv = config.vars;
 
 function environment(extra = {}) {
   return {COLLECT_BACKEND: 'cloudflare', ADMIN_ORIGIN: origin, ASSETS: {fetch: forbidden}, PLATFORM_API: {fetch: forbidden}, ...extra};
 }
 
-test('explicit legacy Cloudflare fixture preserves the original request/service contract', async () => {
-  for (const mode of ['cloudflare']) {
-    let calls = 0;
-    const request = req('/api/admin/auth/session', {headers: {Origin: origin, Cookie: '__Host-collect_admin=fixture'}});
-    const env = environment({COLLECT_BACKEND: mode, PLATFORM_API: {fetch: async received => {
-      calls++; assert.equal(received, request);
-      return Response.json({user: null}, {headers: {'Set-Cookie': cookie, 'Cache-Control': 'public'}});
-    }}});
-    const response = await worker.fetch(request, env);
-    assert.equal(response.status, 200); assert.equal(calls, 1);
-    assert.equal(response.headers.get('Set-Cookie'), cookie);
-    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+test('past product origins and Cloudflare service selection are closed', async () => {
+  for (const other of ['https://admin-supabase-qa.collect.ikanisa.com', 'https://platform-admin.collect.ikanisa.com']) {
+    const response = await worker.fetch(new Request(other + '/api/admin/auth/session'), environment({...supabaseEnv, ADMIN_ORIGIN: other}));
+    assert.equal(response.status, 403);
   }
-});
-
-test('Cloudflare mode retains missing binding, unknown API, and wrong-host refusals', async () => {
-  assert.equal((await worker.fetch(req('/api/admin/auth/session'), environment({PLATFORM_API: null}))).status, 503);
-  assert.equal((await worker.fetch(req('/api/unknown'), environment())).status, 404);
-  assert.equal((await worker.fetch(new Request('https://wrong.invalid/api/admin/auth/session'), environment())).status, 403);
+  const response = await worker.fetch(req('/api/admin/auth/session'), environment());
+  assert.equal(response.status, 503);
 });
 
 test('explicit Supabase selection uses the nominated project once without touching Cloudflare or assets', async () => {
@@ -55,7 +44,7 @@ test('explicit Supabase selection uses the nominated project once without touchi
   }});
   const response = await entry.fetch(req('/api/admin/team?cursor=a%2Bb&cursor=c', {
     method: 'PATCH', body: content, headers: {Origin: origin,
-      Cookie: '__Host-collect_admin=old_fixture; __Host-collect_admin_rrlduytparvsjfmegalh=managed_fixture',
+      Cookie: '__Host-collect_admin=old_fixture; __Host-burimunsi_admin_rrlduytparvsjfmegalh=managed_fixture',
       'Idempotency-Key': 'fixture-operation', 'X-Collect-CSRF': 'fixture-csrf',
       'X-Collect-Requested-With': 'collect-admin', 'X-Collect-Admin': '1'},
   }), environment(supabaseEnv));
@@ -73,15 +62,15 @@ test('Supabase entrypoint binds cold Admin reads to its configured frontend with
       return new Response(null, {status: 204, headers: {'Set-Cookie': cookie}});
     }});
     const response = await entry.fetch(req('/api/admin/auth/session', {method,
-      headers: {'Sec-Fetch-Site': 'same-origin', Cookie: '__Host-collect_admin_rrlduytparvsjfmegalh=fixture'},
+      headers: {'Sec-Fetch-Site': 'same-origin', Cookie: '__Host-burimunsi_admin_rrlduytparvsjfmegalh=fixture'},
     }), environment(supabaseEnv));
     assert.equal(response.status, 204); assert.equal(calls, 1);
     assert.equal(response.headers.get('Set-Cookie'), browserCookie); assert.equal(await response.text(), '');
   }
 });
 
-test('Supabase entrypoint retains lost Admin refresh and Google exchange uncertainty without service fallback', async () => {
-  for (const [path, method] of [['/api/admin/auth/session', 'GET'], ['/api/admin/team', 'HEAD'], ['/v1/auth/google/callback', 'GET']]) {
+test('Supabase entrypoint retains lost Admin refresh uncertainty without service fallback', async () => {
+  for (const [path, method] of [['/api/admin/auth/session', 'GET'], ['/api/admin/team', 'HEAD']]) {
     let calls = 0;
     const entry = createAdminWorker({fetchImpl: async () => {calls++; throw new Error('synthetic lost custody response');}});
     const response = await entry.fetch(req(path, {method}), environment(supabaseEnv));
@@ -105,8 +94,8 @@ test('invalid explicit backend or project configuration refuses API and static u
   assert.equal(calls, 0);
 });
 
-test('both backends preserve ordinary static asset bytes and HTML no-transform behavior', async () => {
-  for (const fields of [{}, supabaseEnv]) {
+test('dedicated host preserves ordinary static asset bytes and HTML no-transform behavior', async () => {
+  for (const fields of [supabaseEnv]) {
     for (const [path, mime, body] of [['/index.html', 'text/html; charset=utf-8', '<html>exact fixture</html>'],
       ['/assets/a%20b.bin', 'application/octet-stream', 'exact fixture bytes'],
       ['/flutter_bootstrap.js', 'application/javascript', 'void 0;']]) {
@@ -175,18 +164,12 @@ test('post-dispatch mutation uncertainty stays explicit and never falls back to 
   assert.deepEqual(await response.json(), {code: 'proxy_outcome_unknown', reason: 'proxy_cookie_invalid'});
 });
 
-test('production and qualification profiles serve the React package using the Supabase transport', async () => {
-  for (const [file, directory] of [
-    ['wrangler.supabase.jsonc', '../../build/admin-web'],
-    ['wrangler.supabase-qa.jsonc', '../../build/admin-web-qualification'],
-  ]) {
-    const profile = JSON.parse(await readFile(new URL('../' + file, import.meta.url), 'utf8'));
-    assert.equal(profile.vars.COLLECT_BACKEND, 'supabase');
-    assert.equal(profile.vars.SUPABASE_URL, SUPABASE_ORIGIN);
-    assert.equal(profile.services, undefined);
-    assert.equal(profile.assets.directory, directory);
-    assert.equal(profile.routes[0].pattern, new URL(profile.vars.ADMIN_ORIGIN).hostname);
-  }
+test('the dedicated profile serves only the bound BuriMunsi React package', () => {
+  assert.equal(config.vars.COLLECT_BACKEND, 'supabase');
+  assert.equal(config.vars.SUPABASE_URL, SUPABASE_ORIGIN);
+  assert.equal(config.services, undefined);
+  assert.equal(config.assets.directory, '../../build/admin-web');
+  assert.equal(config.routes[0].pattern, new URL(origin).hostname);
 });
 
 test('integrated transport bytes retain the recorded current source identity', async () => {
@@ -194,7 +177,8 @@ test('integrated transport bytes retain the recorded current source identity', a
   const source = new URL('../src/', import.meta.url);
   const files = {...provenance.request_boundary_refactor.source_sha256s,
     ...provenance.frontend_session_realm_successor.source_sha256s,
-    ...provenance.burimunsi_admin_successor.source_sha256s};
+    ...provenance.burimunsi_admin_successor.source_sha256s,
+    ...provenance.standalone_admin_successor.source_sha256s};
   const expected = (await readdir(source))
     .filter(name => /^(?:index|admin-session-realm|supabase-transport|transport-[\w-]+)\.js$/.test(name)).sort();
   assert.deepEqual(Object.keys(files).sort(), expected);
@@ -221,25 +205,11 @@ test('ordinary selection defaults to nominated Supabase and missing configuratio
   assert.equal(calls, 1);
 });
 
-test('isolated qualification frontend uses only its exact nominated project and origin', async () => {
-  const qa='https://admin-supabase-qa.collect.ikanisa.com'; let calls=0;
-  const entry=createAdminWorker({fetchImpl:async upstream=>{
-    calls++; assert.equal(upstream.url,SUPABASE_ORIGIN+'/functions/v1/admin-api/api/admin/auth/session');
-    assert.equal(upstream.headers.get('Origin'),qa);return Response.json({user:null});
-  }});
-  const response=await entry.fetch(new Request(qa+'/api/admin/auth/session'),environment({...supabaseEnv,ADMIN_ORIGIN:qa}));
-  assert.equal(response.status,200);assert.equal(calls,1);
-  const other='https://admin-supabase-qa2.collect.ikanisa.com';
-  const denied=await entry.fetch(new Request(other+'/api/admin/auth/session'),environment({...supabaseEnv,ADMIN_ORIGIN:other}));
-  assert.equal(denied.status,503);assert.equal(calls,1);
-});
-
-
 test('default native fetch retains its global receiver on both supported entrypoints', async () => {
   const original=globalThis.fetch;let calls=0;
   try {
     globalThis.fetch=function(request){if(this!==globalThis)throw new TypeError('Illegal invocation');calls++;assert.equal(request.url,SUPABASE_ORIGIN+'/functions/v1/admin-api/api/admin/auth/session');return Promise.resolve(Response.json({user:null}));};
-    for(const handle of [request=>createAdminWorker().fetch(request,environment(supabaseEnv)),createCollectTransport({frontendOrigin:origin})]){
+    for(const handle of [request=>createAdminWorker().fetch(request,environment(supabaseEnv)),createCollectTransport({frontendOrigin:origin, allowedFrontendOrigins:[origin], burimunsi:true})]){
       const response=await handle(req('/api/admin/auth/session'));assert.equal(response.status,200);assert.deepEqual(await response.json(),{user:null});
     }
     assert.equal(calls,2);

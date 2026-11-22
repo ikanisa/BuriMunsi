@@ -1,14 +1,3 @@
-export const collectAdminBrand = {
-  id: 'collect-admin',
-  product: 'Collect',
-  name: 'Collect Admin',
-  description: 'Collect platform operations console.',
-  icon: 'icons/collect-web-512.png',
-  iconSha256: 'cae23ce3562e8aac2e248e7b22f7feed194f4fcfd2b57725ec1026f064bb0ad9',
-  iconSize: '512x512',
-  iconPurpose: 'any maskable',
-};
-
 export const burimunsiAdminBrand = {
   id: 'burimunsi-admin',
   product: 'BuriMunsi',

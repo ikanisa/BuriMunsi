@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { packagePwa, verifyPwaPackage } from '../../scripts/package-pwa.mjs';
 import {sourceIdentity} from '../../scripts/build-identity.mjs';
-import {burimunsiAdminBrand, collectAdminBrand} from '../../src/product-brand.mjs';
+import {burimunsiAdminBrand as brand} from '../../src/product-brand.mjs';
 
-const icon = fileURLToPath(new URL('../../public/icons/collect-web-512.png', import.meta.url));
+const icon = fileURLToPath(new URL('../../public/icons/burimunsi-432.png', import.meta.url));
 
 async function fixture(t) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'collect-admin-pwa-'));
@@ -18,13 +18,13 @@ async function fixture(t) {
   const output = path.join(base, 'candidate');
   await fs.mkdir(path.join(input, 'assets'), { recursive: true });
   await fs.mkdir(path.join(input, 'icons'));
-  await fs.copyFile(icon, path.join(input, 'icons/collect-web-512.png'));
+  await fs.copyFile(icon, path.join(input, 'icons/burimunsi-432.png'));
   await fs.writeFile(path.join(input, 'assets/admin-entry.js'), 'import "./chunk-xyz.js";');
   await fs.writeFile(path.join(input, 'assets/chunk-xyz.js'), 'console.log("synthetic chunk")');
   await fs.writeFile(path.join(input, 'assets/app-def.css'), 'body { color: black; }');
   await fs.writeFile(path.join(input, 'index.html'), `<!doctype html><html><head>
-    <title>Collect Admin</title><meta name="description" content="Collect platform operations console.">
-    <link rel="icon" href="./icons/collect-web-512.png">
+    <title>BuriMunsi Admin</title><meta name="description" content="BuriMunsi group savings administration.">
+    <link rel="icon" href="./icons/burimunsi-432.png">
     <link rel="manifest" href="./manifest.json"><link rel="stylesheet" href="./assets/app-def.css">
     <script type="module" src="./assets/admin-entry.js"></script></head><body><div id="root"></div></body></html>`);
   return { base, input, output };
@@ -42,7 +42,7 @@ test('packages exact versioned assets with a static-only, unqualified worker', a
   assert.equal(new URL(entry, 'https://admin.example.test/admin/groups/one').pathname, `/_build/${result.assetId}/assets/admin-entry.js`);
   assert.equal(new URL(manifestUrl, 'https://admin.example.test/admin/groups/one').pathname, '/manifest.json');
   const manifest = JSON.parse(await fs.readFile(path.join(output, 'manifest.json'), 'utf8'));
-  assert.equal(manifest.name, 'Collect Admin');
+  assert.equal(manifest.name, 'BuriMunsi Admin');
   assert.equal(manifest.scope, '.');
   assert.equal(manifest.start_url, '.');
   const manifestEntry = 'https://admin.example.test/manifest.json';
@@ -51,7 +51,7 @@ test('packages exact versioned assets with a static-only, unqualified worker', a
     'https://admin.example.test/#/admin/sms-receipts',
     'https://admin.example.test/#/admin/reconciliations',
   ]);
-  assert.equal(manifest.icons[0].src, `./_build/${result.assetId}/icons/collect-web-512.png`);
+  assert.equal(manifest.icons[0].src, `./_build/${result.assetId}/icons/burimunsi-432.png`);
   const worker = await fs.readFile(path.join(output, 'custom-sw.js'), 'utf8');
   assert.match(worker, /credentials: 'omit'/);
   assert.match(worker, /crypto\.subtle\.digest\('SHA-256'/);
@@ -62,13 +62,10 @@ test('packages exact versioned assets with a static-only, unqualified worker', a
 
 test('the BuriMunsi PWA binds its own identity and excludes Collect app associations', async (t) => {
   const { input, output } = await fixture(t);
-  const htmlPath = path.join(input, 'index.html');
-  const brand = burimunsiAdminBrand;
-  await fs.writeFile(htmlPath, (await fs.readFile(htmlPath, 'utf8'))
-    .replace(collectAdminBrand.name, brand.name)
-    .replace(collectAdminBrand.description, brand.description)
-    .replace(collectAdminBrand.icon, brand.icon));
-  await fs.copyFile(new URL('../../src/ui/assets/burimunsi-432.png', import.meta.url), path.join(input, brand.icon));
+  await assert.rejects(packagePwa(input, output, {publicBuild: {
+    deployment_profile: {id: 'collect-managed-production'},
+    backend: 'supabase', public_build_config_sha256: 'a'.repeat(64),
+  }}), /bound public Supabase build configuration/);
   const {assetId} = await packagePwa(input, output, {publicBuild: {
     deployment_profile: {id: 'burimunsi-admin-production'},
     backend: 'supabase', public_build_config_sha256: 'a'.repeat(64),
@@ -79,11 +76,10 @@ test('the BuriMunsi PWA binds its own identity and excludes Collect app associat
   assert.equal(manifest.icons[0].sizes, '432x432');
   assert.equal(manifest.icons[0].purpose, 'any');
   assert.doesNotMatch(await fs.readFile(path.join(output, '_headers'), 'utf8'), /api\.collect\.ikanisa\.com/);
-  await assert.rejects(fs.access(path.join(output, '_build', assetId, collectAdminBrand.icon)), {code: 'ENOENT'});
   const associations = path.join(output, '.well-known');
   await fs.mkdir(associations);
   for (const name of ['assetlinks.json', 'apple-app-site-association']) await fs.writeFile(path.join(associations, name), '{}');
-  await assert.rejects(verifyPwaPackage(output), /includes assets for the Collect app/);
+  await assert.rejects(verifyPwaPackage(output), /Invalid Admin cache inventory/);
 });
 
 test('rejects a changed packaged asset and reserved API files', async (t) => {
@@ -133,7 +129,7 @@ test('rejects an absolute Vite asset base and an unapproved icon', async (t) => 
   await fs.writeFile(htmlPath, html.replace('./assets/admin-entry.js', '/assets/admin-entry.js'));
   await assert.rejects(packagePwa(input, output), /relative Vite asset base/);
   await fs.writeFile(htmlPath, html);
-  await fs.writeFile(path.join(input, 'icons/collect-web-512.png'), 'not the Collect icon');
+  await fs.writeFile(path.join(input, 'icons/burimunsi-432.png'), 'not the approved icon');
   await assert.rejects(packagePwa(input, output), /approved asset/);
 });
 

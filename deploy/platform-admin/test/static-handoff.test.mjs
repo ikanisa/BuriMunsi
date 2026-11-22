@@ -5,30 +5,20 @@ import {createHash} from 'node:crypto';
 import worker, {createAdminWorker} from '../src/index.js';
 import {STATIC_RECOVERY_SCRIPT, versionedStatic} from '../src/static-recovery.js';
 import {recoveryDom, installedWorker} from './fixtures/static-handoff-harness.mjs';
-import {canonicalProfile} from '../../../supabase/functions/_shared/deployment-profile.js';
 
-const origin = 'https://admin-supabase-qa.collect.ikanisa.com';
-// Keep the managed fixture bound to the reviewed deployment profile.
-const managedSupabaseOrigin = JSON.parse(await readFile(new URL('../wrangler.supabase.jsonc', import.meta.url))).vars.SUPABASE_URL;
+const configuration = JSON.parse(await readFile(new URL('../wrangler.burimunsi.jsonc', import.meta.url)));
+const origin = configuration.vars.ADMIN_ORIGIN;
 const prior = '/_build/7f23b213325ba63698284d8d31dcb67e3487cf6b4d279e5ff50506950b206198/main.dart.js';
 const current = '/_build/1ea54bebc61ec3e3833ded3175575b770be751cf902961803c3611dd35a7a391/main.dart.js';
-const environment = assets => ({ADMIN_ORIGIN: origin, COLLECT_BACKEND: 'supabase',
-  SUPABASE_URL: managedSupabaseOrigin, ASSETS: assets});
+const environment = ASSETS => ({...configuration.vars, ASSETS});
 const request = (path = prior, init) => new Request(origin + path, init);
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const html = () => new Response('<html>current fixture</html>', {headers: {
   'Content-Type': 'text/html', 'Cache-Control': 'public, max-age=31536000, immutable'}});
 
-test('Supabase production and QA route namespaced assets through the guard without changing managed routes', async () => {
-  for (const name of ['wrangler.supabase.jsonc', 'wrangler.supabase-qa.jsonc']) {
-    const profile = JSON.parse(await readFile(new URL('../' + name, import.meta.url)));
-    assert.equal(profile.assets.run_worker_first.filter(path => path === '/_build/*').length, 1, name);
-    assert.equal(profile.assets.not_found_handling, 'single-page-application', name);
-    for (const path of ['/api', '/api/*', '/v1', '/v1/*', '/functions', '/functions/*',
-      '/privacy/account-deletion', '/privacy/account-deletion/*']) {
-      assert.ok(profile.assets.run_worker_first.includes(path), name + ': ' + path);
-    }
-  }
+test('the standalone profile routes versioned assets through the Worker', () => {
+  assert.equal(configuration.assets.run_worker_first, true);
+  assert.equal(configuration.assets.not_found_handling, 'single-page-application');
 });
 
 test('missing predecessor main becomes explicit noncacheable recovery without provider dispatch', async () => {
@@ -60,13 +50,8 @@ test('static recovery completes even when the rejected asset does not finish can
 });
 
 test('explicit Cloud profile still serves verified and recovery assets', async () => {
-  const profile = {format:'collect.deployment.v1', id:'collect-static-test', mode:'managed', environment:'qualification',
-    supabase_origin:managedSupabaseOrigin, member_api_origin:origin, admin_origin:origin,
-    public_origin:'https://collect.ikanisa.com', google_callback_origin:origin};
-  const encoded = canonicalProfile(profile);
-  const env = {...environment({fetch: async received => new URL(received.url).pathname === current
-    ? new Response('synthetic verified main', {headers:{'Content-Type':'text/javascript'}}) : html()}),
-    APP_ENVIRONMENT:profile.environment, COLLECT_DEPLOYMENT_PROFILE:encoded, COLLECT_DEPLOYMENT_PROFILE_SHA256:sha(encoded)};
+  const env = environment({fetch: async received => new URL(received.url).pathname === current
+    ? new Response('synthetic verified main', {headers:{'Content-Type':'text/javascript'}}) : html()});
   const missing = await worker.fetch(request(prior), env);
   assert.equal(missing.status, 200);
   assert.match(missing.headers.get('Content-Type'), /^text\/javascript/);
@@ -135,9 +120,9 @@ test('HEAD recovery has no body; mutations and wrong host cannot dispatch static
 test('uncontrolled first-visit recovery is named/manual/idempotent and touches no private state', () => {
   const dom = recoveryDom(); dom.run(STATIC_RECOVERY_SCRIPT);
   const panel = dom.panel(); assert.ok(panel); assert.equal(panel.attributes.role, 'alert');
-  assert.equal(panel.children[0].textContent, "Collect couldn't load this page");
+  assert.equal(panel.children[0].textContent, "BuriMunsi couldn't load this page");
   assert.match(panel.children[1].textContent, /When all are blank, return to Admin online in the same tabs/);
-  const reopen = panel.children[2]; assert.equal(reopen.textContent, 'Reopen Collect');
+  const reopen = panel.children[2]; assert.equal(reopen.textContent, 'Reopen BuriMunsi');
   assert.equal(dom.reloads, 0); assert.equal(dom.forbiddenEffects, 0);
   dom.run(STATIC_RECOVERY_SCRIPT); assert.equal(dom.document.body.children.length, 1);
   reopen.listeners.click(); assert.equal(dom.reloads, 1); assert.equal(dom.forbiddenEffects, 0);

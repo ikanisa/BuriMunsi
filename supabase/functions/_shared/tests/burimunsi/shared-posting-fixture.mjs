@@ -3,7 +3,7 @@ import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {appendContributionCollision,appendContributionEntry,appendContributionSnapshots} from '../../domain/contribution-posting.mjs';
 const root=new URL('../../../../../',import.meta.url);
-export const upstream=readFileSync(new URL('upstream/collect/supabase/functions/_shared/domain/payments.js',root),'utf8');
+export const upstream=readFileSync(new URL('vendor/receiver-compat/supabase/functions/_shared/domain/payments.js',root),'utf8');
 export const refactored=readFileSync(new URL('integration/collect-posting/payments.js',root),'utf8');
 export const expectedBlob='63f4ba68c2de7b4aa1cf3dc5523cf354aff5c643';
 export function blob(text){const b=Buffer.from(text);return createHash('sha1').update(`blob ${b.length}\0`).update(b).digest('hex');}

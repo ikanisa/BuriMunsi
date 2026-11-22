@@ -3,7 +3,7 @@ export const hostingHeaders = `/*
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
   Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), fullscreen=(self)
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'self' https://api.collect.ikanisa.com; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests
   X-Robots-Tag: noindex, nofollow
 
 /
@@ -27,23 +27,11 @@ export const hostingHeaders = `/*
 /version.json
   Cache-Control: no-cache
 
-/.well-known/assetlinks.json
-  Content-Type: application/json; charset=utf-8
-  Cache-Control: public, max-age=300, must-revalidate
-
-/.well-known/apple-app-site-association
-  Content-Type: application/json; charset=utf-8
-  Cache-Control: public, max-age=300, must-revalidate
-
 /_build/*
   Cache-Control: public, max-age=31536000, immutable
 `;
 
 export const robotsRules = 'User-agent: *\nDisallow: /\n';
-
-export const burimunsiHostingHeaders = hostingHeaders.replace(
-  "frame-src 'self' https://api.collect.ikanisa.com;", "frame-src 'self';",
-);
 
 export function faviconRedirect(icon) {
   return `/favicon.ico /${icon} 302\n`;

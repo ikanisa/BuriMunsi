@@ -29,14 +29,14 @@ export const STATIC_RECOVERY_SCRIPT = String.raw`(function collectStaticRecovery
     panel.style.cssText = 'box-sizing:border-box;width:calc(100% - 48px);max-width:440px;margin:clamp(32px,12vh,120px) auto;padding:24px 0;color:#191c1f;background:#fff;font:18px/1.5 Inter,system-ui,sans-serif;overflow-wrap:anywhere;';
     const title = document.createElement('h1');
     title.id = 'collect-static-recovery-title';
-    title.textContent = "Collect couldn't load this page";
+    title.textContent = "BuriMunsi couldn't load this page";
     title.style.cssText = 'font-size:clamp(24px,5vw,32px);font-weight:500;line-height:1.15;margin:0 0 16px;';
     const guidance = document.createElement('p');
     guidance.textContent = 'Finish any open work. Open about:blank in each Admin tab. When all are blank, return to Admin online in the same tabs.';
     guidance.style.cssText = 'margin:0 0 24px;';
     const reopen = document.createElement('button');
     reopen.type = 'button';
-    reopen.textContent = 'Reopen Collect';
+    reopen.textContent = 'Reopen BuriMunsi';
     reopen.style.cssText = 'box-sizing:border-box;min-height:48px;max-width:100%;padding:12px 24px;border:1px solid #191c1f;border-radius:999px;background:#191c1f;color:#fff;font:500 18px/1.3 Inter,system-ui,sans-serif;white-space:normal;cursor:pointer;';
     reopen.addEventListener('click', function () { window.location.reload(); });
     panel.append(title, guidance, reopen);

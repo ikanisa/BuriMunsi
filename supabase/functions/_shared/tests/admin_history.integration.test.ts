@@ -8,8 +8,8 @@ import {connection,PostgresDatabase} from './helpers/fenced-postgres.js';
 import {createHandler} from './helpers/real-handler.js';
 import {lockCollectMutation} from '../postgres-mutation-lock.js';
 import {encrypt} from './helpers/module-domain-encryption.js';
-import {callTool} from '../../../../tools/collect-admin-mcp/src/tools.mjs';
-import {parseSession} from '../../../../tools/collect-admin-mcp/src/api.mjs';
+import {callTool} from '../../../../tools/admin-mcp/src/tools.mjs';
+import {parseSession} from '../../../../tools/admin-mcp/src/api.mjs';
 
 // Local integration evidence only: real handlers/transactions, synthetic GoTrue.
 // No hosted Supabase, delivery service, financial posting or real OTP is used.

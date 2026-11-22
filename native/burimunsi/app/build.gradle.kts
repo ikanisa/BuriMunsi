@@ -57,7 +57,7 @@ if (sharedOrigin.get().isNotBlank()) {
 val authOrigin = sharedOrigin.map { if (it.isBlank()) apiOrigin.get() else it }
 val publicKey = providers.gradleProperty("collectPublishableKey").orElse("")
 require(publicKey.get().isBlank() || Regex("sb_publishable_[A-Za-z0-9_-]{10,300}").matches(publicKey.get())) { "Only a public Supabase publishable key may enter native configuration" }
-val collectRoot = providers.gradleProperty("collectRoot").orElse(rootProject.projectDir.resolve("../../upstream/collect").absolutePath)
+val receiverSources = rootProject.projectDir.resolve("../../vendor/receiver-compat")
 
 android {
     // Retains the reused receiver's BuildConfig package. Application IDs remain separate.
@@ -145,13 +145,13 @@ val prepareReceiver by tasks.registering(PrepareReceiverTask::class) {
     inputs.file(rootProject.file("integration/receiver-sources.json"))
     inputs.file(rootProject.file("scripts/prepare_receiver.py"))
     inputs.file(rootProject.file("scripts/receiver_adaptations.py"))
-    inputs.files(fileTree(collectRoot.get()) {
+    inputs.files(fileTree(receiverSources) {
         include("android/app/src/main/kotlin/app/cool/mobile/receiver_sms/*.kt")
     })
     // Recheck exact pins and generated integrity even when Gradle considers inputs unchanged.
     // Never let a stale/tampered generated tree silently bypass the extraction gate.
     outputs.upToDateWhen { false }
-    commandLine("python3", rootProject.file("scripts/prepare_receiver.py"), "--collect-root", collectRoot.get(), "--output", generatedSources.get().asFile)
+    commandLine("python3", rootProject.file("scripts/prepare_receiver.py"), "--output", generatedSources.get().asFile)
 }
 androidComponents {
     onVariants(selector().withFlavor("device" to "internal_receiver")) { variant ->

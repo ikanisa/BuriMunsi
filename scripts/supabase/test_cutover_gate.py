@@ -67,7 +67,7 @@ class CutoverGateTest(unittest.TestCase):
         migration = self.root / 'supabase/migrations/baseline.sql'
         migration.parent.mkdir(parents=True)
         migration.write_text('synthetic fixture baseline')
-        operator = self.root / 'tools/collect-admin-mcp/client.mjs'
+        operator = self.root / 'tools/admin-mcp/client.mjs'
         operator.parent.mkdir(parents=True)
         operator.write_text('original synthetic client')
         before = source_identity(self.root)
@@ -85,7 +85,7 @@ class CutoverGateTest(unittest.TestCase):
             'assets/brand/collect-logo.svg',
             'content/product/collect_capabilities.json',
             'contracts/member-read.json',
-            'upstream/collect/android/receiver/CollectSmsReceiver.kt',
+            'vendor/receiver-compat/android/receiver/CollectSmsReceiver.kt',
             '.dvmrc',
             '.supabase-cli-version',
         )

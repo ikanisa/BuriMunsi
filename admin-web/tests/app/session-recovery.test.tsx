@@ -69,7 +69,7 @@ describe('Admin session recovery through the router', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => now() + elapsed);
 
     fireEvent.click(screen.getByRole('link', {name: 'Groups'}));
-    await screen.findByRole('heading', {name: 'Welcome to Collect'}, {timeout: 4_000});
+    await screen.findByRole('heading', {name: 'Welcome to BuriMunsi'}, {timeout: 4_000});
     expect(router.state.location.pathname).toBe('/admin/login');
     expect(new URLSearchParams(router.state.location.search).get('returnTo')).toBe('/admin/groups');
     expect(requests.filter(path => !path.includes('/auth/'))).toEqual([]);

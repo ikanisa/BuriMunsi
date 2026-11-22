@@ -232,5 +232,12 @@
     },
     "change": "Bind the dedicated BuriMunsi Admin origin, explicit production profile and host-only cookie. Admit only the Admin APIs, the security challenge and the existing privacy routes on this host.",
     "deployed": false
+  },
+  "standalone_admin_successor": {
+    "source_sha256s": {
+      "index.js": "d3f1f52efe65fd1e3b1bee6b78c39352a791c37255d24aecc215b5ad00727eab"
+    },
+    "change": "Require the dedicated BuriMunsi Admin host and explicit production profile for all requests.",
+    "deployed": false
   }
 }

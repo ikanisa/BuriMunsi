@@ -1,13 +1,9 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { cacheAsset, filesUnder, renderWorker, sha256, templatePath, versionedAssetHash } from './pwa-assets.mjs';
-import { burimunsiHostingHeaders, faviconRedirect, hostingHeaders, robotsRules } from './pwa-hosting.mjs';
-import { burimunsiAdminBrand, collectAdminBrand } from '../src/product-brand.mjs';
+import { faviconRedirect, hostingHeaders, robotsRules } from './pwa-hosting.mjs';
+import { burimunsiAdminBrand as brand } from '../src/product-brand.mjs';
 import { BURIMUNSI_ADMIN_PROFILE_ID } from '../../deploy/platform-admin/src/admin-session-realm.js';
-
-function brandForBuild(publicBuild) {
-  return publicBuild?.deployment_profile?.id === BURIMUNSI_ADMIN_PROFILE_ID ? burimunsiAdminBrand : collectAdminBrand;
-}
 
 /**
  * Package a Vite build created with ADMIN_ASSET_BASE=./ as an unqualified
@@ -22,7 +18,6 @@ export async function packagePwa(inputDirectory, outputDirectory, { publicBuild 
   const stat = await fs.lstat(input);
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Invalid Vite build directory');
   const all = await filesUnder(input);
-  const brand = brandForBuild(publicBuild);
   if (!all.includes('index.html') || !all.includes(brand.icon) ||
       !all.includes('assets/admin-entry.js')) {
     throw new Error('Vite build must contain the Admin shell, JavaScript and product icon');
@@ -30,8 +25,7 @@ export async function packagePwa(inputDirectory, outputDirectory, { publicBuild 
   if (sha256(await fs.readFile(path.join(input, brand.icon))) !== brand.iconSha256) {
     throw new Error('Admin icon does not match the approved asset');
   }
-  const runtime = all.filter((name) => name !== 'index.html' &&
-    !(brand === burimunsiAdminBrand && name === collectAdminBrand.icon));
+  const runtime = all.filter((name) => name !== 'index.html');
   if (runtime.some((name) =>
     /^(?:api|v1|functions|privacy|account-deletion)(?:\/|$)/.test(name) ||
     /^(?:custom-sw\.js|manifest\.json|version\.json|_headers|_redirects)$/.test(name) ||
@@ -60,6 +54,7 @@ export async function packagePwa(inputDirectory, outputDirectory, { publicBuild 
 
   // No deployable or qualified backend claim is manufactured by this package.
   if (publicBuild && (publicBuild.backend !== 'supabase' ||
+      publicBuild.deployment_profile?.id !== BURIMUNSI_ADMIN_PROFILE_ID ||
       !/^[a-f0-9]{64}$/.test(publicBuild.public_build_config_sha256 ?? ''))) {
     throw new Error('Expected a bound public Supabase build configuration');
   }
@@ -95,7 +90,7 @@ export async function packagePwa(inputDirectory, outputDirectory, { publicBuild 
     await fs.writeFile(path.join(output, 'index.html'), index, { flag: 'wx' });
     await fs.writeFile(path.join(output, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, { flag: 'wx' });
     await fs.writeFile(path.join(output, 'version.json'), `${JSON.stringify(version, null, 2)}\n`, { flag: 'wx' });
-    await fs.writeFile(path.join(output, '_headers'), brand === burimunsiAdminBrand ? burimunsiHostingHeaders : hostingHeaders, { flag: 'wx' });
+    await fs.writeFile(path.join(output, '_headers'), hostingHeaders, { flag: 'wx' });
     await fs.writeFile(path.join(output, '_redirects'), faviconRedirect(assetPrefix + brand.icon), { flag: 'wx' });
     await fs.writeFile(path.join(output, 'robots.txt'), robotsRules, { flag: 'wx' });
 
@@ -117,7 +112,6 @@ export async function packagePwa(inputDirectory, outputDirectory, { publicBuild 
 export async function verifyPwaPackage(directory) {
   const root = path.resolve(directory);
   const version = JSON.parse(await fs.readFile(path.join(root, 'version.json'), 'utf8'));
-  const brand = brandForBuild(version);
   const worker = await fs.readFile(path.join(root, 'custom-sw.js'), 'utf8');
   const urlMatch = worker.match(/const CACHE_URLS = (\[[^\n]*\]);/);
   const hashMatch = worker.match(/const CACHE_HASHES = (\{[^\n]*\});/);
@@ -127,17 +121,11 @@ export async function verifyPwaPackage(directory) {
   if (!/^[a-f0-9]{64}$/.test(version.asset_manifest_sha256 ?? '')) throw new Error('Invalid Admin asset version');
   const prefix = `_build/${version.asset_manifest_sha256}/`;
   const rootFiles = ['index.html', 'manifest.json', 'version.json', 'custom-sw.js', '_headers', '_redirects', 'robots.txt'];
-  const associations = ['.well-known/apple-app-site-association', '.well-known/assetlinks.json'];
   const files = await filesUnder(root);
   const assets = files.filter(name => name.startsWith(prefix));
   const expectedUrls = ['./', './manifest.json', './version.json', ...assets.map(name => `./${name}`)];
-  if (brand === burimunsiAdminBrand &&
-      (files.some(name => name.startsWith('.well-known/')) || assets.includes(prefix + collectAdminBrand.icon))) {
-    throw new Error('BuriMunsi Admin includes assets for the Collect app');
-  }
-  if (!rootFiles.every(name => files.includes(name)) || (files.some(name => name.startsWith('.well-known/')) &&
-      !associations.every(name => files.includes(name))) ||
-      files.some(name => !rootFiles.includes(name) && !associations.includes(name) && !name.startsWith(prefix)) ||
+  if (!rootFiles.every(name => files.includes(name)) ||
+      files.some(name => !rootFiles.includes(name) && !name.startsWith(prefix)) ||
       JSON.stringify(urls) !== JSON.stringify(expectedUrls) || Object.keys(hashes).length !== expectedUrls.length) {
     throw new Error('Invalid Admin cache inventory');
   }
@@ -151,7 +139,8 @@ export async function verifyPwaPackage(directory) {
   }
   if (version.frontend !== 'react-vite' || version.shipping_candidate !== false ||
       version.qualification_complete !== false || !['unconfigured', 'supabase'].includes(version.backend) ||
-      (version.backend === 'supabase' && !/^[a-f0-9]{64}$/.test(version.public_build_config_sha256 ?? ''))) {
+      (version.backend === 'supabase' && (version.deployment_profile?.id !== BURIMUNSI_ADMIN_PROFILE_ID ||
+        !/^[a-f0-9]{64}$/.test(version.public_build_config_sha256 ?? '')))) {
     throw new Error('Expected an unqualified React Admin package');
   }
   const assetId = versionedAssetHash(assets.map(name => [name.slice(prefix.length), hashes['./' + name]]));
@@ -169,7 +158,7 @@ export async function verifyPwaPackage(directory) {
     throw new Error('Admin entry and cache differ from the asset version');
   }
   const text = (name) => fs.readFile(path.join(root, name), 'utf8');
-  const headers = brand === burimunsiAdminBrand ? burimunsiHostingHeaders : hostingHeaders;
+  const headers = hostingHeaders;
   if (await text('_headers') !== headers || await text('robots.txt') !== robotsRules ||
       await text('_redirects') !== faviconRedirect(icon)) {
     throw new Error('Admin hosting rules or robots policy differ from the package contract');

@@ -1,5 +1,5 @@
 import { ORIGINS, OperatorError, need, sha } from './contract.mjs';
-import { formatAdminCookie, parseAdminCookie } from '../../collect-admin-mcp/src/admin_cookie.mjs';
+import { formatAdminCookie, parseAdminCookie } from '../../admin-mcp/src/admin_cookie.mjs';
 
 const MAX_RESPONSE_BYTES = 256 * 1024;
 const JSON_MEDIA_TYPE = 'application/json';

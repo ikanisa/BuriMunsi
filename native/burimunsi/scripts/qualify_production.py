@@ -70,7 +70,7 @@ def fingerprint(source):
     source = Path(source).absolute()
     need(source.resolve() == source and not any(p.is_symlink() for p in (source, *source.parents)), 'source_link_refused')
     rows = []
-    for base in (source / 'native/burimunsi', source / 'upstream/collect'):
+    for base in (source / 'native/burimunsi', source / 'vendor/receiver-compat'):
         need(base.is_dir(), 'source_missing')
         for path in pipeline.fingerprint_source_files(base):
             raw = readiness._physical(path, 64 * 1024 * 1024)

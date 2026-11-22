@@ -23,7 +23,7 @@ The only business HTTP endpoint is `POST /api/admin/notification-operator`, with
 
 The interactive broker signs in by email using `/api/admin/auth/otp` and `/api/admin/auth/verify`, then reads `/api/admin/auth/session` and the protected `/api/admin/auth/email-verification` sidecar. A later deliberate verification uses protected `/api/admin/auth/email/request` and `/api/admin/auth/email/verify` for the current server-selected email. `/api/admin/auth/logout` ends the session. No authenticator enrollment or factor challenge is required. Optional password compatibility in the HTTP adapter is not the interactive default and grants no email proof by itself.
 
-The human enters the email address and code in `/dev/tty`. Initial sign-in accepts six to ten digits. Sensitive verification uses six digits. The server supplies the code lifetime, up to 30 minutes. For CAPTCHA the broker prints the fixed frontend `/admin/auth/local-challenge` URL and a public pairing descriptor. The human opens that page, pastes the descriptor and completes CAPTCHA. The maintained `collect-admin-mcp` helper uses a short-lived Ed25519 signed offer on an exclusive `127.0.0.1` listener and accepts one matching completion from the selected exact frontend origin. No browser password, cookie or Auth token is extracted. The opaque candidate and CAPTCHA token remain in memory, expire at the original pairing deadline and are consumed once for the selected origin and purpose. Cancellation, refused proof or an uncertain verification is never replayed automatically. A later deliberate challenge needs a fresh human completion. If the selected frontend has no current matching renderer, stop without using another origin or bypass. The existing cookie and CSRF remain in broker process memory and are never returned by IPC/MCP; protected email verification retains both. Memory-only is not a promise of heap zeroization. Quitting closes IPC, cancels active calls, and allows their journal updates to settle before the broker requests logout.
+The human enters the email address and code in `/dev/tty`. Initial sign-in accepts six to ten digits. Sensitive verification uses six digits. The server supplies the code lifetime, up to 30 minutes. For CAPTCHA the broker prints the fixed frontend `/admin/auth/local-challenge` URL and a public pairing descriptor. The human opens that page, pastes the descriptor and completes CAPTCHA. The maintained `tools/admin-mcp` helper uses a short-lived Ed25519 signed offer on an exclusive `127.0.0.1` listener and accepts one matching completion from the selected exact frontend origin. No browser password, cookie or Auth token is extracted. The opaque candidate and CAPTCHA token remain in memory, expire at the original pairing deadline and are consumed once for the selected origin and purpose. Cancellation, refused proof or an uncertain verification is never replayed automatically. A later deliberate challenge needs a fresh human completion. If the selected frontend has no current matching renderer, stop without using another origin or bypass. The existing cookie and CSRF remain in broker process memory and are never returned by IPC/MCP; protected email verification retains both. Memory-only is not a promise of heap zeroization. Quitting closes IPC, cancels active calls, and allows their journal updates to settle before the broker requests logout.
 
 Every call carries the actual cookie's public `operator_session` UUID. This differs from the canonical server auth-session UUID returned in claim/confirmation/start receipts. Both are bound and checked; neither is invented from MCP connection/client identity. Each action rereads the current server session and protected email sidecar before and after its HTTP request. The public user DTO remains truthful AAL1 with `mfaAt:null`; a separate genuine, same-session email proof is required and is normally valid for at most five minutes, subject to authoritative server refusal. Missing, malformed, future, stale or unavailable proof grants no operator action. Password, Google, refresh, local time and MCP assertions cannot create this proof.
 
@@ -31,7 +31,7 @@ The operator authority binds the original actor, session, permissions, expiry, l
 
 Production and QA use distinct cookie realms. Each client accepts an optional session readback cookie only when it echoes the retained token in the original realm. A change in account, principal, public session or email ends local custody.
 
-Primary and staging are separate explicit choices. Only `https://platform-admin.collect.ikanisa.com` and `https://admin-supabase-qa.collect.ikanisa.com` are recognized Admin origins. There is no failover, inferred API URL, browser-cookie extraction, bearer substitution or external network proxy in this client. Actual source/config/fixture approval is still required before authenticating to either origin.
+Primary and staging are separate explicit choices. Only `https://burimunsi-admin.ikanisa.com` and `https://admin-supabase-qa.collect.ikanisa.com` are recognized Admin origins. There is no failover, inferred API URL, browser-cookie extraction, bearer substitution or external network proxy in this client. Actual source/config/fixture approval is still required before authenticating to either origin.
 
 ## Private broker and original operations
 
@@ -62,7 +62,7 @@ The example config is intentionally disabled. The owner must admit the current S
 Normal terminal launch shape, with the exact candidate/Node paths:
 
 ```text
-/Volumes/PRO-G40/Development/Node/bin/node "/Volumes/T7/01 Projects/COLLECT/tools/notification-operator/bin/broker.mjs" --config <absolute-private-approved-config> --config-sha256 <independently-reviewed-config-sha256> --state-dir <new-absolute-private-session-directory>
+node "tools/notification-operator/bin/broker.mjs" --config <absolute-private-approved-config> --config-sha256 <independently-reviewed-config-sha256> --state-dir <new-absolute-private-session-directory>
 ```
 
 After the user completes the human CAPTCHA and email-code sign-in, the terminal prints public descriptor metadata and its digest, without credentials. Review that exact descriptor. The proposed MCP registration uses the pinned Node command plus `bin/mcp.mjs --state-dir <the same directory> --descriptor-sha256 <the exact descriptor digest>`. Use normal TLS verification and a reviewed process environment; the broker refuses `NODE_TLS_REJECT_UNAUTHORIZED=0`. No Codex configuration or registration was changed. Running `bin/mcp.mjs` with no arguments is a usable metadata-only mode: discovery and all eight schemas are available, and tool calls explicitly report `authenticated_session_broker_unconfigured`.
@@ -76,13 +76,13 @@ The dependency-free adapter uses Node built-ins and the current primary MCP [std
 Run the exact pinned Node, without installing packages:
 
 ```text
-/Volumes/PRO-G40/Development/Node/bin/node --test --test-concurrency=1 test/operator.test.mjs test/mcp.test.mjs test/transport.test.mjs test/auth.test.mjs test/email_contract.test.mjs
+node --test --test-concurrency=1 test/operator.test.mjs test/mcp.test.mjs test/transport.test.mjs test/auth.test.mjs test/email_contract.test.mjs
 ```
 
 Tests exercise synthetic email proof and cookies over loopback HTTP, Unix
 sockets, and an MCP subprocess. The suite includes email-proof and broker
 recovery cases. The operator shares the maintained human-challenge handler
-and frame reader from `tools/collect-admin-mcp/src/` and binds its own
+and frame reader from `tools/admin-mcp/src/` and binds its own
 session and transport to the approved Admin origins.
 
 Hosted authentication, Codex registration, Mac Messages handoff, and SMS

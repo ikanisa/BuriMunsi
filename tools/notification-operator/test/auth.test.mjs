@@ -23,7 +23,7 @@ test('email OTP login and sensitive verification keep original cookie, CSRF, pub
   assert.equal(JSON.stringify(c.http.metadata()).includes(logout.csrf),false);
 });
 test('canonical email codes stay usable for the server lifetime without extending consumed proof freshness',async t=>{
-  const c=await setup(t,{origin:ORIGINS[1]});
+  const c=await setup(t,{origin:ORIGINS[0]});
   c.server.otpTtlSeconds=1800;
   const signIn=await c.http.requestEmailSignIn(EMAIL,await c.server.emailProof());
   assert.equal(signIn.expires_in,1800);
@@ -40,7 +40,7 @@ test('canonical email codes stay usable for the server lifetime without extendin
   assert.equal(c.server.counts[ROOT+'/email/verify'],1);
 });
 test('expired code receipts do not arm either verification path',async t=>{
-  const c=await setup(t,{origin:ORIGINS[1]});
+  const c=await setup(t,{origin:ORIGINS[0]});
   c.server.otpTtlSeconds=0;
   const signIn=await c.http.requestEmailSignIn(EMAIL,await c.server.emailProof());
   assert.equal(signIn.expires_in,0);
@@ -55,7 +55,7 @@ test('expired code receipts do not arm either verification path',async t=>{
   assert.equal(c.server.counts[ROOT+'/email/verify'],undefined);
 });
 test('code receipts above the server maximum remain unknown',async t=>{
-  const c=await setup(t,{origin:ORIGINS[1]});
+  const c=await setup(t,{origin:ORIGINS[0]});
   c.server.otpTtlSeconds=1801;
   await assert.rejects(c.http.requestEmailSignIn(EMAIL,await c.server.emailProof()),{
     code:'invalid_email_challenge',outcomeUnknown:true,
@@ -64,7 +64,7 @@ test('code receipts above the server maximum remain unknown',async t=>{
   assert.equal(c.server.counts[ROOT+'/verify'],undefined);
 });
 test('canonical initial login accepts a longer OTP while sensitive verification keeps six digits',async t=>{
-  const c=await setup(t,{origin:ORIGINS[1]});
+  const c=await setup(t,{origin:ORIGINS[0]});
   c.server.code='01234567';
   await c.login();
   assert.equal(c.server.counts[ROOT+'/verify'],1);
@@ -76,7 +76,7 @@ test('canonical initial login accepts a longer OTP while sensitive verification 
   assert.equal(c.server.counts[ROOT+'/email/verify'],1);
 });
 test('canonical session readback accepts a same-cookie echo and optional authenticator availability',async t=>{
-  const c=await setup(t,{origin:ORIGINS[1]});
+  const c=await setup(t,{origin:ORIGINS[0]});
   c.server.echoSessionCookie=true;
   c.server.authTransform=(path,value)=>{
     if(path===ROOT+'/session'&&value.user)value.user.mfaAvailable=true;
@@ -91,7 +91,7 @@ test('canonical session readback accepts a same-cookie echo and optional authent
   assert.equal(c.server.sessions.size,1);
 });
 for(const kind of ['rotated','duplicate','unrelated'])test(`canonical session readback refuses ${kind} cookies`,async t=>{
-  const c=await setup(t,{origin:ORIGINS[1]});
+  const c=await setup(t,{origin:ORIGINS[0]});
   await c.login();
   c.server.echoSessionCookie=true;
   c.server.authTransform=(path,value,headers)=>{
@@ -116,7 +116,7 @@ for(const providerLogout of ['confirmed','unconfirmed'])test(`canonical producti
   assert.equal(c.server.counts[ROOT+'/logout'],1);
 });
 for(const kind of ['unknown-provider-status','cookie-not-deleted','unrelated-cookie'])test(`canonical logout clears custody after ${kind} without repeating the request`,async t=>{
-  const c=await setup(t,{origin:ORIGINS[1]});
+  const c=await setup(t,{origin:ORIGINS[0]});
   await c.login();
   c.server.providerLogout=kind==='unknown-provider-status'?'invalid':'confirmed';
   c.server.authTransform=(path,value,headers)=>{
@@ -169,7 +169,7 @@ for(const field of ['id','principalId','sessionId','email'])test(`clear retained
 test('missing, plain, foreign, cancelled, expired and reused opaque CAPTCHA proofs never send another code',async t=>{
   const c=await setup(t),send=proof=>c.http.requestEmailSignIn(EMAIL,proof);
   for(const proof of [undefined,'token',{token:'token'}])await assert.rejects(send(proof),/fresh_bound_human_captcha/);
-  const foreign=await syntheticEmailProof({origin:ORIGINS[1]});await assert.rejects(send(foreign),/fresh_bound_human_captcha/);
+  await assert.rejects(syntheticEmailProof({origin:'https://platform-admin.collect.ikanisa.com'}),/invalid|approved/);
   const abort=new AbortController(),cancelled=await c.server.emailProof('sign_in',{signal:abort.signal});abort.abort();await assert.rejects(send(cancelled),/fresh_bound_human_captcha/);
   const expired=await c.server.emailProof();const actual=Date.now;t.mock.method(Date,'now',()=>actual()+120001);await assert.rejects(send(expired),/fresh_bound_human_captcha/);t.mock.restoreAll();
   assert.equal(c.server.counts[ROOT+'/otp'],undefined);

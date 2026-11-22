@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { installLocalNetworkFence } from '../../../scripts/qa/public_browser_local_network.cjs';
+import { installLocalNetworkFence } from './local-network-fence.cjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const artifact = resolve(root, process.argv[2] ?? process.env.ADMIN_PWA_BUILD_DIR ?? 'build/admin-web-fixture');
@@ -72,7 +72,7 @@ try {
   const desktop = await open({ width: 1440, height: 900 }, 'block');
   const { page } = desktop;
   await page.goto(origin + '/admin');
-  await page.getByRole('heading', { name: 'Welcome to Collect' }).waitFor();
+  await page.getByRole('heading', { name: 'Welcome to BuriMunsi' }).waitFor();
   await page.getByLabel('Email', { exact: true }).fill('fixture@example.test');
   await page.getByRole('button', { name: 'Send sign-in code' }).click();
   await page.getByRole('heading', { name: 'Check your email' }).waitFor();
@@ -160,7 +160,7 @@ try {
   // Advance only wall time, as on tab resume before the browser runs due timers.
   await sessionPage.clock.setSystemTime(new Date(Date.parse(expiresAt) + 1));
   await sessionPage.getByRole('link', { name: 'Groups', exact: true }).click();
-  await sessionPage.getByRole('heading', { name: 'Welcome to Collect' }).waitFor();
+  await sessionPage.getByRole('heading', { name: 'Welcome to BuriMunsi' }).waitFor();
   assert.equal(new URL(sessionPage.url()).hash, '#/admin/login?returnTo=%2Fadmin%2Fgroups');
   await sessionPage.goBack();
   await sessionPage.waitForURL(url => url.hash === '#/admin/login?returnTo=%2Fadmin%2Flicenses');
@@ -170,7 +170,7 @@ try {
 
   const mobile = await open({ width: 390, height: 844 }, 'block');
   await mobile.page.goto(origin + '/admin/sms-receipts');
-  await mobile.page.getByRole('heading', { name: 'Welcome to Collect' }).waitFor();
+  await mobile.page.getByRole('heading', { name: 'Welcome to BuriMunsi' }).waitFor();
   assert(!mobile.page.url().includes('fixture@example.test'));
   assert.equal(await mobile.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   assert.equal(await mobile.page.getByRole('heading', { name: 'SMS receipts' }).count(), 0);
@@ -198,7 +198,7 @@ try {
 
   await page.getByRole('button', { name: /^Account:/ }).click();
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
-  await page.getByRole('heading', { name: 'Welcome to Collect' }).waitFor();
+  await page.getByRole('heading', { name: 'Welcome to BuriMunsi' }).waitFor();
   assert(!(await desktop.context.cookies(origin)).some(cookie => cookie.name === 'collect_fixture_session'));
 
   // Exercise an actual install with a separate browser context.

@@ -9,5 +9,4 @@ interface AdminBrand {
   iconPurpose: string;
 }
 
-export const collectAdminBrand: AdminBrand;
 export const burimunsiAdminBrand: AdminBrand;

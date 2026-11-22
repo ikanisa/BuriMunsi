@@ -6,7 +6,7 @@ those APKs. It grants no signing, distribution, financial-operation or productio
 promotion authority. Legacy `build` and `promotion` checks are unchanged.
 
 Create a physical evidence bundle outside `native/burimunsi` and
-`upstream/collect`, on the build-evidence volume. It may contain retained copies,
+`vendor/receiver-compat`, on the build-evidence volume. It may contain retained copies,
 or sit at a common parent of existing build/device directories. References are
 relative to the candidate manifest, cannot traverse parents or symlinks, and bind
 each file's SHA-256. Do not put credentials or evidence inside the source tree.

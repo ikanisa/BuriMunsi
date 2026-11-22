@@ -1,4 +1,4 @@
-import {createFrameReader} from '../../collect-admin-mcp/src/stdio-frames.mjs';
+import {createFrameReader} from '../../admin-mcp/src/stdio-frames.mjs';
 import {OperatorError, keys, need, plain} from './contract.mjs';
 import {TOOLS, actionsByToolName} from './mcp_catalogue.mjs';
 

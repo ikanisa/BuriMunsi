@@ -1,5 +1,5 @@
 import { performance } from 'node:perf_hooks';
-import { acquireHumanChallenge } from '../../collect-admin-mcp/src/human_challenge.mjs';
+import { acquireHumanChallenge } from '../../admin-mcp/src/human_challenge.mjs';
 import { ORIGINS, need } from './contract.mjs';
 
 const MAX_PROOF_AGE_MS = 120_000;

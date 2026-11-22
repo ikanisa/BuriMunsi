@@ -1,8 +1,8 @@
 import {renderLocalChallengeDocument} from './local-challenge.mjs';
-import {createCollectTransport, SUPABASE_ORIGIN} from './supabase-transport.js';
+import {createCollectTransport} from './supabase-transport.js';
 import {verifyDeploymentProfile} from '../../../supabase/functions/_shared/deployment-profile.js';
 import {versionedStatic} from './static-recovery.js';
-import {BURIMUNSI_ADMIN_ORIGIN, BURIMUNSI_ADMIN_PROFILE_ID, PRODUCTION_ADMIN_ORIGIN} from './admin-session-realm.js';
+import {BURIMUNSI_ADMIN_ORIGIN, BURIMUNSI_ADMIN_PROFILE_ID} from './admin-session-realm.js';
 
 const API_ROOT = '/api';
 const MANAGED_ROOTS = [API_ROOT, '/v1', '/functions', '/privacy/account-deletion'];
@@ -18,53 +18,31 @@ function hasRoot(path, root) {
   return path === root || path.startsWith(root + '/');
 }
 
-async function managedHost(env, fetchImpl, explicitProfile) {
+async function managedHost(env, fetchImpl) {
+  if (env.COLLECT_DEPLOYMENT_PROFILE === undefined ||
+      (env.COLLECT_BACKEND ?? 'supabase') !== 'supabase' || env.SUPABASE_INTERNAL_URL !== undefined) {
+    throw new Error('BuriMunsi backend profile is required');
+  }
   const profile = await verifyDeploymentProfile(env);
-  const burimunsi = env.ADMIN_ORIGIN === BURIMUNSI_ADMIN_ORIGIN;
-  const burimunsiProfile = profile.id === BURIMUNSI_ADMIN_PROFILE_ID;
-  if (env.SUPABASE_URL !== profile.supabase_origin || env.SUPABASE_INTERNAL_URL !== undefined ||
-      explicitProfile && (env.ADMIN_ORIGIN !== profile.admin_origin ||
-        env.APP_ENVIRONMENT !== undefined && env.APP_ENVIRONMENT !== profile.environment) ||
-      burimunsi !== burimunsiProfile ||
-      burimunsi && (!explicitProfile || profile.environment !== 'production' ||
-        [profile.member_api_origin, profile.public_origin, profile.google_callback_origin].some(origin => origin !== BURIMUNSI_ADMIN_ORIGIN))) {
+  if (env.SUPABASE_URL !== profile.supabase_origin || profile.id !== BURIMUNSI_ADMIN_PROFILE_ID ||
+      profile.environment !== 'production' ||
+      env.APP_ENVIRONMENT !== undefined && env.APP_ENVIRONMENT !== profile.environment ||
+      [profile.admin_origin, profile.member_api_origin, profile.public_origin, profile.google_callback_origin]
+        .some(origin => origin !== BURIMUNSI_ADMIN_ORIGIN)) {
     throw new Error('Backend profile mismatch');
   }
-  return {
-    transport: createCollectTransport({
-      frontendOrigin: env.ADMIN_ORIGIN,
-      isolateAdminSession: env.ADMIN_ORIGIN === PRODUCTION_ADMIN_ORIGIN && profile.supabase_origin === SUPABASE_ORIGIN,
-      burimunsi,
-      ...(explicitProfile ? {allowedFrontendOrigins: [profile.public_origin, profile.member_api_origin, profile.admin_origin]} : {}),
-      fetchImpl,
-    }),
-    challenge: {
-      origin: env.ADMIN_ORIGIN,
-      ...(explicitProfile ? {allowedOrigins: [profile.admin_origin]} : {}),
-    },
-  };
+  return createCollectTransport({
+    frontendOrigin: BURIMUNSI_ADMIN_ORIGIN,
+    allowedFrontendOrigins: [BURIMUNSI_ADMIN_ORIGIN],
+    burimunsi: true,
+    fetchImpl,
+  });
 }
 
-async function legacyApi(request, env, path) {
-  if (!path.startsWith('/api/admin/')) return failure(404, 'not_found', 'This service route is unavailable.');
-  if (!env.PLATFORM_API?.fetch) return failure(503, 'service_unavailable', 'The workspace service is unavailable.');
-  try {
-    // The existing account session remains bound to the original Admin origin.
-    const response = await env.PLATFORM_API.fetch(request);
-    const output = new Response(response.body, response);
-    output.headers.set('Cache-Control', 'no-store');
-    output.headers.set('X-Content-Type-Options', 'nosniff');
-    output.headers.set('Referrer-Policy', 'no-referrer');
-    return output;
-  } catch {
-    return failure(503, 'service_unavailable', 'The workspace service is unavailable.');
-  }
-}
-
-async function serveAssets(request, url, assets, managed) {
-  if (managed && url.pathname.startsWith('/_build/')) return versionedStatic(request, assets);
+async function serveAssets(request, url, assets) {
+  if (url.pathname.startsWith('/_build/')) return versionedStatic(request, assets);
   // Typed deep links and worker installs use the same physical shell.
-  const shell = managed && ['GET', 'HEAD'].includes(request.method) && (url.pathname === '/' || hasRoot(url.pathname, '/admin'));
+  const shell = ['GET', 'HEAD'].includes(request.method) && (url.pathname === '/' || hasRoot(url.pathname, '/admin'));
   const response = await assets.fetch(shell ? new Request(new URL('/index.html', url), request) : request);
   if (response.headers.get('Content-Type')?.split(';', 1)[0].trim().toLowerCase() !== 'text/html') return response;
   const output = new Response(response.body, response);
@@ -77,32 +55,26 @@ export function createAdminWorker({fetchImpl = (request, init) => globalThis.fet
   return {
     async fetch(request, env) {
       const url = new URL(request.url);
-      if (url.origin !== env.ADMIN_ORIGIN) return failure(403, 'origin_denied', 'This workspace origin is unavailable.');
-      const backend = env.COLLECT_BACKEND ?? 'supabase';
-      const managed = backend === 'supabase';
-      const explicitProfile = env.COLLECT_DEPLOYMENT_PROFILE !== undefined || env.COLLECT_DEPLOYMENT_PROFILE_SHA256 !== undefined;
-      if (!managed && (backend !== 'cloudflare' || explicitProfile || env.ADMIN_ORIGIN === BURIMUNSI_ADMIN_ORIGIN)) {
+      if (url.origin !== BURIMUNSI_ADMIN_ORIGIN || env.ADMIN_ORIGIN !== BURIMUNSI_ADMIN_ORIGIN) {
+        return failure(403, 'origin_denied', 'This workspace origin is unavailable.');
+      }
+      let transport;
+      try {
+        transport = await managedHost(env, fetchImpl);
+      } catch {
         return failure(503, 'backend_configuration_invalid', 'The workspace backend is unavailable.');
       }
-      if (managed) {
-        let host;
-        try {
-          host = await managedHost(env, fetchImpl, explicitProfile);
-        } catch {
-          return failure(503, 'backend_configuration_invalid', 'The workspace backend is unavailable.');
-        }
-        const parent = renderLocalChallengeDocument(request, host.challenge);
-        if (parent) return parent;
-        if (env.ADMIN_ORIGIN === BURIMUNSI_ADMIN_ORIGIN && hasRoot(url.pathname, '/.well-known')) {
-          return failure(404, 'not_found', 'This service route is unavailable.');
-        }
-        if (MANAGED_ROOTS.some(root => hasRoot(url.pathname, root))) {
-          return await host.transport(request) ?? failure(404, 'not_found', 'This service route is unavailable.');
-        }
-      } else if (hasRoot(url.pathname, API_ROOT)) {
-        return legacyApi(request, env, url.pathname);
+      const parent = renderLocalChallengeDocument(request, {
+        origin: BURIMUNSI_ADMIN_ORIGIN, allowedOrigins: [BURIMUNSI_ADMIN_ORIGIN],
+      });
+      if (parent) return parent;
+      if (hasRoot(url.pathname, '/.well-known')) {
+        return failure(404, 'not_found', 'This service route is unavailable.');
       }
-      return serveAssets(request, url, env.ASSETS, managed);
+      if (MANAGED_ROOTS.some(root => hasRoot(url.pathname, root))) {
+        return await transport(request) ?? failure(404, 'not_found', 'This service route is unavailable.');
+      }
+      return serveAssets(request, url, env.ASSETS);
     },
   };
 }

@@ -1,35 +1,41 @@
 import {readFileSync,lstatSync,realpathSync,mkdirSync,writeFileSync,openSync,fsyncSync,closeSync} from 'node:fs';
-import {dirname} from 'node:path';
+import {dirname,isAbsolute,join} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {execFileSync} from 'node:child_process';
 import {createRequire} from 'node:module';
 import {createHash} from 'node:crypto';
 import {loadProviderRoot} from '../managed-cloud-migrations/provider-ca.mjs';
 
 export const PROJECT='rrlduytparvsjfmegalh';
-const t7Mounts = ['/Volumes/T7/01 Projects/COLLECT/Project', '/Volumes/COLLECT-STAGING-20261109'];
-function productionDirectories() {
- return t7Mounts.filter(mount => {
-  const volume = lstatSync(mount, {throwIfNoEntry:false});
-  const lock = lstatSync(mount+'/COLLECT-Production/.collect-operation-lock-v1/operation.lock', {throwIfNoEntry:false});
-  return volume?.isDirectory() && lock?.isFile() && lock.dev === volume.dev &&
-   volume.dev !== lstatSync(dirname(mount)).dev && (lock.mode & 0o777) === 0o600 &&
-   lock.uid === process.getuid() && realpathSync(mount+'/COLLECT-Production') === mount+'/COLLECT-Production';
- }).map(mount => mount+'/COLLECT-Production');
+export const ROOT=fileURLToPath(new URL('../../../build/managed-release',import.meta.url));
+
+function createPrivateEvidenceDirectory(){
+ const parent=dirname(ROOT);
+ if(realpathSync(dirname(parent))!==dirname(parent))throw Error('release_evidence_path_invalid');
+ for(const path of [parent,ROOT]){
+  try{mkdirSync(path,{mode:0o700});}catch(error){if(error?.code!=='EEXIST')throw error;}
+  const stat=lstatSync(path);
+  if(!stat.isDirectory()||stat.isSymbolicLink()||stat.uid!==process.getuid()||
+     (stat.mode&(path===ROOT?0o077:0o022))!==0||realpathSync(path)!==path)
+   throw Error('private_release_evidence_directory_required');
+ }
 }
-const production = productionDirectories()[0] ?? t7Mounts[0]+'/COLLECT-Production';
-export const ROOT=production+'/2026-11-17/burimunsi-live-cutover-001';
+
 export const sha=value=>createHash('sha256').update(value).digest('hex');
 export function record(name,value){
  if(!/^[a-z0-9_.-]+$/.test(name))throw Error('invalid_record_name');
- const current = productionDirectories();
- if(current.length!==1 || current[0]!==production)throw Error('t7_production_volume_required');
- mkdirSync(ROOT,{recursive:true,mode:0o700});
- const fd=openSync(ROOT+'/'+name,'wx',0o600);
+ createPrivateEvidenceDirectory();
+ const fd=openSync(join(ROOT,name),'wx',0o600);
  try{writeFileSync(fd,typeof value==='string'?value:JSON.stringify(value,null,2)+'\n');fsyncSync(fd);}finally{closeSync(fd);}
+ const parent=openSync(ROOT,'r');
+ try{fsyncSync(parent);}finally{closeSync(parent);}
 }
 export async function connect(){
- const path='/Users/jeanbosco/Library/Application Support/Collect-Cloud-Recovery/production-db-credential-kq92ggw9/database-password.txt';
- const s=lstatSync(path);if(!s.isFile()||s.isSymbolicLink()||(s.mode&0o077)!==0||s.uid!==process.getuid())throw Error('private_credential_required');
+ const path=process.env.BURIMUNSI_DB_PASSWORD_FILE;
+ if(!path||!isAbsolute(path)||realpathSync(path)!==path)throw Error('private_credential_required');
+ const s=lstatSync(path);
+ if(!s.isFile()||s.isSymbolicLink()||s.nlink!==1||(s.mode&0o077)!==0||s.uid!==process.getuid())
+  throw Error('private_credential_required');
  return connectWithPassword(readFileSync(path,'utf8').trim());
 }
 export async function connectWithPassword(password){

@@ -309,10 +309,10 @@ test('stdio EOF exits promptly and broker loss never reconnects or changes autho
 test('explicit config digest/origin/permission guards have no primary-stage fallback or symlink shortcut',async()=>{
   const dir=await mkdtemp(join(ROOT,'configuration-'));await chmod(dir,0o700);const path=join(dir,'config.json');
   const write=async value=>{const raw=Buffer.from(JSON.stringify(value));await writeFile(path,raw,{mode:0o600});return sha(raw);};
-  let digest=await write({format:'collect.operator.client-config.v1',enabled:true,origin:'https://platform-admin.collect.ikanisa.com'});assert.equal((await readConfig(path,digest)).enabled,true);
+  let digest=await write({format:'collect.operator.client-config.v1',enabled:true,origin:'https://burimunsi-admin.ikanisa.com'});assert.equal((await readConfig(path,digest)).enabled,true);
   await assert.rejects(readConfig(path,'0'.repeat(64)),/reviewed_configuration_digest/);
   digest=await write({format:'collect.operator.client-config.v1',enabled:true,origin:'https://api.collect.ikanisa.com'});await assert.rejects(readConfig(path,digest),/independently_approved/);
-  digest=await write({format:'collect.operator.client-config.v1',enabled:false,origin:'https://platform-admin.collect.ikanisa.com'});await assert.rejects(readConfig(path,digest),/independently_approved/);
+  digest=await write({format:'collect.operator.client-config.v1',enabled:false,origin:'https://burimunsi-admin.ikanisa.com'});await assert.rejects(readConfig(path,digest),/independently_approved/);
   await chmod(path,0o644);await assert.rejects(readConfig(path,digest),/private_owned_regular/);await chmod(path,0o600);
   const alias=join(dir,'aliased');await symlink(dir,alias);await assert.rejects(readConfig(join(alias,'config.json'),digest),/aliased_private/);
 });

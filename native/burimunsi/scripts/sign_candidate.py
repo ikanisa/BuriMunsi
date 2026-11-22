@@ -59,7 +59,7 @@ def current_source():
 def load_evidence(path, expected_sha, alias, certificate):
     readiness._digest(expected_sha); readiness._digest(certificate)
     path = Path(path).absolute()
-    need(not any(path.is_relative_to(p) for p in (pipeline.ROOT, pipeline.OVERLAY / 'upstream/collect')), 'evidence_inside_source')
+    need(not any(path.is_relative_to(p) for p in (pipeline.ROOT, pipeline.OVERLAY / 'vendor/receiver-compat')), 'evidence_inside_source')
     raw = readiness._physical(path)
     need(digest(raw) == expected_sha, 'evidence_hash_changed')
     doc = readiness._object(raw)
@@ -133,7 +133,7 @@ def private_input(path, maximum, *, password=False):
     info = path.lstat()
     need(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() and
          stat.S_IMODE(info.st_mode) == 0o600 and info.st_nlink == 1, 'credential_not_private')
-    need(not any(path.is_relative_to(p) for p in (pipeline.ROOT, pipeline.OVERLAY / 'upstream/collect')), 'credential_inside_source')
+    need(not any(path.is_relative_to(p) for p in (pipeline.ROOT, pipeline.OVERLAY / 'vendor/receiver-compat')), 'credential_inside_source')
     raw = readiness._physical(path, maximum)
     after = path.stat()
     need((info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_ctime_ns) ==
@@ -251,7 +251,7 @@ def sign(args):
     output = Path(args.output).absolute()
     need(output.resolve() == output and not output.exists() and output.parent.is_dir() and
          not any(p.is_symlink() for p in output.parents) and
-         not any(output.is_relative_to(p) for p in (pipeline.ROOT, pipeline.OVERLAY / 'upstream/collect')), 'fresh_output_required')
+         not any(output.is_relative_to(p) for p in (pipeline.ROOT, pipeline.OVERLAY / 'vendor/receiver-compat')), 'fresh_output_required')
     store = private_input(args.keystore, 16 * 1024 * 1024)
     password = private_input(args.store_password_file, 4096, password=True)
     key_password = private_input(args.key_password_file, 4096, password=True) if args.key_password_file is not None else None

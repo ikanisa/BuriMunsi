@@ -40,7 +40,7 @@ wheel hashes and verification. The acquisition helper captures official package
 metadata and exact lock-selected wheel bytes into a fresh directory:
 
 ```sh
-python3 -B scripts/qa/roster_wheelhouse.py --acquire \
+python3 -B tools/roster-decoder/roster_wheelhouse.py --acquire \
   --lock-file tools/roster-decoder/requirements.lock \
   --lock-sha256 REVIEWED_WHOLE_LOCK_SHA256 \
   --destination /absolute/path/to/fresh/publisher-inputs

@@ -259,7 +259,7 @@ def evaluate_candidate(evidence_path,profile_path,properties,*,pipeline=None,now
    import native_pipeline as pipeline
   now=now or dt.datetime.now(dt.timezone.utc)
   base=pathlib.Path(evidence_path).absolute().parent
-  _need(not any(base.is_relative_to(p) for p in (pipeline.ROOT,pipeline.OVERLAY/'upstream/collect')),'CANDIDATE_EVIDENCE_INSIDE_SOURCE')
+  _need(not any(base.is_relative_to(p) for p in (pipeline.ROOT,pipeline.OVERLAY/'vendor/receiver-compat')),'CANDIDATE_EVIDENCE_INSIDE_SOURCE')
   manifest=_object(_physical(evidence_path));profile=_object(_physical(profile_path))
   _keys(manifest,('format','purpose','created_at','source_sha256','profile_sha256','properties','qualification'))
   _need(manifest['format']=='collect.burimunsi.testing-candidate.v1' and manifest['purpose']=='testing-candidate-build','CANDIDATE_PURPOSE_WRONG')

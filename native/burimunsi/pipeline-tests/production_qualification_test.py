@@ -210,7 +210,7 @@ class ProductionQualification(unittest.TestCase):
     def test_snapshot_hash_covers_source_and_ignores_only_derived_outputs(self):
         source = self.base / 'source'
         native = source / 'native/burimunsi'
-        upstream = source / 'upstream/collect'
+        upstream = source / 'vendor/receiver-compat'
         native.mkdir(parents=True)
         upstream.mkdir(parents=True)
         code = native / 'file.kt'
@@ -218,7 +218,7 @@ class ProductionQualification(unittest.TestCase):
         upstream.joinpath('receiver.kt').write_text('upstream')
         original = q.fingerprint(source)
         expected_rows = [{'path': 'native/burimunsi/file.kt', 'sha256': q.digest(b'first')},
-                         {'path': 'upstream/collect/receiver.kt', 'sha256': q.digest(b'upstream')}]
+                         {'path': 'vendor/receiver-compat/receiver.kt', 'sha256': q.digest(b'upstream')}]
         self.assertEqual(original, {'files': expected_rows,
                                    'sha256': hashlib.sha256(json.dumps(expected_rows, sort_keys=True).encode()).hexdigest()})
         native.joinpath('local.properties').write_text('sdk.dir=synthetic')
@@ -232,7 +232,7 @@ class ProductionQualification(unittest.TestCase):
         # A checkout may itself be inside a directory named build.
         source = self.base / 'build/checkout'
         native = source / 'native/burimunsi'
-        upstream = source / 'upstream/collect'
+        upstream = source / 'vendor/receiver-compat'
         native.mkdir(parents=True)
         upstream.mkdir(parents=True)
         code = native / 'Main.kt'
@@ -246,7 +246,7 @@ class ProductionQualification(unittest.TestCase):
 
             original = both()
             self.assertEqual([r['path'] for r in original['files']],
-                             ['native/burimunsi/Main.kt', 'upstream/collect/Receiver.kt'])
+                             ['native/burimunsi/Main.kt', 'vendor/receiver-compat/Receiver.kt'])
             for tree in (native, upstream):
                 marker = tree / '.kotlin/sessions/compiler.salive'
                 marker.parent.mkdir(parents=True)
@@ -263,7 +263,7 @@ class ProductionQualification(unittest.TestCase):
         source = self.base / 'source'
         native = source / 'native/burimunsi'
         native.mkdir(parents=True)
-        source.joinpath('upstream/collect').mkdir(parents=True)
+        source.joinpath('vendor/receiver-compat').mkdir(parents=True)
         native.joinpath('source.kt').symlink_to(self.artifact)
         with self.assertRaises(ValueError):
             q.fingerprint(source)
