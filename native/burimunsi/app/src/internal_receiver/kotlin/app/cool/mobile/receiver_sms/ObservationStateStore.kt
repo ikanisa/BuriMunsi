@@ -17,6 +17,10 @@ import javax.crypto.SecretKey
 
 /** Independent of the existing gateway queue. Keystore-backed and excluded from backup. */
 internal class ObservationStateStore(context:Context):ObservationJournalStore {
+    private companion object {
+        val keyLock = Any()
+        val keyHandles = mutableMapOf<String, SecretKey>()
+    }
     private val app=context.applicationContext
     override fun protectSeenEviction(value:ObservationSeen):Boolean =
         ObservationReplayGuard.protect(app,value.owner,value.inboxRowId)
@@ -24,15 +28,16 @@ internal class ObservationStateStore(context:Context):ObservationJournalStore {
         val fd=Os.open(directory.absolutePath,OsConstants.O_RDONLY,0)
         try{check(OsConstants.S_ISDIR(Os.fstat(fd).st_mode));Os.fsync(fd)}finally{Os.close(fd)}
     })
-    private fun key():SecretKey {
+    private fun key():SecretKey = synchronized(keyLock) {
         val alias=app.packageName+".burimunsi.observation.v1"
-        val keys=KeyStore.getInstance("AndroidKeyStore").apply{load(null)}
-        (keys.getKey(alias,null) as? SecretKey)?.let{return it}
-        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES,"AndroidKeyStore").apply{
-            init(KeyGenParameterSpec.Builder(alias,KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setRandomizedEncryptionRequired(true).build())
-        }.generateKey()
+        keyHandles.getOrPut(alias) {
+            val keys=KeyStore.getInstance("AndroidKeyStore").apply{load(null)}
+            (keys.getKey(alias,null) as? SecretKey) ?: KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES,"AndroidKeyStore").apply{
+                init(KeyGenParameterSpec.Builder(alias,KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                    .setRandomizedEncryptionRequired(true).build())
+            }.generateKey()
+        }
     }
     private fun cipher()=ReceiptCipher({key()},{Base64.encodeToString(it,Base64.NO_WRAP)},{Base64.decode(it,Base64.NO_WRAP)})
     private fun exact(value:JSONObject,keys:Set<String>)=checkContract(value.keys().asSequence().toSet()==keys,"observation_store_unavailable")
@@ -81,16 +86,21 @@ internal class ObservationStateStore(context:Context):ObservationJournalStore {
             ObservationSeen(owner(scope),item.getString("sourceKey"),item.getLong("inboxRowId"),item.getString("requestId"),item.getString("bodySha256"),
                 if(item.has("inboxReceivedAt"))item.getString("inboxReceivedAt") else null)
         }
-        checkContract(seen.all{it.inboxRowId>0&&Regex("[a-f0-9]{64}").matches(it.sourceKey)&&Regex("[a-f0-9]{64}").matches(it.bodySha256)&&
+        val seenByRequest=seen.associateBy(ObservationSeen::requestId)
+        val digest=Regex("[a-f0-9]{64}")
+        checkContract(seen.all{it.inboxRowId>0&&digest.matches(it.sourceKey)&&digest.matches(it.bodySha256)&&
             runCatching{Values.requestId(it.requestId)==it.requestId}.getOrDefault(false)}&&
             seen.map{Triple(it.owner,it.sourceKey,it.requestId)}.toSet().size==seen.size&&
             seen.map{it.owner to it.sourceKey}.toSet().size==seen.size&&
             seen.map{Triple(it.owner,it.inboxRowId,it.inboxReceivedAt)}.toSet().size==seen.size&&
             seen.groupBy{it.owner to it.inboxRowId}.values.all{items->items.size==1||items.none{it.inboxReceivedAt==null}}&&
             seen.all{it.inboxReceivedAt==null||runCatching{Instant.parse(it.inboxReceivedAt).toEpochMilli()>0}.getOrDefault(false)}&&
-            seen.map{it.requestId}.toSet().size==seen.size&&pending.map{it.observation.requestId}.toSet().size==pending.size&&
-            pending.all{entry->seen.count{it.owner==entry.owner&&it.sourceKey==entry.sourceKey&&
-                it.requestId==entry.observation.requestId&&it.bodySha256==Values.sha256(entry.observation.rawBody)}==1},"observation_store_unavailable")
+            seenByRequest.size==seen.size&&pending.map{it.observation.requestId}.toSet().size==pending.size&&
+            pending.all{entry->
+                val recorded=seenByRequest[entry.observation.requestId]
+                recorded!=null&&recorded.owner==entry.owner&&recorded.sourceKey==entry.sourceKey&&
+                    recorded.bodySha256==Values.sha256(entry.observation.rawBody)
+            },"observation_store_unavailable")
         return ObservationJournalState(pending,seen)
     }
     override fun write(value:ObservationJournalState) {

@@ -1,5 +1,7 @@
 package rw.ikanisa.burimunsi.ui
 
+import android.os.SystemClock
+import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -125,7 +127,21 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
                             Text(t(PresentationState.label(presentation.state)),fontSize=17.sp,lineHeight=25.sp)
                             if(presentation.mayRetryRead){Spacer(Modifier.height(16.dp));Primary(t("Refresh"),model::refresh)}
                         }
-                    }else key(s.route,s.routeId){RouteEntrance(t(titleFor(s.route))){when(s.route){
+                    }else key(s.route,s.routeId){
+                        val records = when(s.route){
+                            Route.HOME -> s.home
+                            Route.PAYMENTS -> s.payments
+                            else -> null
+                        }
+                        val onFullyDrawn: (() -> Unit)? = records?.takeUnless { s.busy || s.sheet != null || exportVisible }?.let { payload ->
+                            {
+                                if(model.consumeFreshDraw(s.route,payload)){
+                                    val event=if(s.route==Route.HOME)"home_fresh_draw" else "payments_fresh_draw"
+                                    Log.i("BuriMunsiPerf","event=$event t_ns=${SystemClock.elapsedRealtimeNanos()}")
+                                }
+                            }
+                        }
+                        RouteEntrance(t(titleFor(s.route)),onFullyDrawn){when(s.route){
                         Route.LOGIN->Login(s.busy||s.configurationRequired||s.passcodeChangePending||s.savedSessionPending,
                             s.busy&&model.operation==UiOperation.SIGN_IN,model::login,onSupport,model.supportPhone!=null)
                         Route.HOME->HomeScreen(s,model)

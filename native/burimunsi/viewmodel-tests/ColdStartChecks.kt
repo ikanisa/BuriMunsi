@@ -15,6 +15,7 @@ import rw.ikanisa.burimunsi.core.SnapshotFreshness
 import rw.ikanisa.burimunsi.gateway.GatewayFixture
 import rw.ikanisa.burimunsi.data.ApiFailure
 import rw.ikanisa.burimunsi.data.Fixture
+import rw.ikanisa.burimunsi.storage.InstallationFixture
 import rw.ikanisa.burimunsi.ui.BuriViewModel
 import rw.ikanisa.burimunsi.ui.UiOperation
 
@@ -27,12 +28,19 @@ fun main()=runBlocking {
     }
     val now=System.currentTimeMillis();Fixture.recordSavedAt=now
     Fixture.restoreEntered=CountDownLatch(1);Fixture.restoreBarrier=CountDownLatch(1)
+    InstallationFixture.entered=CountDownLatch(1);InstallationFixture.release=CountDownLatch(1)
     val first=BuriViewModel(Application()){now}
-    check(Fixture.restoreEntered!!.await(5,TimeUnit.SECONDS))
+    check(InstallationFixture.entered!!.await(5,TimeUnit.SECONDS))
+    check(first.state.starting&&first.state.busy&&Fixture.restoreReads==0)
     first.onForeground();first.onForeground()
+    InstallationFixture.release!!.countDown()
+    check(Fixture.restoreEntered!!.await(5,TimeUnit.SECONDS))
+    InstallationFixture.entered=null;InstallationFixture.release=null
     Fixture.restoreBarrier!!.countDown();idle(first)
     check(Fixture.restoreReads==1&&Fixture.sessionReads==0&&Fixture.homeReads==1&&first.screenGate==ScreenGate.OPEN)
-    println("PASS initial foreground shares the in-flight authoritative restore and records read")
+    first.onForeground();idle(first)
+    check(Fixture.restoreReads==1&&Fixture.sessionReads==0&&Fixture.homeReads==1)
+    println("PASS protected setup yields to startup and repeated foreground callbacks share one authoritative restore")
     first.viewModelScope.cancel()
 
     Fixture.restoreEntered=null;Fixture.restoreBarrier=null
@@ -43,8 +51,34 @@ fun main()=runBlocking {
     bundled.onForeground();idle(bundled)
     check(Fixture.homeReads==bundledReads&&bundled.state.home?.balanceRwf==12000L&&
         bundled.state.savedAt==now&&bundled.presentation.showRecords)
-    println("PASS a fresh Home returned with the current saved session avoids a separate records request")
+    val freshHome=checkNotNull(bundled.state.home)
+    check(!bundled.consumeFreshDraw(Route.HOME,freshHome.copy()))
+    check(bundled.consumeFreshDraw(Route.HOME,freshHome)&&!bundled.consumeFreshDraw(Route.HOME,freshHome))
+    println("PASS fresh bundled Home avoids a separate request and emits one draw marker for the actual records")
     bundled.viewModelScope.cancel()
+
+    Fixture.restoredHomeReused=true
+    val recent=BuriViewModel(Application()){now}
+    recent.onForeground();idle(recent)
+    check(Fixture.homeReads==bundledReads&&!recent.consumeFreshDraw(Route.HOME,checkNotNull(recent.state.home)))
+    Fixture.recentPaymentPage=Fixture.page(listOf(Fixture.payment("recent-payment"))) to now
+    recent.navigate(Route.PAYMENTS);idle(recent)
+    check(recent.state.payments?.items?.single()?.id=="recent-payment")
+    check(!recent.consumeFreshDraw(Route.PAYMENTS,checkNotNull(recent.state.payments)))
+    Fixture.recentPaymentPage=null
+
+    recent.refresh();idle(recent)
+    val freshPayments=checkNotNull(recent.state.payments)
+    check(!recent.consumeFreshDraw(Route.PAYMENTS,freshPayments.copy()))
+    check(recent.consumeFreshDraw(Route.PAYMENTS,freshPayments)&&!recent.consumeFreshDraw(Route.PAYMENTS,freshPayments))
+    Fixture.cached=true
+    recent.refresh();idle(recent)
+    check(!recent.consumeFreshDraw(Route.PAYMENTS,checkNotNull(recent.state.payments)))
+    Fixture.cached=false
+    recent.viewModelScope.cancel()
+    Fixture.restoredHomeReused=false
+    println("PASS recent and offline records emit no fresh draw marker, while live Payments emits once")
+
     Fixture.restoredHomeSavedAt=now-SnapshotFreshness.TTL_MS-1
     val staleBundle=BuriViewModel(Application()){now}
     staleBundle.onForeground();idle(staleBundle)
@@ -113,11 +147,29 @@ fun main()=runBlocking {
     withTimeout(3_000){while(Fixture.homeReads==quietHomeBefore)delay(2)}
     val mutationsBefore=Fixture.enrollMutations
     check(!quiet.navigationBlocked)
-    quiet.navigate(Route.PAYMENTS);quiet.enroll("Synthetic member","0780000001")
-    check(quiet.requestedRoute==Route.PAYMENTS&&quiet.state.route==Route.HOME&&Fixture.enrollMutations==mutationsBefore)
-    Fixture.homeBarrier=null;blockedRefresh.countDown();idle(quiet)
-    check(quiet.requestedRoute==null&&quiet.state.route==Route.PAYMENTS&&quiet.state.payments!=null)
-    println("PASS quiet refresh accepts navigation without concurrent records or financial commands")
+    quiet.enroll("Synthetic member","0780000001")
+    check(Fixture.enrollMutations==mutationsBefore)
+    quiet.navigate(Route.PAYMENTS)
+    // Keep the old Home source blocked until after authoritative Payments is visible.
+    withTimeout(2_000){while(quiet.state.route!=Route.PAYMENTS||quiet.state.busy)delay(2)}
+    val prioritizedPayments=checkNotNull(quiet.state.payments)
+    check(quiet.requestedRoute==null&&quiet.state.route==Route.PAYMENTS&&
+        quiet.state.home==null&&quiet.consumeFreshDraw(Route.PAYMENTS,prioritizedPayments))
+    Fixture.homeBarrier=null;blockedRefresh.countDown();delay(50)
+    check(quiet.state.route==Route.PAYMENTS&&quiet.state.payments===prioritizedPayments&&quiet.state.home==null)
+    println("PASS Payments completes while quiet Home is blocked and the late Home cannot publish")
+
+    Fixture.sessionEntered=CountDownLatch(1);Fixture.sessionBarrier=CountDownLatch(1)
+    val paymentListings=Fixture.listingQueries.size
+    val ordinaryHomeReads=Fixture.homeReads
+    quiet.refreshSession(quiet=true)
+    check(Fixture.sessionEntered!!.await(3,TimeUnit.SECONDS))
+    quiet.navigate(Route.HOME)
+    Fixture.sessionBarrier!!.countDown();idle(quiet)
+    check(quiet.state.route==Route.HOME&&quiet.state.home!=null&&
+        Fixture.listingQueries.size==paymentListings&&Fixture.homeReads==ordinaryHomeReads+1)
+    quiet.navigate(Route.PAYMENTS);idle(quiet)
+    println("PASS queued Home reads fresh records without refreshing the abandoned Payments list")
 
     Fixture.sessionEntered=CountDownLatch(1);Fixture.sessionBarrier=CountDownLatch(1)
     Fixture.sessionFailure=ApiFailure("session_unavailable",401)

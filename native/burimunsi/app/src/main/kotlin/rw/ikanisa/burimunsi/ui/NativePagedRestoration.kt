@@ -15,6 +15,7 @@ import rw.ikanisa.burimunsi.core.SnapshotFreshness
 import rw.ikanisa.burimunsi.core.checkContract
 import rw.ikanisa.burimunsi.data.ApiFailure
 import rw.ikanisa.burimunsi.data.NativeRepository
+import rw.ikanisa.burimunsi.data.RecordSnapshot
 
 /** Read-only page reconstruction for one visible route and one exact repository grant. */
 internal class NativePagedRestoration(
@@ -72,6 +73,13 @@ internal class NativePagedRestoration(
             }
         }
 
+    suspend fun <T> readRecord(request: Request, load: (NativeRepository) -> RecordSnapshot<T>): Read<T> =
+        withContext(Dispatchers.IO) {
+            withCurrent(request) {}
+            val snapshot = load(repository())
+            withCurrent(request) { Read(snapshot.value, snapshot.offline, snapshot.savedAt) }
+        }
+
     fun <T> append(current: Read<Page<T>>, next: Read<Page<T>>, id: (T) -> String): Read<Page<T>> =
         Read(PageIntegrity.append(current.value, next.value, id),
             current.offline || next.offline, SnapshotFreshness.oldest(clock(), current.savedAt, next.savedAt))
@@ -82,26 +90,28 @@ internal class NativePagedRestoration(
         id: (T) -> String,
         readNext: suspend (String) -> Read<Page<T>>,
     ): Restored<T> {
-        var content = first
+        val records = PageIntegrity.Accumulator(first.value,id)
+        var offline=first.offline
+        var savedAt=first.savedAt
         var pages = 1
         val usedCursors = mutableSetOf<String>()
         fun position(pageCount: Int) = PagedRestoration.decide(
-            request.route, request.index, request.offset, content.value.items.size, content.value.nextCursor,
-            pageCount, content.offline, SnapshotFreshness.reusable(content.savedAt, clock()), request.smsSearchNotice,
+            request.route, request.index, request.offset, records.size, records.nextCursor,
+            pageCount, offline, SnapshotFreshness.reusable(savedAt, clock()), request.smsSearchNotice,
         )
+        fun finish(decision:ListRestoreDecision)=Restored(Read(records.snapshot(),offline,savedAt),decision)
         while (true) {
             withCurrent(request) {}
             val decision = position(pages)
-            if (!decision.fetchNext) return Restored(content, decision)
-            val cursor = content.value.nextCursor ?: throw ContractFailure("invalid_page")
+            if (!decision.fetchNext) return finish(decision)
+            val cursor = records.nextCursor ?: throw ContractFailure("invalid_page")
             checkContract(usedCursors.add(cursor), "invalid_page")
             val next = readNext(cursor)
             checkContract(next.value.nextCursor == null || next.value.nextCursor !in usedCursors, "invalid_page")
-            val merged = append(content, next, id)
             // A conflicted page must still be rejected when it exceeds the restore budget.
-            if (merged.value.items.size > PagedRestoration.MAX_ITEMS)
-                return Restored(content, position(PagedRestoration.MAX_PAGES))
-            content = merged
+            if(!records.append(next.value,PagedRestoration.MAX_ITEMS))return finish(position(PagedRestoration.MAX_PAGES))
+            offline=offline||next.offline
+            savedAt=SnapshotFreshness.oldest(clock(),savedAt,next.savedAt)
             pages++
         }
     }

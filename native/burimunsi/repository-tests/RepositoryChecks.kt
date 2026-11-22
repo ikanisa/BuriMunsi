@@ -57,6 +57,30 @@ fun main(){
  ck("live read is not cached provenance",!repo.lastReadFromCache&&repo.lastReadSavedAt!=null)
  api.handler={throw ApiFailure("connection_unavailable",0)}
  ck("offline home reuses owner-bound cache",repo.home().balanceRwf==17000L&&repo.lastReadFromCache)
+ api.handler={emptyPage()}
+ repo.payments()
+ val quietHomeStarted=CountDownLatch(1)
+ val releaseQuietHome=CountDownLatch(1)
+ var quietHomeResponse:Result<NativeRepository.QuietHome>?=null
+ api.handler={request->
+  if(request.path.endsWith("/home")){
+   quietHomeStarted.countDown()
+   check(releaseQuietHome.await(5,TimeUnit.SECONDS))
+   JSONObject(home()).put("groupBalanceRwf",18000).toString()
+  }else throw ApiFailure("connection_unavailable",0)
+ }
+ val quietHomeThread=thread{quietHomeResponse=runCatching{repo.readQuietHome()}}
+ try {
+  check(quietHomeStarted.await(3,TimeUnit.SECONDS))
+  repo.payments()
+  val paymentSavedAt=repo.lastReadSavedAt
+  val protectedCache=SecureStore.records.getValue("records")
+  releaseQuietHome.countDown()
+  quietHomeThread.join(3000)
+  ck("late unpublished Home preserves offline Payments provenance and the protected cache",
+   !quietHomeThread.isAlive&&quietHomeResponse?.getOrThrow()?.payload?.getLong("groupBalanceRwf")==18000L&&
+    repo.lastReadFromCache&&repo.lastReadSavedAt==paymentSavedAt&&SecureStore.records["records"]==protectedCache)
+ }finally{releaseQuietHome.countDown()}
  api.handler=happy;repo.sms();ck("successful noncached SMS clears stale cache flag",!repo.lastReadFromCache)
  api.handler={throw ApiFailure("connection_unavailable",0)};repo.home()
  api.handler=happy;repo.refreshSession();ck("session refresh clears previous read provenance",!repo.lastReadFromCache)
