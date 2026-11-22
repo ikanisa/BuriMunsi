@@ -89,6 +89,13 @@ export function paymentAllocationFilterSql(auto,filter) {
   }
 }
 
+// Common canonical names need no catalog scan. Historical zones keep exact
+// database timezone-name validation before conversion.
+function validHomeZone(column) {
+  return `CASE WHEN ${column} COLLATE "C" IN ('Africa/Kigali','UTC','Etc/UTC') THEN true
+    ELSE EXISTS (SELECT 1 FROM zones z WHERE z.name=${column}) END`;
+}
+
 export async function readCanonicalHome(sql,g,at,auto) {
   // Share the credited set and timezone names across the two receipt reads.
   // A missing or malformed source timestamp must never become today's receipt.
@@ -106,7 +113,7 @@ export async function readCanonicalHome(sql,g,at,auto) {
             JOIN app.momo_transactions t ON t.id=c.transaction_id
             WHERE CASE WHEN t.transaction_at ~ '(Z|[+-][0-9]{2}:[0-9]{2})$'
              AND pg_input_is_valid(t.transaction_at,'timestamp with time zone')
-             AND EXISTS (SELECT 1 FROM zones z WHERE z.name=t.transaction_timezone)
+             AND ${validHomeZone('t.transaction_timezone')}
             THEN t.transaction_at::timestamptz >= (date_trunc('day',$2::timestamptz AT TIME ZONE t.transaction_timezone) AT TIME ZONE t.transaction_timezone)
              AND t.transaction_at::timestamptz < ((date_trunc('day',$2::timestamptz AT TIME ZONE t.transaction_timezone)+interval '1 day') AT TIME ZONE t.transaction_timezone)
              AND t.transaction_at::timestamptz <= $2::timestamptz ELSE false END),
@@ -126,7 +133,7 @@ export async function readCanonicalHome(sql,g,at,auto) {
       SELECT c.transaction_id,c.credited_amount,
         CASE WHEN ${recentAt} ~ '(Z|[+-][0-9]{2}:[0-9]{2})$'
           AND pg_input_is_valid(${recentAt},'timestamp with time zone')
-          AND EXISTS (SELECT 1 FROM zones z WHERE z.name=${recentZone})
+          AND ${validHomeZone(recentZone)}
         THEN ${recentAt}::timestamptz END AS ordered_at
       FROM credited c JOIN app.momo_transactions t ON t.id=c.transaction_id
       ${auto?'LEFT JOIN native_times n ON n.source_id=c.native_source_id':''}

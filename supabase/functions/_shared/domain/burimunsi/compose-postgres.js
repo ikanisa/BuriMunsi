@@ -171,7 +171,7 @@ export function createPostgresNativePorts({admission,config,db,bridges,clock=()=
 }
 export function composePostgresNativeRequest(options) {
   const ports=createPostgresNativePorts(options);
-  return composeNativeRequest({...options,ports,readRecordActor:()=>phonePinReadSelector(options.db)});
+  return composeNativeRequest({...options,ports,readRecordActor:request=>phonePinReadSelector(options.db,request)});
 }
 
 /** Build bounded worker entrypoints inside a genuine admitted worker context.

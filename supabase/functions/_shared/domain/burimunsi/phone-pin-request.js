@@ -21,7 +21,13 @@ export const RETIREMENT_OUTCOME_SQL='SELECT private.burimunsi_gateway_retirement
 // This applies only after the database has independently validated the session.
 export const PIN_CLOCK_SKEW_MS=5000;
 export function hasPhonePinContext(db){return proofs.has(db);}
-export function phonePinReadSelector(db){return proofs.get(db)?.selector??null;}
+export function phonePinReadSelector(db,request){
+  const proof=proofs.get(db);
+  if(!proof)return null;
+  requireActiveNativeRequest(request);
+  requireThat(proof.request===request&&db.applicationWork===proof.work,'request_not_admitted',503);
+  return proof.selector;
+}
 export function snapshotPhonePinProof(db,tx){
   const proof=proofs.get(db);
   return proof?.snapshot===tx && db.ownsNativeRead?.(tx) ? proof.row : null;
@@ -174,12 +180,12 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
             const row=(await tx.unsafe(PIN_SET_CONTEXT_SQL,values))[0]?.result;
             const principal=current(row,installation,profile,clock());
             requireThat(principal.groupId===account.groupId&&principal.nativeAccountId===account.id,'session_unavailable',401);
-            proofs.set(db,{groupId:account.groupId,values,snapshot:tx,row,
-              selector:Object.freeze({id:account.id,sessionId:principal.principalSessionId,groupId:account.groupId})});
             const authHeaders=new Headers(request.headers);
             authHeaders.delete('Content-Length');authHeaders.delete('Content-Type');
             authHeaders.set('Authorization','Bearer '+token);authHeaders.set('X-BuriMunsi-Group',account.groupId);
             const read=new Request(new URL('/v1/burimunsi/session?include=home',origin),{headers:authHeaders,signal:request.signal});
+            proofs.set(db,{groupId:account.groupId,values,snapshot:tx,row,request:read,work,
+              selector:Object.freeze({id:account.id,sessionId:principal.principalSessionId,groupId:account.groupId})});
             const response=await operation(principal,local,read);
             if(response.status>=500)return null;
             requireThat(response.ok,'session_unavailable',401);
@@ -210,7 +216,7 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
         const principal=current(row,installation,profile,clock());
         requireThat(requestedGroup===principal.groupId,'native_scope_changed',403);
         const selector=Object.freeze({id:principal.nativeAccountId,sessionId:principal.principalSessionId,groupId:principal.groupId});
-        proofs.set(db,{groupId:principal.groupId,values,selector,snapshot,row});
+        proofs.set(db,{groupId:principal.groupId,values,selector,snapshot,row,request,work});
         return operation(principal,local);
       };
       if(shareRead){

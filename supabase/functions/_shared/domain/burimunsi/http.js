@@ -71,7 +71,7 @@ export function createNativeHandler({auth,records,contributions,members,gateway,
       // service, which reloads and checks the full actor inside its snapshot.
       const usesRecordSnapshot=recordSnapshotReads.has(wireRoute?.operation)||
         (wireRoute?.operation==='session'&&wireQuery?.include==='home');
-      const selector=method==='GET'&&token&&usesRecordSnapshot?readRecordActor?.():null;
+      const selector=method==='GET'&&token&&usesRecordSnapshot?readRecordActor?.(req):null;
       const actor=selector??await auth.authenticate(token,installationId);
       requireActiveNativeRequest(req);
       if(strictContract){requireThat(actor.groupId===groupId,'access_denied',403);wireBinding.actorId=actor.id;}
