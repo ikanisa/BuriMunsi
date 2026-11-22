@@ -144,20 +144,20 @@ try {
 
   await sessionPage.goto(origin + '/admin/security/authenticator?' + new URLSearchParams({ returnTo: '/admin/burimunsi?draft=private' }));
   await sessionPage.getByRole('heading', { name: 'BuriMunsi access' }).waitFor();
-  await sessionPage.getByRole('button', { name: 'Load groups' }).waitFor();
+  await sessionPage.getByRole('button', { name: 'Load BuriMunsi access' }).waitFor();
   assert.equal(new URL(sessionPage.url()).hash, '#/admin/burimunsi');
 
   nextSession = 'unattested';
   await sessionPage.reload();
   await sessionPage.getByRole('heading', { name: 'Access unavailable' }).waitFor();
-  assert.equal(await sessionPage.getByRole('button', { name: 'Load groups' }).count(), 0);
+  assert.equal(await sessionPage.getByRole('button', { name: 'Load BuriMunsi access' }).count(), 0);
 
   nextSession = 'unavailable';
   await sessionPage.reload();
   await sessionPage.getByRole('heading', { name: 'Workspace unavailable' }).waitFor();
   assert.equal(await sessionPage.getByRole('heading', { name: 'BuriMunsi access' }).count(), 0);
   await sessionPage.getByRole('button', { name: 'Try again' }).click();
-  await sessionPage.getByRole('button', { name: 'Load groups' }).waitFor();
+  await sessionPage.getByRole('button', { name: 'Load BuriMunsi access' }).waitFor();
 
   const sessionRead = sessionPage.waitForResponse(response => sessionApi(new URL(response.url())));
   await sessionPage.goto(origin + '/admin/licenses');
