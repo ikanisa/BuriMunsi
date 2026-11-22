@@ -29,7 +29,29 @@ async function admitted(owner,kind,work) {
   } catch(error) { await owner.query('ROLLBACK');throw error; }
 }
 
-async function qualifyBrowserReads(pool,source,originalCookie){
+async function installSmsHealthSchedulerFixture(owner) {
+  // Use the real disabled scheduler with the repository's local provider doubles.
+  await owner.query(await readFile(new URL('../../../supabase/jobs/test-fixture.sql',import.meta.url),'utf8'));
+  await owner.query(`
+    ALTER TABLE cron.job_run_details ADD COLUMN status text, ADD COLUMN start_time timestamptz;
+    CREATE SCHEMA collect_ops;
+    CREATE FUNCTION collect_ops.cleanup_google_expired() RETURNS void LANGUAGE plpgsql AS $$BEGIN
+ -- collect_fence_sql2_write_guard_v1
+ PERFORM private.collect_fence_assert_write(NULL,NULL,NULL);
+ RAISE EXCEPTION 'scheduler_fixture_read_only'; END$$;
+    REVOKE ALL ON FUNCTION collect_ops.cleanup_google_expired() FROM PUBLIC;
+  `);
+  const [{cleanup,manifest}]=(await owner.query(`SELECT
+    encode(sha256(convert_to(pg_get_functiondef('collect_ops.cleanup_google_expired()'::regprocedure),'UTF8')),'hex') AS cleanup,
+    (SELECT encode(sha256(convert_to(prosrc,'UTF8')),'hex') FROM pg_proc
+      WHERE oid='private._retention_manifest_catalog_v2()'::regprocedure) AS manifest`)).rows;
+  const base=await migration('20261117073850_collect_managed_jobs_hmac.sql');
+  await owner.query(base.replace('f70925051147096cfb72869b401fdb69c976b68034c87e8c3e98ee8b5f350ed0',cleanup)
+    .replace('09ecc11aca46af15d7f981b5d5c7c7d3775be6fc245c8ff73f48f61269e37671',manifest));
+  await owner.query(await migration('20261117135049_collect_sms_schedule_one_minute.sql'));
+}
+
+async function qualifyBrowserReads(pool,source,originalCookie,installSmsScopeRepair){
   const {PostgresDatabase}=await import('../../../supabase/functions/_shared/postgres.js');
   const {sqlFenceBackend,openApplicationWork}=await import('../../../supabase/functions/_shared/application-fence.js');
   const {handleAdmin}=await import('../../../supabase/functions/_shared/domain/admin_bridge.js');
@@ -40,6 +62,14 @@ async function qualifyBrowserReads(pool,source,originalCookie){
     let failed=true;
     try {
       const db=new PostgresDatabase(pool,{},work);
+      const errors=[];
+      if (installSmsScopeRepair && path.startsWith('oversight/')) {
+        const execute = db.statement.bind(db);
+        db.statement=async (...args)=>{
+          try { return await execute(...args); }
+          catch (error) { errors.push({code:error.code,message:error.message,where:error.where});throw error; }
+        };
+      }
       const headers=new Headers({Origin:origin});
       if(cookie)headers.set('Cookie','__Host-collect_admin='+cookie);
       if(csrf)headers.set('X-Collect-CSRF',csrf);
@@ -49,7 +79,7 @@ async function qualifyBrowserReads(pool,source,originalCookie){
         BURIMUNSI_DEFAULT_STAFF_PIN:initial,BURIMUNSI_PIN_PEPPER_ID:'fixture',BURIMUNSI_PIN_PEPPER_BASE64:Buffer.alloc(32,29).toString('base64')});
       const parsed=await res.json();
       failed=false;
-      return {status:res.status,data:parsed,cookie:res.headers.get('set-cookie')?.match(/^__Host-collect_admin=([a-f0-9]{64});/)?.[1]};
+      return {status:res.status,data:parsed,errors,cookie:res.headers.get('set-cookie')?.match(/^__Host-collect_admin=([a-f0-9]{64});/)?.[1]};
     } finally {assert.equal((await work.finish({failed})).state,'settled');}
   }
   const original=await call('auth/session',{cookie:originalCookie});
@@ -62,6 +92,7 @@ async function qualifyBrowserReads(pool,source,originalCookie){
   assert.equal(originalDirectory.data.currentAccountId,adminId);
   assert.equal(originalDirectory.data.canManage,true);
   const authorized={cookie:originalCookie,csrf:original.data.csrfToken};
+  const viewers={};
   for(const [role,phone] of [['admin','+250780000058'],['staff','+250780000059']]){
     const made=await call('team/accounts',{...authorized,body:{requestId:randomUUID(),displayName:'Synthetic '+role,phone,role}});
     assert.equal(made.status,200,JSON.stringify(made.data));
@@ -82,10 +113,41 @@ async function qualifyBrowserReads(pool,source,originalCookie){
     assert.ok(Array.isArray(payments.data.rows));
     const team=await call('team',view);
     assert.equal(team.status,role==='admin'?200:403,JSON.stringify(team.data));
+    if(installSmsScopeRepair)viewers[role]=view;
   }
+  if(!installSmsScopeRepair)return;
+  const routes=['oversight/sms-health','oversight/health?evidenceVersion=2'];
+  const restored={cookie:originalCookie};
+  const primaryBefore={};
+  for(const path of routes){
+    const primary=await call(path,restored);
+    assert.equal(primary.status,200,JSON.stringify({path,data:primary.data,errors:primary.errors}));
+    primaryBefore[path]=primary.data.queues;
+    const before=await call(path,viewers.admin);
+    assert.equal(before.status,503,JSON.stringify({path,data:before.data,errors:before.errors}));
+    assert.equal(before.data.error.code,'oversight_unavailable');
+    assert.deepEqual(before.errors.map(({code,message})=>({code,message})),[{code:'42501',message:'group_access_denied'}]);
+    assert.equal((await call(path,viewers.staff)).status,403);
+    assert.equal((await call(path)).status,401);
+  }
+  await installSmsScopeRepair();
+  for(const path of routes){
+    const after=await call(path,viewers.admin);
+    assert.equal(after.status,200,JSON.stringify({path,data:after.data,errors:after.errors}));
+    assert.equal(after.data.contract_version,1);
+    assert.deepEqual(after.data.queues,primaryBefore[path]);
+    assert.ok(Object.hasOwn(after.data.queues,'burimunsi_sms'));
+    assert.ok(Object.hasOwn(after.data.queues,'burimunsi_payer_sms'));
+    const primary=await call(path,restored);
+    assert.equal(primary.status,200,JSON.stringify({path,data:primary.data,errors:primary.errors}));
+    assert.deepEqual(primary.data.queues,primaryBefore[path]);
+    assert.equal((await call(path,viewers.staff)).status,403);
+    assert.equal((await call(path)).status,401);
+  }
+  return {narrowAndFull:{primaryAdmin:[200,200],peerAdmin:[503,200],staff:[403,403],guest:[401,401]},sameCookies:true,sqlstateBefore:'42501',queueParity:true};
 }
 
-export async function verifyPhoneOperatorAccounts({owner,database,fixtureRoot}) {
+export async function verifyPhoneOperatorAccounts({owner,database,fixtureRoot,phoneSmsHealth=false}) {
   const [{actual,local,cluster}] = (await owner.query("SELECT current_database() AS actual,inet_server_addr() IS NULL AS local,current_setting('cluster_name') AS cluster")).rows;
   assert.ok(local && actual===database && /^collect_archive_[0-9a-f]{24}_test$/.test(database) && cluster==='collect_archive_next_fixture');
   await primeJournalSchema(owner);
@@ -123,6 +185,14 @@ export async function verifyPhoneOperatorAccounts({owner,database,fixtureRoot}) 
   await owner.query('SELECT private.collect_fence_begin_quiesce($1,$2,$3)',args);
   await owner.query('SELECT private.collect_fence_drain($1,$2,$3)',args);
   await owner.query(await migration('20261122190000_burimunsi_phone_operator_accounts.sql'));
+  if(phoneSmsHealth){
+    await installSmsHealthSchedulerFixture(owner);
+    for(const name of ['20261117180000_burimunsi_observation_reconcile_status.sql','20261117190000_burimunsi_legacy_reconcile.sql',
+      '20261122191000_burimunsi_sms_completeness.sql','20261122191100_burimunsi_payment_sms_obligations.sql',
+      '20261122191200_burimunsi_known_device_login_budget.sql','20261122191300_burimunsi_event_driven_jobs.sql',
+      '20261122200000_burimunsi_admin_handset_intake.sql','20261122201000_burimunsi_admin_inbox_coverage.sql',
+      '20261122202000_burimunsi_current_admin_inbox_authority.sql'])await owner.query(await migration(name));
+  }
   await owner.query('SELECT private.collect_fence_release_v3($1,$2,$3)',[randomUUID(),state.epoch,state.source_sha256]);
   await admitted(owner,'http_collect',async db=>{
     const current=(await db.query('SELECT * FROM private.burimunsi_pin_session_context($1,$2,$3,$4)',[token,installation,device,'staff'])).rows;
@@ -141,7 +211,17 @@ export async function verifyPhoneOperatorAccounts({owner,database,fixtureRoot}) 
   try { await owner.query(await fixture('burimunsi-phone-team.sql')); } finally { await owner.query('ROLLBACK'); }
   const {host:socket,port}=owner.connectionParameters;
   const pool=await ownedFixturePool({root:fixtureRoot,socket,port:Number(port),database,user:'postgres',clusterName:cluster});
-  try { await qualifyBrowserReads(pool,state.source_sha256,originalCookie); } finally { await pool.end(); }
+  async function installSmsScopeRepair() {
+    const current=(await owner.query('SELECT epoch,source_sha256 FROM private.collect_fence_control WHERE singleton')).rows[0];
+    const args=[randomUUID(),current.epoch,current.source_sha256];
+    await owner.query('SELECT private.collect_fence_begin_quiesce($1,$2,$3)',args);
+    await owner.query('SELECT private.collect_fence_drain($1,$2,$3)',args);
+    await owner.query(await migration('20261122203000_burimunsi_phone_admin_sms_read_scope.sql'));
+    await owner.query('SELECT private.collect_fence_release_v3($1,$2,$3)',[randomUUID(),current.epoch,current.source_sha256]);
+  }
+  let smsHealth;
+  try { smsHealth=await qualifyBrowserReads(pool,state.source_sha256,originalCookie,phoneSmsHealth?installSmsScopeRepair:undefined); } finally { await pool.end(); }
+  if(phoneSmsHealth)await owner.query(await fixture('burimunsi-phone-sms-read-scope.sql'));
   assert.deepEqual(await receiverState(),originalReceiver);
-  return {existingBrowserSession:true,existingNativeSession:true,phoneAccountLifecycle:true,adminAndStaffGroupsAndPayments:true,unchangedDisabledReceiver:true};
+  return {existingBrowserSession:true,existingNativeSession:true,phoneAccountLifecycle:true,adminAndStaffGroupsAndPayments:true,unchangedDisabledReceiver:true,...(smsHealth?{smsHealth}:{})};
 }
