@@ -754,10 +754,10 @@ fun main(args:Array<String>) {
   stop=false;val reversed=ContinuousSyncBudget({now},{stop});now=999;check(reversed.stopped())
  }
  test("continuous failures back off finitely and successful pending work resets the delay") {
-  val retry=ContinuousSyncRetry();check(retry.next(false,true)==15000L);check(retry.next(false,true)==30000L)
-  repeat(8){check(retry.next(false,true)==60000L)}
-  check(retry.next(true,true)==0L&&retry.next(true,false)==30000L&&retry.next(false,true)==15000L)
-  check(retry.next(false,true,progress=true)==0L&&retry.next(false,true)==15000L)
+  val retry=ContinuousSyncRetry()
+  for(expected in listOf(1_000L,2_000L,4_000L,8_000L,16_000L,32_000L,60_000L,60_000L))check(retry.next(false,true)==expected)
+  check(retry.next(true,true)==0L&&retry.next(true,false)==60_000L&&retry.next(false,true)==1_000L)
+  check(retry.next(false,true,progress=true)==0L&&retry.next(false,true)==1_000L&&retry.next(false,false)==60_000L)
  }
  test("an empty phone requires an authoritative empty Cloud reservation status") {
   val e=setup()

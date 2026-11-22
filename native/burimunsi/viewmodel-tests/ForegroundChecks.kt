@@ -24,6 +24,20 @@ fun main()=runBlocking {
     suspend fun idle(){withTimeout(10000){while(m.state.busy)delay(2)};delay(20);withTimeout(10000){while(m.state.busy)delay(2)}}
     idle();m.onForeground();idle()
     ck("initial foreground revalidates session",Fixture.sessionReads==1&&m.screenGate==ScreenGate.OPEN)
+    val recentHomeReads=Fixture.homeReads
+    val recentHomeAt=m.state.savedAt
+    val beforeRecentResume=Fixture.sessionReads
+    m.onBackground();m.onForeground();idle()
+    ck("a known recent Home opens after server revalidation without rereading records or resetting age",
+        Fixture.sessionReads==beforeRecentResume+1&&Fixture.homeReads==recentHomeReads&&
+            m.state.savedAt==recentHomeAt&&m.screenGate==ScreenGate.OPEN)
+    val beforeHint=Fixture.homeReads;val beforeHintSessions=Fixture.sessionReads;val mutations=Fixture.mutations
+    m.onRecordsChanged();idle()
+    ck("a local records event fetches the visible Home immediately using its existing session",
+        Fixture.homeReads==beforeHint+1&&Fixture.sessionReads==beforeHintSessions&&Fixture.mutations==mutations)
+    m.onBackground();m.onRecordsChanged();idle()
+    ck("a local records event leaves background screens idle",Fixture.homeReads==beforeHint+1)
+    m.onForeground();idle()
     val supportReads=AtomicInteger()
     Fixture.supportFetch={supportReads.incrementAndGet();"+250780000001"};m.onBackground();m.onForeground();idle()
     ck("returning to records does not fetch the support contact",supportReads.get()==0&&m.supportPhone==null)

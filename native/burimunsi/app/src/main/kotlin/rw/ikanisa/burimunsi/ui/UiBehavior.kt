@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.graphicsLayer
@@ -51,7 +52,7 @@ data class FocusAction(val modifier:Modifier,val click:()->Unit)
     }
 }
 /** Entry-only motion: outgoing financial records are disposed, never cross-faded underneath. */
-@Composable fun RouteEntrance(title:String,content:@Composable ()->Unit){
+@Composable fun RouteEntrance(title:String,onFullyDrawn:(()->Unit)?=null,content:@Composable ()->Unit){
     val reduced=!LocalBuriMotionAllowed.current
     val progress=remember{Animatable(if(reduced)1f else 0f)}
     val distance=with(LocalDensity.current){6.dp.toPx()}
@@ -59,7 +60,12 @@ data class FocusAction(val modifier:Modifier,val click:()->Unit)
         if(reduced)progress.snapTo(1f) else progress.animateTo(1f,tween(160))
     }
     // Animatable also respects Android's system MotionDurationScale.
+    val finished by remember { derivedStateOf { progress.value == 1f } }
+    val drawSignal = if(onFullyDrawn==null) Modifier else Modifier.drawWithContent {
+        drawContent()
+        if(finished) onFullyDrawn()
+    }
     Box(Modifier.fillMaxSize().semantics{paneTitle=title}.graphicsLayer{
         alpha=progress.value;translationY=(1f-progress.value)*distance
-    }){content()}
+    }.then(drawSignal)){content()}
 }

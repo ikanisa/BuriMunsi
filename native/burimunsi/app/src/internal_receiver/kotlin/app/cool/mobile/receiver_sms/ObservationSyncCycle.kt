@@ -101,6 +101,7 @@ internal object ObservationSyncCycle {
             ComparisonStep.STATUS->{
                 val status=repo.verifiedObservationStatus()
                 if(!sameLocal())return reject(Fence.RECONCILE_CHANGED)
+                ObservationBackground.recordsChanged(app,status.revision)
                 if(status.hasPending||status.hasUnmatchedCanonical||status.revision!=expectedRevision)
                     return reject(Fence.AUDIT_UNCONFIRMED)
                 if(latest is ObservationRecovery.Latest.Empty&&status.hasRecorded)return reject(Fence.RECONCILE_EMPTY)
@@ -135,6 +136,7 @@ internal object ObservationSyncCycle {
                 diagnostic.phase(Phase.RECONCILE_RECHECK)
                 val status=repo.verifiedObservationStatus()
                 if(!sameLocal())return reject(Fence.RECONCILE_CHANGED)
+                ObservationBackground.recordsChanged(app,status.revision)
                 if(status.hasPending||status.hasUnmatchedCanonical||status.revision!=expectedRevision||
                     status.recordedCount!=progress.recordedCount)return reject(Fence.AUDIT_UNCONFIRMED)
                 val checkedAt=SystemClock.elapsedRealtime()
@@ -215,7 +217,10 @@ internal object ObservationSyncCycle {
             val completed=ObservationCoordinator(app,repo,diagnostic).cycle(stopped)
             // A newly retained earlier SMS can change the server's retention
             // order even while the newest phone witness remains unchanged.
-            if(diagnostic.snapshot().acknowledged>0){verified=null;auditProof=null;comparisonProgress=null;recovery.resetAudit()}
+            if(diagnostic.snapshot().acknowledged>0){
+                ObservationBackground.recordsChanged(app)
+                verified=null;auditProof=null;comparisonProgress=null;recovery.resetAudit()
+            }
             diagnostic.phase(Phase.COORDINATOR_FINISHED)
             var postScan=ObservationRecovery.Scan.BLOCKED
             if(!stopped()){

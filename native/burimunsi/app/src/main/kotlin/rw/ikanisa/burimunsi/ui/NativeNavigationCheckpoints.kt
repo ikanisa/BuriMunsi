@@ -35,7 +35,7 @@ internal class NativeNavigationCheckpoints(
             state.filter, if (smsSearching) 0 else state.listIndex, if (smsSearching) 0 else state.listOffset,
             memberAnchorId = state.memberAnchorId.takeIf { members }, memberListing = memberListing,
         )
-        val write = runCatching { writer.prepare(bookmark) }.getOrNull() ?: return
+        val write = writer.prepare(bookmark)
         saveJob?.cancel()
         saveJob = scope.launch(Dispatchers.IO) {
             if (debounce) delay(250)

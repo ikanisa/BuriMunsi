@@ -294,6 +294,26 @@ class GatewayDurabilityTest {
         if(android.os.Build.VERSION.SDK_INT>=34)
             assertTrue(info.foregroundServiceType and android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE!=0)
     }
+    @Test fun foregroundRecordsSignalRequiresTheTargetSignatureAndContainsNoData() {
+        val hintPermission=base.packageName + ".permission.RECORDS_CHANGED"
+        val info=base.packageManager.getPermissionInfo(hintPermission,0)
+        assertEquals(base.packageName,info.packageName)
+        @Suppress("DEPRECATION")
+        assertEquals(android.content.pm.PermissionInfo.PROTECTION_SIGNATURE,
+            info.protectionLevel and android.content.pm.PermissionInfo.PROTECTION_MASK_BASE)
+        val signal=java.util.concurrent.CountDownLatch(1)
+        val registration=rw.ikanisa.burimunsi.BuriRecordChanges.observe(base){signal.countDown()}
+        try {
+            val instrumentation=InstrumentationRegistry.getInstrumentation()
+            val result=instrumentation.uiAutomation.executeShellCommand(
+                "am broadcast --receiver-registered-only -a rw.ikanisa.burimunsi.RECORDS_CHANGED -p " + base.packageName)
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(result).use{it.readBytes()}
+            instrumentation.waitForIdleSync()
+            assertEquals(1L,signal.count)
+            rw.ikanisa.burimunsi.BuriRecordChanges.publishFromReceiver(base)
+            assertTrue(signal.await(5,java.util.concurrent.TimeUnit.SECONDS))
+        }finally{registration()}
+    }
     @Test fun continuousExecutionLeaseSurvivesAnInterruptedCallerUntilItsActualExit() {
         val gate=ContinuousSyncWorkGate()
         val entered=java.util.concurrent.CountDownLatch(1);val release=java.util.concurrent.CountDownLatch(1)
@@ -312,9 +332,9 @@ class GatewayDurabilityTest {
         assertFalse(budget.stopped());at=3000;assertTrue(budget.stopped())
         at=1000;val stopped=ContinuousSyncBudget({at},{cancelled});cancelled=true;assertTrue(stopped.stopped())
         val retry=ContinuousSyncRetry()
-        assertEquals(15000L,retry.next(false,true));assertEquals(30000L,retry.next(false,true))
-        repeat(8){assertEquals(60000L,retry.next(false,true))}
-        assertEquals(0L,retry.next(true,true));assertEquals(15000L,retry.next(false,true))
+        for(expected in listOf(1_000L,2_000L,4_000L,8_000L,16_000L,32_000L,60_000L,60_000L))
+            assertEquals(expected,retry.next(false,true))
+        assertEquals(0L,retry.next(true,true));assertEquals(1_000L,retry.next(false,true))
         assertEquals(500L,retry.next(false,true,awaitingParser=true))
     }
 }

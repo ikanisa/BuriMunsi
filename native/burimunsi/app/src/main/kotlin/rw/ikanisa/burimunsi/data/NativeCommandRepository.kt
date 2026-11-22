@@ -2,7 +2,6 @@ package rw.ikanisa.burimunsi.data
 
 import org.json.JSONObject
 import rw.ikanisa.burimunsi.core.*
-import rw.ikanisa.burimunsi.storage.SecureStore
 
 /** Owns prepared financial and staff commands until their original outcomes are verified. */
 internal class NativeCommandRepository(
@@ -10,7 +9,7 @@ internal class NativeCommandRepository(
     private val journal: OperationJournal,
     private val commandPreparationLock: Any,
     private val receiptVersions: AllocationReceiptVersions,
-    private val cacheStore: SecureStore,
+    private val cacheStore: NativeRecordCache,
     private val installationId: () -> String,
     private val hasPendingReceiverRetirement: () -> Boolean,
 ) : NativeSessionRequests by session {
@@ -195,8 +194,7 @@ internal class NativeCommandRepository(
      * A storage failure leaves the same original operation available for another
      * read-only outcome check, never a second dispatch. */
     private fun invalidateRecordsForCommit(){
-        cacheStore.clear()
-        checkContract(cacheStore.read()==null,"record_cache_unavailable")
+        cacheStore.clear(verify=true)
     }
     private fun sendPending(op:PendingOperation,transientPin:String?=null,resolveBlankPhoneDenial:Boolean=false):JSONObject{
         val j=JSONObject(op.body);val body=j.getJSONObject("body").put("requestId",op.requestId)

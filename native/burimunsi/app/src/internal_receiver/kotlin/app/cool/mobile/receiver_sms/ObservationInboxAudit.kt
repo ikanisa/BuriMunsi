@@ -139,6 +139,7 @@ internal class ObservationInboxAudit(
             if(stopped()||try{auditAuthority(stopped)?.scope!=scope}catch(_:Exception){true})return@synchronized interrupted()
             val status=repo.verifiedObservationStatus()
             if(try{auditAuthority(localStop)?.scope!=scope}catch(_:Exception){true})return@synchronized interrupted()
+            ObservationBackground.recordsChanged(app,status.revision)
             if(status.recordedCount !in 0..100_000||status.hasRecorded!=(status.recordedCount>0))return@synchronized Audit.UNCONFIRMED
             val resume=restartPosition(scope)
             auditProgress=AuditProgress(scope,resume,scope.uncertainLegacy || status.hasPending || status.hasUnmatchedCanonical,clock,status.revision,status.recordedCount,runId=runId,repairTail=resume>0)
@@ -148,6 +149,7 @@ internal class ObservationInboxAudit(
             if(stopped())return@synchronized interrupted()
             val status=repo.verifiedObservationStatus()
             if(try{auditAuthority(localStop)?.scope!=scope}catch(_:Exception){true})return@synchronized interrupted()
+            ObservationBackground.recordsChanged(app,status.revision)
             auditProgress=null
             if(status.hasPending||status.hasUnmatchedCanonical||status.revision!=progress.collectionRevision||status.recordedCount!=progress.recordedCount){
                 if(!stopped())repo.reportInboxCheck(progress.check("incomplete"))

@@ -28,7 +28,7 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
         ): T? = NativeSessions.withObservationOwner(context, expected, action)
     }
 
-    private val cacheStore = SecureStore(context, "records")
+    private val cacheStore = NativeRecordCache(context)
     private val receiptVersions = AllocationReceiptVersions(context)
     private val journal = OperationJournal(AndroidOperationStore(context))
     private val retirementJournal = ReceiverRetirementJournal(AndroidReceiverRetirementStore(context))
@@ -53,19 +53,29 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
     internal class Restoration(val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null,
         val reusedHome:Boolean=false)
 
-    internal fun restoreForHome(allowRecentCache:Boolean):Restoration? {
-        val restored=sessions.restore(includeHome=true,canReuseHome={allowRecentCache&&records.hasRecentHome(it)})?:return null
-        return withHome(restored)
+    internal fun restoreForHome(allowRecentCache:Boolean,wantsHome:(String?,String)->Boolean):Restoration? {
+        val revision=cacheStore.revision()
+        val restored=sessions.restore(includeHome=true,canReuseHome={allowRecentCache&&records.hasRecentHome(it)},
+            wantsHome=wantsHome)?:return null
+        return withHome(restored,revision)
     }
 
-    private fun withHome(verified:NativeSessions.ProfileRead):Restoration {
-        val snapshot=verified.home?.let{records.acceptRestoredHome(verified.operator,it)}
+    private fun withHome(verified:NativeSessions.ProfileRead,revision:Long):Restoration {
+        val snapshot=verified.home?.let{records.acceptRestoredHome(verified.operator,it,revision)}
             ?:if(verified.useRecentHome)records.recentHome(verified.operator)else null
         return Restoration(verified.operator,snapshot?.first,snapshot?.second,verified.useRecentHome)
     }
 
-    internal fun refreshHome():Restoration=withHome(sessions.refreshSession(includeHome=true))
-    fun login(phone: String, pin: String): Operator = sessions.login(phone, pin)
+    internal fun refreshHome():Restoration {
+        val revision=cacheStore.revision()
+        return withHome(sessions.refreshSession(includeHome=true),revision)
+    }
+
+    internal fun loginForHome(phone:String,pin:String):Restoration {
+        val verified=sessions.login(phone,pin,includeHome=true)
+        return withHome(verified,cacheStore.revision())
+    }
+    fun login(phone: String, pin: String): Operator = sessions.login(phone, pin).operator
     fun refreshSession(): Operator = sessions.refreshSession().operator
     fun changePin(current: String, next: String, confirm: String): Operator = sessions.changePin(current, next, confirm)
     fun current(): Operator? = sessions.current()
@@ -87,6 +97,18 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
     fun pairGateway(code: String, replace: Boolean): JSONObject = receiverPairing.pairGateway(code, replace)
 
     fun home(): Home = records.home()
+
+    /** A quiet Home read can finish after the screen has left. No cache or
+     * shared read provenance is written until the controller accepts it. */
+    internal class QuietHome(val payload:JSONObject,val revision:Long)
+
+    internal fun readQuietHome():QuietHome {
+        val revision=cacheStore.revision()
+        return QuietHome(records.readQuietHome(),revision)
+    }
+
+    internal fun acceptQuietHome(owner:Operator, read:QuietHome):Pair<Home,Long>? =
+        records.acceptRestoredHome(owner,read.payload,read.revision)
     internal fun recentPayments(listing:ListingQuery) = records.recentPayments(listing)
     internal fun recentMembers(listing:ListingQuery) = records.recentMembers(listing)
     fun recordReadScope(): RecordReadScope = records.recordReadScope()
@@ -94,6 +116,8 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
 
     fun payments(listing: ListingQuery, cursor: String? = null, memberId: String? = null, scope: RecordReadScope? = null): Page<Payment> =
         records.payments(listing, cursor, memberId, scope)
+    internal fun paymentPage(listing: ListingQuery, cursor: String? = null, memberId: String? = null) =
+        records.paymentPage(listing, cursor, memberId)
 
     fun members(listing: ListingQuery, cursor: String? = null, scope: RecordReadScope? = null, anchorId: String? = null): Page<Member> =
         records.members(listing, cursor, scope, anchorId)
@@ -119,6 +143,7 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
     fun members(q: String = "", cursor: String? = null): Page<Member> = records.members(q, cursor)
     fun payment(id: String): Payment = records.payment(id)
     fun member(id: String): Member = records.member(id)
+    internal fun memberRecord(id: String) = records.memberRecord(id)
     fun ledger(id: String, cursor: String? = null): Page<LedgerRow> = records.ledger(id, cursor)
 
     fun sms(q: String = "", cursor: String? = null, filter: String = "all", limit: Int? = null): Page<SmsRow> =

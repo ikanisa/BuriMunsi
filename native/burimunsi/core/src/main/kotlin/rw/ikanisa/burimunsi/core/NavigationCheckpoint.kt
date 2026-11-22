@@ -100,11 +100,11 @@ class NavigationCheckpointWriter(private val store: NavigationCheckpointStore) {
     private val order = synchronized(orders) { orders.getOrPut(store.writeScope) { Order() } }
 
     fun prepare(bookmark: NavigationCheckpoint?): () -> Unit {
-        val encoded = bookmark?.encode()
         val revision = order.latest.incrementAndGet()
         return {
             synchronized(order) {
                 if (revision == order.latest.get()) {
+                    val encoded = bookmark?.encode()
                     if (encoded == null) store.clear() else store.write(encoded)
                 }
             }

@@ -28,6 +28,7 @@ internal object ObservationBackground {
     private const val LOCAL=904_713
     private const val INBOX_CHANGED=904_714
     private val wakeup=ObservationWakeup()
+    val jobRetry=ContinuousSyncRetry()
     private val observerLock=Any()
     private val observerMain by lazy{Handler(Looper.getMainLooper())}
     private var fallbackObserver:ContentObserver?=null
@@ -61,6 +62,15 @@ internal object ObservationBackground {
         observerExpiry=expiry
         observerMain.postDelayed(expiry,120_000)
     }
+    private var lastCloudRevision: String? = null
+
+    @Synchronized fun recordsChanged(context: Context, revision: String? = null) {
+        if (revision != null && lastCloudRevision == revision) return
+        // A UI notification failure never affects receipt custody, retry or parse evidence.
+        if (runCatching { rw.ikanisa.burimunsi.BuriRecordChanges.publishFromReceiver(context) }.isSuccess && revision != null)
+            lastCloudRevision = revision
+    }
+
     fun begin()=wakeup.begin()
     fun signal(context:Context,delay:Long=0){
         if(!BuriContinuousSupervisor.wake(delay))wakeup.signalNetwork{dispatchNetwork(context,delay)}
@@ -139,7 +149,6 @@ internal object ObservationBackground {
 class ObservationJobService:JobService(){
     private val worker=Executors.newSingleThreadExecutor()
     private val main=Handler(Looper.getMainLooper())
-    private val retry=ContinuousSyncRetry()
     private fun runObserved(stopped:AtomicBoolean):ObservationCycleResult {
         val app=applicationContext
         ObservationBackground.monitorJob(app)
@@ -160,7 +169,7 @@ class ObservationJobService:JobService(){
             try{
                 val result=runObserved(stopped)
                 again=result.more||result.busy
-                if(result.progress||result.awaitingParser)nextDelay=retry.next(result.completed,result.more,result.progress,result.awaitingParser)
+                nextDelay=if(result.busy)500 else ObservationBackground.jobRetry.next(result.completed,result.more,result.progress,result.awaitingParser)
             }catch(_:Exception){/* Protected state remains for retry after network/authority recovery. */}
             finally{
                 if(!stopped.get())again=ObservationBackground.hasPending(applicationContext)||again

@@ -21,7 +21,8 @@ fun main()=runBlocking{
  val realNow=System.currentTimeMillis();var now=realNow+2000
  fun reset(){
   Fixture.paged=null;Fixture.anchoredMembers=null;Fixture.currentOwnerOverride=null;Fixture.receiverGroupOverride=null;Fixture.pendingFlag=true;Fixture.journalFailure=false;Fixture.cached=false
-  Fixture.recordSavedAt=null;Fixture.missingReadTimestamp=false;Fixture.ownerId="operator"
+  // Transport timestamps share the fixture clock even under a slow host scheduler.
+  Fixture.recordSavedAt=realNow;Fixture.missingReadTimestamp=false;Fixture.ownerId="operator"
   Fixture.restoreSignedOut=false;Fixture.role=Role.ADMIN;Fixture.readFailure=null
   Fixture.mutations=0;Fixture.reconciles=0;Fixture.enrollMutations=0;Fixture.staffMutations=0
   Fixture.memberCached=false;Fixture.memberPaymentScopeFailureOnCursor=false;now=realNow+2000

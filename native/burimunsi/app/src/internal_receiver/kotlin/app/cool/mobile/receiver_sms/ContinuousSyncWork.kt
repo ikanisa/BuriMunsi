@@ -88,9 +88,10 @@ internal class ContinuousSyncRetry {
             return delay
         }
         parserWaits=0
-        if(completed){failures=0;return if(more)0 else 30_000}
-        if(progress&&more){failures=0;return 0}
-        failures=(failures+1).coerceAtMost(3)
-        return 15_000L shl (failures-1)
+        if(completed||!more){failures=0;return if(more)0 else 60_000}
+        if(progress){failures=0;return 0}
+        val delay=(1_000L shl failures).coerceAtMost(60_000L)
+        failures=(failures+1).coerceAtMost(6)
+        return delay
     }
 }

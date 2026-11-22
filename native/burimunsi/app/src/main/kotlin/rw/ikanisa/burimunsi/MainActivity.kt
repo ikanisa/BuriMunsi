@@ -85,7 +85,8 @@ class MainActivity:ComponentActivity(){
                 val stopNetworkObservation=SessionNetworkObserver.observe(getSystemService(ConnectivityManager::class.java)){
                     lifecycleScope.launch{model.onNetworkAvailable()}
                 }
-                onPauseOrDispose{visible=false;model.onBackground();stopNetworkObservation()}
+                val stopRecordObservation = BuriRecordChanges.observe(this@MainActivity, model::onRecordsChanged)
+                onPauseOrDispose{visible=false;model.onBackground();stopRecordObservation();stopNetworkObservation()}
             }
             BuriContent {
                 if(visible)BuriApp(model,onSupport=::support,

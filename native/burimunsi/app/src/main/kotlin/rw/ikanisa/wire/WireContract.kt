@@ -22,6 +22,9 @@ object WireMediaType {
 /** JSON transport profile: canonical safe-integer number tokens, unique keys, bounded depth.
  * A canonical integer token policy is deliberately stricter than general-purpose JSON. */
 object StrictJson {
+    private val hexEscape = Regex("[0-9a-fA-F]{4}")
+    private val numberToken = Regex("-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")
+    private val integerToken = Regex("-?(0|[1-9][0-9]*)")
     fun parse(bytes: ByteArray, maxBytes: Int = 2_000_000): Any? {
         if (bytes.size > maxBytes) reject("CONTRACT_SIZE")
         val text = try { Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
@@ -37,7 +40,14 @@ object StrictJson {
         private var p = 0
         private var nodes = 0
         private fun peek(): Char? = text.getOrNull(p)
-        private fun ws() { while (peek() in listOf(' ', '\t', '\r', '\n')) p++ }
+        private fun ws() {
+            while (p < text.length) {
+                when (text[p]) {
+                    ' ', '\t', '\r', '\n' -> p++
+                    else -> return
+                }
+            }
+        }
         private fun take(c: Char) { if (peek() != c) reject("CONTRACT_JSON"); p++ }
         private fun string(): String {
             take('"'); val out = StringBuilder()
@@ -61,7 +71,7 @@ object StrictJson {
                     'b' -> out.append('\b'); 'f' -> out.append('\u000c')
                     'u' -> { if (p + 4 > text.length) reject("CONTRACT_JSON")
                         val raw = text.substring(p, p + 4)
-                        if (!Regex("[0-9a-fA-F]{4}").matches(raw)) reject("CONTRACT_JSON")
+                        if (!hexEscape.matches(raw)) reject("CONTRACT_JSON")
                         out.append(raw.toInt(16).toChar()); p += 4 }
                     else -> reject("CONTRACT_JSON")
                 }
@@ -90,13 +100,12 @@ object StrictJson {
                         if (peek() == ']') { p++; return result }; take(',') }
                 }
             }
-            for ((literal, v) in listOf("true" to true, "false" to false, "null" to null)) {
-                if (text.startsWith(literal, p)) { p += literal.length; return v }
-            }
-            val token = Regex("-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?").find(text, p)
-                ?.takeIf { it.range.first == p }?.value ?: reject("CONTRACT_JSON")
+            if (text.startsWith("true", p)) { p += 4; return true }
+            if (text.startsWith("false", p)) { p += 5; return false }
+            if (text.startsWith("null", p)) { p += 4; return null }
+            val token = numberToken.matchAt(text, p)?.value ?: reject("CONTRACT_JSON")
             p += token.length
-            if (!Regex("-?(0|[1-9][0-9]*)").matches(token) || token == "-0") reject("CONTRACT_NUMBER")
+            if (!integerToken.matches(token) || token == "-0") reject("CONTRACT_NUMBER")
             val number = token.toLongOrNull() ?: reject("CONTRACT_NUMBER")
             if (number !in -9007199254740991L..9007199254740991L) reject("CONTRACT_NUMBER")
             return number
@@ -145,6 +154,9 @@ object StrictQuery {
 
 class WireContract(private val product: String, private val version: String,
     private val defs: Map<String, Any?>, private val routes: List<List<String>> = emptyList()) {
+    private val patterns = java.util.concurrent.ConcurrentHashMap<String, Regex>()
+    private fun pattern(value: String): Regex = patterns.computeIfAbsent(value, ::Regex)
+
     fun validate(name: String, value: Any?): Any? {
         val root = defs[name] ?: reject("CONTRACT_OPERATION")
         fun visit(raw: Any?, x: Any?, p: String) {
@@ -178,7 +190,7 @@ class WireContract(private val product: String, private val version: String,
                     val v = x as String; val length = v.codePointCount(0, v.length)
                     if ((s["minLength"] is Number && length < (s["minLength"] as Number).toInt()) || (s["maxLength"] is Number && length > (s["maxLength"] as Number).toInt())) reject(code ?: "CONTRACT_STRING", p)
                     if (v.contains('\u0000')) reject(code ?: "CONTRACT_STRING", p)
-                    if (s["pattern"] is String && !Regex(s["pattern"] as String).containsMatchIn(v)) reject(code ?: "CONTRACT_STRING", p)
+                    if (s["pattern"] is String && !pattern(s["pattern"] as String).containsMatchIn(v)) reject(code ?: "CONTRACT_STRING", p)
                     if (s["format"] == "date-time" && runCatching { OffsetDateTime.parse(v) }.isFailure) reject("CONTRACT_TIMESTAMP", p)
                 }
                 "integer" -> {
@@ -242,10 +254,10 @@ class WireContract(private val product: String, private val version: String,
                 if ((d["totalCount"] as Number).toLong() < items.size || (d["nextCursor"] != null && items.isEmpty())) reject("CONTRACT_PAGE")
             }
             if (d.containsKey("recentPayments")) rows(d["recentPayments"])
-            if (operation == "session") {
+            if (operation == "session" || operation == "login") {
                 val included = d.containsKey("home")
                 if (included != (expected["includeHome"] == true)) reject("CONTRACT_CONTEXT")
-                if (included) rows(objectValue(d["home"])["recentPayments"])
+                d["home"]?.let { rows(objectValue(it)["recentPayments"]) }
             }
             if (d.containsKey("groupId") && d["groupId"] != b["groupId"]) reject("CONTRACT_IDENTITY")
             if (operation in listOf("payment", "paymentDetailV1", "member", "rawSms") && d["id"] != expected["recordId"]) reject("CONTRACT_IDENTITY")
@@ -380,9 +392,10 @@ class WireContract(private val product: String, private val version: String,
         return value
     }
     fun route(method: String, path: String): Pair<String, String?> {
+        val logicalPath = path.substringBefore('?')
         for (entry in routes) {
             if (entry[0] != method) continue
-            val match = Regex(entry[1]).matchEntire(path.substringBefore('?')) ?: continue
+            val match = pattern(entry[1]).matchEntire(logicalPath) ?: continue
             return entry[2] to if (match.groups.size > 1) match.groups[1]?.value else null
         }
         reject("CONTRACT_OPERATION")
