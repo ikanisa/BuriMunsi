@@ -1,5 +1,6 @@
 package rw.ikanisa.burimunsi.data
 
+import org.json.JSONArray
 import org.json.JSONObject
 import rw.ikanisa.burimunsi.core.ObservationReconcileRequest
 import rw.ikanisa.burimunsi.core.SmsObservation
@@ -22,4 +23,16 @@ internal fun reconciliationItem(request:ObservationReconcileRequest):JSONObject 
         .put("rawSender",request.rawSender).put("serviceCentreAt",request.serviceCentreAt?:JSONObject.NULL)
         .put("inboxReceivedAt",request.inboxReceivedAt).put("subscriptionId",request.subscriptionId?:JSONObject.NULL)
         .also{body->request.gatewayEnvelopeId?.let{body.put("gatewayEnvelopeId",Values.requestId(it))}}
+}
+
+internal const val OBSERVATION_RECONCILE_MAX_ITEMS = 20
+internal const val OBSERVATION_RECONCILE_MAX_BYTES = 8192
+
+internal fun reconciliationBatchBody(requests: List<ObservationReconcileRequest>, runId: String?, includeProcessing: Boolean = false): JSONObject {
+    val items = JSONArray()
+    requests.forEach { items.put(reconciliationItem(it)) }
+    return JSONObject().put("items", items).also { body ->
+        runId?.let { body.put("runId", Values.requestId(it)) }
+        if (includeProcessing) body.put("includeProcessing", true)
+    }
 }

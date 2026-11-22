@@ -155,6 +155,18 @@ fun main(){
   respond(batchReply(first,second));ck("real ApiClient accepts two ordered observation keys",call("reconcile-batch",batch).getJSONArray("items").length()==2)
   respond(batchReply(second,first))
   ck("real ApiClient rejects reordered observation keys",runCatching{call("reconcile-batch",batch)}.isFailure)
+  val withParser=JSONObject(batch.toString()).put("includeProcessing",true)
+  fun combinedReply()=batchReply(first,second).also{ it.getJSONArray("items").getJSONObject(0).put("processingStatus","parsed")
+   it.getJSONArray("items").getJSONObject(1).put("processingStatus","duplicate") }
+  respond(combinedReply());ck("the requested page binds both source keys and their parser outcomes",
+   call("reconcile-batch",withParser).getJSONArray("items").getJSONObject(1).getString("processingStatus")=="duplicate")
+  respond(combinedReply());ck("a legacy request rejects unsolicited parser information",runCatching{call("reconcile-batch",batch)}.isFailure)
+  respond(batchReply(first,second));ck("the combined request rejects an absent parser outcome for a matched source",
+   runCatching{call("reconcile-batch",withParser)}.isFailure)
+  val missing=JSONObject().put("sourceKey",second).put("state","missing").put("sourceId",JSONObject.NULL)
+  fun missingReply()=JSONObject().put("groupId","group-1").put("items",org.json.JSONArray().put(matched(first).put("processingStatus","pending")).put(missing))
+  respond(missingReply());ck("missing custody has no parser outcome",call("reconcile-batch",withParser).getJSONArray("items").length()==2)
+  missing.put("processingStatus","parsed");respond(missingReply());ck("a missing source cannot claim parsed",runCatching{call("reconcile-batch",withParser)}.isFailure)
   respond(JSONObject().put("groupId","group-1").put("hasPending",false).put("hasRecorded",true).put("recordedCount",1)
     .put("hasUnmatchedCanonical",false).put("revision","f".repeat(64)))
   ck("real ApiClient reads scoped reconciliation status without a body",call("reconcile-status").getInt("recordedCount")==1&&Wire.last!!.written.size()==0)

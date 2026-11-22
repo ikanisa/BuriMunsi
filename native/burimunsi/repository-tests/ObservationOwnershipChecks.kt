@@ -170,6 +170,9 @@ fun main(){
     val other=witness.copy(sourceKey="3".repeat(64))
     val source="00000000-0000-4000-8000-000000000001"
     var swapped=false;var otherGroup=false
+    var combinedStatus="parsed"
+    var combinedError:ApiFailure?=null
+    val pageModes=mutableListOf<Boolean>()
     fun ack(key:String)=JSONObject().put("sourceKey",key).put("state","matched").put("sourceId",source)
     api.handler={request->
         check(request.contractContext["groupId"]=="group-1"&&request.contractContext["actorId"]==actor)
@@ -180,11 +183,18 @@ fun main(){
                 ack(witness.sourceKey).put("groupId",group).put("latestRecordedSourceId",source).toString()
             }
             request.path.endsWith("/reconcile-batch")->{
-                check(request.method=="POST"&&request.body!!.keys().asSequence().toSet()==setOf("items"))
-                val items=request.body.getJSONArray("items")
+                val body=checkNotNull(request.body)
+                val combined=body.has("includeProcessing")
+                check(request.method=="POST"&&body.keys().asSequence().toSet()==if(combined)setOf("items","runId","includeProcessing") else if(body.has("runId"))setOf("items","runId") else setOf("items"))
+                if(body.has("runId"))check(body.getString("runId")=="3c341699-0064-4997-892c-b10b45898478")
+                if(combined)check(body.getBoolean("includeProcessing"));pageModes.add(combined)
+                if(combined)combinedError?.let{throw it}
+                val items=body.getJSONArray("items")
                 check((0 until items.length()).map{items.getJSONObject(it).getString("sourceKey")}==listOf(witness.sourceKey,other.sourceKey))
                 val keys=if(swapped)listOf(other.sourceKey,witness.sourceKey)else listOf(witness.sourceKey,other.sourceKey)
-                JSONObject().put("groupId",group).put("items",JSONArray().also{rows->keys.forEach{rows.put(ack(it))}}).toString()
+                JSONObject().put("groupId",group).put("items",JSONArray().also{rows->keys.forEach{
+                    val row=ack(it);if(combined)row.put("processingStatus",combinedStatus);rows.put(row)
+                }}).toString()
             }
             else->{
                 check(request.method=="GET"&&request.path.endsWith("/reconcile-status")&&request.body==null)
@@ -195,6 +205,17 @@ fun main(){
     }
     check(proof.reconcileObservation(witness).sourceId==source&&proof.reconcileObservations(listOf(witness,other)).size==2&&
         proof.observationReconcileStatus().recordedCount==2)
+    val runId="3c341699-0064-4997-892c-b10b45898478"
+    fun combined()=proof.reconcileObservations(listOf(witness,other),runId,includeProcessing=true)
+    check(combined().all{it.processingStatus=="parsed"}&&pageModes.last())
+    combinedStatus="unexpected";check(runCatching{combined()}.isFailure);combinedStatus="parsed"
+    combinedError=ApiFailure("access_denied",403);val beforeDenied=pageModes.size
+    check(runCatching{combined()}.isFailure&&pageModes.size==beforeDenied+1&&pageModes.last())
+    combinedError=ApiFailure("contract_unknown_field",400)
+    check(combined().all{it.processingStatus==null}&&pageModes.takeLast(2)==listOf(true,false))
+    val beforeReuse=pageModes.size
+    check(combined().all{it.processingStatus==null}&&pageModes.size==beforeReuse+1&&!pageModes.last())
+    println("PASS a current server binds parser outcomes and an older strict server uses the same run's verified fallback")
     swapped=true;check(runCatching{proof.reconcileObservations(listOf(witness,other))}.isFailure)
     val requestsBefore=api.calls.size
     check(runCatching{proof.reconcileObservations(listOf(witness,witness))}.isFailure&&api.calls.size==requestsBefore)
