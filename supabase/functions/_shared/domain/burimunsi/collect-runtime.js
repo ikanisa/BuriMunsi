@@ -106,7 +106,8 @@ export async function createCollectNativeRuntime(env,{trustedNetworkBucket,clock
   ['true','false'].includes(env.BURIMUNSI_SMART_ONBOARDING_ADVANCED_ENABLED),'native_service_unconfigured');
  const config=configuration(bound.profile,undefined,nativeObservationsEnabled(env),env.BURIMUNSI_STAFF_PIN_PHONE_PRESERVATION_ENABLED==='true',
   env.BURIMUNSI_SMART_ONBOARDING_ADVANCED_ENABLED==='true');
- const secrets=Object.freeze({...secretsFor(env),defaultStaffPin:env.BURIMUNSI_DEFAULT_STAFF_PIN});
+ const secrets=Object.freeze({...secretsFor(env),defaultStaffPin:env.BURIMUNSI_DEFAULT_STAFF_PIN,
+  defaultOnlyOnCreate:env.BURIMUNSI_PRODUCT_MODE==='standalone'});
  const networkBucket=async request=>{
   let value;try{value=await trustedNetworkBucket(request);}catch{need(false,'trusted_network_resolver_required');}
   need(typeof value==='string'&&/^[a-f0-9]{64}$/.test(value),'trusted_network_resolver_required');return value;

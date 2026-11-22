@@ -447,7 +447,8 @@ class NativeUiContractTest {
         panelButton("Edit staff","Save changes").assertIsEnabled().performClick()
         ui.runOnIdle{check(c.staffSaveCalls==1&&c.lastStaffPhone=="+250780000002"&&c.lastStaffPin.isEmpty())}
         ui.runOnIdle{c.state=c.state.copy(sheetId=null,selectedStaff=null,draft=mapOf("name" to "Example Staff","phone" to "+250780000002"))}
-        ui.onNodeWithText("Leave blank for default",useUnmergedTree=true).assertExists()
+        ui.onNodeWithText("Passcode",useUnmergedTree=true).assertDoesNotExist()
+        ui.onNodeWithText("New passcode",useUnmergedTree=true).assertDoesNotExist()
         panelButton("Add staff","Create staff").assertIsEnabled().performClick()
         ui.runOnIdle{check(c.staffSaveCalls==2&&c.lastStaffPin.isEmpty())}
         field("Passcode").performScrollTo().performTextInput("26")

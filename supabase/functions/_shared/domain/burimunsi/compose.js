@@ -23,7 +23,8 @@ export function composeNativeRequest({admission,config,ports,secrets,networkBuck
   requirePort(ports?.gateway,['withAuthorityTransaction','withReadSnapshot']);
   const groupId=config.groupId;
   const auth=new NativeAuthService({store:ports.auth,hasher:new PinHasher({pepper:secrets.pinPepper,pepperId:secrets.pinPepperId}),groupId,clock,sessionTtlMs:config.sessionTtlMs??1800000,
-    preserveStaffPinOnPhoneChange:config.preserveStaffPinOnPhoneChange===true,defaultStaffPin:secrets.defaultStaffPin});
+    preserveStaffPinOnPhoneChange:config.preserveStaffPinOnPhoneChange===true,defaultStaffPin:secrets.defaultStaffPin,
+    defaultOnlyOnCreate:secrets.defaultOnlyOnCreate===true});
   const contributions=composeNativeContributions({config,ports,clock});
   const members=new MemberService({store:ports.canonical,groupId,clock});
   const gateway=new GatewayRegistry({store:ports.gateway,groupId,clock});

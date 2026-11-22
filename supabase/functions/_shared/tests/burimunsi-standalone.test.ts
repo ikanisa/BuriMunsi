@@ -73,7 +73,10 @@ Deno.test('standalone preserves native and dedicated Admin admission without bro
     ['collect-api', '/privacy/account-deletion', 'GET', 'https://other.example', 403],
     ['collect-api', '/v1/momo/gateway/profile', 'GET', BURIMUNSI_ADMIN_ORIGIN, 403],
     ['admin-api', '/api/admin/auth/phone-passcode', 'POST', BURIMUNSI_ADMIN_ORIGIN, 204],
-    ['admin-api', '/api/admin/auth/passcode/verify', 'POST', BURIMUNSI_ADMIN_ORIGIN, 204],
+    ['admin-api', '/api/admin/auth/passcode/change', 'POST', BURIMUNSI_ADMIN_ORIGIN, 204],
+    ['admin-api', '/api/admin/team', 'GET', BURIMUNSI_ADMIN_ORIGIN, 204],
+    ['admin-api', '/api/admin/team/accounts', 'POST', BURIMUNSI_ADMIN_ORIGIN, 204],
+    ['admin-api', '/api/admin/team/accounts/7dfc16fb-b3b8-4c2d-b6f8-bcbfd8025001/access', 'POST', BURIMUNSI_ADMIN_ORIGIN, 204],
     ['admin-api', '/api/admin/auth/session', 'GET', BURIMUNSI_ADMIN_ORIGIN, 204],
     ['admin-api', '/api/admin/auth/logout', 'POST', BURIMUNSI_ADMIN_ORIGIN, 204],
     ['admin-api', '/api/admin/auth/session', 'GET', project, 204],
@@ -112,7 +115,7 @@ Deno.test('standalone preserves native and dedicated Admin admission without bro
 Deno.test('standalone rejects old Admin and direct member authentication before work or preflight admission', async () => {
   const routes = {
     'admin-api': [
-      ['POST', '/api/admin/auth/otp'], ['POST', '/api/admin/auth/verify'], ['POST', '/api/admin/auth/login'],
+      ['POST', '/api/admin/auth/otp'], ['POST', '/api/admin/auth/verify'], ['POST', '/api/admin/auth/passcode/verify'], ['POST', '/api/admin/auth/login'],
       ['POST', '/api/admin/auth/forgot-password'], ['POST', '/api/admin/auth/complete-password'],
       ['POST', '/api/admin/auth/change-password'], ['GET', '/api/admin/auth/email-verification'],
       ['POST', '/api/admin/auth/email/request'], ['POST', '/api/admin/auth/email/verify'],
