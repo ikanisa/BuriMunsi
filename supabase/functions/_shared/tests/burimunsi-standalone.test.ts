@@ -4,13 +4,14 @@ import {canonicalProfile, MANAGED_SUPABASE_ORIGIN} from '../deployment-profile.j
 import {assertRuntimeDeployment} from '../deployment-database.js';
 import {createHandler} from '../edge-http-handler.js';
 import {logicalRequest} from '../edge-http-transport.js';
-import {adminSessionOriginMatches} from '../admin-security.js';
+import {adminSessionOriginMatches, validateAdminOrigin} from '../admin-security.js';
 import {handleAuth} from '../domain/auth.js';
 import {momoGatewayRoute} from '../domain/momo_gateway.js';
 
 const project = MANAGED_SUPABASE_ORIGIN;
 const group = 'fixture-group';
 const legacyAdmin = 'https://platform-admin.collect.ikanisa.com';
+const legacyQA = 'https://admin-supabase-qa.collect.ikanisa.com';
 const profile = {
   format: 'collect.deployment.v1', id: 'collect-managed-production-cloud', mode: 'managed',
   environment: 'production', supabase_origin: project, member_api_origin: project,
@@ -68,13 +69,17 @@ Deno.test('standalone preserves native and dedicated Admin admission without bro
     ['collect-api', '/v1/momo/gateway/profile', 'GET', project, 204],
     ['collect-api', '/v1/rpc/get_public_runtime_config', 'POST', project, 204],
     ['collect-api', '/v1/security/challenge?parent_origin=' + encodeURIComponent(BURIMUNSI_ADMIN_ORIGIN), 'GET', BURIMUNSI_ADMIN_ORIGIN, 204],
+    ['collect-api', '/v1/security/challenge?parent_origin=' + encodeURIComponent(legacyAdmin), 'GET', legacyAdmin, 403],
+    ['collect-api', '/v1/security/challenge?parent_origin=' + encodeURIComponent(legacyQA), 'GET', legacyQA, 403],
     ['collect-api', '/privacy/account-deletion/assets/client.js', 'GET', BURIMUNSI_ADMIN_ORIGIN, 204],
     ['collect-api', '/v1/privacy/email/challenge', 'POST', BURIMUNSI_ADMIN_ORIGIN, 204],
     ['collect-api', '/v1/rpc/get_current_account_deletion_request_status_v1', 'POST', BURIMUNSI_ADMIN_ORIGIN, 204],
     ['collect-api', '/v1/privacy/email/challenge', 'POST', 'https://other.example', 403],
     ['collect-api', '/v1/momo/gateway/profile', 'GET', BURIMUNSI_ADMIN_ORIGIN, 403],
     ['admin-api', '/api/admin/auth/session', 'GET', BURIMUNSI_ADMIN_ORIGIN, 204],
-    ['admin-api', '/api/admin/auth/session', 'GET', legacyAdmin, 204],
+    ['admin-api', '/api/admin/auth/session', 'GET', project, 204],
+    ['admin-api', '/api/admin/auth/session', 'GET', legacyAdmin, 403],
+    ['admin-api', '/api/admin/auth/session', 'GET', legacyQA, 403],
     ['admin-api', '/api/admin/auth/session', 'GET', 'https://other.example', 403],
   ] as const) {
     const handler = createHandler(surface, () => env, {standalone: true, reportHealth: () => false});
@@ -86,7 +91,22 @@ Deno.test('standalone preserves native and dedicated Admin admission without bro
   }
   const sessionRequest = request('admin-api', '/api/admin/auth/session', 'GET', BURIMUNSI_ADMIN_ORIGIN);
   assertEquals(adminSessionOriginMatches(sessionRequest, env, profile, {origin: BURIMUNSI_ADMIN_ORIGIN}), true);
-  assertEquals(adminSessionOriginMatches(sessionRequest, env, profile, {origin: legacyAdmin}), false);
+  for (const origin of [legacyAdmin, legacyQA]) {
+    const oldSession = request('admin-api', '/api/admin/auth/session', 'GET', origin);
+    assertEquals(adminSessionOriginMatches(oldSession, env, profile, {origin}), false);
+    const login = request('admin-api', '/api/admin/auth/otp', 'POST', origin, {});
+    login.headers.set('X-Collect-Requested-With', 'collect-admin');
+    const handler = createHandler('admin-api', () => env, {standalone: true, reportHealth: () => false});
+    assertEquals((await handler(login)).status, 403);
+  }
+  for (const origin of [BURIMUNSI_ADMIN_ORIGIN, project]) {
+    const login = request('admin-api', '/api/admin/auth/otp', 'POST', origin, {});
+    login.headers.set('X-Collect-Requested-With', 'collect-admin');
+    assertEquals(validateAdminOrigin(login, env), origin);
+    assertEquals(adminSessionOriginMatches(
+      request('admin-api', '/api/admin/auth/session', 'GET', origin), env, profile, {origin},
+    ), true);
+  }
   assertEquals(adminSessionOriginMatches(sessionRequest, {...env, BURIMUNSI_PRODUCT_MODE: undefined}, profile, {origin: BURIMUNSI_ADMIN_ORIGIN}), false);
 });
 

@@ -5,6 +5,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
 import {principalFixture,I} from './native-principal-fixture.mjs';
 import {openApplicationWork} from '../../application-fence.js';
 import {syntheticFenceBackend} from '../helpers/fenced-unit.js';
@@ -13,6 +14,8 @@ import {digest} from '../../domain/core.js';
 import {encrypt} from '../../domain/encryption.js';
 import {handleAdmin} from '../../domain/admin_bridge.js';
 import {createAdminWorker} from '../../../../../deploy/platform-admin/src/index.js';
+import {BURIMUNSI_ADMIN_COOKIE} from '../../../../../deploy/platform-admin/src/admin-session-realm.js';
+import {profile as managedProfile} from '../../../../../scripts/supabase/cloud-release/migrations.mjs';
 await import('../helpers/node-postgres-import.mjs');
 const {logicalRequest}=await import('../../serve.js');
 
@@ -157,16 +160,29 @@ test('changed deployment source is not an admitted token exchange',()=>fixture(a
 test('managed session denial cannot create a new projection',()=>fixture(async({state,call})=>{state.managed=false;const {response}=await call();assert.equal(response.status,401);assert.equal(state.nativeReads,0);}));
 test('existing unrelated Admin routes keep their dispatcher',()=>fixture(async({call})=>{const {response}=await call({path:'/api/other'});assert.equal(response,null);}));
 
-test('native BFF access survives the real Admin proxy and shared function URL projection',()=>fixture(async({env,request,token})=>{
+test('native BFF access survives the dedicated Admin proxy and managed function URL projection',()=>fixture(async({f,env,request,token})=>{
+ const config = JSON.parse(await readFile(new URL(
+  '../../../../../deploy/platform-admin/wrangler.burimunsi.jsonc', import.meta.url), 'utf8')).vars;
+ const backendEnv = {...env, APP_ENVIRONMENT: 'production', ADMIN_ORIGIN: PROJECT,
+  COLLECT_DEPLOYMENT_PROFILE: managedProfile, COLLECT_DEPLOYMENT_PROFILE_SHA256: await digest(managedProfile),
+  BURIMUNSI_PRODUCT_MODE: 'standalone'};
+ f.execute('UPDATE app.admin_sessions SET origin=?', config.ADMIN_ORIGIN);
  let dispatches=0;
  const proxy=createAdminWorker({fetchImpl:async upstream=>{
   dispatches++;assert.equal(upstream.url,PROJECT+'/functions/v1/admin-api/api/admin/burimunsi/access');
   assert.equal(upstream.headers.get('X-BuriMunsi-Device'),DEVICE);
-  const logical=logicalRequest(upstream,'admin-api',env);
+  assert.equal(upstream.headers.get('Cookie'), '__Host-collect_admin=' + COOKIE);
+  const logical=logicalRequest(upstream,'admin-api');
   assert.equal(new URL(logical.url).origin,PROJECT);
-  return handleAdmin(logical,env,{});
+  return handleAdmin(logical,backendEnv,{});
  }});
- const response=await proxy.fetch(request(),{...env,COLLECT_BACKEND:'supabase',ASSETS:{fetch(){throw Error('No static fallback');}}});
+ const native = request(), headers = new Headers(native.headers);
+ headers.set('Origin', config.ADMIN_ORIGIN);
+ headers.set('Cookie', BURIMUNSI_ADMIN_COOKIE + '=' + COOKIE);
+ const browser = new Request(config.ADMIN_ORIGIN + new URL(native.url).pathname, {
+  method: native.method, headers, body: await native.text(),
+ });
+ const response=await proxy.fetch(browser,{...config,ASSETS:{fetch(){throw Error('No static fallback');}}});
  assert.equal(response.status,200,await response.clone().text());assert.equal((await response.json()).accessToken,token);
  assert.equal(dispatches,1);assert.equal(response.headers.get('Pragma'),'no-cache');
 }));

@@ -18,7 +18,7 @@ export function adminCookieToken(request) {
 const managedBrowsers=['https://platform-admin.collect.ikanisa.com','https://admin-supabase-qa.collect.ikanisa.com'];
 function managedBrowserHosts(env){
  if(!isManagedProductionProfile(env)||env.ADMIN_ORIGIN!==MANAGED_SUPABASE_ORIGIN)return [];
- return env.BURIMUNSI_PRODUCT_MODE===BURIMUNSI_PRODUCT_MODE?[...managedBrowsers,BURIMUNSI_ADMIN_ORIGIN]:managedBrowsers;
+ return env.BURIMUNSI_PRODUCT_MODE===BURIMUNSI_PRODUCT_MODE?[BURIMUNSI_ADMIN_ORIGIN]:managedBrowsers;
 }
 export function isManagedAdminBrowserOrigin(env,origin){
  return managedBrowserHosts(env).includes(origin);
