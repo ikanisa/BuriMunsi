@@ -274,7 +274,22 @@ class NativeUiContractTest {
         button("Apply").performClick();ui.runOnIdle{check(c.filterCalls==1&&c.state.filter=="processing"&&c.state.sheet==null){"Expected processing applied once; actual sheet=${c.state.sheet}, filter=${c.state.filter}, applies=${c.filterCalls}"}}
     }
     @Test fun overviewKeepsAuthoritativeUnallocatedAmountAndAllPaymentsAction(){
-        val c=FakeController(Route.HOME);c.state=c.state.copy(home=c.state.home!!.copy(unallocatedCount=1,unallocatedAmountRwf=3000));show(c)
+        val c=FakeController(Route.HOME)
+        val savings=HomeSavings(10000,2500,7500,"2026-11-06T10:00:00Z",SavingsReconciliation.BALANCED)
+        val initial=c.state.home!!.copy(balanceRwf=43000,unallocatedCount=1,unallocatedAmountRwf=3000,savings=savings)
+        c.state=c.state.copy(home=initial,operator=c.state.operator!!.copy(role=Role.STAFF));show(c)
+        ui.onNodeWithContentDescription("Lifetime member contributions · 10,000 RWF").assertIsDisplayed()
+        ui.onNodeWithContentDescription("Total outgoing payments · 2,500 RWF").assertIsDisplayed()
+        ui.onNodeWithContentDescription("MoMo balance · last SMS · 7,500 RWF",substring=true).assertIsDisplayed()
+        ui.runOnIdle{c.state=c.state.copy(home=initial.copy(savings=savings.copy(latestWalletBalanceRwf=11500,reconciliationStatus=SavingsReconciliation.MISMATCH)))}
+        ui.onNodeWithText("Contributions less outgoing payments differ from the last MoMo balance.").assertIsDisplayed()
+        ui.runOnIdle{c.state=c.state.copy(home=initial.copy(savings=savings.copy(reconciliationStatus=SavingsReconciliation.UNAVAILABLE)))}
+        ui.onNodeWithText("Reconciliation unavailable from the verified records.").assertIsDisplayed()
+        ui.onNodeWithContentDescription("MoMo balance · last SMS · 7,500 RWF",substring=true).assertIsDisplayed()
+        ui.runOnIdle{c.state=c.state.copy(home=initial.copy(savings=null))}
+        ui.onNodeWithContentDescription("Lifetime member contributions · Unavailable").assertDoesNotExist()
+        ui.onNodeWithContentDescription("Total outgoing payments · Unavailable").assertDoesNotExist()
+        ui.runOnIdle{c.state=c.state.copy(home=initial)}
         val list=ui.onNode(hasScrollToIndexAction())
         list.performScrollToNode(hasText("1 unallocated"))
         ui.onNodeWithText("1 unallocated").assertExists();ui.onNodeWithText("RWF 3,000").assertExists()

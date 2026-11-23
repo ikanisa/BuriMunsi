@@ -14,7 +14,7 @@ function sessionProfile(actor){
  * Do not replace the current router or bypass its application fence.
  * Origin/networkBucket are server-owned deployment inputs, not forwarded client claims.
  */
-export function createNativeHandler({auth,records,contributions,members,gateway,observations=null,cursor=null,origin,networkBucket,strictContract=false,groupId,requestReadTimeoutMs=15000,verifiedObservationStatusEnabled=false,readRecordActor=null}) {
+export function createNativeHandler({auth,records,contributions,members,gateway,observations=null,cursor=null,origin,networkBucket,strictContract=false,groupId,requestReadTimeoutMs=15000,verifiedObservationStatusEnabled=false,readRecordActor=null,allowHomeSavings=false}) {
   requirePort(auth,['login','authenticate','logout','changePasscode','manageStaff']);
   requirePort(records,['home','page','detail','exportLedger','commandStatus']);
   requirePort(contributions,['allocate']);requirePort(members,['enroll','setActive']);
@@ -58,6 +58,11 @@ export function createNativeHandler({auth,records,contributions,members,gateway,
         if(!csv){wireRoute=contractRoute(method,route);if(method==='GET')validateNativeRequest(wireRoute.operation,null);}
         wireQuery=validateNativeQuery(csv?'csv':wireRoute.operation,url.search.slice(1));
       }
+      const bundledHome=wireQuery?.include==='home'||wireQuery?.include==='home,savings';
+      const includeSavings=wireQuery?.include==='savings'||wireQuery?.include==='home,savings';
+      // The phone/PIN gate owns login and forwards its Home read as a scoped GET.
+      if(includeSavings)requireThat(allowHomeSavings&&wireRoute.operation!=='login','invalid_query',400);
+      if(wireRoute)wireRoute.includeSavings=includeSavings;
       if(route==='/session/login'&&method==='POST'){
         const b=await body(req,['phone','pin']);
         const network=await networkBucket(req);requireActiveNativeRequest(req);
@@ -70,16 +75,16 @@ export function createNativeHandler({auth,records,contributions,members,gateway,
       // The server-owned PIN selector only names the actor to the records
       // service, which reloads and checks the full actor inside its snapshot.
       const usesRecordSnapshot=recordSnapshotReads.has(wireRoute?.operation)||
-        (wireRoute?.operation==='session'&&wireQuery?.include==='home');
+        (wireRoute?.operation==='session'&&bundledHome);
       const selector=method==='GET'&&token&&usesRecordSnapshot?readRecordActor?.(req):null;
       const actor=selector??await auth.authenticate(token,installationId);
       requireActiveNativeRequest(req);
       if(strictContract){requireThat(actor.groupId===groupId,'access_denied',403);wireBinding.actorId=actor.id;}
       if(route==='/session'&&method==='GET'){
-        if(wireQuery?.include!=='home')return json(sessionProfile(actor));
+        if(!bundledHome)return json(sessionProfile(actor));
         requirePort(records,['sessionHome']);
         wireRoute.includeHome=true;
-        const {current,home}=await records.sessionHome(actor);
+        const {current,home}=await records.sessionHome(actor,includeSavings);
         return json({...sessionProfile(current),home});
       }
       if(route==='/session/logout'&&method==='POST'){await body(req,[]);return json(await auth.logout(actor));}
@@ -101,7 +106,7 @@ export function createNativeHandler({auth,records,contributions,members,gateway,
       }
       const outcome=/^\/operations\/([A-Za-z0-9_-]+)$/.exec(route);
       if(outcome&&method==='GET')return json(await records.commandStatus(actor,outcome[1]));
-      if(route==='/home'&&method==='GET')return json(await records.home(actor));
+      if(route==='/home'&&method==='GET')return json(await records.home(actor,includeSavings));
       if(route==='/members/suggestions'&&method==='GET'){
         requirePort(records,['onboardingSuggestions']);
         const query=strictContract?wireQuery:Object.fromEntries(url.searchParams);

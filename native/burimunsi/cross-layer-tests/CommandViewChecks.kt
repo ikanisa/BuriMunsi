@@ -60,7 +60,7 @@ private class Scenario(private val role: String = "admin") {
    }
    else->{recordReads++;if(recordFailure)throw ApiFailure("connection_unavailable",0)
     when {
-     r.path.endsWith("/home")->JSONObject().put("groupBalanceRwf",10000).put("todayRwf",10000).put("memberCount",1).put("unallocatedCount",1)
+     r.path.substringBefore('?').endsWith("/home")->JSONObject().put("groupBalanceRwf",10000).put("todayRwf",10000).put("memberCount",1).put("unallocatedCount",1)
       .put("recentPayments",JSONArray().put(payment())).put("asOf","2026-11-09T10:00:00Z").toString()
      r.path.contains("/payments/payment-1")->payment().toString()
      r.path.endsWith("/payments/payment-2")->payment().put("id","payment-2").put("state","unallocated").put("version",1).toString()

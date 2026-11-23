@@ -512,6 +512,19 @@ fun main(){
         Wire.last?.getRequestProperty("X-BuriMunsi-Group")==null)
  ck("unrequested Home cannot accompany a legacy sign-in response",
     runCatching{native.call("POST",bundledLogin.substringBefore('?'),body=loginBody,contractContext=loginContext)}.isFailure)
+ val savings=JSONObject("""{"lifetimeContributionsRwf":10000,"outgoingPaymentsRwf":2500,"latestWalletBalanceRwf":11500,"lastWalletSmsAt":"2026-11-09T08:00:00Z","reconciliationStatus":"mismatch"}""")
+ val enriched=JSONObject(homeData.toString()).put("savings",savings)
+ Wire.reply=Reply(transform={it.put("data",enriched)})
+ val optInHome="/v1/burimunsi/home?include=savings"
+ val returned=JSONObject(native.call("GET",optInHome,token="a".repeat(64),contractContext=scope))
+ ck("Home savings request binds three separate reported values to the scope",
+    Wire.last?.url?.query=="include=savings"&&returned.getJSONObject("savings").getLong("outgoingPaymentsRwf")==2500L)
+ ck("legacy Home rejects unsolicited savings keys",
+    runCatching{native.call("GET",optInHome.substringBefore('?'),token="a".repeat(64),contractContext=scope)}.isFailure)
+ Wire.reply=Reply(transform={it.getJSONObject("data").put("groupId","group-1").put("home",enriched)})
+ val beforeUnsupportedLogin=Wire.last
+ ck("phone PIN login never transmits an unsupported savings selector",
+    runCatching{native.call("POST",bundledLogin+",savings",body=loginBody,contractContext=loginContext)}.isFailure&&Wire.last===beforeUnsupportedLogin)
  Wire.reply=Reply(transform={v->v.getJSONObject("data").put("groupId","group-1").put("home",JSONObject.NULL)})
  val incomplete=JSONObject(native.call("POST",bundledLogin,body=loginBody,contractContext=loginContext))
  ck("bundled login accepts a valid token with an explicitly unavailable Home",incomplete.has("home")&&incomplete.isNull("home"))

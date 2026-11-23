@@ -15,7 +15,8 @@ internal fun validateCachedPayload(installationId:String,path:String,payload:Str
         val operation=if(route.first=="payment"&&data.containsKey("payment")) PAYMENT_DETAIL_V1 else route.first
         contract.validate(operation+".data",data)
         val binding=context+mapOf("installationId" to installationId)
-        contract.semantics(operation,mapOf("binding" to binding,"data" to data),binding+mapOf("recordId" to route.second))
+        contract.semantics(operation,mapOf("binding" to binding,"data" to data),binding+mapOf(
+            "recordId" to route.second,"includeSavings" to (operation=="home"&&data.containsKey("savings"))))
         return payload
     }catch(e:ContractViolation){throw ApiFailure(e.code.lowercase(),0,false)}
 }

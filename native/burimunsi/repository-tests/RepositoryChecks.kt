@@ -38,7 +38,7 @@ fun main(){
   .put("protocol","burimunsi.operation-recovery.v1").put("requestId",id).put("state",state)
   .put("originDigest",req.recoveryOrigin).put("groupId","group-1").put("actorId","admin-1").put("installationId","installation-1").toString()
  val api=ApiClient()
- api.handler={r->when{r.path.endsWith("/session/login")||r.path.endsWith("/session")->session();r.path.endsWith("/logout")->signedOut();r.path.endsWith("/home")->home();r.path.endsWith("/payments/tx-1")->pay();r.path.contains("/sms?")||r.path.contains("/staff?")->emptyPage();else->"{}"}}
+ api.handler={r->when{r.path.endsWith("/session/login")||r.path.endsWith("/session")->session();r.path.endsWith("/logout")->signedOut();r.path.substringBefore('?').endsWith("/home")->home();r.path.endsWith("/payments/tx-1")->pay();r.path.contains("/sms?")||r.path.contains("/staff?")->emptyPage();else->"{}"}}
  val happy=api.handler
  SecureStore.reset();val repo=NativeRepository(Context(),api,"group-1")
  ck("empty store restores no session",repo.restore()==null)
@@ -53,17 +53,39 @@ fun main(){
   otherScope.restore()==null&&repo.current()?.id=="admin-1"&&api.calls.size==beforeOtherScope&&
   SecureStore.records["session"]==originalScopeRecord)
  val count=api.calls.size;runCatching{repo.login("bad","2468")};ck("invalid login does not dispatch or replace operator",api.calls.size==count&&repo.current()?.id=="admin-1")
- ck("home reads authoritative balance",repo.home().balanceRwf==17000L)
+ ck("managed legacy Home reads its authoritative balance without a phone/PIN projection",repo.home().balanceRwf==17000L&&api.calls.last().path=="/v1/burimunsi/home")
  ck("live read is not cached provenance",!repo.lastReadFromCache&&repo.lastReadSavedAt!=null)
  api.handler={throw ApiFailure("connection_unavailable",0)}
  ck("offline home reuses owner-bound cache",repo.home().balanceRwf==17000L&&repo.lastReadFromCache)
+ ck("pre-savings cache retains Home and leaves all savings unknown",repo.home().savings==null)
+ api.resolvesLoginScope=true
+ val savings=JSONObject().put("lifetimeContributionsRwf",10000).put("outgoingPaymentsRwf",2500)
+  .put("latestWalletBalanceRwf",11500).put("lastWalletSmsAt","2026-11-08T10:00:00Z").put("reconciliationStatus","mismatch")
+ api.handler={ req->check(req.path=="/v1/burimunsi/home?include=savings");JSONObject(home()).put("savings",savings).toString() }
+ ck("Home uses distinct reported amounts and retains a real mismatch",repo.home().savings?.let {
+  it.lifetimeContributionsRwf==10000L&&it.outgoingPaymentsRwf==2500L&&it.latestWalletBalanceRwf==11500L&&it.reconciliationStatus==SavingsReconciliation.MISMATCH }==true)
+ api.handler={throw ApiFailure("connection_unavailable",0)}
+ ck("enhanced Home survives an offline read with its timestamp",repo.home().savings?.lastWalletSmsAt=="2026-11-08T10:00:00Z"&&repo.lastReadFromCache)
+ api.handler={JSONObject(home()).put("savings",JSONObject(savings.toString()).put("reconciliationStatus","balanced")).toString()}
+ ck("an inconsistent server status cannot misreport reconciled funds",runCatching{repo.home()}.exceptionOrNull() is ContractFailure)
+ api.handler={JSONObject(home()).put("savings",JSONObject(savings.toString()).put("latestWalletBalanceRwf",JSONObject.NULL)
+  .put("lastWalletSmsAt",JSONObject.NULL).put("reconciliationStatus","unavailable")).toString()}
+ ck("unknown wallet remains unavailable",repo.home().savings?.let{it.latestWalletBalanceRwf==null&&it.reconciliationStatus==SavingsReconciliation.UNAVAILABLE}==true)
+ api.handler={JSONObject(home()).put("savings",JSONObject(savings.toString()).put("reconciliationStatus","unavailable")).toString()}
+ ck("insufficient debit history preserves the verified SMS wallet",repo.home().savings?.let{it.latestWalletBalanceRwf==11500L&&it.reconciliationStatus==SavingsReconciliation.UNAVAILABLE}==true)
+ api.handler={ req->if(req.path=="/v1/burimunsi/home?include=savings")throw ApiFailure("contract_query",400);check(req.path=="/v1/burimunsi/home");home() }
+ ck("a legacy server still supplies Home without savings",repo.home().savings==null)
+ val callsBeforeDenied=api.calls.size
+ api.handler={throw ApiFailure("permission_denied",403)}
+ ck("no legacy retry masks denied access",runCatching{repo.home()}.isFailure&&api.calls.size==callsBeforeDenied+1)
+ api.resolvesLoginScope=false
  api.handler={emptyPage()}
  repo.payments()
  val quietHomeStarted=CountDownLatch(1)
  val releaseQuietHome=CountDownLatch(1)
  var quietHomeResponse:Result<NativeRepository.QuietHome>?=null
  api.handler={request->
-  if(request.path.endsWith("/home")){
+  if(request.path.substringBefore('?').endsWith("/home")){
    quietHomeStarted.countDown()
    check(releaseQuietHome.await(5,TimeUnit.SECONDS))
    JSONObject(home()).put("groupBalanceRwf",18000).toString()
@@ -588,7 +610,7 @@ fun main(){
   switchedAccount.current()?.id=="other-admin"&&JSONObject(SecureStore.records.getValue("session")).getString("token")=="b".repeat(64))
  switchedAccount.logout();api.handler=happy;repo.login("0780000001","2468")
  val sent=CountDownLatch(1);val finish=CountDownLatch(1);var failure:Throwable?=null
- api.handler={req->if(req.path.endsWith("/home")){sent.countDown();check(finish.await(5,TimeUnit.SECONDS));home()}else happy(req)}
+ api.handler={req->if(req.path.substringBefore('?').endsWith("/home")){sent.countDown();check(finish.await(5,TimeUnit.SECONDS));home()}else happy(req)}
  val reader=thread{try{repo.home()}catch(e:Throwable){failure=e}}
  check(sent.await(5,TimeUnit.SECONDS));repo.clearOperator();finish.countDown();reader.join(6000)
  ck("late read cannot restore signed-out records",failure is ContractFailure&&repo.current()==null&&!SecureStore.records.containsKey("records"))

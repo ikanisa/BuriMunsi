@@ -253,11 +253,23 @@ class WireContract(private val product: String, private val version: String,
                 rows(d["items"]); val items = arrayValue(d["items"])
                 if ((d["totalCount"] as Number).toLong() < items.size || (d["nextCursor"] != null && items.isEmpty())) reject("CONTRACT_PAGE")
             }
-            if (d.containsKey("recentPayments")) rows(d["recentPayments"])
+            fun checkHome(home: Map<String, Any?>) {
+                rows(home["recentPayments"])
+                if (home.containsKey("savings") != (expected["includeSavings"] == true)) reject("CONTRACT_CONTEXT")
+                val savings = home["savings"]?.let(::objectValue) ?: return
+                val lifetime = (savings["lifetimeContributionsRwf"] as Number).toLong()
+                val outgoing = (savings["outgoingPaymentsRwf"] as Number).toLong()
+                val wallet = (savings["latestWalletBalanceRwf"] as? Number)?.toLong()
+                if ((wallet == null) != (savings["lastWalletSmsAt"] == null)) reject("CONTRACT_STATE")
+                val status = savings["reconciliationStatus"]
+                if (status == "unavailable") return
+                if (wallet == null || (status == "balanced") != (lifetime == outgoing + wallet)) reject("CONTRACT_STATE")
+            }
+            if (operation == "home") checkHome(d)
             if (operation == "session" || operation == "login") {
                 val included = d.containsKey("home")
                 if (included != (expected["includeHome"] == true)) reject("CONTRACT_CONTEXT")
-                d["home"]?.let { rows(objectValue(it)["recentPayments"]) }
+                d["home"]?.let { checkHome(objectValue(it)) }
             }
             if (d.containsKey("groupId") && d["groupId"] != b["groupId"]) reject("CONTRACT_IDENTITY")
             if (operation in listOf("payment", "paymentDetailV1", "member", "rawSms") && d["id"] != expected["recordId"]) reject("CONTRACT_IDENTITY")
@@ -390,6 +402,7 @@ class WireContract(private val product: String, private val version: String,
     }
     fun query(operation: String, raw: String): Map<String, Any?> {
         val value = StrictQuery.parse(raw)
+        if (operation == "login" && value["include"] in setOf("savings", "home,savings")) reject("CONTRACT_QUERY")
         try { validate("$operation.query", value) }
         catch (_: ContractViolation) { reject("CONTRACT_QUERY") }
         if (((value["q"] as? String)?.length ?: 0) > 80) reject("CONTRACT_QUERY")

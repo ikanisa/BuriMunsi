@@ -1,5 +1,5 @@
 import {COMMAND_OPERATIONS} from './postgres-command-outcome.js';
-import {requirePort,requireThat} from './errors.js';
+import {BuriError,requirePort,requireThat} from './errors.js';
 import {authorize,requiresReceiverBinding} from './policy.js';
 import {requireId,requireRequestId,canonicalJson,sha256,normalizePhone} from './values.js';
 import {ledgerCsv} from './csv.js';
@@ -7,6 +7,7 @@ import {projectRecoveredOutcome,requireOriginDigest} from './operation-recovery.
 import {projectPaymentHistory,HISTORY_LIMIT} from './payment-history.js';
 import {previewSmartOnboardingImport} from './smart-onboarding-import.js';
 import {normalizeListingQuery,selectListing,canonicalListingInstant,listingText,listingFilterIdentity} from './listing-query.js';
+import {ContractViolation,validateHomeSavings} from './wire/native-contract.mjs';
 /** Readers must use the existing ledger snapshot, not SUM(received SMS).
  * Session, membership scope, total and page use the same read snapshot.
  */
@@ -57,19 +58,24 @@ export class RecordsService {
     },true);
   }
 
-  home(actor) {
-    return this.within(actor,'records.read',tx=>this.#home(tx));
+  home(actor,includeSavings=false) {
+    return this.within(actor,'records.read',tx=>this.#home(tx,includeSavings));
   }
-  sessionHome(actor) {
-    return this.within(actor,'records.read',async(tx,current)=>({current,home:await this.#home(tx)}));
+  sessionHome(actor,includeSavings=false) {
+    return this.within(actor,'records.read',async(tx,current)=>({current,home:await this.#home(tx,includeSavings)}));
   }
-  async #home(tx) {
+  async #home(tx,includeSavings) {
     requirePort(tx,['canonicalHome']);
-    const value=await tx.canonicalHome(this.groupId);
+    const value=await tx.canonicalHome(this.groupId,includeSavings);
     requireThat(value && Number.isSafeInteger(value.groupBalanceRwf)&&Number.isSafeInteger(value.todayRwf)&&Number.isSafeInteger(value.memberCount)&&Number.isSafeInteger(value.unallocatedCount)&&typeof value.asOf==='string','invalid_snapshot',503);
     if(value.unallocatedAmountRwf!==undefined)requireThat(Number.isSafeInteger(value.unallocatedAmountRwf),'invalid_snapshot',503);
-    return {groupBalanceRwf:value.groupBalanceRwf,todayRwf:value.todayRwf,memberCount:value.memberCount,unallocatedCount:value.unallocatedCount,
+    const home={groupBalanceRwf:value.groupBalanceRwf,todayRwf:value.todayRwf,memberCount:value.memberCount,unallocatedCount:value.unallocatedCount,
       ...(value.unallocatedAmountRwf===undefined?{}:{unallocatedAmountRwf:value.unallocatedAmountRwf}),asOf:value.asOf,recentPayments:this.projectRows(value.recentPayments??[],'payments')};
+    if(includeSavings){
+      try{home.savings=validateHomeSavings(value.savings);}
+      catch(error){if(error instanceof ContractViolation)throw new BuriError('invalid_snapshot',503);throw error;}
+    }
+    return home;
   }
   async onboardingSuggestions(actor,query={}) {
     const q=query.q??'',limit=query.limit??40;

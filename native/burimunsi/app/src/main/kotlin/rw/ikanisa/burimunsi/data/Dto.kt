@@ -15,6 +15,28 @@ internal fun JSONObject.nullString(name:String):String? {
     val value=get(name);checkContract(value is String,"contract_type");return value as String
 }
 internal fun JSONObject.optionalNullString(name:String):String?=if(has(name))nullString(name)else null
+internal fun decodeHomeSavings(value:JSONObject):HomeSavings {
+    val contributions=value.counter("lifetimeContributionsRwf",Values.MAX_RWF)
+    val outgoing=value.counter("outgoingPaymentsRwf",Values.MAX_RWF)
+    val wallet=if(value.get("latestWalletBalanceRwf")==JSONObject.NULL)null else value.counter("latestWalletBalanceRwf",Values.MAX_RWF)
+    val at=value.nullString("lastWalletSmsAt")
+    checkContract((wallet==null)==(at==null),"invalid_home_savings")
+    if(at!=null)checkContract(at.endsWith("Z")&&runCatching { java.time.Instant.parse(at) }.isSuccess,"invalid_home_savings")
+    val status=when(value.getString("reconciliationStatus")) {
+        "balanced" -> SavingsReconciliation.BALANCED
+        "mismatch" -> SavingsReconciliation.MISMATCH
+        "unavailable" -> SavingsReconciliation.UNAVAILABLE
+        else -> throw ContractFailure("invalid_home_savings")
+    }
+    val consistent=when(status) {
+        SavingsReconciliation.BALANCED -> wallet!=null&&contributions==outgoing+wallet
+        SavingsReconciliation.MISMATCH -> wallet!=null&&contributions!=outgoing+wallet
+        // The newest wallet can be known even when earlier debits lack sufficient evidence.
+        SavingsReconciliation.UNAVAILABLE -> true
+    }
+    checkContract(consistent,"invalid_home_savings")
+    return HomeSavings(contributions,outgoing,wallet,at,status)
+}
 internal fun JSONObject.capabilities():Set<String> {
     checkContract(has("capabilities")&&!isNull("capabilities"),"contract_missing_field")
     val a=getJSONArray("capabilities");val values=(0 until a.length()).map{val v=a.get(it);checkContract(v is String,"contract_type");v as String}

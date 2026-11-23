@@ -250,14 +250,15 @@ internal class NativeSessions(
         return synchronized(sessionRefreshLock){refreshSessionLocked(witness,expectedOwner=null,includeHome)}
     }
     private fun readSession(witness:SessionWitness,includeHome:Boolean):JSONObject {
-        if(includeHome&&api.resolvesLoginScope){
-            try{return JSONObject(requestOwned(witness,"GET","/session?include=home"))}
-            catch(e:ApiFailure){
-                // A previous backend can reject the new query before loading records.
-                if(e.status!=400||e.code !in setOf("invalid_query","contract_query"))throw e
-            }
+        fun read(path:String)=requestOwned(witness,"GET",path)
+        return JSONObject(if(includeHome&&api.resolvesLoginScope)compatibleHomeRequest("/session",listOf("home,savings","home"),::read)else read("/session"))
+    }
+    private inline fun compatibleHomeRequest(path:String,selectors:List<String>,send:(String)->String):String {
+        for (selector in selectors) try { return send("$path?include=$selector") } catch (error:ApiFailure) {
+            // Only a certain rejection of a read selector permits trying the older read syntax.
+            if(error.uncertain||error.status!=400||error.code !in setOf("invalid_query","contract_query"))throw error
         }
-        return JSONObject(requestOwned(witness,"GET","/session"))
+        return send(path)
     }
     private fun refreshSessionLocked(witness:SessionWitness,expectedOwner:String?,includeHome:Boolean=false):ProfileRead {
         val j=try{readSession(witness,includeHome)}catch(e:ApiFailure){
@@ -514,8 +515,10 @@ internal class NativeSessions(
         recoveryOrigin: String?,
     ): String = callOwned(witness, method, path, body, recoveryOrigin, publishProvenance = true)
 
-    internal fun requestUnpublishedHome(witness: SessionWitness): String =
-        callOwned(witness, "GET", "/home", null, null, publishProvenance = false)
+    internal fun readSavingsHome(witness:SessionWitness,publishProvenance:Boolean):String {
+        fun read(path:String)=callOwned(witness,"GET",path,null,null,publishProvenance)
+        return if(api.resolvesLoginScope)compatibleHomeRequest("/home",listOf("savings"),::read)else read("/home")
+    }
 
     private fun callOwned(
         witness: SessionWitness,

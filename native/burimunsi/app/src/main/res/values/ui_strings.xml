@@ -609,4 +609,10 @@
     <string name="ui_open_burimunsi_admin">Open BuriMunsi Admin</string>
     <string name="ui_receive_payment_sms">Receive payment SMS</string>
     <string name="ui_install_burimunsi_admin">Install the signed BuriMunsi Admin app provided by your organization, then sign in with your mobile number and passcode.</string>
+    <string name="ui_home_lifetime_contributions">Lifetime member contributions</string>
+    <string name="ui_home_outgoing_total">Total outgoing payments</string>
+    <string name="ui_home_wallet_last_sms">MoMo balance · last SMS</string>
+    <string name="ui_home_savings_unavailable">Savings figures unavailable.</string>
+    <string name="ui_home_savings_mismatch">Contributions less outgoing payments differ from the last MoMo balance.</string>
+    <string name="ui_home_wallet_check_unavailable">Reconciliation unavailable from the verified records.</string>
 </resources>

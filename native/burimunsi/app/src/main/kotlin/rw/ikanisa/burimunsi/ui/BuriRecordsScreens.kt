@@ -106,7 +106,10 @@ import rw.ikanisa.burimunsi.core.*
     val t=LocalUiText.current;val home=s.home
     LazyColumn(Modifier.fillMaxSize(),state=routeList(s,m),contentPadding=PaddingValues(20.dp,21.dp,20.dp,26.dp),verticalArrangement=Arrangement.spacedBy(14.dp)){
         if(home==null){item{if(s.busy){BuriInlineLoading("Loading records");BuriSkeletonRows()}else Empty(t("No records available"))};return@LazyColumn}
-        item{BigValue(home.balanceRwf)}
+        item{
+            if(s.operator?.role==Role.STAFF&&home.savings!=null) HomeSavingsOverview(home.savings)
+            else BigValue(home.balanceRwf)
+        }
         item{Row(Modifier.fillMaxWidth().padding(top=6.dp,bottom=11.dp),horizontalArrangement=Arrangement.SpaceEvenly){
             RoundAction(R.drawable.ic_activity,t("Open payments"),{m.navigate(Route.PAYMENTS)},!s.busy,58)
             RoundAction(R.drawable.ic_members,t("Open members"),{m.navigate(Route.MEMBERS)},!s.busy,58)

@@ -3050,6 +3050,36 @@
       "key": "ui_install_burimunsi_admin",
       "en": "Install the signed BuriMunsi Admin app provided by your organization, then sign in with your mobile number and passcode.",
       "rw": "Shyiramo porogaramu yemejwe ya BuriMunsi Admin wahawe n’ikigo cyawe, hanyuma winjire ukoresheje nimero ya telefoni n’umubare wawe w’ibanga."
+    },
+    {
+      "key": "ui_home_lifetime_contributions",
+      "en": "Lifetime member contributions",
+      "rw": "Imisanzu yose abanyamuryango batanze"
+    },
+    {
+      "key": "ui_home_outgoing_total",
+      "en": "Total outgoing payments",
+      "rw": "Igiteranyo cy’amafaranga yishyuwe"
+    },
+    {
+      "key": "ui_home_wallet_last_sms",
+      "en": "MoMo balance · last SMS",
+      "rw": "Amafaranga asigaye kuri MoMo · SMS ya nyuma"
+    },
+    {
+      "key": "ui_home_savings_unavailable",
+      "en": "Savings figures unavailable.",
+      "rw": "Imibare y’ubwizigame ntiboneka."
+    },
+    {
+      "key": "ui_home_savings_mismatch",
+      "en": "Contributions less outgoing payments differ from the last MoMo balance.",
+      "rw": "Imisanzu ukuyemo amafaranga yishyuwe ntihwanye n’amafaranga asigaye kuri MoMo nk’uko SMS ya nyuma ibigaragaza."
+    },
+    {
+      "key": "ui_home_wallet_check_unavailable",
+      "en": "Reconciliation unavailable from the verified records.",
+      "rw": "Amakuru yemejwe ntahagije kugira ngo iyi mibare igereranywe."
     }
   ]
 }

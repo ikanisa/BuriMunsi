@@ -11,6 +11,7 @@ data class Request(val method:String,val path:String,val token:String?,val body:
 object Transport {
  val calls=CopyOnWriteArrayList<Request>()
  var handler:(Request)->String={error("No transport fixture")}
+ var legacySessionHome:((Request)->String)?=null
  var sessionHome:((Request)->String)?=null
  var loginHome:((Request)->String)?=null
 }
@@ -23,8 +24,10 @@ class ApiClient(origin:String,val installationId:String,token:()->String?,val in
  fun call(method:String,path:String,token:String?=null,body:JSONObject?=null,csv:Boolean=false,recoveryOrigin:String?=null,contractContext:Map<String,Any?> = emptyMap()):String {
   val request=Request(method,path,token,body,recoveryOrigin,contractContext)
   Transport.calls.add(request)
-  if(method=="GET"&&path=="/v1/burimunsi/session?include=home")
+  if(method=="GET"&&path=="/v1/burimunsi/session?include=home,savings")
    return Transport.sessionHome?.invoke(request)?:throw ApiFailure("invalid_query",400)
+  if(method=="GET"&&path=="/v1/burimunsi/session?include=home")
+   return Transport.legacySessionHome?.invoke(request)?:throw ApiFailure("invalid_query",400)
   if(method=="POST"&&path=="/v1/burimunsi/session/login?include=home")
    return Transport.loginHome?.invoke(request)
     ?:JSONObject(Transport.handler(request.copy(path=path.substringBefore('?')))).put("home",JSONObject.NULL).toString()

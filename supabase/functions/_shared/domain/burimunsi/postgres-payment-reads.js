@@ -96,7 +96,7 @@ function validHomeZone(column) {
     ELSE EXISTS (SELECT 1 FROM zones z WHERE z.name=${column}) END`;
 }
 
-export async function readCanonicalHome(sql,g,at,auto) {
+export async function readCanonicalHome(sql,g,at,auto,includeSavings=false) {
   // Check the same source-grounded timestamps before paying for the full
   // role-aware projection of the three receipts displayed on Home.
   const nativeTimes = auto ? `native_times AS MATERIALIZED (
@@ -149,7 +149,7 @@ export async function readCanonicalHome(sql,g,at,auto) {
     SELECT totals.balance,today.today,counts.*,recent.* FROM totals CROSS JOIN today CROSS JOIN counts
     LEFT JOIN recent ON true ORDER BY recent.ordered_at DESC,recent.id DESC`,[g,at]);
   const [summary]=rows;
-  return {
+  const home={
     groupBalanceRwf:pgInteger(summary.balance),
     todayRwf:pgInteger(summary.today),
     memberCount:pgInteger(summary.members),
@@ -158,4 +158,15 @@ export async function readCanonicalHome(sql,g,at,auto) {
     recentPayments:rows.filter(row=>row.id!=null).map(row=>projectPayment({...row,amount_minor:row.credited_amount})),
     asOf:at,
   };
+  if(includeSavings){
+    const [s]=await sql.unsafe('SELECT * FROM private.burimunsi_home_savings($1,$2::timestamptz)',[g,at]);
+    home.savings={
+      lifetimeContributionsRwf:pgInteger(s.lifetime_contributions,{minimum:0}),
+      outgoingPaymentsRwf:pgInteger(s.outgoing_payments,{minimum:0}),
+      latestWalletBalanceRwf:s.wallet_balance===null?null:pgInteger(s.wallet_balance,{minimum:0}),
+      lastWalletSmsAt:s.last_wallet_sms_at,
+      reconciliationStatus:s.reconciliation_status,
+    };
+  }
+  return home;
 }

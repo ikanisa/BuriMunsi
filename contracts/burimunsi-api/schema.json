@@ -1027,6 +1027,66 @@
       ],
       "additionalProperties": false
     },
+    "homeSavings": {
+      "type": "object",
+      "properties": {
+        "lifetimeContributionsRwf": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "x-code": "CONTRACT_AMOUNT"
+        },
+        "outgoingPaymentsRwf": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "x-code": "CONTRACT_AMOUNT"
+        },
+        "latestWalletBalanceRwf": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "x-code": "CONTRACT_AMOUNT"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastWalletSmsAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 20,
+              "maxLength": 27,
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z(?![\\s\\S])",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reconciliationStatus": {
+          "type": "string",
+          "enum": [
+            "balanced",
+            "mismatch",
+            "unavailable"
+          ]
+        }
+      },
+      "required": [
+        "lifetimeContributionsRwf",
+        "outgoingPaymentsRwf",
+        "latestWalletBalanceRwf",
+        "lastWalletSmsAt",
+        "reconciliationStatus"
+      ],
+      "additionalProperties": false
+    },
     "home.data": {
       "type": "object",
       "properties": {
@@ -1072,6 +1132,9 @@
           "minimum": -9007199254740991,
           "maximum": 9007199254740991,
           "x-code": "CONTRACT_AMOUNT"
+        },
+        "savings": {
+          "$ref": "#/$defs/homeSavings"
         }
       },
       "required": [
@@ -2809,7 +2872,10 @@
       "properties": {
         "include": {
           "type": "string",
-          "const": "home"
+          "enum": [
+            "home",
+            "home,savings"
+          ]
         }
       },
       "required": [],
@@ -2820,7 +2886,10 @@
       "properties": {
         "include": {
           "type": "string",
-          "const": "home"
+          "enum": [
+            "home",
+            "home,savings"
+          ]
         }
       },
       "required": [],
@@ -2840,7 +2909,12 @@
     },
     "home.query": {
       "type": "object",
-      "properties": {},
+      "properties": {
+        "include": {
+          "type": "string",
+          "const": "savings"
+        }
+      },
       "required": [],
       "additionalProperties": false
     },

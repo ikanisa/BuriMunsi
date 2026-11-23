@@ -12,7 +12,7 @@ import {lockCollectMutation} from '../../postgres-mutation-lock.js';
 import {PostgresPostingCustody} from './postgres-posting-custody.js';
 import {PostgresStorageWitnesses} from './postgres-storage-witnesses.js';
 import {prepareNativeAutoExtraction,validateNativeAutoExtraction} from './native-auto-parser.js';
-import {nativeSmsEventAliases} from './native-sms-event-identity.js';
+import {nativeSmsEventWitness} from './native-sms-event-identity.js';
 
 const HASH=/^[a-f0-9]{64}$/;
 const MODEL=/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/;
@@ -139,12 +139,12 @@ export class PostgresNativeAutoWorker {
    }catch{return await retry('provider_unavailable');}
    const extracted=validateNativeAutoExtraction(source,account,output);
    if(extracted.kind!=='parsed')return await retry('invalid_output');
-   const eventIdentity=await nativeSmsEventAliases(source,record.bodySha256);
+   const witness=await nativeSmsEventWitness(source,record.bodySha256);
    const attempt=crypto.randomUUID();
    const done=await this.authority.write(async tx=>{
     await this.verify(tx,sourceId,initial,binding);
-    const identity=await tx.unsafe('SELECT private.burimunsi_auto_event_bind($1,$2::uuid,$3,$4::jsonb) AS result',
-     [sourceId,lease,record.fingerprint,eventIdentity]);
+    const identity=await tx.unsafe('SELECT private.burimunsi_auto_event_bind($1,$2::uuid,$3,$4::jsonb,$5::text,$6::text) AS result',
+     [sourceId,lease,record.fingerprint,witness.event,witness.inboxAt,witness.serviceAt]);
     check(identity.length===1&&identity[0].result===true,'native_auto_source_changed',409);
     const rows=await tx.unsafe('SELECT private.burimunsi_auto_finish($1,$2::uuid,$3,$4,$5::uuid,$6,$7::jsonb,$8::jsonb) AS result',
      [...values,attempt,this.env.MOMO_AI_MODEL,extracted.normalizedOutput??output,extracted.facts]);

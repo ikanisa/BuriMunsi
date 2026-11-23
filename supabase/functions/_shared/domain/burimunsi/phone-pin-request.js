@@ -5,7 +5,7 @@ import {PinHasher,newBearer,PIN_ITERATIONS} from './pin.js';
 import {lockCollectMutation} from '../../postgres-mutation-lock.js';
 import {BURIMUNSI_PRODUCT_MODE} from '../../burimunsi-standalone.js';
 import {requireActiveNativeRequest} from './wire/request-boundary.mjs';
-import {validateNativeRequest,requestBinding,bindNativeResponse,CONTRACT_VERSION} from './wire/native-contract.mjs';
+import {ContractViolation,validateNativeQuery,validateNativeRequest,requestBinding,bindNativeResponse,CONTRACT_VERSION} from './wire/native-contract.mjs';
 import {nativeRequestUrl,readNativeJson,requireNativeHttpsOrigin} from './wire/native-http.mjs';
 import {pgInteger} from './postgres-values.js';
 
@@ -86,12 +86,14 @@ function current(row,installation,profile,now){
 }
 function headers(){return {'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','Pragma':'no-cache',
   'X-Content-Type-Options':'nosniff','X-BuriMunsi-Contract':CONTRACT_VERSION};}
-function requirePinTransition(request,url,{readSession=false}={}){
+function requirePinTransition(request,url,readOperation){
   requireRequestId(request.headers.get('X-BuriMunsi-Request'));
   const generation=request.headers.get('X-BuriMunsi-Generation');
   requireThat(/^(0|[1-9][0-9]{0,15})$/.test(generation??'')&&Number.isSafeInteger(Number(generation)),'invalid_generation',400);
   requireThat(request.headers.get('X-BuriMunsi-Contract')===CONTRACT_VERSION,'contract_version',400);
-  requireThat(url.search===''||(readSession&&url.search==='?include=home'),'invalid_query',400);
+  if(!readOperation){requireThat(url.search==='','invalid_query',400);return;}
+  try{return validateNativeQuery(readOperation,url.search.slice(1)).include;}
+  catch(error){if(error instanceof ContractViolation)throw new BuriError('invalid_query',400);throw error;}
 }
 
 /** Bounded native phone/PIN authentication. No Auth identity, browser session
@@ -116,19 +118,20 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
     const login=method==='POST'&&path==='/v1/burimunsi/session/login';
     const logout=method==='POST'&&path==='/v1/burimunsi/session/logout';
     const retirement=method==='GET'&&/^\/v1\/burimunsi\/gateway\/replacements\/([a-f0-9-]{36})\/outcome$/.exec(path);
-    const readSession=method==='GET'&&path==='/v1/burimunsi/session',includeHome=url.search==='?include=home';
+    const readSession=method==='GET'&&path==='/v1/burimunsi/session';
     const renewing=readSession||(method==='POST'&&path==='/v1/burimunsi/session/passcode');
     const db=env?.DB,work=db?.applicationWork;requirePort(db,['transaction','context','readContext','setClaims']);requirePort(work,['assert']);
     const supportsReadSnapshot=typeof db.withNativeReadSnapshot==='function';
-    const combinedRead=method==='GET'&&(supportsReadSnapshot?recordReadPath.test(path):
-      env.BURIMUNSI_PRODUCT_MODE===BURIMUNSI_PRODUCT_MODE&&(path==='/v1/burimunsi/payments'||readSession&&includeHome));
     requireThat(!active.has(db),'native_context_busy',503);
     requireThat(request.headers.get('X-BuriMunsi-Auth')==='phone_pin'&&!request.headers.has('X-BuriMunsi-Collect-Session'),'invalid_credentials',401);
     const installation=requireRequestId(request.headers.get('X-BuriMunsi-Installation')),
       profile=request.headers.get('X-BuriMunsi-Profile'),device=request.headers.get('X-BuriMunsi-Device');
     requireThat(['staff','internal_receiver'].includes(profile)&&/^[a-f0-9]{64}$/.test(device??''),'invalid_credentials',401);
     if(login)requireThat(!request.headers.has('X-BuriMunsi-Group')&&!request.headers.has('authorization'),'invalid_credentials',401);
-    if(login||logout||retirement||renewing)requirePinTransition(request,url,{readSession:readSession||login});
+    const include=login||logout||retirement||renewing?requirePinTransition(request,url,login?'login':readSession?'session':null):undefined;
+    const includeHome=include!==undefined,includeSavings=include==='home,savings';
+    const combinedRead=method==='GET'&&(supportsReadSnapshot?recordReadPath.test(path):
+      env.BURIMUNSI_PRODUCT_MODE===BURIMUNSI_PRODUCT_MODE&&(path==='/v1/burimunsi/payments'||readSession&&includeHome));
     const owned=async(durable=false)=>{requireActiveNativeRequest(request);requireThat(db.applicationWork===work,'request_not_admitted',503);
       if(durable)await work.assert();else await assertWorkOwner(work);
       requireThat(db.applicationWork===work,'request_not_admitted',503);requireActiveNativeRequest(request);};
@@ -244,7 +247,7 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
               const authHeaders=new Headers(request.headers);
               authHeaders.delete('Content-Length');authHeaders.delete('Content-Type');
               authHeaders.set('Authorization','Bearer '+token);authHeaders.set('X-BuriMunsi-Group',account.groupId);
-              const read=new Request(new URL('/v1/burimunsi/session?include=home',origin),{headers:authHeaders,signal:request.signal});
+              const read=new Request(new URL('/v1/burimunsi/session'+url.search,origin),{headers:authHeaders,signal:request.signal});
               const response=await serveRead(sql,principal,values,read);
               const envelope=await response.json();
               requireThat(envelope.ok===true&&envelope.binding?.actorId===account.id&&envelope.binding?.groupId===account.groupId&&
@@ -261,7 +264,7 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
           }
           await owned(true);
         }
-        return new Response(JSON.stringify(bindNativeResponse({operation:'login',includeHome},binding,body,data)),{status:200,headers:headers()});
+        return new Response(JSON.stringify(bindNativeResponse({operation:'login',includeHome,includeSavings},binding,body,data)),{status:200,headers:headers()});
       }
       const token=(request.headers.get('authorization')??'').match(/^Bearer ([a-f0-9]{64})$/)?.[1];
       requireThat(token,'session_unavailable',401);const values=Object.freeze([token,installation,device,profile]);

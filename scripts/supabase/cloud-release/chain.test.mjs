@@ -17,8 +17,9 @@ const fail=code=>{throw Error(code);};
 const flags=process.argv.slice(2),managedLifecycle=flags.includes('--managed-lifecycle'),textSubjects=flags.includes('--text-subjects');
 const scopedWriters=flags.includes('--scoped-writers'),release=flags.includes('--writer-journal-release');
 const forward=flags.includes('--forward-migration-release'),adminHandsets=flags.includes('--admin-handsets'),phoneSmsHealth=flags.includes('--phone-sms-health');
+const freshPhoneReads=flags.includes('--fresh-phone-reads');
 const phoneOperators=flags.includes('--phone-operators')||adminHandsets||phoneSmsHealth;
-if(flags.some(x=>!['--managed-lifecycle','--text-subjects','--scoped-writers','--writer-journal-release','--forward-migration-release','--phone-operators','--admin-handsets','--phone-sms-health'].includes(x))||new Set(flags).size!==flags.length||(textSubjects&&!managedLifecycle)||((scopedWriters||release||forward||phoneOperators)&&!textSubjects)||([scopedWriters,release,forward,phoneOperators].filter(Boolean).length>1)||(adminHandsets&&phoneSmsHealth))fail('invalid_mode');
+if(flags.some(x=>!['--managed-lifecycle','--text-subjects','--scoped-writers','--writer-journal-release','--forward-migration-release','--phone-operators','--admin-handsets','--phone-sms-health','--fresh-phone-reads'].includes(x))||new Set(flags).size!==flags.length||(textSubjects&&!managedLifecycle)||((scopedWriters||release||forward||phoneOperators)&&!textSubjects)||([scopedWriters,release,forward,phoneOperators].filter(Boolean).length>1)||(adminHandsets&&phoneSmsHealth))fail('invalid_mode');
 const work=JSON.parse(await readFile(root+'/supabase/managed-migration-history/source-migrations.lock.json','utf8')).migrations;
 const deployed=await retainedLock();
 if(work.length!==58||deployed.length!==62||work.slice(0,52).some((x,i)=>x.name!==deployed[i].name||x.sha256!==deployed[i].sha256))fail('source_chain_changed');
@@ -157,6 +158,11 @@ await withOwnedArchiveFixture(async({owner,admin,watcher,database,fixtureRoot})=
   try{let denied=false;try{await owner.query('SELECT private._retention_manifest_schema_v2()');}catch(e){denied=e.code==='42501'&&e.message==='retention_manifest_storage_lifecycle_shape_changed';}if(!denied)fail('lifecycle_drift_not_detected');}
   finally{await admin.query('SET ROLE supabase_storage_admin; CREATE INDEX bucket_lifecycle_states_due_idx ON storage.bucket_lifecycle_states USING btree (next_run_at, bucket_id) WHERE (next_run_at IS NOT NULL); RESET ROLE');}
   await owner.query('SELECT private._retention_manifest_schema_v2()');negativeChecks.push('post_install_storage_drift');
+ }
+ if(freshPhoneReads){
+  const {verifyFreshPhoneReads}=await import('../../../supabase/tests/burimunsi/fresh-phone-migrations.mjs');
+  await verifyFreshPhoneReads({owner,admin,database,fixtureRoot});
+  return;
  }
  if(phoneOperators){
   const {verifyPhoneOperatorAccounts}=await import('./phone-operator.fixture.mjs');

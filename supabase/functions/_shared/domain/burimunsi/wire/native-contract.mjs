@@ -1,5 +1,5 @@
 import {profile,defs} from './burimunsi.generated.mjs';
-import {ContractViolation,parseWire,validateSchema,semantics,validateQuery} from './runtime.mjs';
+import {ContractViolation,parseWire,validateSchema,semantics,validateQuery,checkHomeReconciliation} from './runtime.mjs';
 export {ContractViolation,parseWire};
 export const CONTRACT_VERSION=profile.contractVersion;
 const heldObservationPaths=new Map([
@@ -28,12 +28,17 @@ export function validateNativeRequest(operation,value){
  return value;
 }
 export function nativeExpected(binding,route,body,originDigest,handoffFingerprint){
- return {...binding,recordId:route.recordId,includeHome:route.includeHome,memberId:body?.memberId,phone:body?.phone,
+ return {...binding,recordId:route.recordId,includeHome:route.includeHome,includeSavings:route.includeSavings,memberId:body?.memberId,phone:body?.phone,
   staffId:body?.id,commandRequestId:body?.requestId,staffOperation:body?.operation,
   consentEnabled:body?.enabled,consentGeneration:body?.generation,displayHintsVersion:body?.displayHintsVersion,
   importRows:body?.rows?.map(row=>row.row),sourceIds:body?.sourceIds,sourceKey:body?.sourceKey,observationBodySha256:route.observationBodySha256,
   inboxRun:body?.runId,inboxState:body?.state,includeProcessing:body?.includeProcessing===true,
   sourceKeys:Array.isArray(body?.items)?body.items.map(item=>item.sourceKey):undefined,originDigest,handoffFingerprint};
+}
+export function validateHomeSavings(savings){
+ validateSchema(defs,'homeSavings',savings);
+ checkHomeReconciliation(savings);
+ return savings;
 }
 export function bindNativeResponse(route,binding,body,data,originDigest,handoffFingerprint){
  // Project only the public acknowledgement fields promised by canonical bridge ports.

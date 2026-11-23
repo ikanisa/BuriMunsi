@@ -68,7 +68,10 @@ internal class NativeRecordData(
     fun hasRecentHome(saved:SavedNativeSession):Boolean {
         val owner=saved.operatorOrNull()?:return false
         val now=System.currentTimeMillis()
-        return now<owner.expiresAt&&cachedRecord("/home",saved.groupId,owner,Values.sha256(saved.token),now,recent=true)!=null
+        if(now>=owner.expiresAt)return false
+        val entry=cachedRecord("/home",saved.groupId,owner,Values.sha256(saved.token),now,recent=true)?:return false
+        // Upgrade a fresh legacy Home through the bundled read when we can reach the server.
+        return runCatching { JSONObject(entry.payload).getJSONObject("savings") }.isSuccess
     }
 
     private fun <T> recentRecord(path:String,expectedOwner:Operator?=null,decode:(String)->T):Pair<T,Long>? {
@@ -106,16 +109,16 @@ internal class NativeRecordData(
     }
 
     private fun records(path:String):String = records(path){value,_->value}
-    private fun <T> records(path:String,read:(String,Operator)->T):T = snapshot(path,read).value
+    private fun <T> records(path:String,read:(String,Operator)->T):T = snapshot(path,read=read).value
 
-    private fun <T> snapshot(path:String,read:(String,Operator)->T):RecordSnapshot<T> {
+    private fun <T> snapshot(path:String,fetch:(SessionWitness)->String={requestOwned(it,"GET",path)},read:(String,Operator)->T):RecordSnapshot<T> {
         val witness=ownedSession()
         val (who,group)=authority.withCurrent(witness){(operator?:throw ApiFailure("session_unavailable",401)) to groupId}
         if(System.currentTimeMillis()>=who.expiresAt)throw ApiFailure("session_unavailable",401)
         val sessionScope=Values.sha256(witness.token)
         val revision=cacheStore.revision()
         try {
-            val value=requestOwned(witness,"GET",path)
+            val value=fetch(witness)
             val verified=authority.withCurrent(witness){
                 val now=System.currentTimeMillis()
                 checkContract(now<who.expiresAt,"session_unavailable")
@@ -176,15 +179,16 @@ internal class NativeRecordData(
         }
     }
 
-    fun home():Home=decodeHome(JSONObject(records("/home")))
+    fun home():Home=snapshot("/home",fetch={sessions.readSavingsHome(it,publishProvenance=true)}) { value,_->decodeHome(JSONObject(value)) }.value
 
     fun readQuietHome(): JSONObject {
-        val scope = recordReadScope { witness, _ -> sessions.requestUnpublishedHome(witness) }
+        val scope = recordReadScope { witness, _ -> sessions.readSavingsHome(witness,publishProvenance=false) }
         return JSONObject(scope.read(recordReadOwner, "/home"))
     }
     private fun decodeHome(j:JSONObject):Home{
         val a=j.getJSONArray("recentPayments")
-        return Home(j.amount("groupBalanceRwf"),j.amount("todayRwf"),j.getInt("memberCount"),j.getInt("unallocatedCount"),(0 until a.length()).map{decodePayment(a.getJSONObject(it))},j.getString("asOf"),if(j.has("unallocatedAmountRwf")&&!j.isNull("unallocatedAmountRwf"))j.amount("unallocatedAmountRwf")else null)
+        return Home(j.amount("groupBalanceRwf"),j.amount("todayRwf"),j.getInt("memberCount"),j.getInt("unallocatedCount"),(0 until a.length()).map{decodePayment(a.getJSONObject(it))},j.getString("asOf"),if(j.has("unallocatedAmountRwf")&&!j.isNull("unallocatedAmountRwf"))j.amount("unallocatedAmountRwf")else null,
+            if(j.has("savings"))decodeHomeSavings(j.getJSONObject("savings"))else null)
     }
     /** Full-query export collectors use online reads with one immutable local
      * identity witness. Server cursors independently bind group/actor/query and

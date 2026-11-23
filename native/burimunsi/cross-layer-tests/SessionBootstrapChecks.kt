@@ -20,6 +20,7 @@ import rw.ikanisa.burimunsi.data.ApiFailure
 import rw.ikanisa.burimunsi.data.NativeRepository
 import rw.ikanisa.burimunsi.data.NativeRecordCache
 import rw.ikanisa.burimunsi.data.Transport
+import rw.ikanisa.burimunsi.data.Request
 import rw.ikanisa.burimunsi.gateway.GatewayFixture
 import rw.ikanisa.burimunsi.storage.SecureStore
 import rw.ikanisa.burimunsi.ui.BuriViewModel
@@ -62,8 +63,10 @@ internal class SessionScenario {
                 request.path.endsWith("/session/login") || request.path.endsWith("/session") ->
                     JSONObject().put("profile", profile).put("token", token).put("groupId", group)
                         .put("expiresAt", sessionDeadline ?: (System.currentTimeMillis() + 3_600_000)).toString()
-                request.path.endsWith("/home") -> JSONObject().put("groupBalanceRwf", 0).put("todayRwf", 0)
+                request.path.substringBefore('?').endsWith("/home") -> JSONObject().put("groupBalanceRwf", 0).put("todayRwf", 0)
                     .put("memberCount", 0).put("unallocatedCount", 0).put("recentPayments", JSONArray())
+                    .put("savings", JSONObject().put("lifetimeContributionsRwf",10000).put("outgoingPaymentsRwf",2500)
+                        .put("latestWalletBalanceRwf",7500).put("lastWalletSmsAt","2026-11-20T00:00:00Z").put("reconciliationStatus","balanced"))
                     .put("asOf", "2026-11-20T00:00:00Z").toString()
                 request.path.contains("/staff?") -> JSONObject().put("items", JSONArray()).put("totalCount", 0)
                     .put("revision", "fixture-1").put("asOf", "2026-11-20T00:00:00Z")
@@ -131,7 +134,7 @@ private suspend fun interruptedRestore(replacement: Replacement) {
                 model.state.gateway == null && !model.presentation.showRecords)
             if (replacement == Replacement.OTHER_GROUP) {
                 check(original.current()?.id == scenario.owner && original.boundCollectionId == scenario.group)
-                check(Transport.calls.none { it.path.endsWith("/home") })
+                check(Transport.calls.none { it.path.substringBefore('?').endsWith("/home") })
                 return
             }
             scenario.owner = "operator-b"
@@ -140,7 +143,7 @@ private suspend fun interruptedRestore(replacement: Replacement) {
             model.login("0780000002", "1357")
             idle(model)
             check(model.state.operator?.id == scenario.owner && model.state.home != null)
-            val home = Transport.calls.last { it.path.endsWith("/home") }
+            val home = Transport.calls.last { it.path.substringBefore('?').endsWith("/home") }
             check(home.context["groupId"] == scenario.group && home.context["actorId"] == scenario.owner)
         }
     } finally {
@@ -228,7 +231,7 @@ private suspend fun cancelBootstrap() {
         checkpoint.release.countDown()
         stop(model)
         check(model.state.operator == null && GatewayFixture.uploadStarts == receiverStarts)
-        check(Transport.calls.none { it.path.endsWith("/home") || it.path.contains("/operations/") })
+        check(Transport.calls.none { it.path.substringBefore('?').endsWith("/home") || it.path.contains("/operations/") })
     } finally {
         checkpoint.release.countDown()
         stop(model)
@@ -295,25 +298,30 @@ private suspend fun legacyProfileRestores() {
     } finally { stop(model) }
 }
 
-private suspend fun bundledHomeRestores() {
+private suspend fun bundledHomeRestores(legacy:Boolean=false) {
     val scenario = SessionScenario()
     scenario.signIn(scenario.repository())
-    Transport.sessionHome = { request ->
+    val bundledResponse: (Request)->String = { request ->
         val session = Transport.handler(request.copy(path = "/v1/burimunsi/session"))
         val home = Transport.handler(request.copy(path = "/v1/burimunsi/home"))
-        JSONObject(session).put("home", JSONObject(home).put("groupBalanceRwf", 250L)).toString()
+        JSONObject(session).put("home", JSONObject(home).put("groupBalanceRwf", 250L)
+            .apply { if(legacy)remove("savings") }).toString()
     }
+    if(legacy) Transport.legacySessionHome=bundledResponse else Transport.sessionHome=bundledResponse
     val model = BuriViewModel(scenario.app)
     try {
         idle(model)
         check(model.state.operator?.id == scenario.owner && model.state.home?.balanceRwf == 250L)
-        check(Transport.calls.count { it.path.endsWith("/session?include=home") } == 1)
-        check(Transport.calls.none { it.path.endsWith("/home") || it.path.endsWith("/session") })
+        check(model.state.home?.savings?.latestWalletBalanceRwf == (if(legacy)null else 7500L))
+        check(Transport.calls.count { it.path.endsWith("/session?include=home") } == (if(legacy)1 else 0))
+        check(Transport.calls.count { it.path.endsWith("/session?include=home,savings") } == 1)
+        check(Transport.calls.none { it.path.substringBefore('?').endsWith("/home") || it.path.endsWith("/session") })
         val saved = JSONObject(SecureStore.records.getValue("records")).getJSONObject("entries").getJSONObject("/home")
         check(JSONObject(saved.getString("payload")).getLong("groupBalanceRwf") == 250L)
     } finally {
         stop(model)
         Transport.sessionHome = null
+        Transport.legacySessionHome = null
     }
 }
 
@@ -338,7 +346,7 @@ private suspend fun loginHomeRequests(include: Boolean, oldServer: Boolean = fal
         if(oldServer)throw ApiFailure("invalid_query",400)
         val login = Transport.handler(request.copy(path = "/v1/burimunsi/session/login"))
         val home = if(include)JSONObject(Transport.handler(request.copy(path = "/v1/burimunsi/home")))
-            .put("groupBalanceRwf",300L) else JSONObject.NULL
+            .put("groupBalanceRwf",300L).apply{remove("savings")} else JSONObject.NULL
         JSONObject(login).put("home",home).toString()
     }
     val model=BuriViewModel(scenario.app)
@@ -349,8 +357,8 @@ private suspend fun loginHomeRequests(include: Boolean, oldServer: Boolean = fal
         val bundled="/v1/burimunsi/session/login?include=home"
         val expected=when {
             uncertain||include->listOf(bundled)
-            oldServer->listOf(bundled,"/v1/burimunsi/session/login","/v1/burimunsi/home")
-            else->listOf(bundled,"/v1/burimunsi/home")
+            oldServer->listOf(bundled,"/v1/burimunsi/session/login","/v1/burimunsi/home?include=savings")
+            else->listOf(bundled,"/v1/burimunsi/home?include=savings")
         }
         check(Transport.calls.map{it.path}==expected)
         if(uncertain)check(model.state.operator==null&&model.state.home==null)
@@ -371,11 +379,11 @@ private suspend fun recentHomeKeepsAgeAndAuthorization() {
     val model = BuriViewModel(scenario.app)
     try {
         idle(model)
-        check(model.state.home != null && model.state.savedAt == originalTime && !model.state.offline)
+        check(model.state.home?.savings?.outgoingPaymentsRwf == 2500L && model.state.savedAt == originalTime && !model.state.offline)
         check(Transport.calls.map { it.path } == listOf("/v1/burimunsi/session"))
         model.onFixtureMain { refresh() }
         idle(model)
-        check(Transport.calls.count { it.path == "/v1/burimunsi/home" } == 1)
+        check(Transport.calls.count { it.path == "/v1/burimunsi/home?include=savings" } == 1)
     } finally { stop(model) }
 
     val flag = if (BuildConfig.IS_GATEWAY) Capability.GATEWAY else Capability.ALLOCATE
@@ -385,7 +393,7 @@ private suspend fun recentHomeKeepsAgeAndAuthorization() {
     try {
         idle(changed)
         check(changed.state.home != null && changed.allows(flag))
-        check(Transport.calls.any { it.path == "/v1/burimunsi/home" })
+        check(Transport.calls.any { it.path == "/v1/burimunsi/home?include=savings" })
     } finally { stop(changed) }
 
     val cache=JSONObject(SecureStore.records.getValue("records"))
@@ -396,7 +404,7 @@ private suspend fun recentHomeKeepsAgeAndAuthorization() {
     val expired = BuriViewModel(scenario.app)
     try {
         idle(expired)
-        check(expired.state.home != null && Transport.calls.any { it.path == "/v1/burimunsi/session?include=home" })
+        check(expired.state.home != null && Transport.calls.any { it.path == "/v1/burimunsi/session?include=home,savings" })
     } finally { stop(expired) }
 }
 
@@ -451,6 +459,7 @@ fun main() = runBlocking {
         "an equal-valued foreground profile replaces the authority held by the screen" to suspend { equalProfileRefresh() },
         "an older actor-only saved profile restores through a current server profile" to suspend { legacyProfileRestores() },
         "a paired session and Home response restores and caches the authorized snapshot" to suspend { bundledHomeRestores() },
+        "a confirmed unsupported savings selector still uses legacy bundled Home" to suspend { bundledHomeRestores(legacy=true) },
         "a restored Settings destination never requests unused Home records" to suspend { settingsRestoreSkipsUnusedHome() },
         "bundled sign-in displays the confirmed Home without another request" to suspend { loginHomeRequests(include=true) },
         "a committed sign-in without its optional Home fetches only Home" to suspend { loginHomeRequests(include=false) },

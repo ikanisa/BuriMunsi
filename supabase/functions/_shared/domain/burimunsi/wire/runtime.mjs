@@ -83,6 +83,15 @@ export function checkBinding(actual,expected) {
  if(Object.hasOwn(expected,'generation')&&actual.generation!==expected.generation)fail('CONTRACT_GENERATION','$.binding.generation');
  if(Object.hasOwn(expected,'currentGeneration')&&expected.currentGeneration!==expected.generation)fail('CONTRACT_GENERATION','$.binding.generation');
 }
+export function checkHomeReconciliation(savings) {
+ const {lifetimeContributionsRwf,outgoingPaymentsRwf,latestWalletBalanceRwf,lastWalletSmsAt,reconciliationStatus}=savings;
+ if((latestWalletBalanceRwf===null)!==(lastWalletSmsAt===null))fail('CONTRACT_STATE');
+ // The receipt can remain known while historical outgoing evidence is incomplete.
+ if(reconciliationStatus==='unavailable')return;
+ if(latestWalletBalanceRwf===null)fail('CONTRACT_STATE');
+ const balanced=BigInt(lifetimeContributionsRwf)===BigInt(outgoingPaymentsRwf)+BigInt(latestWalletBalanceRwf);
+ if((reconciliationStatus==='balanced')!==balanced)fail('CONTRACT_STATE');
+}
 export function semantics(product,operation,r,expected={}) {
  checkBinding(r.binding,expected);
  const data=product==='mmoney'?r:operation==='paymentDetailV1'?r.data.payment:r.data;
@@ -112,10 +121,15 @@ export function semantics(product,operation,r,expected={}) {
  }else{
   function rows(list){const ids=new Set();for(const row of list){if(row.groupId!==r.binding.groupId)fail('CONTRACT_IDENTITY');if(ids.has(row.id))fail('CONTRACT_DUPLICATE');ids.add(row.id);}}
   if(data.items&&operation!=='observationReconcileBatch'){rows(data.items);if(data.totalCount<data.items.length||(data.nextCursor!==null&&!data.items.length))fail('CONTRACT_PAGE');}
-  if(data.recentPayments)rows(data.recentPayments);
+  function checkHome(home){
+   rows(home.recentPayments);
+   if(Object.hasOwn(home,'savings')!==(expected.includeSavings===true))fail('CONTRACT_CONTEXT');
+   if(home.savings)checkHomeReconciliation(home.savings);
+  }
+  if(operation==='home')checkHome(data);
   if(operation==='session'||operation==='login'){
    if(Object.hasOwn(data,'home')!==(expected.includeHome===true))fail('CONTRACT_CONTEXT');
-   if(data.home)rows(data.home.recentPayments);
+   if(data.home)checkHome(data.home);
   }
   if(data.groupId!==undefined&&data.groupId!==r.binding.groupId)fail('CONTRACT_IDENTITY');
   if(['payment','paymentDetailV1','member','rawSms'].includes(operation)&&data.id!==expected.recordId)fail('CONTRACT_IDENTITY');
