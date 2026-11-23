@@ -1,6 +1,6 @@
 // Collection-scoped metadata and separately authorized, audited content disclosure.
 import {ApiError,json,uuid,text,digest,id,now,requirePermission} from './core.js';
-import {accountDatabase,adminAccountSession,adminCanonicalActor} from './admin_accounts.js';
+import {accountDatabase,accountReadDatabase,adminAccountSession,adminCanonicalActor} from './admin_accounts.js';
 import {assertMutationAdmission} from './mutations.js';
 import {decrypt} from './encryption.js';
 import {payerStates,payerReasons} from './burimunsi/payer-outcomes.js';
@@ -49,7 +49,7 @@ async function reservationMatches(row){
  return await digest(canonicalJson(descriptor))===row.sourceFingerprint;
 }
 async function collections(env,account,url){
- filters(url,[]);const scoped=accountDatabase(env,account,'sms.read');
+ filters(url,[]);const scoped=accountReadDatabase(env,account,'sms.read');
  const result=await select(scoped,'SELECT private.burimunsi_observation_admin_collections() AS result');
  if(!Array.isArray(result)||result.length>500)bad();
  const ids=new Set(),items=result.map(v=>{
@@ -59,15 +59,28 @@ async function collections(env,account,url){
  });
  return json({contractVersion:1,items,asOf:now()});
 }
+const pageSql='SELECT private.burimunsi_observation_admin_page(?,?,?) AS result';
+// Derive outcomes from the IDs on this exact authorized page. All three views
+// share a snapshot, including while the phone is updating its inbox status.
+const processingPageSql=`WITH page AS MATERIALIZED (${pageSql})
+ SELECT page.result || jsonb_build_object(
+   'outcomes', private.burimunsi_admin_observation_outcomes(page.result->>'collectionId',
+     ARRAY(SELECT item->>'sourceId' FROM jsonb_array_elements(page.result->'items') AS rows(item)), ?::boolean),
+   'inboxCheck', private.burimunsi_observation_admin_inbox_check(page.result->>'collectionId')
+ ) AS result FROM page`;
+
 async function page(env,account,actor,url){
  filters(url,['collectionId','limit','cursor','includeProcessing']);
  const includeProcessing=url.searchParams.get('includeProcessing');
  if(includeProcessing!==null&&includeProcessing!=='1')invalid();const collectionId=group(url.searchParams.get('collectionId'));
  const rawLimit=url.searchParams.get('limit')??'25';if(!/^(?:[1-9][0-9]?|100)$/.test(rawLimit))invalid();
  const limit=Number(rawLimit),token=url.searchParams.get('cursor');if(token!==null&&(!token||token.length>2048))invalid();
- const scoped=accountDatabase(env,account,'sms.read'),cursor=requestCursorKey(env);
- const get=offset=>select(scoped,'SELECT private.burimunsi_observation_admin_page(?,?,?) AS result',collectionId,limit,offset);
- const first=await get(0);if(!isObject(first)||first.collectionId!==collectionId||!HASH.test(first.revision??''))bad();
+ const scoped=accountReadDatabase(env,account,'sms.read'),cursor=requestCursorKey(env);
+ const wantProcessing=includeProcessing==='1',finances=actor.permissions.has('payments.read');
+ const get=(offset,processing)=>processing
+  ?select(scoped,processingPageSql,collectionId,limit,offset,finances)
+  :select(scoped,pageSql,collectionId,limit,offset);
+ const first=await get(0,wantProcessing&&token===null);if(!isObject(first)||first.collectionId!==collectionId||!HASH.test(first.revision??''))bad();
  const filterHash=await digest(canonicalJson({kind:'managed_admin_observation_v1',collectionId,limit,sessionId:actor.sessionId}));
  const scope={groupId:collectionId,actorId:actor.userId,snapshot:first.revision,filterHash,sort:'newest'};
  let after=null;
@@ -75,7 +88,7 @@ async function page(env,account,actor,url){
   if(error?.code==='cursor_scope_changed'||error?.code==='cursor_expired')fail(409,'cursor_changed','The observation list changed. Refresh and try again.');
   invalid();}}
  if(after!==null&&(!isObject(after)||Object.keys(after).length!==1||!Number.isSafeInteger(after.offset)||after.offset<1||after.offset>100000))invalid();
- const offset=after?.offset??0,result=offset===0?first:await get(offset);
+ const offset=after?.offset??0,result=token===null?first:await get(offset,wantProcessing);
  if(!isObject(result)||result.collectionId!==collectionId||result.revision!==scope.snapshot||!Array.isArray(result.items))
   fail(409,'cursor_changed','The observation list changed. Refresh and try again.');
  const total=num(result.totalCount,0,100000);if(result.items.length!==Math.max(0,Math.min(limit,total-offset)))bad();
@@ -90,13 +103,11 @@ async function page(env,account,actor,url){
    retentionState:retained?'retained':'unresolved',bodySha256:retained?v.bodySha256:null});
  }
  let inboxCheck;
- if(includeProcessing==='1'){
-  const finances=actor.permissions.has('payments.read');
-  const sourceIds=items.map(v=>v.sourceId);
-  const result=await select(scoped,'SELECT private.burimunsi_admin_observation_outcomes(?,ARRAY(SELECT jsonb_array_elements_text(?::text::jsonb)),?::boolean) AS result',collectionId,JSON.stringify(sourceIds),finances);
-  if(!Array.isArray(result)||result.length!==items.length)bad();
+ if(wantProcessing){
+  const outcomes=result.outcomes;
+  if(!Array.isArray(outcomes)||outcomes.length!==items.length)bad();
   const indexed=new Map();
-  for(const row of result){
+  for(const row of outcomes){
    if(!isObject(row)||Object.keys(row).length!==5||!seen.has(row.sourceId)||indexed.has(row.sourceId)||
     !['pending','blocked','held','historical','duplicate','excluded','retrying','reversed','posted','non_payment','unmatched'].includes(row.processing)||
     !(row.paymentReference===null||finances&&typeof row.paymentReference==='string'&&/^[0-9]{12}$/.test(row.paymentReference))||
@@ -105,7 +116,7 @@ async function page(env,account,actor,url){
    indexed.set(row.sourceId,{processing:row.processing,paymentReference:row.paymentReference,payerStatus:row.payerStatus,payerReason:row.payerReason});
   }
   for(const item of items)Object.assign(item,indexed.get(item.sourceId));
-  const check=await select(scoped,'SELECT private.burimunsi_observation_admin_inbox_check(?) AS result',collectionId);
+  const check=result.inboxCheck;
   if(!isObject(check)||Object.keys(check).length!==6||!['unknown','checking','incomplete','verified'].includes(check.state)||
     !(check.headsMatch===null||typeof check.headsMatch==='boolean'))bad();
   for(const field of ['checkedAt','candidateCount','missingCount','pendingCount'])if(check[field]!==null)num(check[field],0,Number.MAX_SAFE_INTEGER);
