@@ -102,13 +102,15 @@ export async function verifyFreshPhoneReads({owner,admin,database,fixtureRoot}) 
   // to this one disposable UNIX socket, never to the internet or another DB.
   const {host:socket,port:actualPort} = owner.connectionParameters;
   const endpoint = socket+'/.s.PGSQL.'+actualPort;
-  const deno = fileURLToPath(new URL('scripts/supabase/node_modules/deno/deno',root));
+  const deno = process.env.DENO_BIN ?? 'deno';
+  const env = {PATH:process.env.PATH ?? '/usr/bin:/bin:/usr/sbin:/sbin',LC_ALL:'C',NO_COLOR:'1',DENO_NO_UPDATE_CHECK:'1'};
+  const denoVersion = execFileSync(deno,['--version'],{env,encoding:'utf8',timeout:5000,maxBuffer:2048});
+  assert.match(denoVersion,/^deno 2\.9\.6\s/m);
   const lock = fileURLToPath(new URL('supabase/functions/deno.lock',root));
   const entry = fileURLToPath(new URL('./fresh-phone-driver.mjs',import.meta.url));
-  execFileSync(deno,['run','--node-modules-dir=none','--lock='+lock,'--frozen','--cached-only',
+  execFileSync(deno,['run','--no-prompt','--node-modules-dir=none','--lock='+lock,'--frozen','--cached-only',
     '--allow-read='+fixtureRoot,'--allow-env','--allow-sys=uid','--allow-net=unix:'+endpoint,'--allow-write='+endpoint,
     entry,socket,String(actualPort),database,source],{
-    env:{PATH:'/usr/bin:/bin:/usr/sbin:/sbin',LC_ALL:'C',NO_COLOR:'1',DENO_NO_UPDATE_CHECK:'1'},
-    stdio:'inherit',timeout:90000,
+    env,stdio:'inherit',timeout:90000,
   });
 }
