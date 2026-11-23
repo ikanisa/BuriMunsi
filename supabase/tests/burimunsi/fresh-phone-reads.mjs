@@ -1,9 +1,9 @@
 // Runs on the socket-only managed archive fixture after its protected synthetic
 // team is enrolled. These calls use the production HTTP gate and PostgreSQL stores.
 import assert from 'node:assert/strict';
+import {Buffer} from 'node:buffer';
 import {createHash, randomBytes, randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
-import {ownedFixturePool} from './postgres-fixture-pool.mjs';
 import {openApplicationWork, sqlFenceBackend} from '../../functions/_shared/application-fence.js';
 import {CONTRACT_VERSION} from '../../functions/_shared/domain/burimunsi/wire/native-contract.mjs';
 import {createPhonePinRequestGate, phonePinReadSelector} from '../../functions/_shared/domain/burimunsi/phone-pin-request.js';
@@ -28,11 +28,8 @@ const token = () => randomBytes(32).toString('hex');
 const hash = raw => createHash('sha256').update(raw).digest('hex');
 const unused = () => { throw Error('Unexpected write or external operation'); };
 
-export async function qualifyNativeReads({owner, admin, database, fixtureRoot, source}) {
-  const {host:socket, port} = owner.connectionParameters;
-  const pool = await ownedFixturePool({root:fixtureRoot, socket, port:Number(port), database,
-    user:'postgres', clusterName:'collect_archive_next_fixture'});
-  const backend = sqlFenceBackend(pool, pool);
+export async function qualifyNativeReads({pool, admissionPool, inspect, source}) {
+  const backend = sqlFenceBackend(admissionPool, admissionPool);
   async function admitted(fn, kind = 'http_collect') {
     const admission = await openApplicationWork({backend, sourceSha256:source, kind});
     let failed = true;
@@ -90,7 +87,7 @@ export async function qualifyNativeReads({owner, admin, database, fixtureRoot, s
   }
 
   async function lease(actor) {
-    const {rows} = await admin.query(`SELECT expires_at AS initial, pin_lease_expires_at AS renewed,
+    const rows = await inspect(`SELECT expires_at AS initial, pin_lease_expires_at AS renewed,
       floor(extract(epoch FROM clock_timestamp())*1000)::bigint AS now
       FROM private.burimunsi_sessions WHERE id=$1`, [actor.session]);
     assert.equal(rows.length, 1);
@@ -139,45 +136,67 @@ export async function qualifyNativeReads({owner, admin, database, fixtureRoot, s
     console.log('PASS scoped Incoming SMS list and total on real PostgreSQL through the authenticated Admin phone-session handler');
   }
 
-  try {
-    await admitted(db => assert.rejects(db.transaction(async sql => {
-      await sql.unsafe('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ WRITE');
-      await db.context(sql);
-    }), {code:'application_fence_unavailable'}));
-    console.log('PASS original PostgreSQL write fence rejects the former repeatable-read write transaction');
-    for (const account of accounts) {
-      for (const [state, ttl] of [['current',1800000], ['due',45000], ['expired',2500]]) {
-        const actor = await issue(account, ttl);
-        const before = await lease(actor);
-        assert.equal(before.renewed, null);
-        if (state === 'expired') {
-          await delay(Math.max(0, before.initial-before.now+50));
-          assert.ok((await lease(actor)).now >= before.initial);
-          await assert.rejects(read(actor, payments), {code:'session_unavailable'});
-        } else {
-          await assertPayments(actor);
-        }
-        for (const path of [home,payments]) {
-          await assert.rejects(read(actor, path, token()), {code:'session_unavailable'});
-        }
-        assert.equal((await lease(actor)).renewed, null);
-        const expires = await assertHome(actor);
-        const after = await lease(actor);
-        assert.equal(after.initial, before.initial);
-        if (state === 'current') {
-          assert.equal(after.renewed, null);
-          assert.equal(expires, before.initial);
-        } else {
-          assert.ok(after.renewed > before.initial);
-          assert.equal(expires, after.renewed);
-        }
+  await admitted(db => assert.rejects(db.transaction(async sql => {
+    await sql.unsafe('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ WRITE');
+    await db.context(sql);
+  }), {code:'application_fence_unavailable'}));
+  console.log('PASS original PostgreSQL write fence rejects the former repeatable-read write transaction');
+  await admitted(async db => {
+    const marker = randomUUID();
+    const failedRead = new Error('synthetic consumer rejection');
+    let firstPid;
+    await assert.rejects(db.withNativeReadSnapshot(async sql => {
+      const [context] = await sql.unsafe(`SELECT current_user AS role, current_setting('transaction_read_only') AS read_only,
+        current_setting('transaction_isolation') AS isolation, current_setting('lock_timeout') AS lock_limit,
+        current_setting('statement_timeout') AS statement_limit,current_setting('search_path') AS path,
+        current_setting('request.jwt.claims') AS claims,current_setting('collect.edge_verified') AS verified,
+        pg_backend_pid() AS pid`);
+      const {pid,...scope}=context;firstPid=pid;
+      assert.ok(Number.isInteger(pid));
+      assert.deepEqual(scope,{role:'collect_runtime',read_only:'on',isolation:'repeatable read',lock_limit:'5s',
+        statement_limit:'15s',path:'app,public,pg_catalog',claims:'{}',verified:'true'});
+      assert.equal(await db.withNativeReadSnapshot(inner=>inner===sql),true);
+      assert.throws(()=>db.transaction(()=>{}),/read_snapshot_cannot_write/);
+      await sql.unsafe("SELECT set_config('burimunsi.fixture_read_rollback',$1,true)",[marker]);
+      throw failedRead;
+    }),error=>error===failedRead);
+    await db.withNativeReadSnapshot(async sql => {
+      const [context] = await sql.unsafe("SELECT pg_backend_pid() AS pid,current_setting('burimunsi.fixture_read_rollback',true) AS prior");
+      assert.equal(context.pid,firstPid,'one runtime connection must be demonstrably reused');
+      assert.notEqual(context.prior,marker);
+    });
+  });
+  console.log('PASS read-only context, nested snapshot, write refusal and rollback on the same postgres.js connection');
+  for (const account of accounts) {
+    for (const [state, ttl] of [['current',1800000], ['due',45000], ['expired',2500]]) {
+      const actor = await issue(account, ttl);
+      const before = await lease(actor);
+      assert.equal(before.renewed, null);
+      if (state === 'expired') {
+        await delay(Math.max(0, before.initial-before.now+50));
+        assert.ok((await lease(actor)).now >= before.initial);
+        await assert.rejects(read(actor, payments), {code:'session_unavailable'});
+      } else {
         await assertPayments(actor);
-        assert.equal((await lease(actor)).renewed, after.renewed);
-        console.log('PASS', account.role, account.profile, state, 'Home and Payments; wrong-device denied; original lease and renewal verified');
       }
+      for (const path of [home,payments]) {
+        await assert.rejects(read(actor, path, token()), {code:'session_unavailable'});
+      }
+      assert.equal((await lease(actor)).renewed, null);
+      const expires = await assertHome(actor);
+      const after = await lease(actor);
+      assert.equal(after.initial, before.initial);
+      if (state === 'current') {
+        assert.equal(after.renewed, null);
+        assert.equal(expires, before.initial);
+      } else {
+        assert.ok(after.renewed > before.initial);
+        assert.equal(expires, after.renewed);
+      }
+      await assertPayments(actor);
+      assert.equal((await lease(actor)).renewed, after.renewed);
+      console.log('PASS', account.role, account.profile, state, 'Home and Payments; wrong-device denied; original lease and renewal verified');
     }
-    await verifyAdminIncoming();
-  } finally {
-    await pool.end();
   }
+  await verifyAdminIncoming();
 }
