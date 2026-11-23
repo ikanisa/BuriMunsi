@@ -40,14 +40,14 @@ function PhoneTeamDirectory({team, canManage, reload}: {team: PhoneTeam; canMana
   function review(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!current() || inFlight.current || change) return;
-    const form = new FormData(event.currentTarget), role = form.get('role');
-    if (role !== 'admin' && role !== 'staff') return;
+    const form = new FormData(event.currentTarget);
+    if (editing && editing.role !== 'staff') return;
     try {
       if (editing) {
         const active = form.get('access') === 'active';
-        if (editing.active === active && editing.role === role) {setFeedback('Choose a different role or access status.'); return;}
-        setChange({kind: 'access', requestId: crypto.randomUUID(), member: editing, role, active});
-      } else setChange(prepareTeamAccount(team, String(form.get('displayName') ?? ''), String(form.get('phone') ?? ''), role));
+        if (editing.active === active) {setFeedback('Choose a different access status.'); return;}
+        setChange({kind: 'access', requestId: crypto.randomUUID(), member: editing, role: editing.role, active});
+      } else setChange(prepareTeamAccount(team, String(form.get('displayName') ?? ''), String(form.get('phone') ?? ''), 'staff'));
       setFeedback('');
     } catch (error) {setFeedback(error instanceof Error ? error.message : 'Check the account details.');}
   }
@@ -67,7 +67,9 @@ function PhoneTeamDirectory({team, canManage, reload}: {team: PhoneTeam; canMana
     } catch (error) {
       if (!current()) return;
       setUncertain(error instanceof AdminRequestError && error.outcomeUnknown);
-      setFeedback(error instanceof Error ? error.message : 'The account change could not be confirmed.');
+      setFeedback(error instanceof AdminRequestError && error.code === 'burimunsi_single_admin'
+        ? 'BuriMunsi allows only one Admin. Refresh Team access before making another change.'
+        : error instanceof Error ? error.message : 'The account change could not be confirmed.');
     } finally {inFlight.current = false; if (mounted.current) setBusy(false);}
   }
   return <>
@@ -77,18 +79,17 @@ function PhoneTeamDirectory({team, canManage, reload}: {team: PhoneTeam; canMana
         <thead><tr><th>Account</th><th>Mobile number</th><th>Role</th><th>Access</th>{canManage && <th>Actions</th>}</tr></thead>
         <tbody>{team.members.map(member => <tr key={member.id}><td>{member.displayName}</td><td>{member.phone}</td>
           <td>{phoneTeamRoles[member.role]}</td><td><StatusBadge tone={member.active ? 'success' : 'neutral'}>{member.active ? 'Active' : 'Disabled'}</StatusBadge></td>
-          {canManage && <td>{member.id !== team.currentAccountId && <Button aria-label={`Manage ${member.displayName}`} disabled={creating || !!editing} onClick={() => {cancel(); setEditing(member);}}>Manage access</Button>}</td>}</tr>)}</tbody>
+          {canManage && <td>{member.role === 'staff' && member.id !== team.currentAccountId && <Button aria-label={`Manage ${member.displayName}`} disabled={creating || !!editing} onClick={() => {cancel(); setEditing(member);}}>Manage access</Button>}</td>}</tr>)}</tbody>
       </table></div>}
     </Card>
-    {canManage && (creating || editing) && <Card className="admin-security-card"><h2>{editing ? 'Manage account access' : 'Create an account'}</h2>
+    {canManage && (creating || editing) && <Card className="admin-security-card"><h2>{editing ? 'Manage account access' : 'Create a Staff account'}</h2>
       {!change ? <form className="admin-auth-form" onSubmit={review}>
         {editing ? <p>{editing.displayName} · {editing.phone}</p> : <>
           <Field label="Name" htmlFor="team-name"><input className="admin-input" id="team-name" name="displayName" autoComplete="off" minLength={2} maxLength={100} required /></Field>
           <Field label="Mobile number" htmlFor="team-phone"><input className="admin-input" id="team-phone" name="phone" type="tel" autoComplete="off" maxLength={40} required /></Field>
           <p>The account starts with the configured four-digit passcode. The user can change it after signing in.</p>
         </>}
-        <Field label="Role" htmlFor="team-role"><select className="admin-input" id="team-role" name="role" defaultValue={editing?.role ?? 'staff'}>
-          {(Object.keys(phoneTeamRoles) as PhoneTeamRole[]).map(role => <option key={role} value={role}>{phoneTeamRoles[role]}</option>)}</select></Field>
+        <p>Role: Staff</p>
         {editing && <Field label="Access" htmlFor="team-access"><select className="admin-input" id="team-access" name="access" defaultValue={editing.active ? 'active' : 'disabled'}>
           <option value="active">Active</option><option value="disabled">Disabled</option></select></Field>}
         <Button type="submit" variant="primary">Review account</Button><Button onClick={cancel}>Cancel</Button>

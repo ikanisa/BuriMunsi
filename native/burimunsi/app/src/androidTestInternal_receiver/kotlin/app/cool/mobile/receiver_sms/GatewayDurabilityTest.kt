@@ -226,6 +226,59 @@ class GatewayDurabilityTest {
         assertTrue(reopened.pending(scope).isEmpty())
         assertEquals(original.seen,reopened.seenSnapshot(scope).entries)
         assertFalse(reopened.acknowledge(scope,id,ack))
+        // Synthetic decrypted JSON written byte-for-byte with the predecessor's
+        // v1 field layout, independent of the new serializer.
+        val captured="2026-11-07T10:06:00Z"
+        val carrier="2026-11-07T09:58:00Z"
+        val scopeJson=JSONObject().put("collectionId",scope.collectionId).put("accountId",scope.accountId)
+        val pendingJson=JSONObject().put("owner",scopeJson).put("sourceKey",localKey)
+            .put("observation",JSONObject().put("requestId",id).put("rawSender","Synthetic").put("rawBody",body)
+                .put("sourceMode","catch_up").put("complete",false).put("capturedAt",captured)
+                .put("serviceCentreAt",carrier).put("inboxReceivedAt",at).put("subscriptionId",JSONObject.NULL)
+                .put("sourceKey",localKey))
+        val seenJson=JSONObject().put("owner",scopeJson).put("sourceKey",localKey).put("inboxRowId",10L)
+            .put("requestId",id).put("bodySha256",Values.sha256(body)).put("inboxReceivedAt",at).put("capturedAt",captured)
+        // Only the test-only Android Keystore handle, created by the earlier
+        // isolated journal write; no external key or predecessor APK is involved.
+        val keyStore=java.security.KeyStore.getInstance("AndroidKeyStore").apply{load(null)}
+        val alias=base.packageName+".burimunsi.observation.v1"
+        val fixtureCipher=ReceiptCipher({checkNotNull(keyStore.getKey(alias,null) as? javax.crypto.SecretKey)},
+            {android.util.Base64.encodeToString(it,android.util.Base64.NO_WRAP)},
+            {android.util.Base64.decode(it,android.util.Base64.NO_WRAP)})
+        fun seed(seen:JSONObject){
+            val serialized=JSONObject().put("version",1).put("pending",JSONArray().put(pendingJson))
+                .put("seen",JSONArray().put(seen)).toString()
+            bytes.writeText(fixtureCipher.encrypt(serialized))
+        }
+        val originalSeen=seenJson.toString()
+        for (broken in listOf(
+            JSONObject(originalSeen).put("capturedAt","not-a-timestamp"),
+            JSONObject(originalSeen).put("capturedAt","2026-11-07T11:00:00Z"),
+            JSONObject(originalSeen).put("unrecognizedProof","synthetic"),
+            JSONObject(originalSeen).apply{remove("bodySha256")})){
+            seed(broken)
+            val protected=bytes.readBytes()
+            assertTrue(runCatching{reopened.pending(scope)}.isFailure)
+            assertArrayEquals(protected,bytes.readBytes())
+        }
+        seed(JSONObject(originalSeen))
+        val protected=bytes.readBytes()
+        val prior=ObservationStateStore(context).read()
+        assertEquals(captured,prior.seen.single().capturedAt)
+        assertEquals(at,prior.seen.single().inboxReceivedAt)
+        assertEquals(captured,prior.pending.single().observation.capturedAt)
+        assertEquals(at,prior.pending.single().observation.inboxReceivedAt)
+        assertEquals(carrier,prior.pending.single().observation.serviceCentreAt)
+        assertEquals(id,prior.pending.single().observation.requestId)
+        assertEquals(localKey,prior.pending.single().sourceKey)
+        assertArrayEquals(protected,bytes.readBytes())
+        assertFalse(reopened.acknowledge(foreign,id,ack))
+        assertArrayEquals(protected,bytes.readBytes())
+        assertTrue(reopened.acknowledge(scope,id,ack))
+        assertEquals(prior.seen,ObservationStateStore(context).read().seen)
+        val afterJson=JSONObject(fixtureCipher.decrypt(bytes.readText()))
+        assertEquals(captured,afterJson.getJSONArray("seen").getJSONObject(0).getString("capturedAt"))
+        assertEquals(at,afterJson.getJSONArray("seen").getJSONObject(0).getString("inboxReceivedAt"))
     }
     @Test fun observationProfileAndConsentAreEncryptedAndAccountScoped() {
         val now=System.currentTimeMillis();val scope=ObservationOwner("synthetic-group","synthetic-admin")

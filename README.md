@@ -1,6 +1,6 @@
 # BuriMunsi
 
-BuriMunsi runs group savings for its configured group. The Android Staff app handles member and payment workflows. Admin Sync processes eligible M-Money receipts on each Android phone signed in by an authorized Admin. The web Admin handles operator access, member and financial oversight, and reconciliation.
+BuriMunsi runs group savings for its configured group. The Android Staff app handles member and payment workflows. Admin Sync captures eligible M-Money receipts for the signed-in Admin. The web Admin handles operator access, member and financial oversight, and reconciliation.
 
 For BuriMunsi support or an account deletion request, [contact support on WhatsApp at +250 788 767 816](https://wa.me/250788767816).
 
@@ -32,25 +32,31 @@ node admin-web/tests/browser/smoke.mjs build/admin-web-fixture
 
 `make admin-web-build` requires the approved Supabase publishable key. The build command supplies the exact dedicated profile. Keep provider secrets outside this checkout. `make native-build NATIVE_OUTPUT=/absolute/path/to/new-evidence` produces the isolated native test and qualification artifacts. Follow [testing-candidate compilation](native/burimunsi/configuration/testing-candidate.md) for a configured unsigned release build.
 
-## Internal access and SMS receiving
+## Account roles, SMS access and payments
 
-Admins create accounts by mobile number, assign the Admin or Staff role, and
-can change or disable access in Team access. Users sign in to the Android
-app and dedicated web panel with their registered number and four-digit
-passcode. New accounts start with the configured `BURIMUNSI_DEFAULT_STAFF_PIN`
-secret. Changing that passcode is optional. For support, contact BuriMunsi
-on [WhatsApp at +250 788 767 816](https://wa.me/250788767816).
+BuriMunsi has one designated human Admin and separate Staff accounts. Users sign
+in with their registered mobile number and four-digit passcode. The signed-in
+profile determines access: only the Admin can capture M-Money SMS; Staff never
+have SMS access.
 
-An Admin signs in to Admin Sync on any supported Android phone and grants the
-Android permissions for that phone. Each participating phone reconciles its
-own eligible SMS, including older gaps, and uploads missing receipts
-automatically. When several phones observe the same provider transaction,
-BuriMunsi records its credit and eligible payer notification once. Staff
-accounts have no access to SMS.
+The Admin can sign in on any supported Android phone and use any SIM that
+receives the relevant M-Money messages. SMS capture starts automatically after
+Admin sign-in and once Android's SMS permissions are granted. No device or SIM
+registration, manual pairing, or phone handoff is part of the product workflow.
+The login number identifies the user, not the phone or SIM.
+
+Payment processing is automatic. The system validates and deduplicates eligible
+receipts and posts verified payments without manual transaction review or
+approval. A receipt that cannot be validated must not post as a payment.
+
+This is the product requirement, not a claim that an existing build or
+deployment already meets it. Historical receiver documents remain release
+evidence, not the current product workflow. Release verification must confirm
+that the Android apps and backend follow the profile-based model.
 
 The release record binds the Android artifacts, Admin build and live Edge
-source. Carrier delivery is confirmed when the outbound gateway records the
-delivery acknowledgement for the original payer notification. [Android authority transition](native/burimunsi/configuration/authority-transition.md) · [Scheduler operation](supabase/jobs/README.md)
+source. See [scheduler operation](supabase/jobs/README.md) for background
+processing and operational evidence.
 
 The managed runtime revision requires the exact deployment source, the current
 fence epoch and function inventory, and verified preimages for

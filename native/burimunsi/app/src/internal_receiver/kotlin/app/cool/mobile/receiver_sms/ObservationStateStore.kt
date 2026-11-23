@@ -101,7 +101,8 @@ internal class ObservationStateStore(context:Context):ObservationJournalStore {
             pending.all{entry->
                 val recorded=seenByRequest[entry.observation.requestId]
                 recorded!=null&&recorded.owner==entry.owner&&recorded.sourceKey==entry.sourceKey&&
-                    recorded.bodySha256==Values.sha256(entry.observation.rawBody)
+                    recorded.bodySha256==Values.sha256(entry.observation.rawBody)&&
+                    (recorded.capturedAt==null||recorded.capturedAt==entry.observation.capturedAt)
             },"observation_store_unavailable")
         return ObservationJournalState(pending,seen)
     }
