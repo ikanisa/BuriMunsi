@@ -47,6 +47,14 @@ class MomoGatewayStore(private val context:Context){
  }
 }
 class SmsQueueStore(context:Context){
+ enum class AppendResult { STORED,DUPLICATE,FAILED }
+ fun appendIfCapacity(envelope:JSONObject,maxItems:Int,reserve:Int,confirmedMissingId:String?):AppendResult {
+  if(confirmedMissingId!=envelope.getString("id"))return AppendResult.FAILED
+  val previous=ReceiverFixture.retainedCaptureId
+  ReceiverFixture.retainedCaptureId=confirmedMissingId;ReceiverFixture.retainedBodyHash=rw.ikanisa.burimunsi.core.Values.sha256(envelope.getString("raw_body"))
+  return if(previous==confirmedMissingId)AppendResult.DUPLICATE else AppendResult.STORED
+ }
+
  fun queueMetadata(owner:String):Pair<Int,String?>{check(!ReceiverFixture.unreadable){"Synthetic unreadable ciphertext"};return ReceiverFixture.queued to null}
  fun disablePreservingQueue(owner:String):Boolean{if(ReceiverFixture.failQueueDisable)return false;ReceiverFixture.queueEnabled=false;return true}
  fun enableForOwner(owner:String):Boolean{if(ReceiverFixture.failQueueEnable)return false;ReceiverFixture.queueEnabled=true;return true}

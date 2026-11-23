@@ -1,5 +1,5 @@
 import { BuriError } from './errors.js';
-import { exactKeys } from './values.js';
+import { exactKeys, requireRequestId } from './values.js';
 import { readLatestRetainedObservationId } from './postgres-observation-listing.js';
 import { PostgresObservationReconcileEvidence } from './postgres-observation-reconcile-evidence.js';
 import {
@@ -40,6 +40,17 @@ function batchWitnessFailure(error) {
     return new BuriError('observation_item_unavailable', 503);
   }
   return error;
+}
+
+const processingStates = new Set(['pending','retrying','parsed','needs_review','conflict','duplicate','security','historical','unknown']);
+
+export async function readObservationProcessingStatus(tx, groupId, sourceIds) {
+  const rows = await tx.unsafe('SELECT private.burimunsi_observation_processing_status($1::text::jsonb) AS result', [JSON.stringify(sourceIds)]);
+  const value = rows[0]?.result;
+  check(rows.length === 1 && value?.groupId === groupId && Array.isArray(value.statuses) && value.statuses.length === sourceIds.length);
+  value.statuses.forEach((item, i) => check(item?.sourceId === sourceIds[i] && processingStates.has(item.status) &&
+    typeof item.canRetry === 'boolean' && (!item.canRetry || ['retrying','needs_review'].includes(item.status))));
+  return value;
 }
 
 /** Reconcile opaque inbox keys with existing receipts under the current actor.
@@ -133,7 +144,9 @@ export class PostgresObservationReconciliation {
   /** Verify a bounded set of phone witnesses. Each result describes the final
    * authorized snapshot; this never writes observations or financial state. */
   async reconcileBatch(actor, input) {
-    exactKeys(input, ['items']);
+    exactKeys(input, ['items','runId','includeProcessing'], ['items']);
+    if(input.runId!==undefined)requireRequestId(input.runId);
+    check(input.includeProcessing === undefined || typeof input.includeProcessing === 'boolean', 'invalid_request', 400);
     check(
       Array.isArray(input.items) && input.items.length >= 1 && input.items.length <= 20,
       'invalid_request',
@@ -156,19 +169,22 @@ export class PostgresObservationReconciliation {
         .filter((i) => i >= 0);
       const batch = { actor, values, hashes, initial, indexes, legacy };
       await this.#verifyBatchObjects(batch);
-      if (indexes.length) await this.#verifyBatchJournals(batch, snapshot);
-      // authority.read is REPEATABLE READ, so the keys and authorization are
-      // rechecked together after the network and custody operations.
-      const final = await this.authority.read(snapshot);
-      check(
-        same(final.ctx, initial.ctx) && same(final.records, initial.records) &&
-          same(final.candidates, initial.candidates),
-        'observation_changed',
-        409,
-      );
-      const matches = final.records.map((r, i) => r ?? legacy.get(i)?.match ?? null),
-        ids = matches.filter(Boolean).map((r) => r.id);
+      const matches = initial.records.map((r, i) => r ?? legacy.get(i)?.match ?? null);
+      const ids = matches.filter(Boolean).map(r => r.id);
       check(new Set(ids).size === ids.length, 'observation_item_conflict', 409);
+      if (indexes.length || input.runId) {
+        await this.#verifyBatchJournals(batch, snapshot, input.runId, matches);
+      }
+      // Recheck the exact witnesses, consent and parser outcomes in one final
+      // read-only repeatable-read snapshot after storage verification and page recording.
+      const statuses = await this.authority.read(async tx => {
+        const final = await snapshot(tx);
+        check(same(final.ctx, initial.ctx) && same(final.records, initial.records) && same(final.candidates, initial.candidates),
+          'observation_changed', 409);
+        if (!input.includeProcessing || !ids.length) return null;
+        const result = await readObservationProcessingStatus(tx, this.groupId, ids);
+        return new Map(result.statuses.map(item => [item.sourceId, item.status]));
+      });
       await this.authority.assertOwned();
       return {
         groupId: this.groupId,
@@ -176,6 +192,7 @@ export class PostgresObservationReconciliation {
           sourceKey: v.sourceKey,
           state: matches[i] ? 'matched' : 'missing',
           sourceId: matches[i]?.id ?? null,
+          ...(statuses && matches[i] ? {processingStatus: statuses.get(matches[i].id)} : {}),
         })),
       };
     } catch (error) {
@@ -210,7 +227,7 @@ export class PostgresObservationReconciliation {
     check(isObservationSenderAllowed(value.rawSender, profile), 'unsupported_receipt', 422);
     let found;
     try {
-      found = await this.#evidence.lookupSourceKey(tx, value.sourceKey, contentSha, value.bodySha256);
+      found = await this.#evidence.lookupSourceKey(tx, value.sourceKey, contentSha, value.bodySha256,value.gatewayEnvelopeId);
     } catch (error) {
       throw mapKeyError ? mapKeyError(error) : error;
     }
@@ -223,7 +240,7 @@ export class PostgresObservationReconciliation {
         409,
       );
     }
-    const candidates = record ? [] : await this.#evidence.readLegacyCandidates(tx, actor, value.bodySha256);
+    const candidates = record||value.gatewayEnvelopeId ? [] : await this.#evidence.readLegacyCandidates(tx, actor, value.bodySha256);
     return { record, candidates };
   }
 
@@ -247,7 +264,7 @@ export class PostgresObservationReconciliation {
         try {
           if (initial.records[i]) {
             await serialize(() =>
-              this.#evidence.verifyKeyedObject(hashes[i], values[i].bodySha256, initial.records[i])
+              this.#evidence.verifyKeyedObject(hashes[i], values[i].bodySha256, initial.records[i],values[i])
             );
           } else {
             const proof = await serialize(() =>
@@ -273,7 +290,7 @@ export class PostgresObservationReconciliation {
     if (failure) throw failure;
   }
 
-  async #verifyBatchJournals({ actor, values, initial, indexes, legacy }, snapshot) {
+  async #verifyBatchJournals({ actor, values, initial, indexes, legacy }, snapshot, runId, matches) {
     // The normal custody fence serializes journal verification with storage
     // mutation; it does not itself write an observation or financial record.
     const singleton = legacy.get(indexes[0]);
@@ -320,6 +337,13 @@ export class PostgresObservationReconciliation {
             }
           }
         }
+        if (runId) {
+          const page = values.map((v, i) => ({key: v.sourceKey, sourceId: matches[i]?.id ?? null,
+            bodySha256: v.bodySha256, inboxReceivedAt: v.inboxReceivedAt}));
+          const saved = await tx.unsafe('SELECT private.burimunsi_observation_inbox_page($1::uuid,$2::text::jsonb) AS saved',
+            [runId, JSON.stringify(page)]);
+          check(saved.length === 1 && saved[0].saved === true);
+        }
       });
     } catch (error) {
       if (itemFinalPending) {
@@ -338,10 +362,11 @@ export class PostgresObservationReconciliation {
   reconcileStatus(actor) {
     return this.#statusSnapshot(actor, false);
   }
-  async reconcileVerifiedStatus(actor) {
-    return { ...await this.#statusSnapshot(actor, true), scope: 'verified_collection' };
+  async reconcileVerifiedStatus(actor, scope) {
+    check(scope === undefined || scope === 'installation', 'invalid_query', 400);
+    return { ...await this.#statusSnapshot(actor, true, scope === 'installation'), scope: scope === 'installation' ? 'verified_installation' : 'verified_collection' };
   }
-  async #statusSnapshot(actor, verified) {
+  async #statusSnapshot(actor, verified, installation = false) {
     try {
       const result = await this.authority.read(async (tx) => {
         await this.context(tx, actor);
@@ -353,7 +378,7 @@ export class PostgresObservationReconciliation {
         check(rows.length === 1);
         const value = rows[0].result;
         check(
-          value && value.groupId === this.groupId && typeof value.hasPending === 'boolean' &&
+          value && (!installation || value.scope === 'verified_installation') && value.groupId === this.groupId && typeof value.hasPending === 'boolean' &&
             typeof value.hasRecorded === 'boolean' && typeof value.hasUnmatchedCanonical === 'boolean' &&
             Number.isSafeInteger(value.recordedCount) && value.recordedCount >= 0 &&
             value.recordedCount <= 100000 &&

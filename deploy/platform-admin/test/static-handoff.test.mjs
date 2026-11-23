@@ -164,3 +164,26 @@ test('an explicit recovery script cannot pass the installed bundle hash check', 
   await assert.rejects(installedWorker(source, origin, new Map([[origin + '/', shell],
     [origin + prior, new TextEncoder().encode(STATIC_RECOVERY_SCRIPT)]])), /Admin asset bytes differ/);
 });
+
+test('React content-addressed entry passes only when selected Worker holds its release asset', async () => {
+  const reactEntry = id => '/_build/' + id.repeat(64) + '/assets/admin-entry.js';
+  const a = reactEntry('a'), b = reactEntry('b');
+  let upstream = 0;
+  const entry = createAdminWorker({fetchImpl: async () => {upstream++; throw Error('No provider call');}});
+  for (const [served, requested] of [[b, a], [a, b]]) {
+    const env = environment({fetch: async received => new URL(received.url).pathname === served
+      ? new Response('React release ' + served, {headers: {'Content-Type': 'text/javascript',
+        'Cache-Control': 'public, max-age=31536000, immutable'}}) : html()});
+    const matched = await entry.fetch(request(served), env);
+    assert.equal(matched.status, 200);
+    assert.match(matched.headers.get('Cache-Control'), /immutable/);
+    assert.equal(await matched.text(), 'React release ' + served);
+
+    const mismatched = await entry.fetch(request(requested), env);
+    assert.equal(mismatched.status, 404);
+    assert.match(mismatched.headers.get('Content-Type'), /^text\/plain/);
+    assert.match(mismatched.headers.get('Cache-Control'), /no-store/);
+    assert.match(await mismatched.text(), /When all are blank, return to Admin online in the same tabs/);
+  }
+  assert.equal(upstream, 0);
+});

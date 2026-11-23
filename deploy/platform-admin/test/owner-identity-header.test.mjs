@@ -11,6 +11,8 @@ test('owner identity opt-in is forwarded only to the exact Admin session GET',as
   ['/api/admin/auth/session','GET','1, 1',null],
   ['/api/admin/auth/session/','GET','1',null],
   ['/api/admin/auth/session','POST','1',null],
+  ['/api/admin/auth/phone-passcode','POST','1',null],
+  ['/api/admin/auth/passcode/verify','POST','1',null],
   ['/api/admin/team','GET','1',null],
   ['/v1/profile','GET','1',null],
  ]){

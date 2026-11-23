@@ -24,6 +24,7 @@ internal fun queryObservationInbox(
     configuredSenders: Iterable<String> = emptyList(),
     through: Long? = null,
     order: ObservationInboxOrder = ObservationInboxOrder.ROW_ID,
+    metadataOnly: Boolean = false,
 ) = with(app.contentResolver) {
     val bounds = if (through == null) "_id > ?" else "_id > ? AND _id <= ?"
     val args = listOfNotNull(after.toString(), through?.toString()).toTypedArray()
@@ -37,8 +38,9 @@ internal fun queryObservationInbox(
         listOf(("$bounds AND ($filter)" to (args + senders)), plain)
     } else listOf(plain)
 
+    val requestedColumns = if (metadataOnly) listOf(arrayOf("_id", "address", "date")) else projections
     plans.firstNotNullOfOrNull { (selection, selectionArgs) ->
-        projections.firstNotNullOfOrNull { columns ->
+        requestedColumns.firstNotNullOfOrNull { columns ->
             try {
                 query(inboxUri, columns, selection, selectionArgs, order.sort)
             } catch (_: Exception) {

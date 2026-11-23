@@ -115,7 +115,7 @@ export function proveNativeAutoCredit(source,account,output){
   const value=parsed.normalizedOutput??output,profile=validateProviderProfile(account);
   const name=value?.payer_name_raw,identifier=value?.payer_identifier_raw;
   if(!profile||!name||!identifier||parsed.facts.counterparty_name!==name||parsed.facts.counterparty_identifier!==identifier)return false;
-  return proveIncomingSource(planned.body,source.raw_body,value,profile);
+  return proveIncomingSource(planned.body,source.raw_body,value,profile,parsed.facts.transaction_at?parsed.facts.transaction_datetime_raw:null);
  }catch{return false;}
 }
 

@@ -84,7 +84,7 @@ describe('dedicated phone accounts', () => {
     expect(fetchImpl.mock.calls.filter(([path]) => String(path).includes('/auth/') && path !== '/api/admin/auth/session')).toHaveLength(0);
   }, 12_000);
 
-  it('creates an account using the configured passcode and changes its role and access through the authenticated Team route', async () => {
+  it('creates only Staff using the configured passcode and manages access without promoting the account', async () => {
     const members = [{...admin}, {...staff}], writes: {path: string; body: Record<string, unknown>; headers: Headers}[] = [];
     let loseFirst = true;
     const accountId = '40000000-0000-4000-8000-000000000003';
@@ -114,7 +114,8 @@ describe('dedicated phone accounts', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Create account'}));
     fireEvent.change(screen.getByLabelText('Name'), {target: {value: 'New operator'}});
     fireEvent.change(screen.getByLabelText('Mobile number'), {target: {value: '0780 000 003'}});
-    expect(screen.getByLabelText('Role')).toHaveValue('staff');
+    expect(screen.queryByLabelText('Role')).toBeNull();
+    expect(screen.getByText('Role: Staff')).toBeVisible();
     expect(screen.queryByLabelText(/passcode|email|whatsapp/i)).toBeNull();
     fireEvent.click(screen.getByRole('button', {name: 'Review account'}));
     fireEvent.click(screen.getByRole('button', {name: 'Confirm account creation'}));
@@ -125,12 +126,16 @@ describe('dedicated phone accounts', () => {
     expect(writes[1].headers.get('Idempotency-Key')).toBe(writes[0].body.requestId);
     expect(writes[1].headers.get('X-Collect-CSRF')).toBe(csrfToken);
     fireEvent.click(within(newRow).getByRole('button', {name: /Manage/}));
-    fireEvent.change(screen.getByLabelText('Role'), {target: {value: 'admin'}});
+    expect(screen.queryByLabelText('Role')).toBeNull();
+    expect(screen.getByText('Role: Staff')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', {name: 'Review account'}));
+    expect(screen.queryByRole('button', {name: 'Confirm access change'})).toBeNull();
+    expect(writes).toHaveLength(2);
     fireEvent.change(screen.getByLabelText('Access'), {target: {value: 'disabled'}});
     fireEvent.click(screen.getByRole('button', {name: 'Review account'}));
     fireEvent.click(screen.getByRole('button', {name: 'Confirm access change'}));
-    expect(await screen.findByRole('row', {name: /New operator.*Admin Disabled/})).toBeVisible();
-    expect(writes[2].body).toEqual({requestId: expect.any(String), expectedVersion: 1, role: 'admin', active: false});
+    expect(await screen.findByRole('row', {name: /New operator.*Staff Disabled/})).toBeVisible();
+    expect(writes[2].body).toEqual({requestId: expect.any(String), expectedVersion: 1, role: 'staff', active: false});
     expect(fetchImpl.mock.calls.filter(([path]) => String(path).includes('/auth/')).map(([path]) => path)).toEqual(['/api/admin/auth/session']);
   });
 

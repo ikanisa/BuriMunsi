@@ -132,12 +132,14 @@ export function semantics(product,operation,r,expected={}) {
     data.statuses.some((row,i)=>row.sourceId!==expected.sourceIds[i]||row.canRetry&&!['retrying','needs_review'].includes(row.status)))fail('CONTRACT_IDENTITY');
   }
   if(operation==='observationProcessingRetry'&&(data.sourceId!==expected.recordId||data.requestId!==expected.commandRequestId))fail('CONTRACT_IDENTITY');
+  if(operation==='observationInboxCheck'&&(data.runId!==expected.inboxRun||data.state!==expected.inboxState))fail('CONTRACT_IDENTITY');
   if(operation==='observationReconcile'&&(data.sourceKey!==expected.sourceKey||
    (data.state==='matched')!==(data.sourceId!==null)))fail('CONTRACT_IDENTITY');
   if(operation==='observationReconcileBatch'){
    if(!Array.isArray(expected.sourceKeys)||new Set(expected.sourceKeys).size!==expected.sourceKeys.length||
     data.items.length!==expected.sourceKeys.length||data.items.some((item,i)=>item.sourceKey!==expected.sourceKeys[i]||
-     (item.state==='matched')!==(item.sourceId!==null)))fail('CONTRACT_IDENTITY');
+     (item.state==='matched')!==(item.sourceId!==null)||
+     Object.hasOwn(item,'processingStatus')!==(expected.includeProcessing===true&&item.state==='matched')))fail('CONTRACT_IDENTITY');
   }
   if(['observationReconcileStatus','observationReconcileVerifiedStatus'].includes(operation)&&data.hasRecorded!==(data.recordedCount>0))fail('CONTRACT_STATE');
   if(operation==='observationReveal'){

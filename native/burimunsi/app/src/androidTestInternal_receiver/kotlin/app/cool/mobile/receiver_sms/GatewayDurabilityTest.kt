@@ -92,6 +92,13 @@ class GatewayDurabilityTest {
         assertEquals(0, reopened.readForOwner(owner).length())
         assertTrue(reopened.acknowledgeDurable(owner, proof))
         assertEquals(SmsQueueStore.AppendResult.DUPLICATE, reopened.appendIfCapacity(row, 4))
+        val id=row.getString("id")
+        assertEquals(SmsQueueStore.AppendResult.DUPLICATE,reopened.appendIfCapacity(row,4,confirmedMissingId="other"))
+        assertEquals(SmsQueueStore.AppendResult.STORED,reopened.appendIfCapacity(row,4,confirmedMissingId=id))
+        assertEquals(SmsQueueStore.AppendResult.DUPLICATE,reopened.appendIfCapacity(row,4,confirmedMissingId=id))
+        assertEquals(1,SmsQueueStore(context).readForOwner(owner).length())
+        assertTrue(reopened.acknowledgeDurable(owner,proof))
+        assertEquals(0,SmsQueueStore(context).readForOwner(owner).length())
     }
     @Test fun capacityPreservesExistingEvidenceAndLiveReserve() {
         val queue = SmsQueueStore(context)
@@ -156,6 +163,12 @@ class GatewayDurabilityTest {
         assertTrue(reopened.pending(ObservationOwner("different-group","synthetic-admin")).isEmpty())
         assertFalse(reopened.acknowledge(scope,observation.requestId,ObservationAck(observation.requestId,"synthetic-source","0".repeat(64),"source_unresolved",0)))
         assertEquals(1,reopened.pending(scope).size)
+        val ack=ObservationAck(observation.requestId,"synthetic-source",Values.sha256(observation.rawBody),"source_unresolved",0)
+        assertTrue(reopened.acknowledge(scope,observation.requestId,ack))
+        val candidate=observation.copy(requestId=UUID.randomUUID().toString(),capturedAt=java.time.Instant.now().toString())
+        assertEquals(ObservationAppend.STORED,reopened.append(scope,source,rowId,candidate,profile,now,confirmedMissing=true))
+        assertEquals(ObservationAppend.DUPLICATE,reopened.append(scope,source,rowId,candidate,profile,now,confirmedMissing=true))
+        assertEquals(observation,ObservationJournal(ObservationStateStore(context)).pending(scope).single().observation)
     }
     @Test fun corruptObservationCiphertextDoesNotResetTheQueue() {
         val file=File(root,"buri-observation-journal.v1");file.writeText("synthetic-corrupt-ciphertext")
@@ -213,6 +226,59 @@ class GatewayDurabilityTest {
         assertTrue(reopened.pending(scope).isEmpty())
         assertEquals(original.seen,reopened.seenSnapshot(scope).entries)
         assertFalse(reopened.acknowledge(scope,id,ack))
+        // Synthetic decrypted JSON written byte-for-byte with the predecessor's
+        // v1 field layout, independent of the new serializer.
+        val captured="2026-11-07T10:06:00Z"
+        val carrier="2026-11-07T09:58:00Z"
+        val scopeJson=JSONObject().put("collectionId",scope.collectionId).put("accountId",scope.accountId)
+        val pendingJson=JSONObject().put("owner",scopeJson).put("sourceKey",localKey)
+            .put("observation",JSONObject().put("requestId",id).put("rawSender","Synthetic").put("rawBody",body)
+                .put("sourceMode","catch_up").put("complete",false).put("capturedAt",captured)
+                .put("serviceCentreAt",carrier).put("inboxReceivedAt",at).put("subscriptionId",JSONObject.NULL)
+                .put("sourceKey",localKey))
+        val seenJson=JSONObject().put("owner",scopeJson).put("sourceKey",localKey).put("inboxRowId",10L)
+            .put("requestId",id).put("bodySha256",Values.sha256(body)).put("inboxReceivedAt",at).put("capturedAt",captured)
+        // Only the test-only Android Keystore handle, created by the earlier
+        // isolated journal write; no external key or predecessor APK is involved.
+        val keyStore=java.security.KeyStore.getInstance("AndroidKeyStore").apply{load(null)}
+        val alias=base.packageName+".burimunsi.observation.v1"
+        val fixtureCipher=ReceiptCipher({checkNotNull(keyStore.getKey(alias,null) as? javax.crypto.SecretKey)},
+            {android.util.Base64.encodeToString(it,android.util.Base64.NO_WRAP)},
+            {android.util.Base64.decode(it,android.util.Base64.NO_WRAP)})
+        fun seed(seen:JSONObject){
+            val serialized=JSONObject().put("version",1).put("pending",JSONArray().put(pendingJson))
+                .put("seen",JSONArray().put(seen)).toString()
+            bytes.writeText(fixtureCipher.encrypt(serialized))
+        }
+        val originalSeen=seenJson.toString()
+        for (broken in listOf(
+            JSONObject(originalSeen).put("capturedAt","not-a-timestamp"),
+            JSONObject(originalSeen).put("capturedAt","2026-11-07T11:00:00Z"),
+            JSONObject(originalSeen).put("unrecognizedProof","synthetic"),
+            JSONObject(originalSeen).apply{remove("bodySha256")})){
+            seed(broken)
+            val protected=bytes.readBytes()
+            assertTrue(runCatching{reopened.pending(scope)}.isFailure)
+            assertArrayEquals(protected,bytes.readBytes())
+        }
+        seed(JSONObject(originalSeen))
+        val protected=bytes.readBytes()
+        val prior=ObservationStateStore(context).read()
+        assertEquals(captured,prior.seen.single().capturedAt)
+        assertEquals(at,prior.seen.single().inboxReceivedAt)
+        assertEquals(captured,prior.pending.single().observation.capturedAt)
+        assertEquals(at,prior.pending.single().observation.inboxReceivedAt)
+        assertEquals(carrier,prior.pending.single().observation.serviceCentreAt)
+        assertEquals(id,prior.pending.single().observation.requestId)
+        assertEquals(localKey,prior.pending.single().sourceKey)
+        assertArrayEquals(protected,bytes.readBytes())
+        assertFalse(reopened.acknowledge(foreign,id,ack))
+        assertArrayEquals(protected,bytes.readBytes())
+        assertTrue(reopened.acknowledge(scope,id,ack))
+        assertEquals(prior.seen,ObservationStateStore(context).read().seen)
+        val afterJson=JSONObject(fixtureCipher.decrypt(bytes.readText()))
+        assertEquals(captured,afterJson.getJSONArray("seen").getJSONObject(0).getString("capturedAt"))
+        assertEquals(at,afterJson.getJSONArray("seen").getJSONObject(0).getString("inboxReceivedAt"))
     }
     @Test fun observationProfileAndConsentAreEncryptedAndAccountScoped() {
         val now=System.currentTimeMillis();val scope=ObservationOwner("synthetic-group","synthetic-admin")
@@ -281,6 +347,26 @@ class GatewayDurabilityTest {
         if(android.os.Build.VERSION.SDK_INT>=34)
             assertTrue(info.foregroundServiceType and android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE!=0)
     }
+    @Test fun foregroundRecordsSignalRequiresTheTargetSignatureAndContainsNoData() {
+        val hintPermission=base.packageName + ".permission.RECORDS_CHANGED"
+        val info=base.packageManager.getPermissionInfo(hintPermission,0)
+        assertEquals(base.packageName,info.packageName)
+        @Suppress("DEPRECATION")
+        assertEquals(android.content.pm.PermissionInfo.PROTECTION_SIGNATURE,
+            info.protectionLevel and android.content.pm.PermissionInfo.PROTECTION_MASK_BASE)
+        val signal=java.util.concurrent.CountDownLatch(1)
+        val registration=rw.ikanisa.burimunsi.BuriRecordChanges.observe(base){signal.countDown()}
+        try {
+            val instrumentation=InstrumentationRegistry.getInstrumentation()
+            val result=instrumentation.uiAutomation.executeShellCommand(
+                "am broadcast --receiver-registered-only -a rw.ikanisa.burimunsi.RECORDS_CHANGED -p " + base.packageName)
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(result).use{it.readBytes()}
+            instrumentation.waitForIdleSync()
+            assertEquals(1L,signal.count)
+            rw.ikanisa.burimunsi.BuriRecordChanges.publishFromReceiver(base)
+            assertTrue(signal.await(5,java.util.concurrent.TimeUnit.SECONDS))
+        }finally{registration()}
+    }
     @Test fun continuousExecutionLeaseSurvivesAnInterruptedCallerUntilItsActualExit() {
         val gate=ContinuousSyncWorkGate()
         val entered=java.util.concurrent.CountDownLatch(1);val release=java.util.concurrent.CountDownLatch(1)
@@ -299,8 +385,9 @@ class GatewayDurabilityTest {
         assertFalse(budget.stopped());at=3000;assertTrue(budget.stopped())
         at=1000;val stopped=ContinuousSyncBudget({at},{cancelled});cancelled=true;assertTrue(stopped.stopped())
         val retry=ContinuousSyncRetry()
-        assertEquals(15000L,retry.next(false,true));assertEquals(30000L,retry.next(false,true))
-        repeat(8){assertEquals(60000L,retry.next(false,true))}
-        assertEquals(2000L,retry.next(true,true));assertEquals(15000L,retry.next(false,true))
+        for(expected in listOf(1_000L,2_000L,4_000L,8_000L,16_000L,32_000L,60_000L,60_000L))
+            assertEquals(expected,retry.next(false,true))
+        assertEquals(0L,retry.next(true,true));assertEquals(1_000L,retry.next(false,true))
+        assertEquals(500L,retry.next(false,true,awaitingParser=true))
     }
 }

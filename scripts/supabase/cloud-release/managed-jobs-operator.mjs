@@ -56,6 +56,14 @@ export function expectedSchedulerBodies(sql){
  if(!claim||!complete)throw Error('scheduler_source_shape_changed');
  return {ops:Object.fromEntries(expected),private:{collect_managed_job_claim:sha(claim[1]),collect_managed_job_complete:sha(complete[1])}};
 }
+const fastScheduleFile = '20261122191300_burimunsi_event_driven_jobs.sql';
+export const fastScheduleHistorySql = "(SELECT encode(sha256(convert_to(statements[1],'UTF8')),'hex') FROM supabase_migrations.schema_migrations WHERE version='20261122191300')";
+export function reviewedJobsCadence(fastDigest, previous = '* * * * *') {
+ if (fastDigest == null) return previous;
+ const reviewed = sha(readFileSync(new URL('../../../supabase/migrations/' + fastScheduleFile, import.meta.url)));
+ if (fastDigest !== reviewed) throw Error('scheduler_migration_changed');
+ return '1 second';
+}
 async function inspect(db){
  const ancillaryRegistration=readAncillaryRegistration();
  const [scheduler,graph]=await Promise.all([renderManagedScheduler(),Promise.resolve(privateJson('graph-import-attempt-002-result.json'))]);
@@ -77,6 +85,9 @@ async function inspect(db){
  const row=(await db.query(`SELECT c.enabled,c.config_sha256,c.template_sha256,c.readiness,c.last_probe_id,
   c.native_provider_source_sha256,c.native_provider_model_id,c.native_provider_approval_sha256,c.native_provider_expires_at,c.native_provider_limit,c.native_provider_used,
   j.jobname,j.schedule,j.command,j.database,j.username,j.active,
+  ${fastScheduleHistorySql} AS fast_migration,
+  (SELECT encode(sha256(convert_to(statements[1],'UTF8')),'hex') FROM supabase_migrations.schema_migrations WHERE version='20261122180000') AS performance_migration,
+  (SELECT encode(sha256(convert_to(statements[1],'UTF8')),'hex') FROM supabase_migrations.schema_migrations WHERE version='20261122191000') AS inbox_migration,
   (SELECT count(*)::int FROM vault.decrypted_secrets WHERE name='collect_job_signing_key_v1') AS keys,
   (SELECT encode(sha256(convert_to(decrypted_secret,'UTF8')),'hex') FROM vault.decrypted_secrets WHERE id=$1::uuid AND name='collect_job_signing_key_v1') AS key_sha,
   (SELECT encode(sha256(convert_to(statements[1],'UTF8')),'hex') FROM supabase_migrations.schema_migrations WHERE version='20261117073850') AS migration_sha,
@@ -86,17 +97,35 @@ async function inspect(db){
   private._collect_fence_scheduler_status()->'coverageVerified' AS scheduler_coverage
   FROM collect_ops.jobs_config c JOIN cron.job j ON j.jobid=c.cron_job_id WHERE c.singleton`,[key.vaultId])).rows[0];
  if(!row||row.config_sha256!==scheduler.configSha||row.template_sha256!==scheduler.templateSha||row.migration_sha!==scheduler.sqlSha||row.keys!==1||row.key_sha!==key.keySha256||
-  row.jobname!=='collect-jobs-maintenance-v1'||row.schedule!==(scheduleHistory?'* * * * *':'*/5 * * * *')||row.command!=='SELECT collect_ops.tick_jobs();'||row.database!=='postgres'||row.username!=='postgres'||
+  row.jobname!=='collect-jobs-maintenance-v1'||row.schedule!==reviewedJobsCadence(row.fast_migration,scheduleHistory?'* * * * *':'*/5 * * * *')||row.command!=='SELECT collect_ops.tick_jobs();'||row.database!=='postgres'||row.username!=='postgres'||
   row.historical!==graph.counts?.sms||row.historical!==37||row.triggers_ok!==true||row.scheduler_coverage!==true)throw Error('scheduler_or_history_guard_changed');
- const guard=(await db.query(`SELECT x.signature,p.proowner::regrole::text owner,p.prosecdef,encode(sha256(convert_to(p.prosrc,'UTF8')),'hex') digest
-  FROM unnest($1::text[]) x(signature) LEFT JOIN pg_proc p ON p.oid=to_regprocedure(x.signature)`,[Object.keys(GUARDS)])).rows;
- if(guard.length!==Object.keys(GUARDS).length||guard.some(x=>x.owner!=='postgres'||x.prosecdef!==true||x.digest!==GUARDS[x.signature]))throw Error('scheduler_or_history_guard_changed');
+ const inboxFile='20261122191000_burimunsi_sms_completeness.sql';
+ if(row.inbox_migration && row.inbox_migration!==sha(readFileSync(new URL('../../../supabase/migrations/'+inboxFile,import.meta.url))))throw Error('scheduler_migration_changed');
+ const expectedGuards={...GUARDS};
+ if(row.performance_migration){
+  if(row.performance_migration!==sha(readFileSync(new URL('../../../supabase/migrations/20261122180000_burimunsi_internal_query_performance.sql',import.meta.url))))throw Error('scheduler_migration_changed');
+  expectedGuards['private.burimunsi_native_sms_post_candidates(integer)']='9324e45037a41ec10f750c173473752dc29187b9e72d3ae4fabb86a13ea06747';
+ }
+ const guard=(await db.query(`SELECT x.signature,p.proowner::regrole::text owner,p.prosecdef,
+    encode(sha256(convert_to(CASE WHEN $2 AND p.proname='burimunsi_auto_snapshot'
+      AND strpos(p.prosrc,' IF NOT private._burimunsi_observation_automatable(p_source) OR private.collect_imported_native_source(p_source)')>0
+      THEN replace(p.prosrc,' IF NOT private._burimunsi_observation_automatable(p_source) OR private.collect_imported_native_source(p_source)',' IF private.collect_imported_native_source(p_source)')
+      WHEN $2 AND p.proname='burimunsi_auto_candidates'
+      AND strpos(p.prosrc,' WHERE private._burimunsi_observation_automatable(o.source_id) AND NOT private.collect_imported_native_source(o.source_id)')>0
+      THEN replace(p.prosrc,' WHERE private._burimunsi_observation_automatable(o.source_id) AND NOT private.collect_imported_native_source(o.source_id)',' WHERE NOT private.collect_imported_native_source(o.source_id)')
+      WHEN $2 AND p.proname IN ('burimunsi_auto_snapshot','burimunsi_auto_candidates') THEN NULL ELSE p.prosrc END,'UTF8')),'hex') digest
+  FROM unnest($1::text[]) x(signature) LEFT JOIN pg_proc p ON p.oid=to_regprocedure(x.signature)`,[Object.keys(GUARDS),Boolean(row.inbox_migration)])).rows;
+ if(guard.length!==Object.keys(GUARDS).length||guard.some(x=>x.owner!=='postgres'||x.prosecdef!==true||x.digest!==expectedGuards[x.signature]))throw Error('scheduler_or_history_guard_changed');
  const expected=expectedSchedulerBodies(scheduler.sql);
- const batchedLedger=(await db.query("SELECT EXISTS(SELECT 1 FROM supabase_migrations.schema_migrations WHERE version='20261122180000') AS installed")).rows[0]?.installed;
- if(batchedLedger)expected.ops.reconcile_jobs='7178d8d2dad63f00f2503c160280d222da80869f156063419f2b3e21d6ae1554';
+ if(row.performance_migration)expected.ops.reconcile_jobs='7178d8d2dad63f00f2503c160280d222da80869f156063419f2b3e21d6ae1554';
  if(scheduleHistory){
   expected.ops.dispatch_jobs='00e49b5d9603cd8564555252cc62b23d667fd9f611c558c46459e4b7580d9f72';
   expected.ops.activate_jobs='18fb407a536fa422aa539a15b161c75af638a295159f020eebc5af1692c188d3';
+ }
+ if(row.fast_migration){
+  expected.ops.activate_jobs='86609d9c2cd3458e01c2220bd1c1555249b4b29e1c725bd9201a23ac1ba11d43';
+  expected.ops.dispatch_jobs='26c4977c6a8b9ebeca359459ef2dff56dc92def2fd4f29f5e81767d946b0a5bc';
+  expected.ops.tick_jobs='2626cb0d88e57470878863844a46895336e4e2c4dbd9ca58ae23a878f4ba492e';
  }
  // The parser migration is optional until the source-bound cutover is recorded.
  const reviewMigration='20261117090952_burimunsi_native_parse_review.sql';

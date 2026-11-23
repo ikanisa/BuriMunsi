@@ -1,6 +1,6 @@
 import type postgres from 'npm:postgres@3.4.7';
 import {applicationWorkTuple,fenceFailure,reserveDatabaseConnection} from '../../../supabase/functions/_shared/application-fence.js';
-import {smsRuntimeRole} from './fence.ts';
+import {smsRuntimeRoleSql} from './fence.ts';
 
 // Internal server SQL only. No route accepts a query or database credential.
 // These compatibility types preserve the inspected OpenSMS module contract;
@@ -13,6 +13,24 @@ export interface D1PreparedStatement {
  run(): Promise<D1Result>;
 }
 export interface D1Database {prepare(query:string):D1PreparedStatement;batch<T=Record<string,unknown>>(statements:D1PreparedStatement[]):Promise<D1Result<T>[]>;}
+
+const businessSetupSql = 'BEGIN ISOLATION LEVEL READ COMMITTED; ' + smsRuntimeRoleSql +
+ "; SET LOCAL search_path=collect_sms,pg_catalog; SET LOCAL statement_timeout='8s'; SET LOCAL lock_timeout='5s'";
+// The materialized binding installs the same tuple checked by the write
+// triggers before testing the admission on this reserved connection.
+const businessProofSql = `
+ WITH request AS (SELECT $1::uuid AS admission_id,$2::bigint AS epoch,$3::text AS source),
+ binding AS MATERIALIZED (
+  SELECT request.*,
+   pg_catalog.set_config('collect.fence_admission_id',admission_id::text,true),
+   pg_catalog.set_config('collect.fence_epoch',epoch::text,true),
+   pg_catalog.set_config('collect.fence_source_sha256',source,true)
+  FROM request
+ )
+ SELECT collect_sms.work_assert_write(admission_id,epoch,source) AS result FROM binding
+`;
+const readerLockSql = "SET LOCAL transaction_read_only='on'; SELECT pg_catalog.pg_advisory_xact_lock_shared(721340019927::bigint)";
+const writerLockSql = 'SELECT pg_catalog.pg_advisory_xact_lock(721340019927::bigint)';
 
 export function compileGatewaySql(input:string, values:unknown[]){
  let text='',count=0;
@@ -34,8 +52,8 @@ export function compileGatewaySql(input:string, values:unknown[]){
 }
 
 class Statement implements D1PreparedStatement {
- constructor(readonly database:GatewayDatabase,readonly query:string,readonly values:unknown[]=[]){ }
- bind(...values:unknown[]){return new Statement(this.database,this.query,values);}
+ constructor(readonly database:GatewayDatabase,readonly query:string,readonly readOnly:boolean,readonly values:unknown[]=[]){ }
+ bind(...values:unknown[]){return new Statement(this.database,this.query,this.readOnly,values);}
  async all<T=Record<string,unknown>>():Promise<D1Result<T>>{return (await this.database.batch<T>([this]))[0];}
  async first<T=Record<string,unknown>>(column?:string):Promise<T|null>{const row=(await this.all<Record<string,unknown>>()).results[0];return (row?(column===undefined?row:row[column]):null) as T|null;}
  run():Promise<D1Result>{return this.all();}
@@ -44,7 +62,12 @@ class Statement implements D1PreparedStatement {
 export class GatewayDatabase implements D1Database {
  constructor(readonly sql: ReturnType<typeof postgres>,private readonly work:any=null,private readonly capacity={waiting:0}){ }
  withApplicationWork(work:any){applicationWorkTuple(work);return new GatewayDatabase(this.sql,work,this.capacity);}
- prepare(query:string){if(typeof query!=='string'||query.length>100000)throw Error('gateway_sql_shape');return new Statement(this,query);}
+ prepare(query:string){return this.statement(query,false);}
+ prepareRead(query:string){return this.statement(query,true);}
+ private statement(query:string,readOnly:boolean){
+  if(typeof query!=='string'||query.length>100000)throw Error('gateway_sql_shape');
+  return new Statement(this,query,readOnly);
+ }
  async batch<T=Record<string,unknown>>(statements:D1PreparedStatement[]):Promise<D1Result<T>[]>{
   if(!statements.length||statements.length>1000||this.capacity.waiting>=16)throw Error('gateway_database_busy');
   const work=this.work;if(!work)throw fenceFailure(null);
@@ -53,21 +76,19 @@ export class GatewayDatabase implements D1Database {
   work.assertLocal();
   const prepared=statements.map(statement=>{
    if(!(statement instanceof Statement)||statement.database!==this)throw Error('gateway_statement_owner');
-   return compileGatewaySql(statement.query,statement.values);
+   return {...compileGatewaySql(statement.query,statement.values),readOnly:statement.readOnly};
   });
+  const readOnly=prepared.every(statement=>statement.readOnly);
   this.capacity.waiting++;
   try{return await work.waitUntil((async()=>{
    await work.assert();const tuple=applicationWorkTuple(work),tx=await reserveDatabaseConnection(this.sql);let idleConfirmed=false;
    try{
-    await tx.unsafe('BEGIN ISOLATION LEVEL READ COMMITTED');await smsRuntimeRole(tx);
-    await tx.unsafe('SET LOCAL search_path=collect_sms,pg_catalog');
-    await tx.unsafe("SET LOCAL statement_timeout='8s'");await tx.unsafe("SET LOCAL lock_timeout='5s'");
-    await tx.unsafe("SELECT set_config('collect.fence_admission_id',$1,true),set_config('collect.fence_epoch',$2,true),set_config('collect.fence_source_sha256',$3,true)",[tuple[0],String(tuple[1]),tuple[2]]);
-    const proof=(await tx.unsafe('SELECT collect_sms.work_assert_write($1::uuid,$2::bigint,$3::text) AS result',tuple))[0]?.result;
+    await tx.unsafe(businessSetupSql);
+    const proof=(await tx.unsafe(businessProofSql,tuple))[0]?.result;
     if(proof?.contractVersion!==1||proof.epoch!==tuple[1]||!['open','quiescing'].includes(proof.mode))throw fenceFailure(null);
-    // All reads and read/modify batches participate in the same source/epoch
-    // lease. The independent serial writer lock grants no fence authority.
-    await tx.unsafe('SELECT pg_advisory_xact_lock(721340019927::bigint)');
+    // Use the original fence for both modes. A batch of explicit reads can
+    // share the gateway lock after the database enforces READ ONLY.
+    await tx.unsafe(readOnly?readerLockSql:writerLockSql);
     const result:D1Result<T>[]=[];
     for(const statement of prepared){
      const rows=await tx.unsafe(statement.text,statement.values as never[]);
@@ -78,4 +99,8 @@ export class GatewayDatabase implements D1Database {
    finally{if(idleConfirmed)tx.release();}
   })()) as D1Result<T>[];}finally{this.capacity.waiting--;}
  }
+}
+
+export function prepareGatewayRead(database:D1Database,query:string):D1PreparedStatement{
+ return database instanceof GatewayDatabase?database.prepareRead(query):database.prepare(query);
 }

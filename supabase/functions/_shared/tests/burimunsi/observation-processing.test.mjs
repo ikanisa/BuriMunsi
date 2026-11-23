@@ -42,7 +42,7 @@ test('adapter denies staff and switched groups before either database operation'
  adapter.authority={session:async()=>session,read:async(fn)=>fn(tx),write:async(fn)=>fn(tx)};
  assert.deepEqual(await adapter.processingStatus(input,{sourceIds:[source]}),status);
  assert.deepEqual(await adapter.processingRetry(input,source,{requestId}),retry);
- for(const changes of [{role:'staff'},{installationProfile:'staff'},{groupId:'other'},{revoked:true},{id:requestId}]){
+ for(const changes of [{role:'staff'},{installationProfile:'unrecognized'},{groupId:'other'},{revoked:true},{id:requestId}]){
   Object.assign(session,changes);await assert.rejects(adapter.processingStatus(input,{sourceIds:[source]}),{code:'access_denied'});Object.assign(session,input);
  }
  assert.equal(queries,2);

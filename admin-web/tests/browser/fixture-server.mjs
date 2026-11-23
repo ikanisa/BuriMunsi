@@ -55,6 +55,7 @@ async function readFixtureBody(request) {
 }
 
 const phoneAccounts = createPhoneAccountFixture({cookieSignIn: process.env.COLLECT_FIXTURE_SIGN_IN === '1',
+  legacySessionResponses: process.env.COLLECT_FIXTURE_LEGACY_SESSIONS === '1',
   lifetime: process.env.COLLECT_FIXTURE_LONG_EXPIRY === '1' ? 40 * 24 * 60 * 60 * 1000 : 2 * 60 * 60 * 1000,
   json, readBody: readFixtureBody});
 

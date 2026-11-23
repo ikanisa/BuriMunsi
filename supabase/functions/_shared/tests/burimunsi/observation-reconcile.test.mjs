@@ -55,6 +55,16 @@ test('batch wire binds ordered source identities and rejects ambiguous outcomes'
   {...result,items:[{...items[0],rawBody:'private'},items[1]]},
   {...result,groupId:'another-group'}
  ])assert.throws(()=>bindNativeResponse({operation:'observationReconcileBatch'},binding,body,bad));
+ const expanded={...body,includeProcessing:true},parsed={...items[0],processingStatus:'parsed'};
+ const bind=(request,items)=>bindNativeResponse({operation:'observationReconcileBatch'},binding,request,{...result,items});
+ assert.doesNotThrow(()=>validateNativeRequest('observationReconcileBatch',expanded));
+ assert.throws(()=>validateNativeRequest('observationReconcileBatch',{...body,includeProcessing:1}));
+ assert.doesNotThrow(()=>bind(expanded,[parsed,items[1]]));
+ assert.throws(()=>bind(expanded,items));
+ assert.throws(()=>bind(expanded,[parsed,{...items[1],processingStatus:'parsed'}]));
+ assert.throws(()=>bind(expanded,[{...parsed,processingStatus:'credited'},items[1]]));
+ assert.throws(()=>bind(body,[parsed,items[1]]));
+ assert.throws(()=>bind({...body,includeProcessing:false},[parsed,items[1]]));
 });
 
 test('batch HTTP forwards only bounded metadata and rejects oversize and duplicate keys',async()=>{

@@ -68,8 +68,8 @@ android {
         applicationId = "rw.ikanisa.burimunsi"
         minSdk = 26
         targetSdk = 36
-        versionCode = 56
-        versionName = "0.23.0-collect.34"
+        versionCode = 57
+        versionName = "0.23.0-collect.35"
         resValue("string", "app_name", "BuriMunsi")
         buildConfigField("boolean", "IS_QUALIFICATION", "false")
         // The new Cloud identity snapshots the existing inbox before catch-up.
@@ -126,6 +126,10 @@ android {
             signingConfig = signingConfigs.getByName("debug")
             matchingFallbacks += listOf("debug")
             resValue("string", "app_name", "BuriMunsi Native Test")
+        }
+        forEach { type ->
+            type.manifestPlaceholders["burimunsiStaffRecordsPermission"] =
+                "rw.ikanisa.burimunsi.staff.cloud${type.applicationIdSuffix.orEmpty()}.permission.RECORDS_CHANGED"
         }
         for (name in offlineBuildTypes) named(name) {
             buildConfigField("boolean", "IS_QUALIFICATION", "true")

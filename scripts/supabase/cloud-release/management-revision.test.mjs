@@ -13,7 +13,7 @@ const preimages = {BURIMUNSI_PRODUCT_MODE: sha('standalone'), BURIMUNSI_COLLECTI
 const owner = {session_user: 'postgres', current_user: 'postgres', current_database: 'postgres',
   version: 170006, isolation: 'read committed', project: PROJECT};
 
-function fixture({identity = owner, unknownQuiesce = false, sms = false, binaryChanged = false} = {}) {
+function fixture({identity = owner, unknownQuiesce = false, sms = false, binaryChanged = false, migrations = []} = {}) {
   const queries = [], records = [];
   let current = {mode: 'open', epoch: '10', operation_id: null, source_sha256: previous};
   let functions = ['collect-api', 'admin-api', 'collect-jobs'].map((slug, i) => ({
@@ -36,6 +36,9 @@ function fixture({identity = owner, unknownQuiesce = false, sms = false, binaryC
     expectedFunctions: functions, expectedSecretPreimages: preimages, requireChangedBundles: true,
     ...(sms ? {smsBinding: {gatewayReleaseSha256: gateway, previousApprovalSha256: previousApproval,
       candidateApprovalSha256: candidateApproval}} : {})};
+  const migrationHistory = migrations.length
+    ? [{version:'20261122000000',name:'original',sha256:previous,entries:1}] : [];
+  let nextMigration = 0;
   let sourceSecret = previous;
   const result = (value, status = 201) => ({status, json: () => structuredClone(value)});
   const dependencies = {
@@ -83,6 +86,14 @@ function fixture({identity = owner, unknownQuiesce = false, sms = false, binaryC
       const body = JSON.parse(options.body);
       queries.push(body);
       assert.equal(body.read_only, false);
+      if (body.query.startsWith('DO $release_')) {
+        const entry = migrations[nextMigration++];
+        assert.equal(current.mode, 'fenced');
+        const [version, ...name] = entry.file.replace('.sql','').split('_');
+        assert.equal(body.query, renderManagementMigration({...entry, version, name:name.join('_')},migrationHistory,current));
+        migrationHistory.push({version,name:name.join('_'),sha256:entry.sha256,entries:1});
+        return result([]);
+      }
       assert.ok(!body.query.includes(';'));
       if (body.query.startsWith('SELECT session_user,')) return result([identity]);
       if (body.query.startsWith('SELECT mode,epoch,')) return result([current]);
@@ -90,7 +101,7 @@ function fixture({identity = owner, unknownQuiesce = false, sms = false, binaryC
       if (body.query.startsWith('SELECT private._collect_fence_scheduler_status()')) {
         return result([{status: {checked: true, coverageVerified: true, blocking: false}}]);
       }
-      if (body.query.includes('FROM supabase_migrations.schema_migrations'.toLowerCase())) return result([]);
+      if (body.query.includes('FROM supabase_migrations.schema_migrations'.toLowerCase())) return result(migrationHistory);
       const [operation, value, source, from, to] = body.parameters;
       assert.ok(/\$1::uuid/.test(body.query));
       if (body.query.includes('collect_fence_begin_quiesce')) {
@@ -135,6 +146,23 @@ test('Management transport refuses unreviewed migration, resume and unbound stan
     {expectedSecretPreimages: {...preimages, BURIMUNSI_PRODUCT_MODE: sha('collect')}}]) {
     await assert.rejects(reviseRuntimeViaManagement({...f.input, ...input}, {
       api() { assert.fail('unsupported operation reached the provider'); },
+    }), /initial_standalone_management_revision_required/);
+  }
+});
+
+test('sequential reviewed management migrations bind each step to the last confirmed history', async () => {
+  const migrations = [1, 2, 3, 4, 5, 6, 7].map(i => {
+    const sql = 'BEGIN;\nSELECT ' + i + ';\nCOMMIT;\n';
+    return {file:'20261122000' + i + '00_candidate.sql', sql, sha256:sha(sql)};
+  });
+  const f = fixture({sms:true, migrations});
+  const done = await reviseRuntimeViaManagement({...f.input, migrations}, f.dependencies);
+  assert.equal(done.status, 'revision_deployed_live');
+  assert.equal(f.queries.filter(q=>q.query.startsWith('DO $release_')).length, migrations.length);
+  const eighth = {...migrations[6],file:'20261122000800_candidate.sql'};
+  for (const invalid of [migrations.toReversed(), [...migrations,eighth], [migrations[0], migrations[0]]]) {
+    await assert.rejects(reviseRuntimeViaManagement({...f.input, migrations:invalid}, {
+      api() { assert.fail('invalid migration order reached provider'); },
     }), /initial_standalone_management_revision_required/);
   }
 });
@@ -191,4 +219,40 @@ test('SMS cannot be rebound without proven prior approval or with a changed anci
     /ancillary_requalification_invalid/);
   assert.equal(changed.records.at(-1), 'revision-fixture-revision-source-secret-complete.json');
   assert.ok(!changed.records.some(name => name.endsWith('collect-api-attempt.json')));
+});
+
+test('a lost source-setting HTTP reply resolves only from two matching provider activations under the same fence',async()=>{
+ for(const scenario of ['settled','partial','stale','different_bundle','different_activation']){
+  const f=fixture({sms:true,binaryChanged:scenario==='different_bundle'});
+  const original=f.dependencies.api;
+  let writes=0,reads=0,stamp;
+  f.dependencies.api=async(path,options)=>{
+   const response=await original(path,options);
+   if(path==='secrets'&&options?.method==='POST'){
+    writes++;
+    stamp=new Date().toISOString();
+    throw Error('source_setting_reply_lost');
+   }
+   if(path==='secrets'&&writes){
+    const n=++reads;
+    return {...response,json:()=>response.json().map(row=>{
+     if(!['BUILD_SOURCE_ID','COLLECT_SMS_CORE_SOURCE_SHA256','COLLECT_SMS_SOURCE_APPROVAL'].includes(row.name))return row;
+     const updated_at=scenario==='stale'?new Date(Date.now()-60000).toISOString():
+      scenario==='different_activation'&&n===2?new Date(Date.parse(stamp)+1).toISOString():stamp;
+     const value=scenario==='partial'&&row.name==='BUILD_SOURCE_ID'?sha(previous):row.value;
+     return {...row,value,updated_at};
+    })};
+   }
+   return response;
+  };
+  if(scenario==='settled'){
+   const result=await reviseRuntimeViaManagement(f.input,f.dependencies);
+   assert.equal(result.status,'revision_deployed_live');
+   assert.ok(f.records.includes('revision-fixture-revision-source-binding-provider-observation.json'));
+  }else{
+   await assert.rejects(reviseRuntimeViaManagement(f.input,f.dependencies));
+   assert.ok(!f.records.some(name=>name.endsWith('collect-api-attempt.json')));
+  }
+  assert.equal(writes,1);
+ }
 });

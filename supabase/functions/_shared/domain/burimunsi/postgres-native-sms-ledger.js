@@ -191,6 +191,13 @@ export class PostgresNativeSmsLedger {
      read[0].currency==='RWF'&&read[0].ledger_currency==='RWF'&&read[0].evidence_id===evidenceId&&
      exact(read[0].amount_minor)===facts.amount_minor&&exact(read[0].ledger_amount)===facts.amount_minor);
     await this.worker.verify(tx,sourceId,initial.plan,binding);
+    // Only the posting worker has verified the original encrypted inbox object.
+    // Bind its receipt time to this specific transaction for the deferred receipt trigger.
+    if(source.source_mode==='catch_up'&&source.complete===false&&typeof source.inbox_received_at==='string'&&
+      this.env.BURIMUNSI_PAYMENT_SMS_ENABLED==='true'&&this.env.BURIMUNSI_PAYMENT_SMS_COLLECTION_ID===this.groupId){
+     await tx.unsafe("SELECT set_config('burimunsi.payer_inbox_witness',$1,true)",
+      [JSON.stringify({source:sourceId,object:record.object_sha256,phoneAt:source.inbox_received_at})]);
+    }
     return {state:'posted'};
    });
   }catch(error){

@@ -1,4 +1,4 @@
-import type {D1Database,D1PreparedStatement} from "./postgres.ts";
+import { type D1Database, type D1PreparedStatement, prepareGatewayRead } from "./postgres.ts";
 import type { Context } from "npm:hono@4.13.16";
 import { application } from "./auth.ts";
 import type { AppEnv, Env, Kind, MessageRow } from "./types.ts";
@@ -269,23 +269,23 @@ export function summary(m: MessageRow & { parts_total?: number | null }) {
   };
 }
 export async function messageDetail(env: Env, id: string, appId?: string) {
-  const row = await env.DB.prepare(
+  const row = await prepareGatewayRead(env.DB,
     `SELECT m.*,(SELECT MAX(parts_total) FROM attempts a WHERE a.message_id=m.message_id) AS parts_total FROM messages m WHERE m.message_id=? ${appId ? "AND m.application_id=?" : ""}`,
   )
     .bind(id, ...(appId ? [appId] : []))
     .first<MessageRow>();
   if (!row) throw new ApiError(404, "not_found", "Message not found");
   const results = await env.DB.batch<Record<string, unknown>>([
-    env.DB.prepare(
+    prepareGatewayRead(env.DB,
       "SELECT * FROM attempts WHERE message_id=? ORDER BY updated_at,attempt_id",
     ).bind(id),
-    env.DB.prepare(
+    prepareGatewayRead(env.DB,
       "SELECT * FROM message_parts WHERE message_id=? ORDER BY attempt_id,part_index",
     ).bind(id),
-    env.DB.prepare(
+    prepareGatewayRead(env.DB,
       "SELECT event_id,type,attempt_id,at,received_at,part_index,parts_total,error_code,detail_json,detail_redacted_at FROM device_events WHERE message_id=? ORDER BY received_at,event_id",
     ).bind(id),
-    env.DB.prepare(
+    prepareGatewayRead(env.DB,
       "SELECT * FROM audit_events WHERE resource_id=? ORDER BY at,event_id",
     ).bind(id),
   ]);

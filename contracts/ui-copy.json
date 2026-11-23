@@ -778,8 +778,8 @@
     },
     {
       "key": "ui_47a5108e3f48",
-      "en": "Ask your administrator to reauthorize this installation. Retained receipts must keep their original source binding.",
-      "rw": "Saba umuyobozi kongera guha iyi porogaramu uburenganzira. Inyemezabwishyu zibitswe zigomba kugumana aho zakomotse."
+      "en": "Sign in with an Admin account to resume receiving payment SMS.",
+      "rw": "Injira ukoresheje konti y’umuyobozi kugira ngo wongere kwakira SMS z’ubwishyu."
     },
     {
       "key": "ui_47be65b6a9d3",
@@ -2313,8 +2313,8 @@
     },
     {
       "key": "ui_cd21e82c9071",
-      "en": "Review the requested Android permissions. Grant access only on the approved receiving phone, then refresh this status.",
-      "rw": "Genzura uburenganzira bwa Android busabwa. Butange gusa kuri telefoni yakira yemejwe, hanyuma uvugurure uko ihagaze."
+      "en": "Allow the requested Android SMS and phone permissions to receive payments automatically.",
+      "rw": "Emera ko porogaramu ikoresha SMS na telefoni kugira ngo inyemezabwishyu zakirwe mu buryo bwikora."
     },
     {
       "key": "ui_cd5da12c512a",
@@ -3035,6 +3035,21 @@
       "key": "ui_sms_retry_not_eligible",
       "en": "This SMS cannot be retried.",
       "rw": "Ubu butumwa ntibushobora gusubirwamo."
+    },
+    {
+      "key": "ui_open_burimunsi_admin",
+      "en": "Open BuriMunsi Admin",
+      "rw": "Fungura BuriMunsi Admin"
+    },
+    {
+      "key": "ui_receive_payment_sms",
+      "en": "Receive payment SMS",
+      "rw": "Kwakira SMS z’ubwishyu"
+    },
+    {
+      "key": "ui_install_burimunsi_admin",
+      "en": "Install the signed BuriMunsi Admin app provided by your organization, then sign in with your mobile number and passcode.",
+      "rw": "Shyiramo porogaramu yemejwe ya BuriMunsi Admin wahawe n’ikigo cyawe, hanyuma winjire ukoresheje nimero ya telefoni n’umubare wawe w’ibanga."
     }
   ]
 }

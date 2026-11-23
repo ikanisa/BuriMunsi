@@ -42,6 +42,7 @@ function fixture(){
   }
   if(query.includes('observation_context')){allowed();return [{result:{...ctx(),sessionId:state.liveSessionId??session,consentGeneration:state.generation}}];}
   if(query.includes('observation_reconcile_verified_status')){allowed();return [{result:{groupId:group,hasPending:true,
+   ...(state.legacyInventory?{}:{scope:'verified_installation'}),
    hasRecorded:state.rows.size>0,recordedCount:state.rows.size,hasUnmatchedCanonical:false,revision:'a'.repeat(64)}}];}
   if(query.includes('observation_reconcile_status')){allowed();return [{result:state.reconcileStatus??{groupId:group,hasPending:false,
    hasRecorded:state.rows.size>0,recordedCount:state.rows.size,hasUnmatchedCanonical:false,revision:'f'.repeat(64)}}];}
@@ -57,14 +58,20 @@ function fixture(){
    return [{result:{...ctx(),profile_tuple_sha256:state.tupleChangedOnPrepare?'e'.repeat(64):ctx().profile_tuple_sha256,
     consentGeneration:state.generation,requestId,fingerprint,sourceId}}];
   }
-  if(query.includes('observation_key_prepare')){
+  if(query.includes('observation_held_matches')){
+   allowed();const [key,requestId,fingerprint,body,generation]=args;
+   if(generation!==state.generation)throw sqlError('42501');
+   const stored=state.sourceKeys.get(key);
+   return [{result:!!stored?.held&&stored.generation===generation&&stored.body===body&&state.requests.get(requestId)?.fingerprint===fingerprint}];
+  }
+  if(query.includes('observation_key_prepare')||query.includes('observation_held_prepare')){
    allowed();const [key,content,body,requestId,fingerprint,sourceId,profileVersion,profileHash,generation]=args;
    if(generation!==state.generation||profileVersion!=='synthetic-v1'||profileHash!=='b'.repeat(64))throw sqlError('40001');
    const prior=state.sourceKeys.get(key);
    if(prior&&(prior.content!==content||prior.body!==body))throw sqlError('23505');
    if(prior&&prior.sourceId!==sourceId){const record=state.rows.get(prior.sourceId);if(!record)throw sqlError('55000');
     return [{result:{kind:'duplicate',record:structuredClone(record)}}];}
-   if(!prior){state.sourceKeys.set(key,{content,body,sourceId});state.requests.set(requestId,{requestId,fingerprint,sourceId});}
+   if(!prior){state.sourceKeys.set(key,{content,body,sourceId,held:query.includes('observation_held_prepare'),generation});state.requests.set(requestId,{requestId,fingerprint,sourceId});}
    else if(state.requests.get(requestId)?.fingerprint!==fingerprint)throw sqlError('23505');
    return [{result:{kind:'new',context:{...ctx(),profile_tuple_sha256:state.tupleChangedOnPrepare?'e'.repeat(64):ctx().profile_tuple_sha256,
     consentGeneration:state.generation,requestId,fingerprint,sourceId}}}];
@@ -214,7 +221,19 @@ test('strict HTTP capture and reconciliation replay one retained observation und
   assert.deepEqual(verified,{groupId:group,hasPending:true,hasRecorded:true,recordedCount:1,
    hasUnmatchedCanonical:false,revision:'a'.repeat(64),scope:'verified_collection'});
   assert.deepEqual(await read(await request('/reconcile-verified-status')),verified);
-  for(const raw of ['/recover-held','/recover-held-ack'])assert.equal((await request(raw,capture)).status,404);
+  assert.deepEqual(await read(await request('/reconcile-verified-status?scope=installation')),{...verified,scope:'verified_installation'});
+  assert.equal((await request('/reconcile-verified-status?scope=someone-else')).status,400);
+  f.state.legacyInventory=true;assert.equal((await request('/reconcile-verified-status?scope=installation')).status,503);
+  f.state.legacyInventory=false;
+  for(const raw of ['/recover-held','/recover-held-ack'])assert.equal((await request(raw,capture)).status,400);
+  const historical={...capture,requestId:id(58),sourceKey:'8'.repeat(64),expectedConsentGeneration:1};
+  const absent=await read(await request('/recover-held-ack',historical));
+  assert.equal(absent.state,'unconfirmed');assert.equal(absent.retryAllowed,false);assert.equal(f.state.puts,1);
+  const held=await read(await request('/recover-held',historical));assert.equal(held.autoProcessing,'held');
+  assert.deepEqual(await read(await request('/recover-held',historical)),held);
+  const acknowledged=await read(await request('/recover-held-ack',historical));
+  assert.equal(acknowledged.sourceId,held.sourceId);assert.equal(acknowledged.state,'acknowledged');
+  assert.equal((await request('/recover-held-ack',{...historical,expectedConsentGeneration:2})).status,403);
   current={...actor,role:'staff'};
   const session=observations.authority.session;
   observations.authority.session=async()=>current;
@@ -222,13 +241,15 @@ test('strict HTTP capture and reconciliation replay one retained observation und
    for(const [suffix,body] of [['/reconcile',proof],['/reconcile-batch',{items:[proof]}],['/reconcile-status'],['/reconcile-verified-status']]){
     assert.equal((await request(suffix,body)).status,403);
    }
-   for(const changed of [{revoked:true},{active:false},{installationProfile:'staff'},{groupId:'another-group'}]){
+   for(const changed of [{revoked:true},{active:false},{installationProfile:'unrecognized'},{groupId:'another-group'}]){
     current={...actor,...changed};assert.equal((await request('/reconcile-verified-status')).status,403);
    }
+   current={...actor,installationProfile:'staff',capabilities:['records.read']};
+   assert.equal((await request('/reconcile-verified-status?scope=installation')).status,200);
    current=actor;f.state.enabled=false;assert.equal((await request('/reconcile-verified-status')).status,403);
   } finally {observations.authority.session=session;}
-  assert.equal(f.state.puts,1);
-  assert.equal(f.state.commits,1);
+  assert.equal(f.state.puts,2);
+  assert.equal(f.state.commits,2);
  });
 });
 
@@ -337,7 +358,7 @@ test('reconciliation fails closed for staff, disabled consent and unresolved res
   serviceCentreAt:item.serviceCentreAt,inboxReceivedAt:item.inboxReceivedAt,subscriptionId:item.subscriptionId};
  await f.run(async adapter=>{
   const session=adapter.authority.session;
-  for(const changed of [{role:'staff'},{installationProfile:'staff'},{groupId:'other'},{revoked:true}]){
+  for(const changed of [{role:'staff'},{installationProfile:'unrecognized'},{groupId:'other'},{revoked:true}]){
    adapter.authority.session=async()=>({...actor,...changed});
    await assert.rejects(adapter.reconcile(actor,proof),e=>e.status===403);
   }
@@ -676,6 +697,54 @@ test('batch reconciliation verifies encrypted objects in request order without p
  });
 });
 
+test('inline parser outcomes share the final authorized source snapshot and omit every missing item',async()=>{
+ const f=fixture(),a=await batchWitness(91),b=await batchWitness(92),missing=await batchWitness(93);
+ await f.run(async adapter=>{
+  const savedA=await adapter.observe(actor,a.item),savedB=await adapter.observe(actor,b.item);
+  const statuses=new Map([[savedA.sourceId,'duplicate'],[savedB.sourceId,'needs_review']]);
+  const items=[b.proof,missing.proof,a.proof],queries=[];
+  let changeResult=null;
+  const read=adapter.authority.read;
+  adapter.authority.read=fn=>read(tx=>{
+   const keys=[];let authorized=false;
+   return fn({unsafe:async(query,args)=>{
+    if(query.includes('burimunsi_observation_processing_status')){
+     assert.equal(authorized,true);assert.deepEqual(keys,items.map(item=>item.sourceKey));
+     const ids=JSON.parse(args[0]);queries.push(ids);
+     const result={groupId:group,statuses:ids.map(sourceId=>({sourceId,status:statuses.get(sourceId),canRetry:false}))};
+     return [{result:changeResult?changeResult(result):result}];
+    }
+    const result=await tx.unsafe(query,args);
+    if(query.includes('burimunsi_observation_context'))authorized=true;
+    if(query.includes('burimunsi_observation_key_lookup'))keys.push(args[0]);
+    return result;
+   }});
+  });
+  const batch=()=>adapter.reconcileBatch(actor,{items,includeProcessing:true});
+  const result=await batch();
+  assert.deepEqual(queries,[[savedB.sourceId,savedA.sourceId]]);
+  assert.deepEqual(result.items,[
+   {sourceKey:b.proof.sourceKey,state:'matched',sourceId:savedB.sourceId,processingStatus:'needs_review'},
+   {sourceKey:missing.proof.sourceKey,state:'missing',sourceId:null},
+   {sourceKey:a.proof.sourceKey,state:'matched',sourceId:savedA.sourceId,processingStatus:'duplicate'},
+  ]);
+  const allMissing=await adapter.reconcileBatch(actor,{items:[missing.proof],includeProcessing:true});
+  assert.deepEqual(allMissing.items,[result.items[1]]);assert.equal(queries.length,1);
+  await adapter.reconcileBatch(actor,{items,includeProcessing:false});
+  assert.equal(queries.length,1);
+  for(const malformed of [r=>({...r,groupId:'foreign'}),r=>({...r,statuses:r.statuses.toReversed()}),
+   r=>({...r,statuses:r.statuses.slice(1)}),r=>({...r,statuses:r.statuses.map(s=>({...s,status:'unverified'}))})]){
+   changeResult=malformed;await assert.rejects(batch,e=>e.status===503);
+  }
+  changeResult=null;const count=queries.length;
+  const bytes=f.state.media.get('sms/'+savedB.sourceId);f.state.media.delete('sms/'+savedB.sourceId);
+  await assert.rejects(batch,e=>e.status===503);assert.equal(queries.length,count);
+  f.state.media.set('sms/'+savedB.sourceId,bytes);
+  f.state.onGet=async()=>{f.state.enabled=false;};
+  await assert.rejects(batch,e=>e.status===403);assert.equal(queries.length,count);
+ });
+});
+
 test('a batch fails closed for per-item conflicts, reservations, storage failure and unauthorized actors',async()=>{
  const f=fixture(),a=await batchWitness(4),b=await batchWitness(5),missing=await batchWitness(6);
  await f.run(async adapter=>{
@@ -694,7 +763,7 @@ test('a batch fails closed for per-item conflicts, reservations, storage failure
   await assert.rejects(adapter.reconcileBatch(actor,proofs),e=>e.status===503&&e.code==='observation_unavailable');
   f.state.onGet=null;
   const session=adapter.authority.session;
-  for(const changed of [{role:'staff'},{installationProfile:'staff'},{groupId:'other'},{revoked:true}]){
+  for(const changed of [{role:'staff'},{installationProfile:'unrecognized'},{groupId:'other'},{revoked:true}]){
    adapter.authority.session=async()=>({...actor,...changed});
    await assert.rejects(adapter.reconcileBatch(actor,proofs),e=>e.status===403);
   }

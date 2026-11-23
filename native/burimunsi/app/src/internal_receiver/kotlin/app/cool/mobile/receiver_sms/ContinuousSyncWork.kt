@@ -21,6 +21,9 @@ internal object ObservationInboxRevision {
         Any().also{observer=it;current.incrementAndGet()}
     }
     /** Invalidate all process-local sweep witnesses before unregistering. */
+    fun temporaryObserverRegistered():Any?=synchronized(observerLock){
+        if(observer!=null)null else Any().also{observer=it;current.incrementAndGet()}
+    }
     fun observerDetached(lease:Any)=synchronized(observerLock){
         if(observer===lease){observer=null;current.incrementAndGet()}
     }
@@ -76,10 +79,19 @@ internal class ContinuousSyncBudget(
 /** Event wakeups bypass this idle/error delay; failures never create an unbounded busy loop. */
 internal class ContinuousSyncRetry {
     private var failures=0
-    fun next(completed:Boolean,more:Boolean,progress:Boolean=false):Long {
-        if(completed){failures=0;return if(more)2_000 else 30_000}
-        if(progress&&more){failures=0;return 2_000}
-        failures=(failures+1).coerceAtMost(3)
-        return 15_000L shl (failures-1)
+    private var parserWaits=0
+    fun next(completed:Boolean,more:Boolean,progress:Boolean=false,awaitingParser:Boolean=false):Long {
+        if(awaitingParser){
+            failures=0
+            val delay=500L shl parserWaits.coerceAtMost(5)
+            parserWaits=(parserWaits+1).coerceAtMost(5)
+            return delay
+        }
+        parserWaits=0
+        if(completed||!more){failures=0;return if(more)0 else 60_000}
+        if(progress){failures=0;return 0}
+        val delay=(1_000L shl failures).coerceAtMost(60_000L)
+        failures=(failures+1).coerceAtMost(6)
+        return delay
     }
 }

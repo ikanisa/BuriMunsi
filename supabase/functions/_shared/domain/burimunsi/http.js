@@ -2,7 +2,7 @@ import {discardNativeBody,requireActiveNativeRequest,nativeRequestErrorStatus,MA
 import {ContractViolation,CONTRACT_VERSION,contractRoute,requestBinding,validateNativeRequest,bindNativeResponse,validateNativeQuery,heldObservationOperation} from './wire/native-contract.mjs';
 import {nativeRequestUrl,readNativeJson,requireNativeHttpsOrigin} from './wire/native-http.mjs';
 import {BuriError,ObservationUploadUnresolved,requirePort,requireThat} from './errors.js';
-import {exactKeys,requireId,requireRequestId} from './values.js';
+import {exactKeys,requireId,requireRequestId,sha256} from './values.js';
 import {LISTING_QUERY_KEYS} from './listing-query.js';
 
 const recordSnapshotReads = new Set(['home','payments','members','ledger','payment','member','history','staff','audit','onboardingSuggestions']);
@@ -49,8 +49,8 @@ export function createNativeHandler({auth,records,contributions,members,gateway,
       requireThat(url.pathname.startsWith('/v1/burimunsi/'),'not_found',404);
       const route=url.pathname.slice('/v1/burimunsi'.length),method=req.method;
       const heldOperation=heldObservationOperation(url.pathname);
-      if(heldOperation)requireThat(heldOperation==='observationReconcileVerifiedStatus'&&method==='GET'&&
-        verifiedObservationStatusEnabled===true,'not_found',404);
+      if(heldOperation)requireThat(verifiedObservationStatusEnabled===true&&strictContract&&
+        method===(heldOperation==='observationReconcileVerifiedStatus'?'GET':'POST'),'not_found',404);
       const installationId=req.headers.get('x-burimunsi-installation');requireId(installationId);
       if(strictContract){
         wireBinding=requestBinding(req,installationId,groupId);
@@ -162,7 +162,12 @@ export function createNativeHandler({auth,records,contributions,members,gateway,
       }
       if(route==='/sms/observations/reconcile-batch'&&method==='POST'){
         requirePort(observations,['reconcileBatch']);
-        return json(await observations.reconcileBatch(actor,await body(req,['items'])));
+        return json(await observations.reconcileBatch(actor,await body(req,['items','runId','includeProcessing'],['items'])));
+      }
+      if(route==='/sms/observations/inbox-check'&&method==='POST'){
+        requirePort(observations,['inboxCheck']);
+        return json(await observations.inboxCheck(actor,await body(req,['runId','expectedConsentGeneration','state',
+          'candidateCount','missingCount','pendingCount','phoneLatestKey','parsedLatestKey','collectionRevision'])));
       }
       if(route==='/sms/observations/reconcile-status'&&method==='GET'){
         requirePort(observations,['reconcileStatus']);
@@ -170,7 +175,15 @@ export function createNativeHandler({auth,records,contributions,members,gateway,
       }
       if(heldOperation==='observationReconcileVerifiedStatus'){
         requirePort(observations,['reconcileVerifiedStatus']);
-        return json(await observations.reconcileVerifiedStatus(actor));
+        return json(await observations.reconcileVerifiedStatus(actor,wireQuery.scope));
+      }
+      if(heldOperation==='observationRecoverHeld'||heldOperation==='observationRecoverHeldAck'){
+        const port=heldOperation==='observationRecoverHeld'?'recoverHeld':'recoverHeldAck';
+        requirePort(observations,[port]);
+        const input=await body(req,['requestId','rawSender','rawBody','sourceMode','complete','capturedAt',
+          'serviceCentreAt','inboxReceivedAt','subscriptionId','sourceKey','expectedConsentGeneration']);
+        wireRoute.observationBodySha256=await sha256(input.rawBody);
+        return json(await observations[port](actor,input));
       }
       const observedRetry=/^\/sms\/observations\/([A-Za-z0-9_-]+)\/retry$/.exec(route);
       if(observedRetry&&method==='POST'){

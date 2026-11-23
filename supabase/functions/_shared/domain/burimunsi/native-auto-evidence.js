@@ -235,7 +235,7 @@ function conflictingOutgoing(body,profile){
  }
  return false;
 }
-function supportedReceiptClause(body,value,token){
+function supportedReceiptClause(body,value,token,verifiedDate){
  const statement=sourceStatements(body).find(part=>token.at>=part.start&&token.at<part.end);
  if(!statement||token.end>statement.end)return false;
  const lead=body.slice(statement.start,token.at).trim(),tail=body.slice(token.end,statement.end).trim();
@@ -244,7 +244,13 @@ function supportedReceiptClause(body,value,token){
  const name=value.payer_name_raw,id=value.payer_identifier_raw;
  if(typeof name!=='string'||!RECEIPT_PARTY_NAME.test(name)||name!==name.trim()||
   id!==null&&(typeof id!=='string'||!RECEIPT_PARTY_ID.test(id)||id!==id.trim()))return false;
- const party=tail.slice(connection[0].length);
+ const remainder=tail.slice(connection[0].length);
+ // The carrier may put the independently parsed event time in this sentence.
+ // Only the complete, source-quoted timestamp may follow the complete party.
+ const dateSuffix=verifiedDate?' at '+verifiedDate:'';
+ const withDate=dateSuffix&&remainder.endsWith(dateSuffix)&&META_DATE.test(dateSuffix)&&
+  typeof value.evidence.transaction_datetime==='string'&&value.evidence.transaction_datetime.includes(verifiedDate);
+ const party=withDate?remainder.slice(0,-dateSuffix.length):remainder;
  if(id===null?party!==name:party!==`${name} ${id}`&&party!==`${name} (${id})`)return false;
  const phrase=connection[0]+party,phraseAt=body.indexOf(phrase,token.end);
  if(phraseAt<token.end||phraseAt+phrase.length>statement.end)return false;
@@ -252,7 +258,7 @@ function supportedReceiptClause(body,value,token){
  // fragment cannot stand in for an omitted qualifier after a name/number.
  return quotePositions(body,value.evidence.payer).some(span=>span.at<=phraseAt&&span.end>=phraseAt+phrase.length);
 }
-function supportedIncomingSource(body,value,profile){
+function supportedIncomingSource(body,value,profile,verifiedDate){
  const raw=value.principal_amount_raw,quote=value.evidence.principal,direction=value.evidence.incoming_success;
  const amount=quotedMinor(raw,profile);
  if(amount===null||amount<=0||!present(body,quote)||!present(body,direction)||conflictingOutgoing(body,profile))return false;
@@ -267,7 +273,7 @@ function supportedIncomingSource(body,value,profile){
    // meant. Only standalone labeled fee/balance fields are ancillary.
    const sourceAmounts=monetaryTokens(body,profile);
    const current=sourceAmounts.find(token=>token.at<=at&&token.end>=at+raw.length&&token.value===amount);
-   if(!current||!supportedReceiptClause(body,value,current))continue;
+   if(!current||!supportedReceiptClause(body,value,current,verifiedDate))continue;
    if(sourceAmounts.some(token=>{
     if(token.at===current.at&&token.end===current.end)return false;
     const other=clauseAt(body,token.at),before=body.slice(other.start,token.at),after=body.slice(token.end,other.end);
@@ -287,10 +293,10 @@ function supportedIncomingSource(body,value,profile){
 
 // A supported receipt must retain both complete payer spans before and after
 // removal of unrelated safety advice. This layer supplies evidence only.
-export function proveIncomingSource(body, original, value, profile) {
+export function proveIncomingSource(body, original, value, profile, verifiedDate) {
   const {payer_name_raw: name, payer_identifier_raw: id, principal_amount_raw: amount} = value;
   const quote = value.evidence.payer;
-  return supportedIncomingSource(body, value, profile) &&
+  return supportedIncomingSource(body, value, profile, verifiedDate) &&
     sourceBoundPayerIdentifier(body, quote, id) && sourceBoundPayerIdentifier(original, quote, id) &&
     sourceBoundPayerName(body, quote, name, id, amount) && sourceBoundPayerName(original, quote, name, id, amount);
 }

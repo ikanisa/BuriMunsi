@@ -9,27 +9,15 @@ Keystore UIDs prevent those apps from loading the previous apps' local sessions,
 device credentials or queued work. This is a fresh installation and does not
 move or resolve those records. A matching URL does not establish a working backend.
 
-The receiver holds exact identities of the phone's existing inbox rows at its
-first authorized scan, even when the server reports no legacy records. Later
-insertions can be processed normally. Messages already present at that scan are
-not automatically backfilled, including any received after installation but
-before the scan. They remain on the phone and need an authorized reconciliation;
-no backfill control is claimed here. If the inbox cannot be safely snapshotted,
-the scan stays blocked. Independent server-side deduplication and proof of a
-single active receiver are still required before enabling live financial work.
+The first authorized scan records the existing inbox identities and the scoped consent under which they were observed. A receiver cycle compares each approved sender and receiving SIM row against server custody and parsing, including the newest phone receipt ordered by received time and inbox row ID. It requeues a confirmed gap with its original source identity. Paired receipts use the paired gateway and observation-only receipts use the consented observation transport. The historical recovery endpoint retains an eligible first-scan receipt under its recorded consent and holds it for review. For a key-only baseline, the receiver can open a new current-consent historical review. A previous in-flight command with uncertain original consent stays on hold. Admin receives the most recent online check, including missing or unparsed receipts.
 
 Before live use, complete and verify the following for each installation:
 
 1. Reconcile the cloud database, authentication, functions, Admin access and
    existing group and financial history. Preserve every uncertain outcome; do
    not replay an unknown effect against the cloud project.
-2. Stop the former receiver and reconcile its outstanding commands and queues
-   without replaying uncertain effects. Preserve the original evidence; the new
-   apps cannot read it. Establish the single Cloud receiver and an accountable
-   procedure for messages held at first scan.
-3. Authenticate the existing approved operator and have the Cloud service issue
-   a new installation-bound grant and session. Check role, collection and device
-   scope; never copy a previous device credential into the new package.
+2. Reconcile outstanding commands from earlier app packages under their original receipt identities. A previously paired gateway retains its own queue and recovery credentials.
+3. Sign in to Admin Sync on each supported Android phone using the registered Admin mobile number and passcode. The server authenticates the Admin and registers the new installation automatically. Android asks for SMS and phone permissions on that handset. Subsequent eligible receipts and backlog reconciliation run automatically. A second signed-in Admin handset can receive at the same time. Each handset verifies its own inbox, while payment references and credits remain scoped to the collection. Staff accounts have no access to the receiver.
 4. Preserve unresolved obligations and original source identities. Verify that
    a crash, retry, reinstall or account change cannot create duplicate credits.
 5. Qualify the hosted routes, Admin and Staff access, SMS permission separation,

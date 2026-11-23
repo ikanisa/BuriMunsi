@@ -155,9 +155,27 @@ fun main(){
   respond(batchReply(first,second));ck("real ApiClient accepts two ordered observation keys",call("reconcile-batch",batch).getJSONArray("items").length()==2)
   respond(batchReply(second,first))
   ck("real ApiClient rejects reordered observation keys",runCatching{call("reconcile-batch",batch)}.isFailure)
+  val withParser=JSONObject(batch.toString()).put("includeProcessing",true)
+  fun combinedReply()=batchReply(first,second).also{ it.getJSONArray("items").getJSONObject(0).put("processingStatus","parsed")
+   it.getJSONArray("items").getJSONObject(1).put("processingStatus","duplicate") }
+  respond(combinedReply());ck("the requested page binds both source keys and their parser outcomes",
+   call("reconcile-batch",withParser).getJSONArray("items").getJSONObject(1).getString("processingStatus")=="duplicate")
+  respond(combinedReply());ck("a legacy request rejects unsolicited parser information",runCatching{call("reconcile-batch",batch)}.isFailure)
+  respond(batchReply(first,second));ck("the combined request rejects an absent parser outcome for a matched source",
+   runCatching{call("reconcile-batch",withParser)}.isFailure)
+  val missing=JSONObject().put("sourceKey",second).put("state","missing").put("sourceId",JSONObject.NULL)
+  fun missingReply()=JSONObject().put("groupId","group-1").put("items",org.json.JSONArray().put(matched(first).put("processingStatus","pending")).put(missing))
+  respond(missingReply());ck("missing custody has no parser outcome",call("reconcile-batch",withParser).getJSONArray("items").length()==2)
+  missing.put("processingStatus","parsed");respond(missingReply());ck("a missing source cannot claim parsed",runCatching{call("reconcile-batch",withParser)}.isFailure)
   respond(JSONObject().put("groupId","group-1").put("hasPending",false).put("hasRecorded",true).put("recordedCount",1)
     .put("hasUnmatchedCanonical",false).put("revision","f".repeat(64)))
   ck("real ApiClient reads scoped reconciliation status without a body",call("reconcile-status").getInt("recordedCount")==1&&Wire.last!!.written.size()==0)
+  fun verified(scopeName:String)=JSONObject().put("groupId","group-1").put("hasPending",false).put("hasRecorded",false)
+    .put("recordedCount",0).put("hasUnmatchedCanonical",false).put("revision","f".repeat(64)).put("scope",scopeName)
+  respond(verified("verified_installation"));ck("the handset verifies its own inventory scope",
+   call("reconcile-verified-status?scope=installation").getString("scope")=="verified_installation")
+  respond(verified("verified_collection"));ck("a collection inventory cannot certify an individual handset",
+   runCatching{call("reconcile-verified-status?scope=installation")}.isFailure)
   val opened=Wire.opened
   ck("the reconciliation contract refuses raw message text before transport",
     runCatching{call("reconcile",item(first).put("rawBody","synthetic private message"))}.isFailure&&Wire.opened==opened)
@@ -501,6 +519,14 @@ fun main(){
  val missingHome=runCatching{native.call("POST",bundledLogin,body=loginBody,contractContext=loginContext)}.exceptionOrNull() as ApiFailure
  ck("missing requested Home is an uncertain contract failure",missingHome.uncertain&&missingHome.code=="contract_context")
  val cloud="https://rrlduytparvsjfmegalh.supabase.co";val publishable="sb_publishable_"+"p".repeat(24)
+ val otherInstall="00000000-0000-4000-8000-000000000088"
+ val secondAdminPhone=ApiClient.phonePin("https://test.invalid",otherInstall,"internal_receiver","/functions/v1/collect-api"){"e".repeat(64)}
+ Wire.reply=Reply(transform={v->v.put("data",v.getJSONObject("data").put("groupId","group-1"))})
+ val secondLogin=JSONObject(secondAdminPhone.call("POST","/v1/burimunsi/session/login",
+  body=JSONObject().put("phone","+250780000001").put("pin","2468"),contractContext=mapOf("generation" to "28")))
+ ck("a second independently keyed phone uses the same ordinary Admin login and server scope",
+  secondLogin.getString("groupId")=="group-1"&&Wire.last?.getRequestProperty("X-BuriMunsi-Installation")==otherInstall&&
+   Wire.last?.getRequestProperty("X-BuriMunsi-Profile")=="internal_receiver"&&Wire.last?.getRequestProperty("X-BuriMunsi-Group")==null)
  val cloudClient=ApiClient.phonePin(cloud,nativeInstall,"staff","/functions/v1/collect-api",publishable){"d".repeat(64)}
  cloudClient.call("POST","/v1/burimunsi/session/login",body=JSONObject().put("phone","+250780000001").put("pin","2468"),contractContext=mapOf("generation" to "18"))
  ck("cloud login sends the public project key without inventing an authorization token",Wire.last?.getRequestProperty("apikey")==publishable&&Wire.last?.getRequestProperty("Authorization")==null)

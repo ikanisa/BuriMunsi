@@ -16,6 +16,7 @@ class ObservationConfigStore(context:Context){
  }
 }
 object ObservationGateway{
+ fun canOfferPermissions(context:Context)=!ReceiverFixture.observationPaused
  fun queued(context:Context,query:String):QueuedObservationSnapshot?=null
  fun publishQueued(context:Context,snapshot:QueuedObservationSnapshot,publish:()->Unit)=false
  fun start(context:Context){}
@@ -27,4 +28,9 @@ object ObservationGateway{
   }
  fun setPaused(context:Context,paused:Boolean){withControl(context){owner,config->config.setPaused(owner,paused)}}
  fun status(context:Context)=GatewayStatus(false,false,null,0,null,null,null,"authorization_required",observationMode=true)
+}
+
+internal object ObservationReceivingSim {
+ fun classify(context:Context,owner:ObservationOwner,subscription:Int?):ObservationLegacyOwnership.Decision =
+  if(subscription==3)ObservationLegacyOwnership.Decision.UNOWNED else ObservationLegacyOwnership.Decision.HOLD
 }

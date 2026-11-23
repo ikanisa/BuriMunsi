@@ -31,6 +31,13 @@ fun main()=runBlocking {
     ck("a known recent Home opens after server revalidation without rereading records or resetting age",
         Fixture.sessionReads==beforeRecentResume+1&&Fixture.homeReads==recentHomeReads&&
             m.state.savedAt==recentHomeAt&&m.screenGate==ScreenGate.OPEN)
+    val beforeHint=Fixture.homeReads;val beforeHintSessions=Fixture.sessionReads;val mutations=Fixture.mutations
+    m.onRecordsChanged();idle()
+    ck("a local records event fetches the visible Home immediately using its existing session",
+        Fixture.homeReads==beforeHint+1&&Fixture.sessionReads==beforeHintSessions&&Fixture.mutations==mutations)
+    m.onBackground();m.onRecordsChanged();idle()
+    ck("a local records event leaves background screens idle",Fixture.homeReads==beforeHint+1)
+    m.onForeground();idle()
     m.navigate(Route.PAYMENTS);idle();m.search("payer");m.searchSubmit();idle();m.listPosition(Route.PAYMENTS,null,3,11)
     val reads=Fixture.sessionReads
     m.onBackground()

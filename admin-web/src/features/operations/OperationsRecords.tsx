@@ -92,7 +92,7 @@ export function RecordsPage<T>({title, subtitle, permission, statuses = [], sear
     return load(scoped, offset, status, search, actor, JSON.parse(filterKey) as Record<string, string>, limit);
   }, [actor, filterKey, limit, load, offset, request, search, status]);
   const key = JSON.stringify([session.epoch, actor?.id ?? '', actor?.canonical ?? null, permission, offset, limit, status, search, filterKey]);
-  const {result, retry} = useOperationRead(key, canRead, loadPage);
+  const {result, retry} = useOperationRead(key, canRead, loadPage, {live: permission === 'sms.read' || permission === 'payments.read'});
   const noRecords = result?.status === 'success' && result.value.rows.length === 0;
   const hasFilters = smsPagination && Boolean(search || status || Object.values(selectedFilters).some(Boolean));
   const clearFilters = hasFilters ? <Button onClick={() => {
@@ -157,7 +157,7 @@ export function DetailPage<T>({title, subtitle, permission, back, resourceKey, v
     const scoped: AdminRequest = (path, options) => request(path, {...options, signal});
     return load(scoped, actor, offset);
   }, [actor, load, offset, request]);
-  const {result, retry} = useOperationRead(`${session.epoch}:${actor?.id ?? ''}:${resourceKey}:${offset}`, canRead && valid, loadDetail);
+  const {result, retry} = useOperationRead(`${session.epoch}:${actor?.id ?? ''}:${resourceKey}:${offset}`, canRead && valid, loadDetail, {live: permission === 'sms.read' || permission === 'payments.read'});
   const candidate = safeAdminReturnLocation(params.get('returnTo'));
   const returnPath = candidate && [back, ...additionalReturns].includes(new URL(candidate, 'https://admin.invalid').pathname) ? candidate : back;
   return <><PageHeader eyebrow={`${adminBrand.name} / Operations`} title={title} subtitle={subtitle} /><p><Link className="operations-link" to={returnPath}>← Back to records</Link></p>

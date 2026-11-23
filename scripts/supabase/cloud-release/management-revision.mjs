@@ -2,7 +2,7 @@
 // https://supabase.com/docs/reference/api/v1-run-a-query
 import {management, PROJECT, record, sha} from './access.mjs';
 import {body as migrationBody} from './migrations.mjs';
-import {requireRevisionSchedulerReady, requireSecretPreimages, reviseRuntime} from './revise-runtime.mjs';
+import {MAX_REVISION_MIGRATIONS, requireRevisionSchedulerReady, requireSecretPreimages, reviseRuntime} from './revise-runtime.mjs';
 
 const identity = "SELECT session_user,current_user,current_database(),current_setting('server_version_num')::int AS version,current_setting('transaction_isolation') AS isolation,(SELECT project_ref FROM private.collect_fence_control WHERE singleton) AS project";
 const fence = 'SELECT mode,epoch,operation_id,source_sha256 FROM private.collect_fence_control WHERE singleton';
@@ -152,9 +152,10 @@ const settingDigests = settings =>
 export async function reviseRuntimeViaManagement(input, {api = management, ...dependencies} = {}) {
   const {migrations = [], resumeFencedRevision, acceptAncillaryRequalification,
     expectedBefore, expectedFunctions, expectedSecretPreimages, testEvidence, smsBinding} = input;
-  if (!Array.isArray(migrations) || migrations.length > 1 ||
+  if (!Array.isArray(migrations) || migrations.length > MAX_REVISION_MIGRATIONS ||
       migrations.some(entry => !/^\d{14}_[a-z0-9_]+\.sql$/.test(entry?.file) ||
         typeof entry.sql !== 'string' || sha(entry.sql) !== entry.sha256) ||
+      migrations.some((entry, i) => i > 0 && migrations[i - 1].file.slice(0, 14) >= entry.file.slice(0, 14)) ||
       resumeFencedRevision != null || acceptAncillaryRequalification ||
       expectedBefore?.mode !== 'open' || !Array.isArray(expectedFunctions) ||
       expectedSecretPreimages?.BURIMUNSI_PRODUCT_MODE !== sha('standalone') ||
@@ -204,7 +205,51 @@ export async function reviseRuntimeViaManagement(input, {api = management, ...de
       writeAttempted = true;
       const body = JSON.stringify([{name: 'BUILD_SOURCE_ID', value: testEvidence.sourceSha256},
         ...['COLLECT_SMS_CORE_SOURCE_SHA256', 'COLLECT_SMS_SOURCE_APPROVAL'].map(name => ({name, value: candidate[name]}))]);
-      const written = await api(path, {...options, body});
+      const started = Date.now();
+      let written;
+      try {
+        written = await api(path, {...options, body});
+      } catch (error) {
+        // A source rebind can update every Function before the HTTP reply
+        // reaches the operator. Reconcile this exact three-setting request
+        // from timestamped provider records under its original stopped fence.
+        // An unchanged value, split transaction or unexplained bundle/version
+        // remains unresolved. This branch never repeats the mutation.
+        await confirmStoppedFence();
+        const finished = Date.now();
+        const names = ['BUILD_SOURCE_ID','COLLECT_SMS_CORE_SOURCE_SHA256','COLLECT_SMS_SOURCE_APPROVAL'];
+        const values = [testEvidence.sourceSha256,candidate.COLLECT_SMS_CORE_SOURCE_SHA256,candidate.COLLECT_SMS_SOURCE_APPROVAL];
+        const before = expectedFunctions;
+        const read = async () => {
+          const [settings, functions] = await Promise.all([api('secrets'), api('functions')]);
+          const rows = settings.json(), deployed = functions.json();
+          requireSecretPreimages({...expectedSecretPreimages,...candidateDigests}, rows);
+          const updates = names.map((name, index) => {
+            const matched = rows.filter(row => row.name === name);
+            if (matched.length !== 1 || matched[0].value !== sha(values[index])) throw error;
+            return matched[0].updated_at;
+          });
+          const stamp = Date.parse(updates[0]);
+          if (new Set(updates).size !== 1 || !Number.isFinite(stamp) ||
+              stamp < started - 1000 || stamp > finished + 1000 ||
+              !Array.isArray(deployed) || before.length !== deployed.length ||
+              new Set(deployed.map(row => row.slug)).size !== before.length) throw error;
+          const versions = before.map(prior => {
+            const row = deployed.find(item => item.slug === prior.slug);
+            if (!row || row.version !== prior.version + 1 ||
+                ['id','status','verify_jwt','ezbr_sha256'].some(key => row[key] !== prior[key])) throw error;
+            return {slug:row.slug,version:row.version,digest:row.ezbr_sha256};
+          });
+          return {providerUpdatedAt:updates[0],versions};
+        };
+        const first = await read();
+        await confirmStoppedFence();
+        const observed = await read();
+        if (JSON.stringify(first) !== JSON.stringify(observed)) throw error;
+        save('revision-'+input.label+'-source-binding-provider-observation.json',{
+          earlyHttpAcknowledgement:'unavailable',fenceId,requestSha256:sha(body),...observed,at:new Date().toISOString(),
+        });
+      }
       await confirmStoppedFence();
       requireSecretPreimages({...expectedSecretPreimages, ...candidateDigests}, (await api('secrets')).json());
       sourceChanged = true;

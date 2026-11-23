@@ -8,7 +8,7 @@ import {parseMomoSourceCandidate, type MomoExtraction} from './momoSourceActions
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const HASH = /^[a-f0-9]{64}$/;
 export interface MomoSourceRevealContext {
-  request: AdminRequest; identity: PendingIdentity; financialModel: 'transaction_journals' | 'canonical_evidence_ledger'; source: MomoSourceJob;
+  request: AdminRequest; identity: PendingIdentity; financialModel: 'transaction_journals' | 'canonical_evidence_ledger'; source: Pick<MomoSourceJob,'raw_sms_id'|'body_sha256'>; observationGroup?: string;
   enabled: boolean; isEnabled?: () => boolean; isCurrent: () => boolean; verifyFresh: () => Promise<boolean>; signal?: AbortSignal;
 }
 export interface MomoRevealedSource {sender: string; body: string; bodySha256: string; candidate?: MomoExtraction;}
@@ -32,8 +32,16 @@ export async function revealMomoSource(context: MomoSourceRevealContext, reason:
   enabled(context); const reviewedReason = momoRevealReason(reason);
   if (!await context.verifyFresh()) fail('Complete current verification before viewing this source.');
   enabled(context);
-  const body = await context.request(`momo/sources/${context.source.raw_sms_id}/content`, {reviewReason: reviewedReason, ...(context.signal ? {signal: context.signal} : {})});
+  const observation = context.observationGroup;
+  const path = observation ? `momo/observations/${context.source.raw_sms_id}/content?collectionId=${encodeURIComponent(observation)}` : `momo/sources/${context.source.raw_sms_id}/content`;
+  const payload = await context.request(path, {reviewReason: reviewedReason, ...(context.signal ? {signal: context.signal} : {})});
   enabled(context);
+  let body = payload;
+  if (observation) {
+    const original = z.object({contractVersion:z.literal(1),collectionId:z.literal(observation),sourceId:z.literal(context.source.raw_sms_id),
+      sourceKind:z.literal('observation'),retentionState:z.literal('retained'),rawSender:z.string(),rawBody:z.string(),bodySha256:z.string().regex(HASH)}).strict().parse(payload);
+    body = {raw_sms_id:original.sourceId,body_sha256:original.bodySha256,raw_sender:original.rawSender,raw_body:original.rawBody,latest_attempt:null};
+  }
   const data = z.object({raw_sms_id: z.string().regex(UUID), body_sha256: z.string().regex(HASH), raw_sender: z.string(), raw_body: z.string(), latest_attempt: z.unknown()}).strict().parse(body);
   if (!Object.hasOwn(body, 'latest_attempt') || data.raw_sms_id !== context.source.raw_sms_id || data.body_sha256 !== context.source.body_sha256 ||
       !data.raw_sender.trim() || data.raw_sender.length > 96 || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(data.raw_sender) ||

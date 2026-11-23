@@ -9,7 +9,8 @@ const states = new Set(['accepted', 'assigned', 'phone_accepted', 'queued', 'han
   'sent', 'delivered', 'delivery_unconfirmed', 'partial', 'failed', 'outcome_unknown', 'cancelled', 'expired']);
 const sha256 = /^[a-f0-9]{64}$/;
 const keys = {
-  claim: 'SELECT private.burimunsi_claim_payment_sms($1::text,$2::timestamptz,$3::text,$4::integer) AS result',
+  claim: 'SELECT private.burimunsi_claim_payment_sms_v2($1::text,$2::timestamptz,$3::text,$4::integer,$5::uuid) AS result',
+  resume: 'SELECT private.burimunsi_resume_payment_sms($1::text,$2::timestamptz,$3::text,$4::uuid) AS result',
   prepare: 'SELECT private.burimunsi_prepare_payment_sms_v2($1::text,$2::uuid,$3::uuid,$4::text) AS result',
   finish: 'SELECT private.burimunsi_finish_payment_sms($1::text,$2::uuid,$3::uuid,$4::text,$5::text,$6::text) AS result',
 };
@@ -97,11 +98,20 @@ export async function drainBuriMunsiPaymentSms(env, { makeTransport = createOpen
   if (!runtime) return { status: 'disabled', processed: 0 };
   const db = env.DB, work = applicationWork(env);
   const query = (sql, args) => command(db, work, sql, args);
-  const jobs = await query(keys.claim, [runtime.group, runtime.enabledAt, runtime.config.applicationId, 1]);
+  const scope = [runtime.group, runtime.enabledAt, runtime.config.applicationId], requestId = crypto.randomUUID();
+  let jobs;
+  try {jobs = await query(keys.claim, [...scope, 1, requestId]);}
+  catch {
+    // A lost commit reply can only resume this request under its original
+    // admission. The database revalidates the immutable recipient and ledger.
+    jobs = await query(keys.resume, [...scope, requestId]);
+  }
   check(Array.isArray(jobs) && jobs.length <= 1);
   if (jobs.length === 0) return { status: 'complete', processed: 0 };
   const result = await runClaim(jobs[0], runtime, query, work, makeTransport(runtime.config));
-  const status = result.outcome === 'held' ? 'held' : result.outcome === 'unknown' ? 'unconfirmed' : 'complete';
+  // Completion acknowledges the durable journal transition. The provider's
+  // outcome remains unknown until GET on the original message proves otherwise.
+  const status = result.outcome === 'held' ? 'held' : 'complete';
   return { status, processed: 1, ...result };
 }
 
@@ -114,6 +124,8 @@ export function scheduledPaymentSmsResult(result) {
       return {status: 'complete', processed: 1, outcome: 'accepted', gateway_state: result.gateway_state};
     if (result.status === 'complete' && result.outcome === 'suppressed')
       return {status: 'complete', processed: 1, outcome: 'suppressed'};
+    if (result.status === 'complete' && result.outcome === 'unknown')
+      return {status: 'complete', processed: 1, outcome: 'unknown'};
     if (result.status === 'unconfirmed' && result.outcome === 'unknown')
       return {status: 'unconfirmed', processed: 1, outcome: 'unknown'};
     if (result.status === 'held' && result.outcome === 'held')

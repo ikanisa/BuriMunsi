@@ -3,7 +3,6 @@ package app.cool.mobile.receiver_sms
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.provider.Settings
 import app.cool.mobile.BuildConfig
 import org.json.JSONArray
@@ -16,6 +15,9 @@ import rw.ikanisa.burimunsi.core.ObservationProfile
 import rw.ikanisa.burimunsi.core.ObservationSessionOwner
 import rw.ikanisa.burimunsi.core.ObservationSourceIdentity
 import rw.ikanisa.burimunsi.core.Values
+import rw.ikanisa.burimunsi.core.ObservationReconcileRequest
+import rw.ikanisa.burimunsi.core.SmsObservation
+import java.util.UUID
 import rw.ikanisa.burimunsi.core.checkContract
 import rw.ikanisa.burimunsi.data.NativeRepository
 import rw.ikanisa.burimunsi.storage.SecureStore
@@ -34,7 +36,13 @@ internal class ObservationHeldInbox(
     private val config: ObservationConfigStore,
 ) {
     private companion object {
-        const val MAX_HELD = 20_000
+        const val MAX_HELD = 100_000
+        // The v57/v58 count ceiling was 100,000, but their SecureStore writer
+        // cannot persist plaintext above 2,000,000 UTF-8 bytes. Each genuine
+        // nonfirst digest consumes 67 bytes (comma + quotes + 64 hex digits).
+        const val PREDECESSOR_MAX_BYTES = 2_000_000
+        const val MAX_EXISTING_HELD = PREDECESSOR_MAX_BYTES / 67
+        val heldKey = Regex("[a-f0-9]{64}")
     }
 
     private val cursorStore = SecureStore(app, "observation-cursors")
@@ -70,8 +78,8 @@ internal class ObservationHeldInbox(
         return PreviousCursor(last, ObservationCursor.start(last, latest))
     }
 
-    /** The original inbox is held as opaque exact identities. The snapshot is
-     * encrypted and never deletes, uploads, or claims a legacy message. */
+    /** Freeze the original inbox's opaque row identities and enrollment in encrypted storage.
+     * The online audit separately admits eligible historical evidence under held custody. */
     fun snapshot(session:ObservationSessionOwner,profile:ObservationProfile,consent:ObservationConsentState,
         control:ObservationConfigStore.Control,stopped:()->Boolean):Pair<String,Set<String>>? {
         val owner=session.owner;val device=deviceId()?:return null
@@ -86,23 +94,30 @@ internal class ObservationHeldInbox(
         val store=if(legacy)legacyStore(owner.collectionId)else priorCursorStore(owner)
         val existing=store.read()
         if(existing!=null){
+            checkContract(existing.length<=PREDECESSOR_MAX_BYTES&&
+                (existing.all{it.code<128}||existing.toByteArray(Charsets.UTF_8).size<=PREDECESSOR_MAX_BYTES),
+                "observation_cursor_unavailable")
             val value=JSONObject(existing);checkContract(value.keys().asSequence().toSet()==setOf("collectionId","deviceScope","keys")&&
-                value.getString("collectionId")==owner.collectionId&&value.getString("deviceScope")==deviceScope,"observation_cursor_unavailable")
-            val list=value.getJSONArray("keys");checkContract(list.length()<=MAX_HELD,"observation_cursor_unavailable")
-            val keys=(0 until list.length()).map{list.getString(it)}
-            checkContract(keys.toSet().size==keys.size&&keys.all{Regex("[a-f0-9]{64}").matches(it)},"observation_cursor_unavailable")
-            return device to keys.toSet()
+                value.get("collectionId")==owner.collectionId&&value.get("deviceScope")==deviceScope,"observation_cursor_unavailable")
+            val list=value.getJSONArray("keys");checkContract(list.length()<=MAX_EXISTING_HELD,"observation_cursor_unavailable")
+            val keys=linkedSetOf<String>()
+            for(index in 0 until list.length()){
+                val key=list.get(index) as? String
+                checkContract(key!=null&&heldKey.matches(key)&&keys.add(key),"observation_cursor_unavailable")
+            }
+            return device to keys
         }
         if(profile.legacyHold==null)return null
         val prior=if(legacy)null else previousCursor(owner, profile.fingerprint()).scanStart
         val ambiguous=if(legacy)emptySet() else ObservationStateStore(app).read().seen
             .filter{it.owner.collectionId==owner.collectionId&&it.inboxReceivedAt==null}.map{it.inboxRowId}.toSet()
-        val cursor=try{app.contentResolver.query(Uri.parse("content://sms/inbox"),arrayOf("_id","date"),"_id > ?",arrayOf("0"),"_id ASC")}
-            catch(_:Exception){null}?:return null
+        val cursor=queryObservationInbox(app,0,profile.receipt.senders,metadataOnly=true)?:return null
         val keys=linkedSetOf<String>()
         cursor.use{
             val idCol=it.getColumnIndexOrThrow("_id");val dateCol=it.getColumnIndexOrThrow("date")
+            val senderCol=it.getColumnIndexOrThrow("address")
             while(it.moveToNext()){
+                if(it.isNull(senderCol)||profile.receipt.senders.none{sender->sender.equals(it.getString(senderCol),ignoreCase=true)})continue
                 if(stopped()||!observationInboxPermitted(app)||it.isNull(idCol))return null
                 val id=it.getLong(idCol)
                 if(prior!=null&&id>prior&&id !in ambiguous)continue
@@ -112,6 +127,7 @@ internal class ObservationHeldInbox(
                 checkContract(keys.add(heldInboxSourceKey(device,owner.collectionId,id,date)),"observation_cursor_unavailable")
             }
         }
+        val enrollment=enrollmentStore(owner,device)
         val encoded=JSONObject().put("collectionId",owner.collectionId).put("deviceScope",deviceScope)
             .put("keys",JSONArray().also{array->keys.forEach{array.put(it)}}).toString()
         val saved=ObservationLegacyOwnership.withoutControlTransition(app){
@@ -121,9 +137,58 @@ internal class ObservationHeldInbox(
                     deviceId()!=device||store.read()!=null||(!legacy&&(
                         previousCursor(owner, profile.fingerprint()).scanStart!=prior||ObservationStateStore(app).read().seen
                             .filter{it.owner.collectionId==owner.collectionId&&it.inboxReceivedAt==null}.map{it.inboxRowId}.toSet()!=ambiguous)))false
-                else{store.write(encoded);store.read()==encoded}
+                else {
+                    val enrollmentData=enrollmentRecord(owner,device,consent,profile,keys)
+                    // Write scope first. A crash before the immutable inbox snapshot leaves no eligible row.
+                    enrollment.write(enrollmentData)
+                    if(enrollment.read()!=enrollmentData)false else {store.write(encoded);store.read()==encoded}
+                }
             }?:false
         }?:false
         return if(saved)device to keys else null
     }
+    private fun enrollmentStore(owner:ObservationOwner,device:String)=SecureStore(app,"observation-held-enrollment-"+
+        Values.sha256(listOf(owner.collectionId,owner.accountId,device).joinToString(""){"${it.length}:$it"}))
+
+    private fun enrollmentRecord(owner:ObservationOwner,device:String,consent:ObservationConsentState,profile:ObservationProfile,keys:Set<String>):String =
+        JSONObject().put("account",owner.accountId).put("collection",owner.collectionId).put("device",Values.sha256(device))
+            .put("installation",MomoGatewayStore(app).existingInstallationId()).put("generation",consent.revision.generation)
+            .put("profile",profile.fingerprint()).put("keys",Values.sha256(keys.sorted().joinToString(""))).toString()
+
+    /** Retain a confirmed missing baseline row through the historical route under its recorded consent.
+     * The secure marker binds the exact envelope before either a first send or a retry. */
+    fun recoverMissing(repo:NativeRepository,session:ObservationSessionOwner,consent:ObservationConsentState,profile:ObservationProfile,
+        device:String,key:String,request:ObservationReconcileRequest,body:String):Boolean {
+        val owner=session.owner
+        val installation=MomoGatewayStore(app).existingInstallationId() ?: return false
+        if(HeldRecoveryJournal.protects(app,owner,installation,Values.sha256(device),key))return false
+        val control=config.controlState(owner)
+        fun authorized():Boolean {
+            if(control.paused || config.controlState(owner)!=control || config.consent(owner)!=consent ||
+                !consent.canCapture(observationInboxPermitted(app)) || config.profile(owner,System.currentTimeMillis())!=profile ||
+                NativeRepository.observationOwner(app)!=session || deviceId()!=device)return false
+            val held=snapshot(session,profile,consent,control){false}?.second ?: return false
+            if(key !in held)return false
+            val original=enrollmentStore(owner,device).read()
+            // Old baseline files bind collection, device and row key but carry no original grant.
+            // A new current-consent review is distinct from replaying an uncertain legacy command.
+            return original==null || original==enrollmentRecord(owner,device,consent,profile,held)
+        }
+        if(!authorized())return false
+        val digest=Values.sha256(listOf(key,request.rawSender,request.bodySha256,request.inboxReceivedAt,
+            request.serviceCentreAt.orEmpty(),request.subscriptionId.toString()).joinToString(""){"${it.length}:$it"})
+        val marker=SecureStore(app,"observation-held-admission-"+Values.sha256(listOf(owner.accountId,installation,key)
+            .joinToString(""){"${it.length}:$it"}))
+        val prior=marker.read()
+        val data=prior?.let(::JSONObject) ?: JSONObject().put("requestId",UUID.randomUUID().toString())
+            .put("generation",consent.revision.generation).put("digest",digest).put("capturedAt",Instant.now().toString())
+            .put("basis",if(enrollmentStore(owner,device).read()==null)"current_consent_review" else "original_enrollment")
+        if(data.getLong("generation")!=consent.revision.generation || data.getString("digest")!=digest)return false
+        val item=SmsObservation(data.getString("requestId"),request.rawSender,body,"catch_up",false,data.getString("capturedAt"),
+            request.serviceCentreAt,request.inboxReceivedAt,request.subscriptionId,key)
+        if(prior==null){val encoded=data.toString();marker.write(encoded);if(marker.read()!=encoded)return false}
+        if(!authorized())return false
+        return repo.recoverHeldObservation(item,consent.revision.generation)
+    }
+
 }

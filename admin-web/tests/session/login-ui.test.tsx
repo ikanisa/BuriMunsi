@@ -65,7 +65,7 @@ describe('BuriMunsi phone and passcode sign-in', () => {
         return authenticated ? signedIn() : anonymous();
       }
       expect(path).toBe('/api/admin/auth/phone-passcode');
-      expect(identityVersion).toBeNull();
+      expect(identityVersion).toBe('1');
       expect(JSON.parse(String(init?.body))).toEqual({phone: '+250780000001', pin: '0123'});
       expect(init?.credentials).toBe('same-origin');
       authenticated = true;
@@ -101,7 +101,7 @@ describe('BuriMunsi phone and passcode sign-in', () => {
   it.each([true, false])('checks a direct owner proof without a second session read (%s)', async matches => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, options?: RequestInit) => {
       if (String(input).endsWith('/auth/session')) return anonymous();
-      expect(new Headers(options?.headers).get('X-Collect-Owner-Identity-Version')).toBeNull();
+      expect(new Headers(options?.headers).get('X-Collect-Owner-Identity-Version')).toBe('1');
       const proof = confirmed();
       return reply(matches ? proof : {...proof, ownerIdentity: {...ownerIdentity, principalId: 'another-person'}});
     });
@@ -159,7 +159,7 @@ describe('BuriMunsi passcode verification', () => {
     const old = new Date(Date.now() - 310_000).toISOString();
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, options?: RequestInit) => {
       if (String(input).endsWith('/auth/session')) return reply(confirmed(old));
-      expect(new Headers(options?.headers).get('X-Collect-Owner-Identity-Version')).toBeNull();
+      expect(new Headers(options?.headers).get('X-Collect-Owner-Identity-Version')).toBe('1');
       return reply({contractVersion: 1, sessionId: owner.sessionId, passcodeVerifiedAt: verified, session: confirmed(verified)});
     });
     const controller = new AdminSessionController({backend: 'supabase', phonePasscodeOnly: true, publishableKey,
@@ -190,7 +190,7 @@ describe('BuriMunsi passcode verification', () => {
           });
         }
         expect(path).toBe('/api/admin/auth/passcode/verify');
-        expect(headers.get('X-Collect-Owner-Identity-Version')).toBeNull();
+        expect(headers.get('X-Collect-Owner-Identity-Version')).toBe('1');
         expect(headers.get('X-Collect-CSRF')).toBe(csrf);
         expect(JSON.parse(String(init?.body))).toEqual({pin: '0123'});
         verifiedRequest = true;

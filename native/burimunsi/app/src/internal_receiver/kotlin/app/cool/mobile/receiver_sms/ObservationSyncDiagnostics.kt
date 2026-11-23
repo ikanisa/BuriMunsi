@@ -84,7 +84,13 @@ internal object ObservationSyncDiagnostics {
         is InterruptedException,is java.util.concurrent.CancellationException->ErrorKind.INTERRUPTED
         is java.net.SocketTimeoutException->ErrorKind.TIMEOUT
         is java.net.SocketException,is java.net.UnknownHostException,is javax.net.ssl.SSLException->ErrorKind.NETWORK
-        is ApiFailure->when(error.status){401,403->ErrorKind.AUTHORIZATION;in 500..599->ErrorKind.API_UNAVAILABLE;else->ErrorKind.API_OTHER}
+        is ApiFailure->when {
+            error.status==401 || error.status==403 -> ErrorKind.AUTHORIZATION
+            error.status in 500..599 -> ErrorKind.API_UNAVAILABLE
+            error.status==0 && error.code=="connection_unavailable" -> ErrorKind.NETWORK
+            error.status in 200..299 && error.code=="contract_response_timeout" -> ErrorKind.TIMEOUT
+            else -> ErrorKind.API_OTHER
+        }
         else->ErrorKind.UNKNOWN
     }
     fun begin(online:Boolean,now:()->Long):Cycle {

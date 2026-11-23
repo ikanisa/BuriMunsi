@@ -55,6 +55,10 @@ def _adapt_sms_capture_journal(text: str) -> str:
 
 
 def _adapt_sms_queue_store(text: str) -> str:
+    text = replace_once(text, 'reserveItems: Int = 0): AppendResult =', 'reserveItems: Int = 0, confirmedMissingId: String? = null): AppendResult =')
+    text = replace_once(text, 'return@synchronized if (prior == ReceiptAckPolicy.sha256(envelope.optString("raw_body")))\n                        AppendResult.DUPLICATE else AppendResult.FAILED',
+        'if (prior != ReceiptAckPolicy.sha256(envelope.optString("raw_body"))) return@synchronized AppendResult.FAILED\n'
+        '                    if (confirmedMissingId != envelopeId) return@synchronized AppendResult.DUPLICATE')
     text = replace_once(text, '            val envelopeId = envelope.optString("id", "")', '''            val envelopeId = envelope.optString("id", "")
             if (envelopeId.isBlank() || envelope.opt("raw_body") !is String || envelope.optString("raw_body").isBlank())
                 return@synchronized AppendResult.FAILED''')
@@ -124,6 +128,9 @@ def _adapt_momo_gateway_store(text: str) -> str:
             !BuriReceiverReliability.bindingMatches(expected::opt, binding::opt)) return@synchronized null
         action()
     }
+    internal fun <T> withCurrentCapture(expected: JSONObject, action: () -> T): T? = withCurrentBinding(expected) {
+        ObservationGateway.withCaptureAdmin(context, expected.opt("collection_id") as? String, action)
+    }
     internal fun <T> withCurrentUpload(expected: JSONObject, action: () -> T): T? = synchronized(lock) {
         val current = read() ?: return@synchronized null
         if (expected.optString("gateway_token").isBlank() ||
@@ -139,6 +146,9 @@ def _adapt_momo_gateway_store(text: str) -> str:
 
 
 def _adapt_collect_sms_receiver(text: str) -> str:
+    text = replace_once(text, '                    val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)',
+        '                    if (binding == null || gateway?.withCurrentCapture(binding) { true } != true) return@executeCapture\n'
+        '                    val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)')
     text = replace_once(text, '                    if (!MomoGatewayPolicy.providerSource(sender)) return@executeCapture',
         '                    if (!BuriCapturePolicy.senderAllowed(binding, sender)) return@executeCapture')
     text = replace_once(text, '''                    if (!BuriCapturePolicy.retain(context, binding, sender, body, subscription)) return@executeCapture''', '''                    when (BuriCapturePolicy.route(context, binding, subscription)) {
@@ -150,7 +160,7 @@ def _adapt_collect_sms_receiver(text: str) -> str:
     text = replace_once(text, '''                    val result = queue.appendIfCapacity(
                         envelope,
                         MomoGatewayPolicy.MAX_PENDING,
-                    )''', '''                    val result = if (gateway != null && binding != null) gateway.withCurrentBinding(binding) {
+                    )''', '''                    val result = if (gateway != null && binding != null) gateway.withCurrentCapture(binding) {
                         queue.appendIfCapacity(envelope, MomoGatewayPolicy.MAX_PENDING)
                     } ?: SmsQueueStore.AppendResult.DISABLED
                     else SmsQueueStore.AppendResult.DISABLED''')
@@ -168,10 +178,12 @@ def _adapt_collect_sms_receiver(text: str) -> str:
 
 
 def _adapt_momo_gateway_recovery(text: str) -> str:
+    text = replace_once(text, '        val owner = binding.getString("owner_user_id")',
+        '        if (state.withCurrentCapture(binding) { true } != true) return false\n        val owner = binding.getString("owner_user_id")')
     text = replace_once(text, '                if (MomoGatewayPolicy.providerSource(sender) && body.isNotEmpty()) {',
         '                if (BuriCapturePolicy.senderAllowed(binding, sender) && body.isNotEmpty()) {')
     text = replace_once(text, '            while (cursor.moveToNext()) {\n                scanned++',
-        '            while (cursor.moveToNext()) {\n                if (state.withCurrentBinding(binding) { true } != true) return false\n                scanned++')
+        '            while (cursor.moveToNext()) {\n                if (state.withCurrentCapture(binding) { true } != true) return false\n                scanned++')
     text = replace_once(text, '''                    val received = cursor.getLong(receivedColumn)
                     val sent = if (sentColumn >= 0) cursor.getLong(sentColumn).takeIf { it > 0L } ?: received else received''', '''                    val received = cursor.getLong(receivedColumn)
                     val bindingCreated = try { Instant.parse(binding.optString("created_at")).toEpochMilli() } catch (_: Exception) { null }
@@ -192,7 +204,7 @@ def _adapt_momo_gateway_recovery(text: str) -> str:
             it.put("inbox_checkpoint", maxOf(it.optLong("inbox_checkpoint"), advanced))
                 .put("historical_backlog_paused", false).put("catch_up_pending", scanned == MomoGatewayPolicy.MAX_SCAN_ROWS)
         }
-        SmsQueueEventBus.notifyQueueChanged()''', '''        val checkpointSaved = state.withCurrentBinding(binding) {
+        SmsQueueEventBus.notifyQueueChanged()''', '''        val checkpointSaved = state.withCurrentCapture(binding) {
             state.update {
                 val current = it.getJSONObject("binding")
                 check(BuriReceiverReliability.bindingMatches(binding::opt, current::opt))
@@ -228,7 +240,7 @@ def _adapt_momo_gateway_recovery(text: str) -> str:
                     }'''
     text = replace_once(text, old, new)
     text = replace_once(text, '''                    when (SmsQueueStore(context).appendIfCapacity(capture, MomoGatewayPolicy.MAX_PENDING,
-                        MomoGatewayPolicy.LIVE_CAPTURE_RESERVE)) {''', '''                    val retained = state.withCurrentBinding(binding) {
+                        MomoGatewayPolicy.LIVE_CAPTURE_RESERVE)) {''', '''                    val retained = state.withCurrentCapture(binding) {
                         SmsQueueStore(context).appendIfCapacity(capture, MomoGatewayPolicy.MAX_PENDING,
                             MomoGatewayPolicy.LIVE_CAPTURE_RESERVE)
                     } ?: SmsQueueStore.AppendResult.DISABLED

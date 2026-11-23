@@ -153,6 +153,9 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     private var lastSessionRenewalAt=0L
     private var lastSignOutRetryAt=0L
     private var lastAutomaticReadAt=0L
+    private var changedRecordsPending=false
+    private var changedReadFailures=0
+    private var changedReadRetry:Job?=null
     override var notificationAccessGranted:Boolean? by mutableStateOf(null);private set
     override var batteryExemptionGranted:Boolean? by mutableStateOf(null);private set
     override val continuousSyncRunning get() = receiverStatus.continuousHealth?.takeIf { it.supported }?.running
@@ -263,6 +266,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     }
     /** Called by LifecycleResumeEffect. Does not cancel a dispatched operation. */
     fun onBackground(){
+        changedReadRetry?.cancel();changedReadRetry=null
         resumeMayReuseRecords=!state.starting&&!state.busy&&state.operator!=null
         pendingFreshDraw=null
         queuedNavigation=null
@@ -314,6 +318,40 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         val now=clock()
         if(lastConnectivityRetryAt>0L&&now>=lastConnectivityRetryAt&&now-lastConnectivityRetryAt<5_000L)return
         lastConnectivityRetryAt=now;resumeQueued=true;drainResumeCheck()
+    }
+    /** A signed local receipt hint carries no record or identity. Re-read only the visible
+     * data with the current repository session and preserve edits and user navigation. */
+    fun onRecordsChanged(){
+        if(!foreground||state.operator==null||!hasAccess(Capability.READ))return
+        views.invalidateRecords()
+        changedReadRetry?.cancel();changedReadRetry=null
+        changedReadFailures=0;changedRecordsPending=true
+        drainChangedRecords()
+    }
+    private fun drainChangedRecords(){
+        if(!changedRecordsPending||!foreground||state.busy||state.operator==null||screenGate!=ScreenGate.OPEN||
+            state.draftDirty||state.pending||!hasAccess(Capability.READ))return
+        if(state.sheet!=null&&state.sheet !in setOf(Sheet.HISTORY,Sheet.AUDIT))return
+        if(state.route !in setOf(Route.HOME,Route.PAYMENTS,Route.PAYMENT,Route.MEMBERS,Route.MEMBER,Route.SMS))return
+        changedRecordsPending=false
+        work(kind=UiOperation.REFRESH,quietRefresh=true,preservePresentation=true){
+            try {
+                refreshNow()
+                if(state.sheet in setOf(Sheet.HISTORY,Sheet.AUDIT))refreshPanelNow()
+                if(state.offline)retryChangedRead() else changedReadFailures=0
+            }catch(error:ApiFailure){
+                if(retryableSessionFailure(error))retryChangedRead()
+                throw error
+            }
+        }
+    }
+    private fun retryChangedRead(){
+        if(!foreground||changedReadRetry?.isActive==true)return
+        val delayMs=(1_000L shl changedReadFailures).coerceAtMost(60_000L)
+        changedReadFailures=(changedReadFailures+1).coerceAtMost(6)
+        changedReadRetry=viewModelScope.launch{
+            delay(delayMs);changedReadRetry=null;changedRecordsPending=true;drainChangedRecords()
+        }
     }
     private fun drainResumeCheck(){
         if(!foreground||!resumeQueued||state.busy)return
@@ -414,6 +452,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     }
     private fun key(route:Route=state.route,id:String?=state.routeId)=route.name+":"+(id?:"")
     private fun clearViews(){
+        changedRecordsPending=false;changedReadFailures=0;changedReadRetry?.cancel();changedReadRetry=null
         pendingFreshDraw=null
         queuedNavigation=null;receiverStatus.invalidate();receiverQueue.invalidate()
         observationStatusJob?.cancel();observationStatusJob=null;observationRetryRequests.clear();downloads.clear()
@@ -526,8 +565,8 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         permissionRevision // Compose observes changes after an Android permission result.
         return receiverStatus.permissionsRequired { app.checkSelfPermission(it)==android.content.pm.PackageManager.PERMISSION_GRANTED }
     }
-    fun requestReceivingPermissions(show: (Array<String>) -> Unit) {
-        if (screenGate == ScreenGate.OPEN) receiverStatus.launchPermissions(show)
+    fun requestReceivingPermissions(automatic: Boolean = false, show: (Array<String>) -> Unit) {
+        if (screenGate == ScreenGate.OPEN) receiverStatus.launchPermissions(automatic, show)
     }
     private fun retryableSessionFailure(e:ApiFailure)=e.status==0||e.status in listOf(408,425,429)||e.status>=500
     private suspend fun restoreSavedSession(){
@@ -695,6 +734,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                 queueRefreshJob=viewModelScope.launch{refreshQueuedNow()}
             }
             checkVisibleFreshness()
+            drainChangedRecords()
             automaticVisibleRefresh()
             receiverStatus.refreshHealth()
         }}
@@ -759,6 +799,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                     drainDownload()
                     drainMemberDocument()
                     drainGatewayPermissionStatus()
+                    drainChangedRecords()
                     checkpointNavigation()
                 }
             }
@@ -1666,11 +1707,9 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         }
     }
     override fun syncReceiver()=work{
-        if(!allows(Capability.GATEWAY))throw ApiFailure("access_denied",403)
         receiverStatus.sync(::showReceiverPanelStatus)
     }
     override fun setPaused(value:Boolean)=work{
-        if(!allows(Capability.GATEWAY))throw ApiFailure("access_denied",403)
         receiverStatus.setPaused(value, ::showReceiverPanelStatus)
     }
     override fun retry()=work{

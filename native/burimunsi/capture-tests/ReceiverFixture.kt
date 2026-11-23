@@ -5,11 +5,11 @@ import org.json.JSONObject
 
 object CaptureFixture {
     var result=SmsQueueStore.AppendResult.STORED
-    var active=true;var retain=true;var metadataFailure=false;var scheduleFailure=false
+    var active=true;var admin=true;var retain=true;var metadataFailure=false;var scheduleFailure=false
     var finished=0;var signalCalls=0;var scheduleCalls=0
     val queue=mutableListOf<JSONObject>();val pendingJobs=mutableSetOf<Int>()
     var gate=MomoGatewayWakeupGate()
-    fun reset(){result=SmsQueueStore.AppendResult.STORED;active=true;retain=true;metadataFailure=false;scheduleFailure=false;
+    fun reset(){result=SmsQueueStore.AppendResult.STORED;active=true;admin=true;retain=true;metadataFailure=false;scheduleFailure=false;
         finished=0;signalCalls=0;scheduleCalls=0;queue.clear();pendingJobs.clear();gate=MomoGatewayWakeupGate()}
 }
 class MomoGatewayStore(context:Context){
@@ -19,6 +19,7 @@ class MomoGatewayStore(context:Context){
     fun installationId()="synthetic-installation"
     fun update(action:(JSONObject)->Unit){if(CaptureFixture.metadataFailure)error("synthetic metadata failure");action(JSONObject())}
     fun <T> withCurrentBinding(binding:JSONObject,action:()->T):T?=if(active())action()else null
+    fun <T> withCurrentCapture(binding:JSONObject,action:()->T):T?=if(CaptureFixture.admin)withCurrentBinding(binding,action) else null
     fun park(reason:String){}
 }
 class SmsQueueStore(context:Context){

@@ -87,7 +87,8 @@ test('the BuriMunsi browser proxy closes legacy auth, native and invitation rout
     ['POST', '/api/admin/auth/forgot-password'], ['POST', '/api/admin/auth/complete-password'],
     ['POST', '/api/admin/auth/change-password'], ['GET', '/api/admin/auth/email-verification'],
     ['POST', '/api/admin/auth/email/request'], ['POST', '/api/admin/auth/email/verify'],
-    ['POST', '/api/admin/auth/passcode/verify'], ['GET', '/api/admin/auth/passcode/change'],
+    ['GET', '/api/admin/auth/passcode/verify'], ['POST', '/api/admin/auth/passcode/verify?extra=1'],
+    ['GET', '/api/admin/auth/passcode/change'],
     ['POST', '/api/admin/auth/google/start'], ['POST', '/api/admin/auth/google/exchange'],
     ['GET', '/api/admin/auth/mfa/factors'], ['POST', '/api/admin/auth/mfa/verify'],
     ['POST', '/api/admin/auth/mfa/recover'], ['GET', '/api/admin/auth/user'],
@@ -120,6 +121,7 @@ test('dedicated phone sign-in, personal passcode changes and Team account operat
     ['POST', 'team/accounts', {requestId: create, displayName: 'Fixture user', phone: '+250780000002', role: 'staff'}],
     ['POST', access, {requestId: promote, expectedVersion: 1, active: true, role: 'admin'}],
     ['POST', access, {requestId: disable, expectedVersion: 2, active: false}],
+    ['POST', 'auth/passcode/verify', {pin: '0123'}],
     ['POST', 'auth/passcode/change', {current: '0123', newPin: '8547', confirm: '8547'}],
     ['POST', 'auth/logout', {}],
   ];
@@ -154,7 +156,8 @@ test('dedicated phone sign-in, personal passcode changes and Team account operat
     assert.equal(out.headers.get('Cookie'), signIn ? null : '__Host-collect_admin=issued');
     assert.equal(out.headers.get('X-Collect-CSRF'), method === 'POST' && !signIn ? 'same-session-csrf' : null);
     assert.equal(out.headers.get('Idempotency-Key'), payload?.requestId ?? null);
-    assert.equal(out.headers.get('X-Collect-Owner-Identity-Version'), path === 'auth/session' ? '1' : null);
+    assert.equal(out.headers.get('X-Collect-Owner-Identity-Version'),
+      signIn || path === 'auth/session' || path === 'auth/passcode/verify' ? '1' : null);
     const clear = path === 'auth/passcode/change' || path === 'auth/logout';
     const expectedCookie = signIn ? '=issued' + attributes : clear ? '=' + attributes + '; Max-Age=0' : null;
     assert.equal(response.headers.get('Set-Cookie'), expectedCookie && BURIMUNSI_ADMIN_COOKIE + expectedCookie);

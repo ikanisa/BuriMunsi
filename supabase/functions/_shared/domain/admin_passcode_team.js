@@ -52,6 +52,8 @@ export async function handlePasscodeTeam(request, env, path) {
     return json(row.result);
   } catch (error) {
     if (error instanceof ApiError) throw error;
+    if (error?.code === '23505' && (error.constraint_name ?? error.constraint) === 'burimunsi_single_admin')
+      throw new ApiError(409,'burimunsi_single_admin','BuriMunsi already has an active Admin. Create or keep this account as Staff.');
     if (error?.code === '23505' || error?.code === '40001') throw new ApiError(409,'account_changed','This account or request has changed. Refresh the team list.');
     if (error?.message === 'burimunsi_last_admin') throw new ApiError(409,'last_admin','Keep at least one active Admin.');
     if (error?.message === 'burimunsi_own_access') throw new ApiError(409,'own_access','Another Admin must change your access.');

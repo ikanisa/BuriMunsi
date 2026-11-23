@@ -1,5 +1,6 @@
 import {useCallback, useContext, useEffect, useRef, useState} from 'react';
 import {AdminRequestError} from '../../api/client';
+import {useVisibleOperationsRefresh} from './useVisibleOperationsRefresh';
 import {InteractionSuspendedContext} from '../../ui/useFocusScope';
 
 export type OperationReadState<T> =
@@ -11,19 +12,21 @@ export function useOperationRead<T>(
   key: string,
   enabled: boolean,
   load: (signal: AbortSignal) => Promise<T>,
-  {pollMs, invalidResponse = 'The workspace response could not be verified.'}: {pollMs?: number; invalidResponse?: string} = {},
+  {pollMs, collectionId, live = false, invalidResponse = 'The workspace response could not be verified.'}: {pollMs?: number; collectionId?: string; live?: boolean; invalidResponse?: string} = {},
 ) {
   const suspended = useContext(InteractionSuspendedContext);
   const [read, setRead] = useState<{scope: string; result: OperationReadState<T>} | null>(null);
   const [attempt, setAttempt] = useState(0);
   const flight = useRef<{key: string; promise: Promise<T>; controller: AbortController; readers: number} | null>(null);
   const lastStarted = useRef(0);
+  const queuedChange = useRef<string | null>(null);
   const attemptKey = `${key}:${attempt}`;
 
   useEffect(() => {
     if (suspended) {
       flight.current?.controller.abort();
       flight.current = null;
+      queuedChange.current = null;
       return;
     }
     if (!enabled) return;
@@ -48,7 +51,12 @@ export function useOperationRead<T>(
         }});
       }
     }).finally(() => {
-      if (flight.current === current) flight.current = null;
+      if (!active || flight.current !== current) return;
+      flight.current = null;
+      if (queuedChange.current === attemptKey) {
+        queuedChange.current = null;
+        if (document.visibilityState === 'visible' && navigator.onLine) setAttempt(value => value + 1);
+      }
     });
     return () => {
       active = false;
@@ -62,24 +70,16 @@ export function useOperationRead<T>(
     if (!suspended && (!pollMs || !flight.current)) setAttempt(value => value + 1);
   }, [pollMs, suspended]);
 
-  useEffect(() => {
-    if (!enabled || suspended || !pollMs) return;
-    const refreshVisible = () => {
-      if (document.visibilityState === 'visible' && navigator.onLine && Date.now() - lastStarted.current >= pollMs) retry();
-    };
-    const timer = window.setInterval(refreshVisible, pollMs);
-    document.addEventListener('visibilitychange', refreshVisible);
-    window.addEventListener('focus', refreshVisible);
-    window.addEventListener('online', refreshVisible);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener('visibilitychange', refreshVisible);
-      window.removeEventListener('focus', refreshVisible);
-      window.removeEventListener('online', refreshVisible);
-    };
-  }, [enabled, pollMs, retry, suspended]);
+  const refresh = useCallback((changed: boolean, minimumAge: number) => {
+    if (flight.current) {
+      if (changed) queuedChange.current = flight.current.key;
+      return;
+    }
+    if (changed || Date.now() - lastStarted.current >= minimumAge) setAttempt(value => value + 1);
+  }, []);
+  useVisibleOperationsRefresh(enabled && !suspended, pollMs, refresh, collectionId, live);
 
   const result = enabled && (read?.result.key === attemptKey ||
-    pollMs && read?.scope === key && read.result.status === 'success') ? read?.result ?? null : null;
+    (pollMs !== undefined || live) && read?.scope === key && read.result.status === 'success') ? read?.result ?? null : null;
   return {result, retry};
 }

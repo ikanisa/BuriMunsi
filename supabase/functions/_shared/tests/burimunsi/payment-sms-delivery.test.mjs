@@ -83,7 +83,8 @@ test('renders the retained Kinyarwanda v2 wording and Kigali midnight with the o
 test('reserves and arms the exact receipt before the one POST', async () => {
   const { result, operations } = await run();
   assert.deepEqual(operations.map(([k]) => k), ['claim', 'prepare', 'post', 'finish']);
-  assert.deepEqual(operations[0][1], [group, available.BURIMUNSI_PAYMENT_SMS_ENABLED_AT, scope, 1]);
+  assert.deepEqual(operations[0][1].slice(0,4), [group, available.BURIMUNSI_PAYMENT_SMS_ENABLED_AT, scope, 1]);
+  assert.match(operations[0][1][4], /^[a-f0-9-]{36}$/);
   assert.equal(operations[1][1][3], sha(text));
   assert.deepEqual(operations[2][1], { messageId: row.message_id, to, notAfter: row.not_after, text });
   assert.deepEqual(operations[3][1].slice(3), ['accepted', 'delivered', 'c'.repeat(64)]);
@@ -105,7 +106,7 @@ test('changed recipient, a refused prepare or missing eligible work can never PO
 
 test('lost submission acknowledgement is recorded and the original ID is read with no destination', async () => {
   const missed = await run({ lost: true });
-  assert.deepEqual(missed.result, {status: 'unconfirmed', processed: 1, outcome: 'unknown'});
+  assert.deepEqual(missed.result, {status: 'complete', processed: 1, outcome: 'unknown'});
   const original = await run({ job: { ...row, phase: 'inspect', destination: null, body_sha256: sha(text) } });
   assert.deepEqual(original.operations.map(([op]) => op), ['claim', 'get', 'finish']);
   assert.deepEqual(original.operations[1][1], {
@@ -160,7 +161,7 @@ test('BuriMunsi holds a terminal summary without its phone proof and recovers th
     return Response.json(detail);
   }});
   const first=await run({transportFactory});
-  assert.deepEqual(first.result,{status:'unconfirmed',processed:1,outcome:'unknown'});
+  assert.deepEqual(first.result,{status:'complete',processed:1,outcome:'unknown'});
   assert.deepEqual(first.operations.at(-1)[1].slice(3),['unknown',null,null]);
   detail=gatewayDetail('delivered',[attempt('first',2)],[
     part('first',1,{delivered_at:point}),part('first',0,{delivered_at:point})]);

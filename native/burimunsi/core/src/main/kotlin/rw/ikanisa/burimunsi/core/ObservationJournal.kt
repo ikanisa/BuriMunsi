@@ -10,7 +10,7 @@ data class ObservationEntry(val owner:ObservationOwner,val sourceKey:String,val 
     override fun toString()="ObservationEntry(redacted)"
 }
 data class ObservationSeen(val owner:ObservationOwner,val sourceKey:String,val inboxRowId:Long,val requestId:String,val bodySha256:String,
-    val inboxReceivedAt:String?=null) {
+    val inboxReceivedAt:String?=null,val capturedAt:String?=null) {
     override fun toString()="ObservationSeen(redacted)"
 }
 data class ObservationJournalState(val pending:List<ObservationEntry>,val seen:List<ObservationSeen>) {
@@ -78,13 +78,21 @@ class ObservationJournal(private val storage:ObservationJournalStore) {
     companion object { private val lock=Any(); private var revision=0L; private const val MAX_PENDING=256; private const val MAX_OWNER_SEEN=16_000; private const val MAX_SEEN=16_000 }
     // Even an uncertain write invalidates an earlier UI snapshot.
     private fun save(state:ObservationJournalState){try{storage.write(state);checkContract(storage.read()==state,"observation_store_unavailable")}finally{revision++}}
-    fun append(owner:ObservationOwner, sourceKey:String, inboxRowId:Long, observation:SmsObservation, profile:ObservationProfile, now:Long):ObservationAppend = synchronized(lock){
+    fun append(owner:ObservationOwner, sourceKey:String, inboxRowId:Long, observation:SmsObservation, profile:ObservationProfile, now:Long, confirmedMissing:Boolean=false):ObservationAppend = synchronized(lock){
         checkContract(owner.valid()&&inboxRowId>0&&Regex("[a-f0-9]{64}").matches(sourceKey)&&observation.sourceMode=="catch_up"&&observation.valid(profile,now),"invalid_observation")
         val state=storage.read()
         val prior=state.seen.firstOrNull{it.owner==owner&&it.sourceKey==sourceKey}
         if(prior!=null){
             checkContract(prior.inboxRowId==inboxRowId&&prior.bodySha256==Values.sha256(observation.rawBody),"observation_source_conflict")
-            return@synchronized ObservationAppend.DUPLICATE
+            if(!confirmedMissing || state.pending.any { it.owner == owner && it.sourceKey == sourceKey })
+                return@synchronized ObservationAppend.DUPLICATE
+            if(state.pending.size >= MAX_PENDING) return@synchronized ObservationAppend.FULL
+            // Reuse the original operation ID. Persist the recovery envelope before any dispatch.
+            val replay = observation.copy(requestId=prior.requestId, capturedAt=prior.capturedAt ?: observation.capturedAt)
+            val retained = prior.copy(capturedAt=replay.capturedAt)
+            save(ObservationJournalState(state.pending + ObservationEntry(owner,sourceKey,replay),
+                state.seen.map { if(it == prior) retained else it }))
+            return@synchronized ObservationAppend.STORED
         }
         // A changed installation identity must not create a second identity for the same stored row.
         checkContract(state.seen.none{it.owner==owner&&it.inboxRowId==inboxRowId&&
@@ -92,7 +100,7 @@ class ObservationJournal(private val storage:ObservationJournalStore) {
         checkContract(state.seen.none{it.requestId==observation.requestId},"observation_request_conflict")
         if(state.pending.size>=MAX_PENDING)return@synchronized ObservationAppend.FULL
         val entry=ObservationEntry(owner,sourceKey,observation)
-        val seen=state.seen+ObservationSeen(owner,sourceKey,inboxRowId,observation.requestId,Values.sha256(observation.rawBody),observation.inboxReceivedAt)
+        val seen=state.seen+ObservationSeen(owner,sourceKey,inboxRowId,observation.requestId,Values.sha256(observation.rawBody),observation.inboxReceivedAt,observation.capturedAt)
         // Keep all pending identities and each owner's entire replay horizon.
         val pending=state.pending+entry
         val pendingIds=pending.map{it.observation.requestId}.toSet()

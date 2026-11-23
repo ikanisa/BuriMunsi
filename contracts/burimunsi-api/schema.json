@@ -5030,18 +5030,7 @@
                 "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\\s\\S])"
               },
               "status": {
-                "type": "string",
-                "enum": [
-                  "pending",
-                  "retrying",
-                  "parsed",
-                  "needs_review",
-                  "conflict",
-                  "duplicate",
-                  "security",
-                  "historical",
-                  "unknown"
-                ]
+                "$ref": "#/$defs/observationProcessingState"
               },
               "canRetry": {
                 "type": "boolean"
@@ -5230,6 +5219,12 @@
               "type": "null"
             }
           ]
+        },
+        "gatewayEnvelopeId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\\s\\S])"
         }
       },
       "required": [
@@ -5344,6 +5339,15 @@
           },
           "minItems": 1,
           "maxItems": 20
+        },
+        "runId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\\s\\S])"
+        },
+        "includeProcessing": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -5385,6 +5389,9 @@
               "type": "null"
             }
           ]
+        },
+        "processingStatus": {
+          "$ref": "#/$defs/observationProcessingState"
         }
       },
       "required": [
@@ -5700,7 +5707,12 @@
     },
     "observationReconcileVerifiedStatus.query": {
       "type": "object",
-      "properties": {},
+      "properties": {
+        "scope": {
+          "type": "string",
+          "const": "installation"
+        }
+      },
       "required": [],
       "additionalProperties": false
     },
@@ -5735,7 +5747,10 @@
         },
         "scope": {
           "type": "string",
-          "const": "verified_collection"
+          "enum": [
+            "verified_collection",
+            "verified_installation"
+          ]
         }
       },
       "required": [
@@ -5973,6 +5988,175 @@
         "data"
       ],
       "additionalProperties": false
+    },
+    "observationInboxCheck.request": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\\s\\S])"
+        },
+        "expectedConsentGeneration": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "checking",
+            "incomplete",
+            "verified"
+          ]
+        },
+        "candidateCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "missingCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "pendingCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "phoneLatestKey": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}(?![\\s\\S])"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parsedLatestKey": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}(?![\\s\\S])"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "collectionRevision": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}(?![\\s\\S])"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "runId",
+        "expectedConsentGeneration",
+        "state",
+        "candidateCount",
+        "missingCount",
+        "pendingCount",
+        "phoneLatestKey",
+        "parsedLatestKey",
+        "collectionRevision"
+      ],
+      "additionalProperties": false
+    },
+    "observationInboxCheck.query": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "observationInboxCheck.data": {
+      "type": "object",
+      "properties": {
+        "groupId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}(?![\\s\\S])"
+        },
+        "runId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![\\s\\S])"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "checking",
+            "incomplete",
+            "verified"
+          ]
+        }
+      },
+      "required": [
+        "groupId",
+        "runId",
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "observationInboxCheck.response": {
+      "type": "object",
+      "properties": {
+        "contractVersion": {
+          "type": "string",
+          "const": "burimunsi.native.v1",
+          "x-code": "CONTRACT_VERSION"
+        },
+        "ok": {
+          "type": "boolean",
+          "const": true,
+          "x-code": "CONTRACT_VALUE"
+        },
+        "binding": {
+          "$ref": "#/$defs/binding"
+        },
+        "data": {
+          "$ref": "#/$defs/observationInboxCheck.data"
+        }
+      },
+      "required": [
+        "contractVersion",
+        "ok",
+        "binding",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "observationProcessingState": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "retrying",
+        "parsed",
+        "needs_review",
+        "conflict",
+        "duplicate",
+        "security",
+        "historical",
+        "unknown"
+      ]
     }
   }
 }

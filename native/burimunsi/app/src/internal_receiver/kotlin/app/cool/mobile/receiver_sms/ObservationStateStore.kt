@@ -81,10 +81,11 @@ internal class ObservationStateStore(context:Context):ObservationJournalStore {
         }
         val seen=(0 until seenJson.length()).map{index->
             val item=seenJson.getJSONObject(index);val keys=setOf("owner","sourceKey","inboxRowId","requestId","bodySha256")
-            exact(item,if(item.has("inboxReceivedAt"))keys+"inboxReceivedAt" else keys)
+            exact(item,keys+listOf("inboxReceivedAt","capturedAt").filter(item::has))
             val scope=item.getJSONObject("owner");exact(scope,setOf("collectionId","accountId"))
             ObservationSeen(owner(scope),item.getString("sourceKey"),item.getLong("inboxRowId"),item.getString("requestId"),item.getString("bodySha256"),
-                if(item.has("inboxReceivedAt"))item.getString("inboxReceivedAt") else null)
+                if(item.has("inboxReceivedAt"))item.getString("inboxReceivedAt") else null,
+                if(item.has("capturedAt"))item.getString("capturedAt") else null)
         }
         val seenByRequest=seen.associateBy(ObservationSeen::requestId)
         val digest=Regex("[a-f0-9]{64}")
@@ -95,11 +96,13 @@ internal class ObservationStateStore(context:Context):ObservationJournalStore {
             seen.map{Triple(it.owner,it.inboxRowId,it.inboxReceivedAt)}.toSet().size==seen.size&&
             seen.groupBy{it.owner to it.inboxRowId}.values.all{items->items.size==1||items.none{it.inboxReceivedAt==null}}&&
             seen.all{it.inboxReceivedAt==null||runCatching{Instant.parse(it.inboxReceivedAt).toEpochMilli()>0}.getOrDefault(false)}&&
+            seen.all{it.capturedAt==null||runCatching{Instant.parse(it.capturedAt);true}.getOrDefault(false)}&&
             seenByRequest.size==seen.size&&pending.map{it.observation.requestId}.toSet().size==pending.size&&
             pending.all{entry->
                 val recorded=seenByRequest[entry.observation.requestId]
                 recorded!=null&&recorded.owner==entry.owner&&recorded.sourceKey==entry.sourceKey&&
-                    recorded.bodySha256==Values.sha256(entry.observation.rawBody)
+                    recorded.bodySha256==Values.sha256(entry.observation.rawBody)&&
+                    (recorded.capturedAt==null||recorded.capturedAt==entry.observation.capturedAt)
             },"observation_store_unavailable")
         return ObservationJournalState(pending,seen)
     }
@@ -108,7 +111,7 @@ internal class ObservationStateStore(context:Context):ObservationJournalStore {
             .put("sourceKey",entry.sourceKey).put("observation",observationJson(entry.observation)))
         val seen=JSONArray();for(entry in value.seen)seen.put(JSONObject().put("owner",ownerJson(entry.owner))
             .put("sourceKey",entry.sourceKey).put("inboxRowId",entry.inboxRowId).put("requestId",entry.requestId).put("bodySha256",entry.bodySha256)
-            .also{objectValue->entry.inboxReceivedAt?.let{objectValue.put("inboxReceivedAt",it)}})
+            .also{objectValue->entry.inboxReceivedAt?.let{objectValue.put("inboxReceivedAt",it)};entry.capturedAt?.let{objectValue.put("capturedAt",it)}})
         val encrypted=cipher().encrypt(JSONObject().put("version",1).put("pending",pending).put("seen",seen).toString())
         checkContract(file.write(encrypted),"observation_store_unavailable")
     }

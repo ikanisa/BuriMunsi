@@ -235,7 +235,7 @@ class BuriContinuousSyncService:Service(){
             }
             detachSession=NativeRepository(this,api).observeProcessSession{ObservationAuthorityRevision.changed();main.post{wake(0)}}
             observer=object:ContentObserver(main){override fun onChange(selfChange:Boolean){
-                ObservationInboxRevision.changed();BuriContinuousSupervisor.invalidateProof();refreshDisplayedHealth();wake(400)
+                ObservationInboxRevision.changed();BuriContinuousSupervisor.invalidateProof();refreshDisplayedHealth();wake(0)
             }}.also{
                 contentResolver.registerContentObserver(Telephony.Sms.CONTENT_URI,true,it)
             }
@@ -355,7 +355,7 @@ class BuriContinuousSyncService:Service(){
                     ObservationSyncDiagnostics.service(ServicePhase.RETRY,problem)
                     BuriContinuousSupervisor.update(this,problem,if(!result.busy)System.currentTimeMillis()else null,result.healthProof)
                     publishCurrentHealth()
-                    val delay=if(wakeAgain)0L else if(result.busy)2_000L else retry.next(result.completed,result.more,result.progress)
+                    val delay=if(wakeAgain)0L else if(result.busy)500L else retry.next(result.completed,result.more,result.progress,result.awaitingParser)
                     wake(delay)
                 }
             }

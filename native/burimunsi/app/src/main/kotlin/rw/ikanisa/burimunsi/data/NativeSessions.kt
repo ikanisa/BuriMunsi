@@ -44,7 +44,7 @@ internal class NativeSessions(
             if(saved.pendingPasscode?.stage==PasscodeStage.INFLIGHT)return null
             if(synchronized(signOutLock){pendingSignOut(saved,SecureStore(context,"session-revocations").read())})return null
             val profile=saved.operatorOrNull()?:return null
-            if(profile.role!=Role.ADMIN||!profile.capabilities.containsAll(setOf(Capability.SMS.key,Capability.GATEWAY.key)))return null
+            if(!app.cool.mobile.BuildConfig.IS_GATEWAY || profile.role != Role.ADMIN) return null
             return saved.groupId to profile.id
         }
 

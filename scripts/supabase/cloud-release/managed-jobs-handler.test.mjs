@@ -4,15 +4,14 @@ import {cp,mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {renderManagedJobsHandler} from './managed-jobs-handler-patch.mjs';
-const r=await renderManagedJobsHandler(),dir=await mkdtemp(join(tmpdir(),'collect-managed-jobs-handler-'));
+const dir=await mkdtemp(join(tmpdir(),'collect-managed-jobs-handler-'));
 const once=(s,a,b)=>{const i=s.indexOf(a);assert(i>=0&&s.indexOf(a,i+a.length)<0);return s.slice(0,i)+b+s.slice(i+a.length);};
 try{
  await cp(new URL('../../../supabase/functions',import.meta.url),join(dir,'supabase/functions'),{recursive:true});
  await cp(new URL('../../../supabase/retention-inventory.json',import.meta.url),join(dir,'supabase/retention-inventory.json'));
  const shared=join(dir,'supabase/functions/_shared');
  // The substitutions are fixture-only and never become the deployed patch.
- let runtime=r.runtime;
+ let runtime=await readFile(join(shared,'edge-runtime.js'),'utf8');
  runtime=once(runtime,'env.DB = new PostgresDatabase(connection(env.COLLECT_DATABASE_URL, env));',
   'env.DB = globalThis.__managedJobsFixture.db;');
  runtime=once(runtime,'await assertRuntimeDeployment(env.DB.sql, env, standaloneCollectionId);',
@@ -24,8 +23,6 @@ try{
  runtime=once(runtime,'Object.assign(env, providerAdapters(env));',
   'Object.assign(env, globalThis.__managedJobsFixture.adapters);');
  await writeFile(join(shared,'edge-runtime.js'),runtime);
- await writeFile(join(shared,'scheduled-processing.js'),r.processing);
- await writeFile(join(shared,'managed-jobs-dispatch-auth.mjs'),r.auth);
  const script=String.raw`
 import assert from 'node:assert/strict';
 import {createScheduledHandler} from './serve.js';
@@ -88,6 +85,10 @@ Deno.test('payer receipt observations are bounded and unconfirmed work cannot co
  assert.deepEqual((await unresolved.json()).payment_receipt_sms,{status:'unconfirmed',processed:1,outcome:'unknown'});
  assert.equal((await handler(make(first,auth))).status,401);assert.equal(calls,1);
 
+ observed={status:'complete',processed:1,outcome:'unknown',destination:'synthetic-private-contact'};
+ const saved=ticket({native_sms_admission:admission}),safe=await handler(make(saved,await sign(saved)));
+ assert.equal(safe.status,200);assert.equal(tickets.get(saved.dispatch_id).digest,await digest(safe));
+ assert.deepEqual((await safe.json()).payment_receipt_sms,{status:'complete',processed:1,outcome:'unknown'});
  observed={status:'held',processed:1,outcome:'held'};
  const held=ticket({native_sms_admission:admission}),heldResponse=await handler(make(held,await sign(held)));
  assert.equal(heldResponse.status,503);assert.equal(tickets.get(held.dispatch_id).completed,undefined);

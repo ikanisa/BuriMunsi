@@ -44,14 +44,16 @@ export async function qualifyPhoneTeam({admin, origin, open}) {
   const matrix = permissions.locator('..');
   assert.deepEqual(await matrix.getByRole('heading', {level: 3}).allTextContents(), ['Admin', 'Staff']);
   assert.equal(await admin.getByRole('button', {name: /invite|verif/i}).count(), 0);
-  checks.push('team_displays_only_admin_and_staff');
+  const adminRow = admin.getByRole('row').filter({has: admin.getByRole('cell', {name: 'Admin', exact: true})});
+  assert.equal(await adminRow.count(), 1);
+  assert.equal(await adminRow.getByRole('button', {name: /^Manage /}).count(), 0);
+  checks.push('team_displays_admin_without_access_controls');
 
   await button(admin, 'Create account').click();
   await admin.getByLabel('Name', {exact: true}).fill(name);
   await admin.getByLabel('Mobile number').fill(number);
-  const role = admin.getByLabel('Role', {exact: true});
-  assert.equal(await role.inputValue(), 'staff');
-  assert.deepEqual(await role.getByRole('option').allTextContents(), ['Admin', 'Staff']);
+  assert.equal(await admin.getByLabel('Role', {exact: true}).count(), 0);
+  await admin.getByText('Role: Staff', {exact: true}).waitFor();
   assert.equal(await admin.getByLabel(/passcode|email|whatsapp/i).count(), 0);
   await button(admin, 'Review account').click();
   const id = await accountReceipt('Confirm account creation', 'team/accounts', {displayName: name, phone, role: 'staff'}, 1);
@@ -87,27 +89,33 @@ export async function qualifyPhoneTeam({admin, origin, open}) {
 
     const accessPath = `team/accounts/${id}/access`;
     await targetRow.getByRole('button', {name: `Manage ${name}`}).click();
-    await role.selectOption('admin');
+    assert.equal(await admin.getByLabel('Role', {exact: true}).count(), 0);
+    await admin.getByText('Role: Staff', {exact: true}).waitFor();
+    assert.equal(await admin.getByRole('option', {name: 'Admin', exact: true}).count(), 0);
     await button(admin, 'Review account').click();
-    assert.equal(await accountReceipt('Confirm access change', accessPath, {expectedVersion: 1, role: 'admin', active: true}, 2), id);
-    await targetRow.getByRole('cell', {name: 'Admin', exact: true}).waitFor();
-    await staffPage.goto(teamUrl);
-    await heading(staffPage, 'Welcome to BuriMunsi').waitFor();
-    await signIn(staffPage, changedPin);
-    await heading(staffPage, 'Team access').waitFor();
-    await button(staffPage, 'Create account').waitFor();
-    checks.push('promoted_account_reenters_team_as_another_admin');
+    await admin.getByRole('status').filter({hasText: 'Choose a different access status.'}).waitFor();
+    assert.equal(await button(admin, 'Confirm access change').count(), 0);
+    checks.push('staff_access_cannot_promote_or_change_role');
 
-    await targetRow.getByRole('button', {name: `Manage ${name}`}).click();
     await admin.getByLabel('Access', {exact: true}).selectOption('disabled');
     await button(admin, 'Review account').click();
-    assert.equal(await accountReceipt('Confirm access change', accessPath, {expectedVersion: 2, role: 'admin', active: false}, 3), id);
+    assert.equal(await accountReceipt('Confirm access change', accessPath, {expectedVersion: 1, role: 'staff', active: false}, 2), id);
     await targetRow.getByRole('cell', {name: 'Disabled', exact: true}).waitFor();
     await staffPage.reload();
     await heading(staffPage, 'Welcome to BuriMunsi').waitFor();
     await signIn(staffPage, changedPin, 401);
     assert.equal(await button(staffPage, 'Create account').count(), 0);
     checks.push('disabled_account_loses_session_and_cannot_sign_in');
+
+    await targetRow.getByRole('button', {name: `Manage ${name}`}).click();
+    await admin.getByLabel('Access', {exact: true}).selectOption('active');
+    await button(admin, 'Review account').click();
+    assert.equal(await accountReceipt('Confirm access change', accessPath, {expectedVersion: 2, role: 'staff', active: true}, 3), id);
+    await targetRow.getByRole('cell', {name: 'Staff', exact: true}).waitFor();
+    await targetRow.getByRole('cell', {name: 'Active', exact: true}).waitFor();
+    await signIn(staffPage, changedPin);
+    await heading(staffPage, 'Operations overview').waitFor();
+    checks.push('reenabled_staff_can_sign_in_without_promotion');
   } finally {
     await staff.context.close();
   }

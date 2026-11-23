@@ -5,6 +5,7 @@ import {permission,lists,list,overview,fail,unavailable} from './admin_records.j
 import {ApiError,json,uuid} from './core.js';
 import {evidenceRoute} from './evidence.js';
 import {adminSyncEvents} from './admin_sync.js';
+import {adminLiveReceivers} from './admin_live_receivers.js';
 import {adminPrivacyRoute} from './admin_privacy.js';
 import {notificationOperatorRoute} from './notification_operator.js';
 import {notificationOperatorManagementRoute} from './notification_operator_management.js';
@@ -33,6 +34,7 @@ async function bridgeRoute(request,env){
  if(section==='gateway'&&parts[0]==='receipts')return json(await adminMemberReceiptRead(request,base,account,actor,parts,url));
  if(section==='privacy')return adminPrivacyRoute(request,accountDatabase(env,account,'privacy.review',{mfa:true,fresh:true}),actor,parts);
  if(section==='sync'){
+  if(parts.length===1&&parts[0]==='live')return adminLiveReceivers(request,env,account,actor);
   if(parts.length!==0)fail(404,'not_found','This update view does not exist.');
   if(request.method!=='GET')fail(405,'method_not_allowed','Updates are read-only.');
   return json(await adminSyncEvents(request,base,account));

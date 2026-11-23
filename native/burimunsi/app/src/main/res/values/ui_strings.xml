@@ -154,7 +154,7 @@
     <string name="ui_470e7ee2a579">Discard unsaved changes?</string>
     <string name="ui_471174cb19d3">Ledger change (RWF)</string>
     <string name="ui_471a6a3c7653">Check the previous action, then sign in again before adding staff.</string>
-    <string name="ui_47a5108e3f48">Ask your administrator to reauthorize this installation. Retained receipts must keep their original source binding.</string>
+    <string name="ui_47a5108e3f48">Sign in with an Admin account to resume receiving payment SMS.</string>
     <string name="ui_47be65b6a9d3">Registered name: 2–100 characters.</string>
     <string name="ui_47e796b69e13">Authorization required</string>
     <string name="ui_4850b174b713">Required</string>
@@ -461,7 +461,7 @@
     <string name="ui_cba60649926c">Previously retained receipts are not erased.</string>
     <string name="ui_cca7c457de7c">Payment reference</string>
     <string name="ui_ccf28b3545f9">Retire this receiver and pair its replacement to the same receiving account. There can be only one active receiver.</string>
-    <string name="ui_cd21e82c9071">Review the requested Android permissions. Grant access only on the approved receiving phone, then refresh this status.</string>
+    <string name="ui_cd21e82c9071">Allow the requested Android SMS and phone permissions to receive payments automatically.</string>
     <string name="ui_cd5da12c512a">Too many attempts. Try again later.</string>
     <string name="ui_cdfa93bbd715">Leave blank for default</string>
     <string name="ui_ceaeb96063f7">Confirm the document processing consent before continuing.</string>
@@ -606,4 +606,7 @@
     <string name="ui_sms_not_payment_confirmation">This status does not confirm a payment.</string>
     <string name="ui_sms_retry_scheduled">Retry scheduled.</string>
     <string name="ui_sms_retry_not_eligible">This SMS cannot be retried.</string>
+    <string name="ui_open_burimunsi_admin">Open BuriMunsi Admin</string>
+    <string name="ui_receive_payment_sms">Receive payment SMS</string>
+    <string name="ui_install_burimunsi_admin">Install the signed BuriMunsi Admin app provided by your organization, then sign in with your mobile number and passcode.</string>
 </resources>

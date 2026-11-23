@@ -328,9 +328,13 @@ class WireContract(private val product: String, private val version: String,
                 val requested=arrayValue(expected["sourceKeys"])
                 val items=arrayValue(d["items"]).map(::objectValue)
                 if(requested.toSet().size!=requested.size||items.size!=requested.size||items.indices.any{i->
-                    items[i]["sourceKey"]!=requested[i]||(items[i]["state"]=="matched")!=(items[i]["sourceId"]!=null)
+                    val matched = items[i]["state"] == "matched"
+                    items[i]["sourceKey"] != requested[i] || matched != (items[i]["sourceId"] != null) ||
+                        items[i].containsKey("processingStatus") != (expected["includeProcessing"] == true && matched)
                 })reject("CONTRACT_IDENTITY")
             }
+            if(operation=="observationReconcileVerifiedStatus" && d["scope"] != (expected["verifiedScope"] ?: "verified_collection"))
+                reject("CONTRACT_IDENTITY")
             if(operation in listOf("observationReconcileStatus", "observationReconcileVerifiedStatus")&&
                 (d["hasRecorded"]==true)!=((d["recordedCount"] as Number).toLong()>0L))reject("CONTRACT_STATE")
             if (operation == "observationReveal") {

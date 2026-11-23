@@ -8,6 +8,7 @@ import {connect,management,record,ROOT,PROJECT,sha} from './access.mjs';
 import {captureRuntimeSnapshot,checkSnapshot} from './runtime-plan.mjs';
 import {renderManagedJobsHandler} from './managed-jobs-handler-patch.mjs';
 import {keyEvidenceForSource,sameDeployedFunctions,verifyDeploymentEvidence} from './managed-jobs-key-operator.mjs';
+import {fastScheduleHistorySql,reviewedJobsCadence} from './managed-jobs-operator.mjs';
 import {requireRevisionSchedulerReady} from './revise-runtime.mjs';
 import {readAncillaryRegistration,requireSameRegistration,requireVersionOnlyRequalification,registrationSnapshot,scopedInventory} from './ancillary-inventory.mjs';
 
@@ -46,7 +47,7 @@ export const functions=(rows,registration=null)=>{
 function common(state,source,checkKeyFunctions=true){
  if(state?.control?.mode!=='open'||state.control.source_sha256!==source||!Number.isSafeInteger(Number(state.control.epoch))||
   state.enabled!==false||state.active!==false||state.pending!==0||state.activeJobAdmissions!==0||state.imported!==37||
-  state.schedule!=='* * * * *'||state.command!=='SELECT collect_ops.tick_jobs();'||state.operator!==true)
+  state.schedule!==reviewedJobsCadence(state.fastMigration)||state.command!=='SELECT collect_ops.tick_jobs();'||state.operator!==true)
   fail('rebind_scheduler_not_drained');
  requireRevisionSchedulerReady(state.scheduler);
  if(state.secrets.BUILD_SOURCE_ID!==sha(source)||state.secrets.COLLECT_JOB_AUTH_MODE!==sha('supabase_dispatch_hmac_v1')||
@@ -159,7 +160,7 @@ function checkTransition(state,intent,approvalDigest,disabled=true){
 async function liveState(db,api,keyEvidence){
  const ancillaryRegistration=readAncillaryRegistration();
  const control=(await db.query('SELECT mode,epoch,source_sha256 FROM private.collect_fence_control WHERE singleton')).rows[0];
- const x=(await db.query(`SELECT c.enabled,j.active,j.schedule,j.command,c.native_provider_source_sha256,c.native_provider_model_id,
+ const x=(await db.query(`SELECT c.enabled,j.active,j.schedule,j.command,${fastScheduleHistorySql} AS fast_migration,c.native_provider_source_sha256,c.native_provider_model_id,
   c.native_provider_approval_sha256,c.native_provider_used,c.native_provider_limit,c.native_provider_expires_at,
   (SELECT count(*)::int FROM collect_ops.jobs_dispatches WHERE state IN('awaiting','unconfirmed')) AS pending,
   (SELECT count(*)::int FROM private.collect_imported_native_history) AS imported,
@@ -171,7 +172,7 @@ async function liveState(db,api,keyEvidence){
  if(!control||!x)fail('rebind_scheduler_not_drained');
  const [f,s]=await Promise.all([api('functions'),api('secrets')]);
  requireSameRegistration(ancillaryRegistration,readAncillaryRegistration());
- return {control,enabled:x.enabled,active:x.active,schedule:x.schedule,command:x.command,pending:x.pending,imported:x.imported,
+ return {control,enabled:x.enabled,active:x.active,schedule:x.schedule,fastMigration:x.fast_migration,command:x.command,pending:x.pending,imported:x.imported,
   activeJobAdmissions:x.active_job_admissions,scheduler:x.scheduler,operator:x.operator,budget:x,keyCount:keys.length,key:keys[0]??null,
   keyEvidence,functions:functions(f.json(),ancillaryRegistration),ancillaryRegistration,secrets:secretMap(s.json())};
 }
@@ -379,7 +380,7 @@ export async function updateBudget(db,intent,approval){
   // lock is taken before the config row, as with native financial writers.
   await db.query("SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='15s'; SELECT private._collect_fence_require_operator(); SELECT private.collect_fence_assert_write(NULL,NULL,NULL); SELECT pg_advisory_xact_lock(hashtextextended('collect.scheduler.rrlduytparvsjfmegalh',0)); SELECT pg_advisory_xact_lock(734636924058501::bigint)");
   const c=(await db.query('SELECT mode,epoch,source_sha256 FROM private.collect_fence_control WHERE singleton')).rows[0];
-  const x=(await db.query(`SELECT c.*,private._collect_fence_scheduler_status() AS scheduler,
+  const x=(await db.query(`SELECT c.*,${fastScheduleHistorySql} AS fast_migration,private._collect_fence_scheduler_status() AS scheduler,
    (SELECT count(*)::int FROM collect_ops.jobs_dispatches WHERE state IN('awaiting','unconfirmed')) AS pending,
    (SELECT count(*)::int FROM private.collect_fence_admissions a WHERE kind='jobs' AND state IN('active','unresolved')
     AND NOT private._collect_stopped_matches(a.admission_id,a.epoch,a.source_sha256,a.kind)) AS active_job_admissions
@@ -388,7 +389,7 @@ export async function updateBudget(db,intent,approval){
   // and scheduler advisory lock remain held across this read and the CAS.
   const job=x?(await db.query('SELECT active,schedule,command FROM cron.job WHERE jobid=$1',[x.cron_job_id])).rows[0]:null;
   if(!c||c.mode!=='open'||c.source_sha256!==intent.newSource||Number(c.epoch)!==intent.epoch+2||!x||!job||x.enabled||job.active||
-   x.pending!==0||x.active_job_admissions!==0||job.schedule!=='* * * * *'||job.command!=='SELECT collect_ops.tick_jobs();'||
+   x.pending!==0||x.active_job_admissions!==0||job.schedule!==reviewedJobsCadence(x.fast_migration)||job.command!=='SELECT collect_ops.tick_jobs();'||
    !same(budget(x),intent.budget))fail('rebind_provider_preimage_changed');
   requireRevisionSchedulerReady(x.scheduler);
   const changed=await db.query(`UPDATE collect_ops.jobs_config SET native_provider_source_sha256=$1,native_provider_approval_sha256=$2

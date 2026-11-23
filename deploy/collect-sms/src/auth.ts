@@ -1,5 +1,6 @@
 import type { Context, Next } from "npm:hono@4.13.16";
 import type { AdminPermission, AppEnv, Kind, Scope, StaffRole } from "./types.ts";
+import { prepareGatewayRead } from "./postgres.ts";
 import { ApiError, isoNow, safeEqual, sha256 } from "./util.ts";
 
 const rolePermissions: Record<StaffRole, readonly AdminPermission[]> = {
@@ -44,7 +45,7 @@ export async function authenticate(c: Context<AppEnv>, next: Next) {
   // Read roles and revocation on every request; never trust a client-supplied role.
   if (token.startsWith("operator_")) {
     const now = isoNow();
-    const staff = await c.env.DB.prepare(
+    const staff = await prepareGatewayRead(c.env.DB,
       `SELECT a.staff_id,a.name,a.role,s.session_id FROM staff_sessions s
        JOIN staff_accounts a ON a.staff_id=s.staff_id
        WHERE s.token_hash=? AND s.revoked_at IS NULL AND a.revoked_at IS NULL
@@ -57,7 +58,7 @@ export async function authenticate(c: Context<AppEnv>, next: Next) {
     }
     throw new ApiError(401, "session_expired", "Staff session is expired or revoked; sign in again");
   }
-  const app = await c.env.DB.prepare(
+  const app = await prepareGatewayRead(c.env.DB,
     "SELECT application_id,allowed_kinds,scopes FROM applications WHERE token_hash=? AND revoked_at IS NULL",
   )
     .bind(digest)
@@ -72,7 +73,7 @@ export async function authenticate(c: Context<AppEnv>, next: Next) {
     await next();
     return;
   }
-  const device = await c.env.DB.prepare(
+  const device = await prepareGatewayRead(c.env.DB,
     "SELECT installation_id,allowed_kinds FROM devices WHERE token_hash=? AND revoked_at IS NULL",
   )
     .bind(digest)

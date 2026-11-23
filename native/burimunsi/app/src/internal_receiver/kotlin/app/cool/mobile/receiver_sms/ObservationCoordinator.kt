@@ -131,12 +131,24 @@ internal class ObservationCoordinator(context:Context,private val repository:Nat
         diagnostic?.phase(Phase.JOURNAL_READ)
         val entries=owned(session){journal.pending(current)}?:return fail(Fence.OWNER_CHANGED)
         diagnostic?.queued(entries.size)
+        val seen=if(entries.isEmpty())emptyMap() else owned(session){journal.seenSnapshot(current).entries.associateBy{it.requestId}}
+            ?:return fail(Fence.OWNER_CHANGED)
         var unresolved=0;var laterAttempts=0
         var held=false
         for(entry in entries){
             diagnostic?.phase(Phase.UPLOAD_GUARD)
             if(unresolved>0&&laterAttempts>=2)return fail(Fence.UNRESOLVED_LATER_LIMIT)
             if(!uploadAllowed(session,stopped))return false
+            // Previously queued rows may predate SIM scoping. Confirm those immutable rows
+            // still belong to this observation transport before any body leaves the phone.
+            val evidence=entry.observation
+            val inbox=seen[evidence.requestId]
+            val received=evidence.inboxReceivedAt?.let{runCatching{java.time.Instant.parse(it).toEpochMilli()}.getOrNull()}
+            if(inbox==null||received==null||ObservationLegacyOwnership.classify(app,current,inbox.inboxRowId,received,
+                evidence.rawSender,evidence.rawBody,evidence.subscriptionId)!=ObservationLegacyOwnership.Decision.UNOWNED){
+                held=true
+                continue
+            }
             if(HeldRecoveryJournal.hasRecords(app)){
                 val installation=MomoGatewayStore(app).existingInstallationId()?:return fail(Fence.UNRESOLVED_REMAIN)
                 val device=Settings.Secure.getString(app.contentResolver,Settings.Secure.ANDROID_ID)?:return fail(Fence.UNRESOLVED_REMAIN)

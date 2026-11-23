@@ -154,7 +154,7 @@
     <string name="ui_470e7ee2a579">Kureka ibyahinduwe bitarabikwa?</string>
     <string name="ui_471174cb19d3">Impinduka mu gitabo (RWF)</string>
     <string name="ui_471a6a3c7653">Banza ugenzure igikorwa cyabanje, wongere winjire mbere yo kongeramo abakozi.</string>
-    <string name="ui_47a5108e3f48">Saba umuyobozi kongera guha iyi porogaramu uburenganzira. Inyemezabwishyu zibitswe zigomba kugumana aho zakomotse.</string>
+    <string name="ui_47a5108e3f48">Injira ukoresheje konti y’umuyobozi kugira ngo wongere kwakira SMS z’ubwishyu.</string>
     <string name="ui_47be65b6a9d3">Izina ryanditswe: inyuguti 2–100.</string>
     <string name="ui_47e796b69e13">Uburenganzira burakenewe</string>
     <string name="ui_4850b174b713">Burakenewe</string>
@@ -461,7 +461,7 @@
     <string name="ui_cba60649926c">Inyemezabwishyu zabitswe mbere ntizisibwa.</string>
     <string name="ui_cca7c457de7c">Nimero iranga ubwishyu</string>
     <string name="ui_ccf28b3545f9">Hagarika iyi telefoni yakira, uhuze iyisimbura na konti imwe yakira. Telefoni imwe gusa ni yo yemerewe kwakira.</string>
-    <string name="ui_cd21e82c9071">Genzura uburenganzira bwa Android busabwa. Butange gusa kuri telefoni yakira yemejwe, hanyuma uvugurure uko ihagaze.</string>
+    <string name="ui_cd21e82c9071">Emera ko porogaramu ikoresha SMS na telefoni kugira ngo inyemezabwishyu zakirwe mu buryo bwikora.</string>
     <string name="ui_cd5da12c512a">Wagerageje inshuro nyinshi. Ongera ugerageze nyuma.</string>
     <string name="ui_cdfa93bbd715">Siga ubusa ukoreshe isanzwe</string>
     <string name="ui_ceaeb96063f7">Emeza uburenganzira bwo gukoresha inyandiko mbere yo gukomeza.</string>
@@ -606,4 +606,7 @@
     <string name="ui_sms_not_payment_confirmation">Iyi mimerere ntiyemeza ko ubwishyu bwakozwe.</string>
     <string name="ui_sms_retry_scheduled">Gusubiramo byateguwe.</string>
     <string name="ui_sms_retry_not_eligible">Ubu butumwa ntibushobora gusubirwamo.</string>
+    <string name="ui_open_burimunsi_admin">Fungura BuriMunsi Admin</string>
+    <string name="ui_receive_payment_sms">Kwakira SMS z’ubwishyu</string>
+    <string name="ui_install_burimunsi_admin">Shyiramo porogaramu yemejwe ya BuriMunsi Admin wahawe n’ikigo cyawe, hanyuma winjire ukoresheje nimero ya telefoni n’umubare wawe w’ibanga.</string>
 </resources>

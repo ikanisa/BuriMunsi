@@ -28,11 +28,10 @@ export function isCollectNativeRoute(request){
   const path=new URL(request.url).pathname;
   return path==='/v1/burimunsi'||path.startsWith('/v1/burimunsi/');
 }
-// The signed predecessor has no original-consent proof. The deployed catalog
-// also lacks the separate verified-status function. Decide before ingress
-// buffers an SMS or opens a database, fence, or provider connection.
-export function unavailableHeldObservation(request){
-  if(!heldObservationOperation(new URL(request.url).pathname))return null;
+// Disabled observation installations reject held inputs before buffering any
+// SMS. Enabled installations still require the strict wire and a PIN session.
+export function unavailableHeldObservation(request,env){
+  if(!heldObservationOperation(new URL(request.url).pathname)||env?.BURIMUNSI_SMS_OBSERVATIONS_ENABLED==='true')return null;
   discardNativeBody(request);
   return failure(new BuriError('not_found',404));
 }
@@ -122,7 +121,7 @@ export function createCollectNativeRoute({profile,config,bridgeFactory,secrets,n
  * before touching provider, native account, receipt or financial commands. */
 export async function collectNativeRoute(request,env){
   if(!isCollectNativeRoute(request))return null;
-  const unavailable=unavailableHeldObservation(request);
+  const unavailable=unavailableHeldObservation(request,env);
   if(unavailable)return unavailable;
   try{
     const handler=env?.BURIMUNSI_NATIVE_ROUTE;

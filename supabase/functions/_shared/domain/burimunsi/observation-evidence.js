@@ -54,6 +54,10 @@ function instant(value) {
   return `${seconds}.${fraction.replace(/0+$/, '')}Z`;
 }
 
+export function sameObservationInstant(left,right) {
+  return iso(left) && iso(right) && instant(left) === instant(right);
+}
+
 export function mapObservationError(error) {
   if (error instanceof BuriError) return error;
   if (error?.code === '23505' || error?.code === '40001') return new BuriError('observation_changed', 409);
@@ -131,7 +135,8 @@ export function approvedObservationProfile(context, validate) {
 }
 
 export function validateReconcileInput(input) {
-  exactKeys(input, reconcileKeys);
+  exactKeys(input,[...reconcileKeys,'gatewayEnvelopeId'],reconcileKeys);
+  if(input.gatewayEnvelopeId!==undefined)requireRequestId(input.gatewayEnvelopeId);
   const witness = copyObservationValue(input);
   requireObservation(
     OBSERVATION_HASH.test(witness.sourceKey ?? '') && OBSERVATION_HASH.test(witness.bodySha256 ?? '') &&

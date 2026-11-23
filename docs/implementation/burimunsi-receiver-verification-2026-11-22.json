@@ -1,0 +1,125 @@
+{
+  "startedAt": "2026-11-22T15:19:14.806Z",
+  "environment": "Isolated PG17 with synthetic member and object storage, deterministic provider extraction, simulated SMS gateway and carrier multipart callback.",
+  "handsetInputs": "Two saved Android emulator inbox captures, uploaded twice each.",
+  "timeBasis": "Monotonic milliseconds since these saved inputs entered the isolated test. Handset acquisition and physical-network time are outside this clock.",
+  "receipts": [
+    {
+      "syntheticProviderReference": "987654322",
+      "creditedOnce": true,
+      "sourceSha256": "7197980b9626674b4c0718e6576548c316104eb19522e2ac371dd6f8e281f226",
+      "paymentSha256": "199ef7f294db6c38483e60198db655cf109eeaf3573b9872e4ea0c144326ddf6",
+      "ledgerSha256": "7c48c21683ade3bd6bd0e7f48f014f8729aa4f71f71bece1098ac0ec25e39cbe",
+      "postBalanceRwf": 1000,
+      "notice": "delivered"
+    },
+    {
+      "syntheticProviderReference": "987654321",
+      "creditedOnce": true,
+      "sourceSha256": "4bf38c1cbd23debd0bd3533dd22349be5e1d750cb7383efec9e347ed3faf43c7",
+      "paymentSha256": "680f095b2f088c3476574e41f5b51387a849003fc02cfa453476e9f1f5f69bf0",
+      "ledgerSha256": "92815f6d592a393ab416770b9a74f11f0125fb2e1cb48a36d22830e134685cba",
+      "postBalanceRwf": 2000,
+      "notice": "suppressed"
+    }
+  ],
+  "gatewayRequests": [
+    "POST",
+    "GET"
+  ],
+  "adminScopeCheck": "denied other group",
+  "inbox": {
+    "state": "verified",
+    "headsMatch": true,
+    "candidateCount": 2,
+    "missingCount": 0,
+    "pendingCount": 0
+  },
+  "stages": [
+    {
+      "receipt": "987654322",
+      "stage": "receive",
+      "elapsedMs": 0.061
+    },
+    {
+      "receipt": "987654322",
+      "stage": "normalize",
+      "elapsedMs": 0.712
+    },
+    {
+      "receipt": "987654322",
+      "stage": "retain_and_replay",
+      "elapsedMs": 266.409
+    },
+    {
+      "receipt": "987654322",
+      "stage": "parsed",
+      "elapsedMs": 554.603
+    },
+    {
+      "receipt": "987654322",
+      "stage": "posted",
+      "elapsedMs": 1503.298
+    },
+    {
+      "receipt": "987654322",
+      "stage": "notice_eligible",
+      "elapsedMs": 1514.816
+    },
+    {
+      "receipt": "987654321",
+      "stage": "receive",
+      "elapsedMs": 1514.83
+    },
+    {
+      "receipt": "987654321",
+      "stage": "normalize",
+      "elapsedMs": 1514.974
+    },
+    {
+      "receipt": "987654321",
+      "stage": "retain_and_replay",
+      "elapsedMs": 1538.416
+    },
+    {
+      "receipt": "987654321",
+      "stage": "parsed",
+      "elapsedMs": 2016.038
+    },
+    {
+      "receipt": "987654321",
+      "stage": "posted",
+      "elapsedMs": 2547.94
+    },
+    {
+      "receipt": "987654321",
+      "stage": "notice_historical",
+      "elapsedMs": 2565.027
+    },
+    {
+      "receipt": "both",
+      "stage": "verified_phone_and_parsed_heads",
+      "elapsedMs": 3063.143
+    },
+    {
+      "receipt": "987654322",
+      "stage": "submit_lost_response",
+      "elapsedMs": 3624.68
+    },
+    {
+      "receipt": "987654322",
+      "stage": "simulated_carrier_callback",
+      "elapsedMs": 3637.307
+    },
+    {
+      "receipt": "987654322",
+      "stage": "provider_confirmed",
+      "elapsedMs": 3699.872
+    },
+    {
+      "receipt": "both",
+      "stage": "scoped_admin_outcomes",
+      "elapsedMs": 3865.315
+    }
+  ]
+}

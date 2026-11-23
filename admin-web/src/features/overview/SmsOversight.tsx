@@ -1,7 +1,9 @@
-import {useEffect, useRef, useState} from 'react';
+import {useCallback, useContext, useEffect, useRef, useState} from 'react';
+import {InteractionSuspendedContext} from '../../ui/useFocusScope';
+import {useVisibleOperationsRefresh} from '../operations/useVisibleOperationsRefresh';
 import {AdminRequestError, type AdminRequest} from '../../api/client';
 import {Button, Card, ErrorState, LoadingState} from '../../ui';
-import {assistedLabels, nativeLabels, parseSmsOversight, payerLabels, type Oversight} from './smsOversightContract';
+import {assistedLabels, nativeLabels, parseSmsOversight, payerLabels, receiptLabels, reasonLabels, type Oversight} from './smsOversightContract';
 
 const checkedAtFormatter = new Intl.DateTimeFormat('en-GB', {timeZone: 'Africa/Kigali', dateStyle: 'medium', timeStyle: 'short'});
 
@@ -21,16 +23,27 @@ function QueueCounts<Key extends string>({labels, counts}: {labels: Record<Key, 
 
 /** Metadata only: a stale sample never presents counts as current. */
 export function SmsOversight({request, permissions, authorityKey, preferSmsHealth}: {request: AdminRequest; permissions: readonly string[]; authorityKey: string; preferSmsHealth?: boolean}) {
-  const allowed = permissions.includes('system_health.read');
+  const allowed = permissions.includes('system_health.read'), suspended = useContext(InteractionSuspendedContext);
   const [revision, setRevision] = useState(0), [now, setNow] = useState(Date.now);
-  const [state, setState] = useState<{scope: string; sample: Oversight | null; error: boolean} | null>(null);
+  const [state, setState] = useState<{scope: string; access: string; sample: Oversight | null; error: boolean} | null>(null);
   const legacyAuthority = useRef<string | null>(null);
-  const scope = JSON.stringify([authorityKey, revision]); const current = state?.scope === scope ? state : null;
+  const inFlight = useRef<AbortController | null>(null), invalidated = useRef(false);
+  const refresh = useCallback((changed: boolean) => {
+    setNow(Date.now());
+    if (inFlight.current) {if (changed) invalidated.current = true;}
+    else setRevision(value => value + 1);
+  }, []);
+  useVisibleOperationsRefresh(allowed && !suspended, 5000, refresh);
+  const hasSmsRead = permissions.includes('sms.read');
+  const access = JSON.stringify([authorityKey, hasSmsRead]), scope = JSON.stringify([access, revision]);
+  const current = state?.scope === scope || (state?.access === access && !state?.error) ? state : null;
   useEffect(() => {
-    if (!allowed) return;
-    const controller = new AbortController();
+    if (!allowed || suspended) return;
+    const controller = new AbortController(); inFlight.current = controller;
+    invalidated.current = false;
     const options = {authenticated: true, expectedStatus: 200, signal: controller.signal};
     const read = async () => {
+      if (hasSmsRead) return parseSmsOversight(await request('oversight/health?evidenceVersion=2', options));
       if (preferSmsHealth && legacyAuthority.current !== authorityKey) {
         try {return parseSmsOversight(await request('oversight/sms-health', options), 'admin_sms_health');}
         catch (failure) {
@@ -42,15 +55,15 @@ export function SmsOversight({request, permissions, authorityKey, preferSmsHealt
       return parseSmsOversight(await request('oversight/health', options));
     };
     void read()
-      .then(sample => {if (!controller.signal.aborted) setState({scope, sample, error: false});})
-      .catch(() => {if (!controller.signal.aborted) setState({scope, sample: null, error: true});});
-    return () => controller.abort();
-  }, [allowed, authorityKey, preferSmsHealth, request, scope]);
-  useEffect(() => {
-    if (!allowed) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 5000);
-    return () => window.clearInterval(timer);
-  }, [allowed]);
+      .then(sample => {if (!controller.signal.aborted) setState({scope, access, sample, error: false});})
+      .catch(() => {if (!controller.signal.aborted) setState({scope, access, sample: null, error: true});})
+      .finally(() => {
+        if (inFlight.current !== controller) return;
+        inFlight.current = null;
+        if (invalidated.current && document.visibilityState === 'visible' && navigator.onLine) setRevision(value => value + 1);
+      });
+    return () => {controller.abort(); if (inFlight.current === controller) inFlight.current = null;};
+  }, [access, allowed, authorityKey, hasSmsRead, preferSmsHealth, request, scope, suspended]);
   if (!allowed) return null;
   const sample = current?.sample;
   const checked = sample ? Date.parse(sample.checkedAt) : NaN;
@@ -71,10 +84,27 @@ export function SmsOversight({request, permissions, authorityKey, preferSmsHealt
                 {' '}Internal credits measure ledger postings. Provider settlement is recorded separately.</p>
             </> : <p role="status">BuriMunsi queue measurements are unavailable.</p>}
           </section>
-          {sample.payer && <section aria-label="BuriMunsi payer receipts" className="overview-oversight-section">
+          {(sample.operations || sample.payer) && <section aria-label="BuriMunsi payer receipts" className="overview-oversight-section">
             <h3>BuriMunsi payer receipts</h3>
-            <QueueCounts labels={payerLabels} counts={sample.payer} />
-            <p>Recorded gateway observations for approved collections.</p>
+            {sample.operations ? <>
+              <QueueCounts labels={receiptLabels} counts={sample.operations.payer} />
+              {sample.operations.oldest !== null && <p>Oldest pending payer receipt is {formatAge(sample.operations.oldest)} old.</p>}
+              {Object.keys(sample.operations.reasons).length > 0 && <details><summary>Receipt reasons</summary><dl className="overview-oversight-counts">
+                {Object.entries(sample.operations.reasons).map(([key, n]) => <div key={key}><dt>{reasonLabels[key as keyof typeof reasonLabels]}</dt><dd>{n}</dd></div>)}
+              </dl></details>}
+            </> : sample.payer && <QueueCounts labels={payerLabels} counts={sample.payer} />}
+            <p>Reported delivery requires a delivery report for every SMS part from the gateway handset.</p>
+          </section>}
+          {sample.operations && <section className="overview-oversight-section" aria-label="Scheduled processing">
+            <h3>Scheduled processing</h3><dl className="overview-oversight-counts">
+              <div><dt>Scheduler</dt><dd>{sample.operations.schedulerEnabled ? 'Enabled' : 'Paused'}</dd></div>
+              <div><dt>Cron job</dt><dd>{sample.operations.cronActive ? 'Active' : 'Inactive'}</dd></div>
+              <div><dt>Scheduler interval</dt><dd>{sample.operations.cronIntervalSeconds === null ? 'Unverified' : formatAge(sample.operations.cronIntervalSeconds)}</dd></div>
+              <div><dt>Unresolved dispatches</dt><dd>{sample.operations.unresolvedDispatches}</dd></div>
+              <div><dt>Last confirmed scheduled run</dt><dd>{sample.operations.lastConfirmedAt ? checkedAtFormatter.format(new Date(sample.operations.lastConfirmedAt)) + ' Kigali' : 'None recorded'}</dd></div>
+              <div><dt>Receipt gateway</dt><dd>{{not_recorded:'No heartbeat recorded',recent:'Recent heartbeat',stale:'Stale heartbeat'}[sample.operations.gatewayHeartbeat]}</dd></div>
+              <div><dt>Last receipt gateway heartbeat</dt><dd>{sample.operations.gatewayLastSeenAt ? checkedAtFormatter.format(new Date(sample.operations.gatewayLastSeenAt)) + ' Kigali' : 'None recorded'}</dd></div>
+            </dl>{sample.operations.lastConfirmedDigest && <details><summary>Confirmed response digest</summary><code>{sample.operations.lastConfirmedDigest}</code></details>}
           </section>}
           <section aria-label="Assisted receipt delivery" className="overview-oversight-section">
             <h3>Assisted receipt delivery</h3>
@@ -85,7 +115,7 @@ export function SmsOversight({request, permissions, authorityKey, preferSmsHealt
           </section>
           <p>Managed MoMo processing: {sample.managed} · Native SMS parsing: {sample.parsing} · Native SMS ledger: {sample.ledger}</p>
         </>}
-        <p>Worker activity and provider availability are not verified.</p>
+        {!sample.operations && <p>Worker activity and provider availability are not verified.</p>}
       </>}
   </Card>;
 }
