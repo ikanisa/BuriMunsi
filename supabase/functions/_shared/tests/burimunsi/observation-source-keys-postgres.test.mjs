@@ -92,4 +92,57 @@ test('real PostgreSQL source reservation preserves exact replay, distinct rows a
    RAISE EXCEPTION 'revoked actor admitted';EXCEPTION WHEN insufficient_privilege THEN NULL;END;
  END;$t$;
  `);
+
+ // Same approved test receiver, separate PostgreSQL connections. The already
+ // committed first response is deliberately discarded by the client harness.
+ // Unresolved-object rows are seeded here; this test neither uploads nor posts.
+ const actor = `
+ SELECT set_config('fixture.allowed','yes',false);
+ SELECT set_config('fixture.actor',jsonb_build_object('collectionId','group-1','accountId','00000000-0000-4000-8000-000000000001',
+  'principalUserId','principal-a','installationId','00000000-0000-4000-8000-000000000011','grantId','00000000-0000-4000-8000-000000000021',
+  'grantVersion',1,'sessionId','00000000-0000-4000-8000-000000000031')::text,false);`;
+ const first = '10000000-0000-4000-8000-000000000061';
+ const second = '10000000-0000-4000-8000-000000000062';
+ const content = "repeat('c',64)", body = "repeat('d',64)";
+ const reserve = (request, key) => `
+ SELECT private.burimunsi_observation_key_prepare(repeat('${key}',64),${content},${body},'${request}',
+  repeat('a',64),private.fixture_source('principal-a','${request}'),'v1',repeat('d',64),1) AS receipt;`;
+ const retainObject = request => `
+ RESET ROLE;
+ INSERT INTO private.burimunsi_unresolved_observations VALUES(private.fixture_source('principal-a','${request}'),
+  'group-1','${request}',${body},'sms/synthetic/${request}',repeat('9',64),100,1,'principal-a',repeat('a',64));`;
+ const commitAndDiscard = fixture.run('postgres',['-q'],`BEGIN;${actor} SET ROLE collect_runtime;
+  ${reserve(first,'5')}${retainObject(first)} COMMIT;`);
+ assert.equal(commitAndDiscard.status,0,commitAndDiscard.stderr);
+ // Ignore STDOUT from the first connection. Only a fresh authorized read or
+ // exact replay is allowed to settle the ambiguous response.
+ sql(`${actor} SET ROLE collect_runtime;
+ DO $t$ DECLARE rec jsonb; BEGIN
+  rec:=private.burimunsi_observation_key_lookup(repeat('5',64),${content},${body});
+  IF rec->>'requestId' IS DISTINCT FROM '${first}' THEN RAISE EXCEPTION 'committed receipt not recovered';END IF;
+ END;$t$;`);
+ const replay = fixture.run('postgres',['-qAt'],`${actor} SET ROLE collect_runtime; ${reserve(first,'5')}`);
+ assert.equal(replay.status,0,replay.stderr);
+ const reply = JSON.parse(replay.stdout.trim().split('\n').at(-1));
+ // The exact original reservation remains resumable ('new'). Durable
+ // readback above establishes the original outcome; this replay must not
+ // insert a second reservation.
+ assert.equal(reply.kind,'new');
+ sql(`BEGIN;${actor} SET ROLE collect_runtime; ${reserve(second,'6')}${retainObject(second)} COMMIT;`);
+ sql(`${actor} SET ROLE collect_runtime;
+ DO $t$ DECLARE a jsonb;b jsonb;BEGIN
+  a:=private.burimunsi_observation_key_lookup(repeat('5',64),${content},${body});
+  b:=private.burimunsi_observation_key_lookup(repeat('6',64),${content},${body});
+  IF a->>'requestId' IS DISTINCT FROM '${first}' OR b->>'requestId' IS DISTINCT FROM '${second}'
+    OR a->>'sourceId' IS NOT DISTINCT FROM b->>'sourceId' THEN
+   RAISE EXCEPTION 'distinct same-content rows were not both recovered';
+  END IF;
+ END;$t$;
+ RESET ROLE;
+ DO $t$ BEGIN
+  IF (SELECT count(*) FROM private.burimunsi_observation_requests WHERE request_id IN ('${first}','${second}'))<>2 OR
+     (SELECT count(*) FROM private.burimunsi_unresolved_observations WHERE request_id IN ('${first}','${second}'))<>2 THEN
+   RAISE EXCEPTION 'replay or distinct receipt changed row cardinality';
+  END IF;
+ END;$t$;`);
 });
