@@ -309,11 +309,58 @@ private suspend fun bundledHomeRestores() {
         check(model.state.operator?.id == scenario.owner && model.state.home?.balanceRwf == 250L)
         check(Transport.calls.count { it.path.endsWith("/session?include=home") } == 1)
         check(Transport.calls.none { it.path.endsWith("/home") || it.path.endsWith("/session") })
-        val saved = JSONObject(SecureStore.records.getValue("records")).getJSONObject("entries").getJSONObject("/home")
+        val saved = JSONObject(checkNotNull(NativeRecordCache(scenario.app).read("/home"))).getJSONObject("entries").getJSONObject("/home")
         check(JSONObject(saved.getString("payload")).getLong("groupBalanceRwf") == 250L)
     } finally {
         stop(model)
         Transport.sessionHome = null
+    }
+}
+
+private suspend fun freshRowsPublishWhileRecordCacheIsBlocked() {
+    val scenario = SessionScenario()
+    scenario.signIn(scenario.repository())
+    Transport.calls.clear()
+    val normal = Transport.handler
+    Transport.sessionHome = { request ->
+        JSONObject(normal(request.copy(path="/v1/burimunsi/session")))
+            .put("home",JSONObject(normal(request.copy(path="/v1/burimunsi/home")))).toString()
+    }
+    Transport.handler = { request ->
+        if(request.path.contains("/payments?")) JSONObject().put("items",JSONArray()).put("totalCount",0)
+            .put("revision","fresh").put("asOf","2026-11-20T00:00:00Z").put("nextCursor",JSONObject.NULL).toString()
+        else normal(request)
+    }
+    fun blockDisk():Pair<CountDownLatch,CountDownLatch> {
+        val entered=CountDownLatch(1)
+        val release=CountDownLatch(1)
+        SecureStore.beforeWrite={ name ->
+            if(name=="records"){entered.countDown();check(release.await(10,TimeUnit.SECONDS))}
+        }
+        return entered to release
+    }
+    var (entered,release)=blockDisk()
+    val model=BuriViewModel(scenario.app)
+    try {
+        check(entered.await(5,TimeUnit.SECONDS))
+        withTimeout(2_000){while(model.state.busy || model.state.home==null)delay(2)}
+        check(Transport.calls.map { it.path }==listOf("/v1/burimunsi/session?include=home"))
+        val lookup=java.util.concurrent.CompletableFuture.supplyAsync { NativeRecordCache(scenario.app).read("/home") }
+        check(runCatching { lookup.get(250,TimeUnit.MILLISECONDS) }.exceptionOrNull() is java.util.concurrent.TimeoutException)
+        release.countDown()
+        check(lookup.get(5,TimeUnit.SECONDS)!=null)
+        val next=blockDisk()
+        entered=next.first;release=next.second
+        model.onFixtureMain { navigate(Route.PAYMENTS) }
+        check(entered.await(5,TimeUnit.SECONDS))
+        withTimeout(2_000){while(model.state.busy || model.state.payments==null)delay(2)}
+        check(Transport.calls.count { it.path.contains("/payments?") }==1)
+        check(!model.state.offline)
+    } finally {
+        release.countDown()
+        SecureStore.beforeWrite=null
+        Transport.sessionHome=null
+        stop(model)
     }
 }
 
@@ -424,6 +471,37 @@ private fun firstPageCacheRequiresExactQuery() {
     check(Transport.calls.size == requests+1)
 }
 
+private fun olderQueuedHomeCannotOverwriteNewerLiveHome() {
+    val scenario=SessionScenario()
+    val foreground=NativeRepository(scenario.app,ApiClient.phonePin("https://offline.test","fixture-device",flavor,""){"fixture"},
+        deferDisplayCacheWrites=true)
+    scenario.signIn(foreground)
+    val second=scenario.repository()
+    check(second.restore()!=null)
+    val original=Transport.handler
+    var balance=10L
+    Transport.handler={ request ->
+        val response=original(request)
+        if(request.path.endsWith("/home"))JSONObject(response).put("groupBalanceRwf",balance).toString() else response
+    }
+    val cache=NativeRecordCache(scenario.app)
+    val held=CountDownLatch(1);val release=CountDownLatch(1)
+    cache.defer("/test-held-writer",cache.revision()){
+        held.countDown()
+        check(release.await(5,TimeUnit.SECONDS))
+    }
+    try {
+        check(held.await(5,TimeUnit.SECONDS))
+        check(foreground.home().balanceRwf==10L)
+        val older=checkNotNull(foreground.lastReadSavedAt)
+        while(System.currentTimeMillis()<=older)Thread.sleep(1)
+        balance=20L
+        check(second.home().balanceRwf==20L && checkNotNull(second.lastReadSavedAt)>older)
+    } finally { release.countDown() }
+    val stored=JSONObject(checkNotNull(cache.read("/home"))).getJSONObject("entries").getJSONObject("/home")
+    check(JSONObject(stored.getString("payload")).getLong("groupBalanceRwf")==20L)
+}
+
 private fun invalidationRejectsOldRecordWrites() {
     val scenario=SessionScenario()
     val first=NativeRecordCache(scenario.app)
@@ -431,10 +509,25 @@ private fun invalidationRejectsOldRecordWrites() {
     val expired=first.revision()
     second.clear(verify=true)
     first.update(expired){error("The invalidated record cannot write")}
-    check(first.read()==null)
+    check(first.read("/home")==null)
     val live=first.revision()
     first.update(live){"fresh scoped synthetic snapshot"}
-    check(second.read()=="fresh scoped synthetic snapshot")
+    check(second.read("/home")=="fresh scoped synthetic snapshot")
+    val entered=CountDownLatch(1);val release=CountDownLatch(1);val finished=CountDownLatch(1)
+    val staleWrite=java.util.concurrent.atomic.AtomicBoolean(false)
+    first.defer("/home",live) {
+        try {
+            entered.countDown()
+            check(release.await(5,TimeUnit.SECONDS))
+            first.update(live) { staleWrite.set(true); "obsolete" }
+        } finally { finished.countDown() }
+    }
+    try {
+        check(entered.await(5,TimeUnit.SECONDS))
+        second.clear(verify=true)
+    } finally { release.countDown() }
+    check(finished.await(5,TimeUnit.SECONDS) && !staleWrite.get() && second.read("/home")==null)
+
     second.clear(verify=true)
 }
 
@@ -450,6 +543,7 @@ fun main() = runBlocking {
         "a renewed deadline with identical grants preserves the current route and generation" to suspend { renewedDeadlineKeepsScope() },
         "an equal-valued foreground profile replaces the authority held by the screen" to suspend { equalProfileRefresh() },
         "an older actor-only saved profile restores through a current server profile" to suspend { legacyProfileRestores() },
+        "fresh Home and Payments publish while protected record cache writes are blocked" to suspend { freshRowsPublishWhileRecordCacheIsBlocked() },
         "a paired session and Home response restores and caches the authorized snapshot" to suspend { bundledHomeRestores() },
         "a restored Settings destination never requests unused Home records" to suspend { settingsRestoreSkipsUnusedHome() },
         "bundled sign-in displays the confirmed Home without another request" to suspend { loginHomeRequests(include=true) },
@@ -458,6 +552,7 @@ fun main() = runBlocking {
         "an uncertain bundled sign-in never repeats a credential request" to suspend { loginHomeRequests(include=false,uncertain=true) },
         "recent Home cache keeps its age and expires on access changes or timeout" to suspend { recentHomeKeepsAgeAndAuthorization() },
         "recent first pages require an exact query and explicit reads still reach the server" to suspend { firstPageCacheRequiresExactQuery() },
+        "an older queued Home cannot overwrite a newer live Home in another repository" to suspend { olderQueuedHomeCannotOverwriteNewerLiveHome() },
         "a cache invalidation fences a late write from another repository instance" to suspend { invalidationRejectsOldRecordWrites() },
     ).map { (label, scenario) ->
         runCatching { scenario() }.also { result ->

@@ -106,7 +106,7 @@ object Fixture{
  fun payment(id:String="tx-1")=Payment(id,"Example Payer","+250780000816",10000,"2026-11-07 12:00:00","90001","unallocated",1)
  fun <T> page(items:List<T>,next:String?=null)=Page(items,next,2,"v1","2026-11-07T12:00:00Z")
 }
-class NativeRepository(app:Application,api:ApiClient,group:String?=null){
+class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDisplayCacheWrites:Boolean=false){
  private val postedPayments=java.util.concurrent.ConcurrentHashMap<String,Payment>()
  private val readScopeOwner=Any();private var readScopeRevision=0L
  val sessionRevision:Long? get()=operator?.let{readScopeRevision + Fixture.processSessionEpoch.get()}

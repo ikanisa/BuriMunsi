@@ -30,7 +30,7 @@ interface GatewayPort {
     /** Publish only while the same session, permission and queue revision remain current. */
     fun publishQueued(snapshot:QueuedObservationSnapshot,publish:()->Unit):Boolean
     /** A background transition keeps authorized sync running; it grants no authority. */
-    fun foregroundChanged(resumed:Boolean) {}
+    fun foregroundChanged(resumed:Boolean, awaitingInitialAccess:Boolean=false) {}
     fun continuousHealth():ContinuousReceiverHealth=ContinuousReceiverHealth()
     /** Stop the supervisor immediately, for example before explicit operator logout. */
     fun stopContinuous() {}

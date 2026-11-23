@@ -3,7 +3,7 @@ import android.content.Context
 import rw.ikanisa.burimunsi.gateway.ContinuousReceiverHealth
 /** No Android service is started by host gateway/capture adapter tests. */
 object BuriContinuousSupervisor {
- fun foregroundChanged(context:Context,resumed:Boolean){}
+ fun foregroundChanged(context:Context,resumed:Boolean,awaitingInitialAccess:Boolean=false){}
  fun health()=ContinuousReceiverHealth(supported=true)
  fun stop(context:Context){}
  fun halt(context:Context,problem:String){}

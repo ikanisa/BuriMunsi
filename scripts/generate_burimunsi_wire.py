@@ -74,12 +74,12 @@ def kotlin_schema(header, definitions, profile):
     lines = [
         'package rw.ikanisa.wire', '', header, 'object BuriMunsiSchemas {',
         f'  const val VERSION = {kotlin_string(profile["contractVersion"])}',
-        '  val definitions: Map<String, Any?> by lazy { linkedMapOf(',
+        '  val definitions: Map<String, Any?> by lazy { LazyWireDefinitions(linkedMapOf(',
     ]
     for name, definition in definitions.items():
         value = kotlin_string(compact(definition))
-        lines.append(f'    {kotlin_string(name)} to StrictJson.parse({value}),')
-    lines.append('  ) }')
+        lines.append(f'    {kotlin_string(name)} to {value},')
+    lines.append('  )) }')
 
     if profile['routes']:
         routes = ['listOf(' + ','.join(map(kotlin_string, row)) + ')' for row in profile['routes']]

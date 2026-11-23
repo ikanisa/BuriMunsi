@@ -41,13 +41,13 @@ private class CollectGateway(private val context:Context,private val managedColl
     override fun bound():Boolean=if(BuildConfig.IS_QUALIFICATION)false else try{store.read()?.optBoolean("receiver_retired")!=true&&store.binding()?.let{ReceiverCollectionScope.matches(it.opt("collection_id"),managedCollection())}==true}catch(_:Exception){false}
     override fun queuedObservations(query:String)=ObservationGateway.queued(context,query)
     override fun publishQueued(snapshot:QueuedObservationSnapshot,publish:()->Unit)=ObservationGateway.publishQueued(context,snapshot,publish)
-    override fun foregroundChanged(resumed:Boolean){
+    override fun foregroundChanged(resumed:Boolean,awaitingInitialAccess:Boolean){
         if(resumed)HeldRecoveryJournal.maintain(context)
-        BuriContinuousSupervisor.foregroundChanged(context,resumed)
+        BuriContinuousSupervisor.foregroundChanged(context,resumed,awaitingInitialAccess)
     }
     override fun continuousHealth()=BuriContinuousSupervisor.health()
     override fun stopContinuous()=BuriContinuousSupervisor.stop(context)
-    override fun recoverContinuous()=BuriContinuousSupervisor.recover(context)
+    override fun recoverContinuous()=ObservationBackground.onProcessStart(context)
     override fun retirementPending():Boolean=if(BuildConfig.IS_QUALIFICATION)false else {
         val snapshot=store.read()
         snapshot?.optBoolean("receiver_retired")!=true&&(snapshot?.optBoolean("retirement_pending")==true||hasRetirement())

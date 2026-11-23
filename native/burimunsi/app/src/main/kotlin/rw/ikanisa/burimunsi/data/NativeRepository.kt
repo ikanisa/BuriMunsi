@@ -8,7 +8,7 @@ import rw.ikanisa.burimunsi.core.*
 import rw.ikanisa.burimunsi.storage.*
 
 /** API data is the authority. No local SMS-to-balance arithmetic and no demo accounts. */
-class NativeRepository(context: Context, api: ApiClient, groupId: String? = null){
+class NativeRepository(context: Context, api: ApiClient, groupId: String? = null, deferDisplayCacheWrites: Boolean = false){
     companion object {
         private val commandPreparationLock = Any()
 
@@ -39,7 +39,7 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
         sessions, journal, commandPreparationLock, receiptVersions, cacheStore,
         { api.installationId }, receiverPairing::hasPendingReceiverRetirement,
     )
-    private val records = NativeRecordData(sessions, api, cacheStore, receiptVersions, recordReadOwner)
+    private val records = NativeRecordData(sessions, api, cacheStore, receiptVersions, recordReadOwner, deferDisplayCacheWrites)
     private val smsData = NativeSmsData(sessions, { api.installationProfile }, recordReadOwner)
 
     val collectionId: String get() = sessions.groupId
