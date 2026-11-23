@@ -5,7 +5,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {makeAdminRouter} from '../../src/app/App';
 import {SessionProvider} from '../../src/session/SessionProvider';
 import {parsePhoneTeam, type PhoneTeamMember} from '../../src/session/phoneTeam';
-import {parseSessionUser} from '../../src/session/sessionResponses';
+import {parsePhoneLoginSession, parseSessionUser} from '../../src/session/sessionResponses';
 import {hasScopedAdminAuthority} from '../../src/session/ownerIdentity';
 import {sensitiveVerificationDeadline} from '../../src/session/sessionPolicy';
 import {scopes} from '../burimunsi/fixture';
@@ -39,6 +39,16 @@ beforeEach(() => {vi.stubGlobal('crypto', webcrypto);});
 afterEach(() => {cleanups.splice(0).forEach(cleanup => cleanup()); window.history.replaceState(null, '', '/'); vi.unstubAllGlobals(); localStorage.clear(); sessionStorage.clear();});
 
 describe('dedicated phone accounts', () => {
+  it('binds negotiated phone sessions to the requested number and the account role', () => {
+    const adminSession = {...cookie(), sessionContract: 2};
+    const staffSession = {...cookie(staff), sessionContract: 2};
+    expect(parsePhoneLoginSession(adminSession, admin.phone).user.adminIdentity).toEqual(adminSession.adminIdentity);
+    expect(parsePhoneLoginSession(staffSession, staff.phone).user.role).toBe('staff');
+    expect(() => parsePhoneLoginSession(adminSession, staff.phone)).toThrow();
+    expect(() => parsePhoneLoginSession({...adminSession, adminIdentity: null}, admin.phone)).toThrow();
+    expect(() => parsePhoneLoginSession({...staffSession, adminIdentity: adminSession.adminIdentity}, staff.phone)).toThrow();
+  });
+
   it('shows the assigned BuriMunsi role for an operator whose underlying shared role differs', () => {
     const operator: BuriSharedOperator = {adminId, principalId, displayName: 'Test operator', role: 'staff', email: ''};
     const directory = {collectionId: 'group-one', configured: true, team: [operator],

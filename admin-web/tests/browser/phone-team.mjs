@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { fixtureInitialPasscode } from './phone-account-fixture.mjs';
 
 // Exercise the compiled application and its HTTP contract through isolated browser sessions.
-export async function qualifyPhoneTeam({admin, origin, open}) {
+export async function qualifyPhoneTeam({admin, origin, open, legacySessions}) {
   const checks = [];
   const number = '0780 000 003', phone = '+250780000003', name = 'Fixture phone teammate', changedPin = '7391';
   const endpoint = path => origin + '/api/admin/' + path;
@@ -23,7 +23,12 @@ export async function qualifyPhoneTeam({admin, origin, open}) {
     await page.getByLabel('Four-digit passcode', {exact: true}).fill(pin);
     const response = await submit(page, 'Sign in', 'auth/phone-passcode', status);
     assert.deepEqual(response.request().postDataJSON(), {phone, pin});
-    if (status !== 200) await page.getByText('Check your mobile number and passcode.', {exact: true}).waitFor();
+    assert.equal(await response.request().headerValue('x-collect-owner-identity-version'), '1');
+    if (status === 200) {
+      assert.equal((await response.json()).sessionContract, legacySessions ? undefined : 2);
+    } else {
+      await page.getByText('Check your mobile number and passcode.', {exact: true}).waitFor();
+    }
   }
   async function accountReceipt(title, path, expectedBody, version) {
     const response = await submit(admin, title, path);

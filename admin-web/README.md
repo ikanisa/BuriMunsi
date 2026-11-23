@@ -28,10 +28,11 @@ public CAPTCHA settings matching the backend. The command supplies the exact
 `burimunsi-admin-production` deployment profile. Admin and Staff sign in with their
 registered mobile number and four-digit passcode. A same-origin session cookie
 authorizes the workspace routes covered by their grants. In Team access, an
-authorized Admin creates accounts with the configured starting passcode, assigns
-one of the two roles, and enables or disables access. Each user can change their
-own passcode in Account security and sign in again. The compiler accepts the
-validated public client values.
+authorized Admin creates Staff accounts with the configured starting passcode
+and can enable or disable Staff access. Each user can change their own passcode
+in Account security and sign in again. Admin sessions issued by the preceding
+backend retain the read-only Team directory and passcode verification workflow.
+The compiler accepts the validated public client values.
 
 The site is `build/admin-web/`. The paired `build/admin-web.json` binds its bytes
 to the source and public configuration. Set `ADMIN_PWA_BUILD_DIR` to a fresh

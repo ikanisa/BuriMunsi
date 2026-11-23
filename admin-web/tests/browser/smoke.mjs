@@ -195,7 +195,7 @@ try {
   await page.goBack();
   await overview.waitFor();
 
-  const phoneTeamChecks = await qualifyPhoneTeam({admin: page, origin, open});
+  const phoneTeamChecks = await qualifyPhoneTeam({admin: page, origin, open, legacySessions});
 
   const recovery = await open({ width: 1440, height: 900 }, 'block');
   await recovery.context.addCookies(cookies);
