@@ -48,6 +48,9 @@ const observedBusiness = {
   },
 } as unknown as typeof business;
 const database = new GatewayDatabase(observedBusiness);
+const fixtureDatabaseUrl = new URL('postgresql://aws-0-eu-north-1.pooler.supabase.com:5432/postgres?sslmode=verify-full');
+fixtureDatabaseUrl.username = 'collect_sms_edge_login.rrlduytparvsjfmegalh';
+fixtureDatabaseUrl.password = 'unused';
 
 const handler = createSmsGatewayHandler({
   APP_ENVIRONMENT: 'production', SUPABASE_URL: MANAGED_SUPABASE_ORIGIN,
@@ -55,7 +58,7 @@ const handler = createSmsGatewayHandler({
   COLLECT_SMS_ENABLED: 'true', COLLECT_SMS_DISPATCH_PAUSED: 'true',
   COLLECT_SMS_RELEASE_SHA256: 'b'.repeat(64), COLLECT_SMS_APPROVAL_SHA256: 'c'.repeat(64),
   COLLECT_DEPLOYMENT_PROFILE: profile, COLLECT_DEPLOYMENT_PROFILE_SHA256: profileSha256,
-  COLLECT_SMS_DATABASE_URL: 'postgresql://collect_sms_edge_login.rrlduytparvsjfmegalh:unused@aws-0-eu-north-1.pooler.supabase.com:5432/postgres?sslmode=verify-full',
+  COLLECT_SMS_DATABASE_URL: fixtureDatabaseUrl.href,
   COLLECT_SMS_ROOT_ADMIN_TOKEN: 'root-fixture-token-'.repeat(4), COLLECT_SMS_OTP_HMAC_KEY: 'otp-fixture-key-'.repeat(4),
 }, { database, fenceBackend: backend });
 const request = (path: string, token: string) => handler(new Request(
