@@ -717,6 +717,69 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
   const publicAccess=(await f.client.query("SELECT has_function_privilege('collect_runtime','private._burimunsi_reconcile_held_payment_page(uuid,jsonb,jsonb)','EXECUTE') AS allowed")).rows[0];
   assert.equal(publicAccess.allowed,false);
  });
+
+ await t.test('payer opt-out before claim or after claim but before prepare never submits or replays', async () => {
+  const prefs=async enabled=>{
+   await f.client.query('DELETE FROM app.notification_preferences WHERE user_id=$1',[member]);
+   if(enabled!==null)await f.client.query('INSERT INTO app.notification_preferences VALUES($1,$2)',[member,enabled]);
+  };
+  const allocateProven=async reference=>{
+   const input={...fullWire(),requestId:randomUUID(),sourceKey:sha('receipt-consent:'+reference)};
+   input.rawBody=input.rawBody.replace('987654322',reference);
+   const seen=await flow.route('',input);
+   flow.provider({...providerOutput(input.rawBody),schema_version:NATIVE_AUTO_SCHEMA_VERSION,wallet_effect:'credit'});
+   assert.deepEqual(await flow.parser.process(seen.sourceId),{state:'completed',relation:'accepted'});
+   const payment=async()=> (await f.client.query(`SELECT id,amount_rwf::int,provider_reference,member_id,version,sms_source_id
+      FROM burimunsi.payments WHERE id=$1`,[seen.sourceId])).rows[0];
+   const recorded=await payment();
+   assert.deepEqual(recorded,{id:seen.sourceId,amount_rwf:1000,provider_reference:reference,member_id:null,version:'1',sms_source_id:seen.sourceId});
+   const money=async()=> (await f.client.query(`SELECT count(*) AS payments,sum(amount_rwf)::text AS amount,
+      (SELECT count(*) FROM app.ledger_entries) AS ledger FROM burimunsi.payments WHERE collection_id=$1`,[group])).rows[0];
+   const baseline=await count(),before=await money();
+   await owner(sql=>allocate(sql, seen.sourceId));
+   assert.deepEqual(await payment(),{...recorded,member_id:differentMember,version:'2'});
+   assert.deepEqual(await money(),before);
+   assert.equal(await count(),baseline+1);
+   return {id:seen.sourceId,payment};
+  };
+  const assertDenied=async(row,worker)=>{
+   assert.deepEqual(worker.requests,[]);
+   assert.deepEqual(await receiptStatus(row.id),{status:'suppressed',reason:'preferences_disabled'});
+   const {rows:[delivery]}=await f.client.query('SELECT body_sha256,claim_token FROM private.burimunsi_allocation_receipts WHERE payment_id=$1',[row.id]);
+   assert.deepEqual(delivery,{body_sha256:null,claim_token:null});
+   assert.equal((await row.payment()).member_id,differentMember);
+  };
+  const one=await openFixturePayerWorker({client:f.client,collectionId:group,enabledAt:f.enabledAt,allocation:true});
+  let two;
+  try {
+   await prefs(0);
+   const first=await allocateProven('987654329');
+   assert.deepEqual(await one.drain(),{status:'complete',processed:0});
+   await assertDenied(first,one);
+   await prefs(1);
+   const second=await allocateProven('987654330');
+   let observedClaim=0;
+   two=await openFixturePayerWorker({client:f.client,collectionId:group,enabledAt:f.enabledAt,allocation:true,afterClaim:async()=>{
+    observedClaim++;
+    // A real, committed claim has pinned the contact but not yet authorized submission.
+    const {rows:[claim]}=await f.client.query(`SELECT status,claim_token IS NOT NULL AS claimed,
+      body_sha256 IS NULL AS unprepared FROM private.burimunsi_allocation_receipts WHERE payment_id=$1`,[second.id]);
+    assert.deepEqual(claim,{status:'pending',claimed:true,unprepared:true});
+    await prefs(0);
+   }});
+   assert.deepEqual(await two.drain(),{status:'complete',processed:1,outcome:'suppressed'});
+   assert.equal(observedClaim,1);
+   await assertDenied(second,two);
+   await prefs(1);
+   assert.deepEqual(await two.drain(),{status:'complete',processed:0});
+   await assertDenied(first,one);
+   await assertDenied(second,two);
+  } finally {
+   await prefs(null);
+   if(two)await two.complete();
+   await one.complete();
+  }
+ });
 });
 
 test('keyed inbox custody returns the original journal under both advisory and all three row locks',async t=>{

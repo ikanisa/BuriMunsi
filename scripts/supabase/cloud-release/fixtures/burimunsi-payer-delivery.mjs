@@ -7,7 +7,7 @@ import {createOpenSmsReceiptTransport} from '../../../../supabase/functions/_sha
 // All HTTP stays inside the supplied fetch implementation. The PostgreSQL
 // claim, consent recheck, body, message identity and carrier-part verifier are real.
 export async function openFixturePayerWorker({client,collectionId:group,enabledAt,applicationId:app='app_10000000-0000-4000-8000-000000000003',
-  allocation=false,lostReply=true,lostClaimReply=false,context=async tx=>tx.unsafe("SET LOCAL ROLE collect_runtime; SET LOCAL collect.edge_verified='true'; SET LOCAL test.work_kind='jobs'")}){
+  allocation=false,lostReply=true,lostClaimReply=false,afterClaim,context=async tx=>tx.unsafe("SET LOCAL ROLE collect_runtime; SET LOCAL collect.edge_verified='true'; SET LOCAL test.work_kind='jobs'")}){
   const build='a'.repeat(64);let witness;
   const work=await openApplicationWork({sourceSha256:build,kind:'jobs',backend:{
     async register(admissionId,sourceSha256,kind){return (witness={contractVersion:1,admissionId,epoch:1,sourceSha256,kind,state:'active',mode:'open'});},
@@ -36,6 +36,7 @@ export async function openFixturePayerWorker({client,collectionId:group,enabledA
           }});
           await client.query('COMMIT');
         }catch(error){await client.query('ROLLBACK');throw error;}
+        if(claimed && afterClaim && result?.length) await afterClaim();
         if(claimed && lostClaimReply){lostClaimReply=false;throw Error('fixture lost the database claim commit acknowledgement');}
         return result;
       }}};

@@ -9,7 +9,17 @@ Keystore UIDs prevent those apps from loading the previous apps' local sessions,
 device credentials or queued work. This is a fresh installation and does not
 move or resolve those records. A matching URL does not establish a working backend.
 
-The first authorized scan records the existing inbox identities and the scoped consent under which they were observed. A receiver cycle compares each approved sender and receiving SIM row against server custody and parsing, including the newest phone receipt ordered by received time and inbox row ID. It requeues a confirmed gap with its original source identity. Paired receipts use the paired gateway and observation-only receipts use the consented observation transport. The historical recovery endpoint retains an eligible first-scan receipt under its recorded consent and holds it for review. For a key-only baseline, the receiver can open a new current-consent historical review. A previous in-flight command with uncertain original consent stays on hold. Admin receives the most recent online check, including missing or unparsed receipts.
+The designated human Admin signs in with their registered mobile number and
+passcode and grants Android SMS access on the supported phone in use. There is
+no manual phone or SIM enrollment for capture. Staff accounts cannot receive
+or view SMS in BuriMunsi. The first consented scan records eligible inbox
+identities. Later scans compare eligible messages against server custody and
+parsing, using receipt time and inbox row ID for order. Confirmed gaps reuse
+the original source identity. Older or uncertain observations retain their
+held status; a new phone does not inherit the old app's pending command.
+References to a paired gateway apply only to legacy receipt lineage or
+separately managed outbound OpenSMS delivery. See the
+[observation contract](../../../contracts/burimunsi-api/OBSERVATIONS.md).
 
 Before live use, complete and verify the following for each installation:
 
@@ -17,7 +27,7 @@ Before live use, complete and verify the following for each installation:
    existing group and financial history. Preserve every uncertain outcome; do
    not replay an unknown effect against the cloud project.
 2. Reconcile outstanding commands from earlier app packages under their original receipt identities. A previously paired gateway retains its own queue and recovery credentials.
-3. Sign in to Admin Sync on each supported Android phone using the registered Admin mobile number and passcode. The server authenticates the Admin and registers the new installation automatically. Android asks for SMS and phone permissions on that handset. Subsequent eligible receipts and backlog reconciliation run automatically. A second signed-in Admin handset can receive at the same time. Each handset verifies its own inbox, while payment references and credits remain scoped to the collection. Staff accounts have no access to the receiver.
+3. Sign in to Admin Sync on each supported Android phone using the registered Admin mobile number and passcode. The app and server establish the new authenticated installation context automatically; this is not hardware approval. Grant the normal Android SMS permissions. Subsequent eligible receipts and backlog reconciliation run automatically. A second signed-in Admin handset can receive at the same time. Each handset verifies its own inbox, while payment references and credits remain scoped to the collection. Staff accounts have no access to the receiver.
 4. Preserve unresolved obligations and original source identities. Verify that
    a crash, retry, reinstall or account change cannot create duplicate credits.
 5. Qualify the hosted routes, Admin and Staff access, SMS permission separation,
