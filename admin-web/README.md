@@ -48,11 +48,11 @@ using the [BuriMunsi Admin Worker](../deploy/platform-admin/README.md).
 
 ## Installed updates
 
-A verified update activates after the last tab or installed window using the
-previous build leaves Admin.
+Opening or reloading Admin online loads the hosted workspace. Offline, a
+previously installed worker serves its verified shell. Open forms in other tabs
+keep their current version. The waiting worker activates when those tabs leave.
 
-Finish or explicitly discard unsaved form edits in their current tabs. When a
-new worker is waiting, enter `about:blank` in each open Admin tab. After the last
-tab has left Admin, return online to Admin in those same tabs. Keep an installed
-window open if it has pending work and offers no browser address bar. Use the
-original request references to check uncertain outcomes before resubmitting.
+For an installation from before online navigation was introduced, open
+[current Payments](https://burimunsi-admin.ikanisa.com/api/admin/workspace#/admin/payments).
+This same-origin entry keeps the session and works while other tabs stay open.
+Use the original request reference to check an uncertain outcome before resubmitting.

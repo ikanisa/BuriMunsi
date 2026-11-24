@@ -67,9 +67,8 @@ self.addEventListener('install', (event) => {
         const failed = results.find((result) => result.status === 'rejected');
         if (failed) throw failed.reason;
       }
-      // Use the browser's waiting phase. Open operator tabs keep their entire
-      // installed build until every controlled document has been left.
-      // Do not activate an update over an unfinished operator action.
+      // Existing documents keep running. A new document can load the current
+      // online shell without activating this worker over another tab's work.
     } catch (error) {
       if (!preserveAdmittedCache) await caches.delete(CACHE_NAME);
       throw error;
@@ -104,6 +103,24 @@ async function cacheFirst(request) {
   });
 }
 
+async function openWorkspace(request) {
+  // A real navigation or reload can pick up the new release even while another
+  // tab is editing. The fixed URL omits all query parameters and credentials.
+  try {
+    const response = await fetch(new Request(SHELL_URL, {
+      credentials: 'omit', cache: 'no-store', redirect: 'error',
+    }));
+    if (response.status === 401 || response.status === 403) return response;
+    if (response.status === 200 && response.type === 'basic' && !response.redirected &&
+        response.url === SHELL_URL && response.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() === 'text/html') {
+      return response;
+    }
+  } catch {
+    // Offline navigation uses only the shell that passed installation checks.
+  }
+  return cacheFirst(request);
+}
+
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
@@ -113,6 +130,11 @@ self.addEventListener('fetch', (event) => {
   // with the installed static Admin shell, including iframe navigations.
   if (['/api', '/v1', '/functions', '/privacy', '/account-deletion', '/admin/auth/local-challenge'].some((path) =>
     url.pathname === path || url.pathname.startsWith(path + '/'))) return;
+  if (event.request.mode === 'navigate' && event.request.destination === 'document' &&
+      (url.pathname === '/' || url.pathname === '/index.html' || url.pathname === '/admin' || url.pathname.startsWith('/admin/'))) {
+    event.respondWith(openWorkspace(event.request));
+    return;
+  }
   url.search = '';
   if (event.request.mode !== 'navigate' && !ASSET_URLS.has(url.href)) return;
   event.respondWith(cacheFirst(event.request));

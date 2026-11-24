@@ -115,8 +115,8 @@ function worker({ name = 'collect-admin-current', redirectAsset = null, mismatch
     await pending;
   }
 
-  async function request(path, { method = 'GET', mode = 'same-origin' } = {}) {
-    const input = { url: new URL(path, origin).href, method, mode };
+  async function request(path, { method = 'GET', mode = 'same-origin', destination = '' } = {}) {
+    const input = { url: new URL(path, origin).href, method, mode, destination };
     let pending;
     listeners.get('fetch')({
       request: input,
@@ -165,6 +165,28 @@ for (const request of normal.requests) {
   assert.equal(request.redirect, 'error');
 }
 const cache = await normal.caches.open('collect-admin-current');
+const currentDocument = {status: 200, type: 'basic', url: origin, redirected: false,
+  headers: new Headers({'Content-Type': 'text/html; charset=utf-8'}), body: '<title>Next Admin</title>'};
+const navigate = {mode: 'navigate', destination: 'document'};
+normal.setNetworkResponse('/', currentDocument);
+const reopened = await normal.request('/admin/payments?receipt=private', navigate);
+assert.equal(reopened, currentDocument);
+assert.equal(normal.requests.at(-1).url, origin);
+assert.equal(normal.requests.at(-1).credentials, 'omit');
+assert.equal(normal.requests.at(-1).cache, 'no-store');
+assert.equal(normal.requests.at(-1).redirect, 'error');
+assert.equal((await cache.match(origin)).body, '<title>Collect Admin</title>');
+for (const unsuitable of [{redirected: true}, {url: origin + 'another-path'}, {status: 503},
+  {headers: new Headers({'Content-Type': 'application/json'})}]) {
+  normal.setNetworkResponse('/', {...currentDocument, ...unsuitable});
+  assert.equal((await normal.request('/', navigate)).body, '<title>Collect Admin</title>');
+}
+normal.setNetworkResponse('/', {...currentDocument, status: 403});
+assert.equal((await normal.request('/', navigate)).status, 403);
+normal.setRejectedAsset(origin);
+assert.equal((await normal.request('/', navigate)).body, '<title>Collect Admin</title>');
+normal.setRejectedAsset(null);
+assert.equal(await normal.request('/api/admin/workspace', navigate), null);
 assert.deepEqual((await cache.keys()).map((request) => request.url), [origin, origin + 'main.dart.js']);
 assert.equal((await normal.request('/admin/transactions', { mode: 'navigate' })).body,
   '<title>Collect Admin</title>');

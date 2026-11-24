@@ -29,20 +29,21 @@ try {
   const served = files.filter(([name]) => !name.startsWith('_') || name.startsWith('_build/'));
   const entry = `_build/${assetId}/assets/admin-entry.js`;
   const htmlSha = served.find(([name]) => name === 'index.html')[1];
-  const checks = [['/', htmlSha], ['/admin/settings', htmlSha],
+  const checks = [['/', htmlSha], ['/admin/settings', htmlSha], ['/api/admin/workspace', htmlSha],
     ...served.map(([name, digest]) => ['/' + name, digest])];
   const [globalRules] = (await readFile(join(output, '_headers'), 'utf8')).split('\n\n');
   const expectedHeaders = globalRules.split('\n').slice(1).map(line => line.trim().split(/: (.+)/).slice(0, 2));
 
   let checked = 0;
   for (const [pathname, digest] of checks) {
-    const response = await fetch(new URL(pathname, url), { redirect: 'manual', signal: AbortSignal.timeout(15_000) });
+    const response = await fetch(new URL(pathname, url), { redirect: 'manual', signal: AbortSignal.timeout(15_000),
+      ...(pathname === '/api/admin/workspace' ? {headers: {Accept: 'text/html'}} : {}) });
     if (response.status !== 200 || sha256(Buffer.from(await response.arrayBuffer())) !== digest) {
       throw new Error(`Hosted bytes or status differ for ${pathname === '/' ? 'the Admin shell' : pathname}.`);
     }
     const cache = response.headers.get('cache-control') ?? '';
     const contentType = response.headers.get('content-type') ?? '';
-    if (['/', '/index.html', '/admin/settings'].includes(pathname)) {
+    if (['/', '/index.html', '/admin/settings', '/api/admin/workspace'].includes(pathname)) {
       if (!contentType.startsWith('text/html') || !cache.includes('no-store') || !cache.includes('no-transform') ||
           expectedHeaders.some(([name, value]) => response.headers.get(name) !== value)) {
         throw new Error('The hosted HTML security or caching headers differ from the Admin contract.');

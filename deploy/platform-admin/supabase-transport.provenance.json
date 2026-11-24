@@ -270,5 +270,11 @@
     },
     "change": "Negotiate versioned BuriMunsi sign-in and passcode verification sessions with the current Core and retain the exact legacy verification transport.",
     "deployed": false
+  },
+  "burimunsi_online_workspace": {
+    "source_sha256s": {
+      "index.js": "b55bacf1651c62aec59fbe93604440adada0893da088307d99c0a23f1d57eccb"
+    },
+    "change": "Provide a credential-free static workspace entry for installations that still serve a previous shell."
   }
 }
