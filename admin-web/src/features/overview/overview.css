@@ -1,68 +1,71 @@
-.overview-summary {
-  background: var(--admin-accent-surface);
-  border-radius: var(--admin-radius);
-  color: var(--admin-ink);
-  padding: clamp(1rem, 2.5vw, 1.6rem);
-}
 .overview-metrics {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
-  gap: 1rem 1.5rem;
-  margin: .8rem 0 0;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12.5rem), 1fr));
+  gap: .75rem;
 }
-.overview-metric { min-width: 0; }
+
+.overview-metric-card,
+.overview-evidence-card {
+  min-width: 0;
+  padding: clamp(1rem, 2vw, 1.35rem);
+  border: 1px solid var(--admin-line);
+  border-radius: var(--admin-radius);
+  background: var(--admin-surface-soft);
+  color: var(--admin-ink);
+}
+
+a.overview-metric-card,
+a.overview-evidence-card {
+  background: var(--admin-accent-surface);
+  border-color: transparent;
+  text-decoration: none;
+}
+
+a.overview-metric-card:hover,
+a.overview-evidence-card:hover {
+  border-color: var(--admin-accent-ink);
+}
+
+.overview-metric-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: .85rem;
+}
+
+.overview-metric dl { margin: 0; }
 .overview-metric dt { color: var(--admin-muted); font-weight: 650; }
-.overview-metric dd { margin: .15rem 0 0; }
-.overview-metric dd:first-of-type {
+.overview-metric dd {
+  margin: .2rem 0 0;
   font-size: clamp(1.35rem, 3vw, 2rem);
   line-height: 1.25;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
-.overview-metric--primary dd:first-of-type { font-size: clamp(1.45rem, 3.6vw, 2.3rem); }
-.overview-measured { color: var(--admin-muted); font-size: .8125rem; margin: 0; }
-.overview-metrics + .overview-measured { margin-top: .65rem; }
+
+.overview-metric--primary dd { font-size: clamp(1.45rem, 3.6vw, 2.3rem); }
 .overview-refresh { min-width: 44px; min-height: 44px; padding-inline: 0; justify-content: center; }
 .overview-refresh .admin-icon, .overview-sms-row > .admin-icon { width: 22px; height: 22px; }
-.overview-link {
+
+.overview-card-action {
   display: inline-flex;
   align-items: center;
-  gap: .25rem;
-  min-height: 44px;
+  gap: .35rem;
   color: var(--admin-accent-ink);
-  text-decoration: underline;
-  text-underline-offset: .17em;
   font-weight: 650;
-  overflow-wrap: anywhere;
 }
-.overview-link .admin-icon { width: 17px; height: 17px; }
-.overview-sms { margin-top: 1rem; border-block: 1px solid var(--admin-line); }
+.overview-card-action .admin-icon { width: 18px; height: 18px; flex: none; }
+.overview-metric-card .overview-card-action { margin-top: auto; }
+
+.overview-sms { margin-top: .75rem; }
 .overview-sms-row {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: .3rem .65rem;
-  padding-block: .75rem;
+  gap: .4rem .75rem;
 }
 .overview-sms-row > .admin-icon { color: var(--admin-accent-ink); }
-.overview-sms-row > p { margin: 0; flex: 1 1 12rem; min-width: 0; }
+.overview-sms-row > p { min-width: 0; margin: 0; }
 .overview-sms-row strong { margin-inline-end: .45rem; }
 .overview-sms-row small { display: block; color: var(--admin-muted); }
-.overview-sms-row > .overview-link { margin-inline-start: auto; }
-.overview-diagnostics { border-top: 1px solid var(--admin-line); padding-bottom: .15rem; }
-.overview-diagnostics summary { min-height: 44px; padding-block: .65rem; font-weight: 650; cursor: pointer; }
-.overview-diagnostics p, .overview-oversight-counts dt { color: var(--admin-muted); }
-.overview-diagnostics code { overflow-wrap: anywhere; }
-.overview-oversight-section { margin-block: .75rem; }
-.overview-oversight-section h3 { margin: 0 0 .4rem; font-size: .95rem; }
-.overview-oversight-counts { margin: 0; }
-.overview-oversight-counts div {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: .75rem;
-  padding: .3rem 0;
-  border-bottom: 1px solid var(--admin-line);
-}
-.overview-oversight-counts dd { margin: 0; font-weight: 650; font-variant-numeric: tabular-nums; text-align: end; overflow-wrap: anywhere; }
