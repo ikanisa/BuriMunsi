@@ -3,11 +3,15 @@
 import core from '../core/canonical-core-fixtures.json' with {type: 'json'};
 
 export const fixtureMember = {
-  ...core.members.rows[0], title: '900001', public_id: '900001',
+  ...core.members.rows[0], membership_status: 'active', title: '900001', public_id: '900001',
   subtitle: 'Synthetic member Ada', display_name: 'Synthetic member Ada',
   phone_e164: null, email: null, whatsapp_number: null, momo_number: null, phone_masked: null,
 };
-export const fixtureMembers = {...core.members, rows: [fixtureMember], total: 1};
+const inactiveId = '94949494-9494-4494-8494-909090909090';
+export const fixtureInactiveMember = {...fixtureMember, id:inactiveId, person_id:inactiveId, collect_user_id:inactiveId,
+  title:'900002', public_id:'900002', subtitle:'Synthetic member Eric', display_name:'Synthetic member Eric',
+  membership_status:'inactive', active_groups:0, amount:'0 groups'};
+export const fixtureMembers = {...core.members, rows:[fixtureMember, fixtureInactiveMember], total:2};
 
 const time = '2026-11-16T10:00:00.000Z';
 const transactionId = '90909090-9090-4090-8090-909090909090';
@@ -50,9 +54,9 @@ export const fixtureMomoPaymentsOnlyDetail = {
 export function readMemberList(params) {
   const search = (params.get('search') ?? '').toLowerCase(), status = params.get('status') ?? '';
   const offset = Number(params.get('offset') ?? 0);
-  const matches = (!search || `${fixtureMember.display_name} ${fixtureMember.public_id}`.toLowerCase().includes(search)) &&
-    (!status || fixtureMember.status === status);
-  return {...fixtureMembers, rows: matches && offset === 0 ? fixtureMembers.rows : [], total: matches ? 1 : 0};
+  const rows = fixtureMembers.rows.filter(member => (!search || `${member.display_name} ${member.public_id}`.toLowerCase().includes(search)) &&
+    (!status || member.membership_status === status));
+  return {...fixtureMembers, rows: rows.slice(offset, offset + 25), total: rows.length};
 }
 
 export function readMomoList(params) {

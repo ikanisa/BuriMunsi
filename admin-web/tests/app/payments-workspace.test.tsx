@@ -10,7 +10,7 @@ import coreFixture from '../core/canonical-core-fixtures.json';
 import reconciliationFixture from '../core/canonical-reconciliation-fixture.json';
 
 const mock = vi.hoisted(() => ({request:vi.fn(), permissions:[] as string[], status:'authenticated', role:'admin',
-  authMethod:'phone_passcode' as AdminUser['authMethod']}));
+  authMethod:undefined as AdminUser['authMethod']}));
 const currentActor = reconciliationFixture.detail.current_actor_id;
 const momoId = '11111111-1111-4111-8111-111111111111';
 const accountId = '22222222-2222-4222-8222-222222222222';
@@ -52,7 +52,7 @@ afterEach(() => {
   mock.request.mockReset();
   mock.status = 'authenticated';
   mock.role = 'admin';
-  mock.authMethod = 'phone_passcode';
+  mock.authMethod = undefined;
 });
 
 describe('consolidated Payments routes',()=>{
@@ -115,7 +115,7 @@ describe('consolidated Payments routes',()=>{
 
   it('preserves separate SMS and payment permissions, including direct URL source selection',async()=>{
     mock.request.mockResolvedValue({contractVersion:1,asOf:time,items:[]});
-    const sms=visit('/admin/momo-receipts',['sms.read']);
+    const sms=visit('/admin/payments?view=sms&source=android',['sms.read']);
     expect(await screen.findByText('No receiver collections are available for this account.')).toBeVisible();
     expect(screen.queryByRole('link',{name:'Member submitted'})).not.toBeInTheDocument();
     expect(screen.queryByRole('link',{name:'MoMo transactions'})).not.toBeInTheDocument();
@@ -147,16 +147,17 @@ describe('consolidated Payments routes',()=>{
     {role:'admin', permissions:['payments.read'], allowed:false},
     {role:'admin', permissions:['payments.read','sms.read'], allowed:true},
   ])('aligns phone $role receipt links and deep links with the server ($permissions)', async ({role,permissions,allowed}) => {
-    mock.request.mockResolvedValue({...coreFixture.transactions,rows:[payment]});
+    mock.authMethod='phone_passcode';
+    mock.request.mockResolvedValue(activityPage([financialItem]));
     const recorded=visit('/admin/payments',permissions,role);
-    expect(await screen.findByRole('link',{name:paymentRef})).toBeVisible();
+    expect(await screen.findByRole('button',{name:paymentRef})).toBeVisible();
     expect(screen.queryByRole('link',{name:'Member receipts'})).not.toBeInTheDocument();
-    expect(Boolean(screen.queryByRole('link',{name:'SMS & receipts'}))).toBe(allowed);
+    expect(screen.queryByRole('navigation',{name:'Payment views'})).not.toBeInTheDocument();
     recorded.unmount();
-    mock.request.mockClear().mockResolvedValue(emptyOperations);
+    mock.request.mockClear().mockResolvedValue(activityPage([]));
     const compact=visit('/admin/payments?view=sms&source=member',permissions,role);
-    expect(await screen.findByText(allowed ? 'No records found' : 'Access unavailable')).toBeVisible();
-    expect(called('gateway/receipts')).toHaveLength(allowed ? 1 : 0);
+    expect(await screen.findByText(allowed ? 'No payments found' : 'This filter isn’t available')).toBeVisible();
+    expect(called('core/payment-activity?')).toHaveLength(allowed ? 1 : 0);
     compact.unmount();
     const bookmarks=['/admin/member-receipts','/admin/member-receipts/'+momoId];
     for (const path of bookmarks) {
@@ -250,5 +251,108 @@ describe('consolidated Payments routes',()=>{
     expect(await screen.findByText('Direct route denied')).toBeVisible();
     await act(async()=>{});
     expect(mock.request).not.toHaveBeenCalled();
+  });
+});
+
+const activityPage = (items: unknown[], total = items.length, offset = 0) => ({contractVersion:1, asOf:time, limit:25, offset, total, items});
+const financialItem = {kind:'payment', id:payment.id, occurredAt:time, reference:paymentRef, payer:'Recorded payer',
+  amountRwf:5000, status:'recorded', attention:false, paymentId:payment.id, reconciliationId:null, momoIds:[], receipts:[]};
+const smsId = '33333333-3333-4333-8333-333333333333';
+const nativeSource = {kind:'receiver_sms', id:smsId, collectionId:'fixture-group', status:'unmatched', bodySha256:'b'.repeat(64)};
+const receiptItem = {kind:'receiver_sms', id:smsId, occurredAt:time, reference:null, payer:null, amountRwf:null,
+  status:'unmatched', attention:true, paymentId:null, reconciliationId:null, momoIds:[], receipts:[nativeSource]};
+
+describe('standalone BuriMunsi Payments table', () => {
+  it('groups verified links on a single row and keeps an unmatched receipt visible as its own record', async () => {
+    mock.authMethod='phone_passcode';
+    const linkedSource = {...nativeSource,id:accountId,status:'posted',paymentReference:paymentRef,payerStatus:'delivered'};
+    const linked = {...financialItem,reconciliationId:payment.id,momoIds:[momoId],receipts:[linkedSource]};
+    mock.request.mockImplementation(async (path: string) => path === 'operations/transactions/'+payment.id ?
+      {contract_version:2, model:'canonical_evidence_ledger',resource_type:'transactions',resource:payment,current_actor_id:currentActor,can_manage:false} :
+      activityPage([linked,receiptItem]));
+    visit('/admin/payments',['payments.read','reconciliations.read','users.read','sms.read','sms.reveal']);
+    const table = await screen.findByRole('table');
+    expect(screen.getAllByRole('table')).toHaveLength(1);
+    expect(within(table).getAllByRole('row')).toHaveLength(3);
+    expect(screen.queryByRole('navigation',{name:'Payment views'})).not.toBeInTheDocument();
+    fireEvent.click(within(table).getByRole('button',{name:paymentRef}));
+    const detail = within(screen.getByRole('region',{name:'Record details'}));
+    expect(await detail.findByText('Allocated amount')).toBeVisible();
+    expect(detail.getByText('Recorded receiver')).toBeVisible();
+    expect(detail.getByText('Unallocated amount')).toBeVisible();
+    expect(detail.getByRole('link',{name:'Open reconciliation'})).toHaveAttribute('href',expect.stringContaining('/admin/reconciliations/'+payment.id));
+    expect(detail.getByRole('button',{name:'Open MoMo transaction'})).toBeVisible();
+    fireEvent.click(within(table).getByRole('button',{name:'Open 1 receipt for '+paymentRef}));
+    const proof=screen.getByRole('region',{name:'SMS and receipt details'});
+    expect(proof).toHaveFocus();
+    expect(within(proof).getByText('Reported delivered')).toBeVisible();
+    expect(within(proof).getByRole('button',{name:'Review original SMS'})).toBeVisible();
+    expect(called('momo/observations')).toHaveLength(0);
+    fireEvent.click(within(table).getByRole('button',{name:'Receiver SMS'}));
+    expect(screen.getByText(smsId)).toBeVisible();
+    expect(screen.queryByRole('link',{name:'Open payment record'})).not.toBeInTheDocument();
+    expect(screen.queryByText('RWF 0')).not.toBeInTheDocument();
+  });
+
+  it('lets Staff open the linked transfer without displaying internal SMS evidence as a provider reference', async () => {
+    mock.authMethod='phone_passcode';
+    const evidenceKey='sMs:synthetic-evidence-key';
+    mock.request.mockImplementation(async (path: string) => path.startsWith('core/payment-activity?')
+      ? activityPage([{...financialItem,momoIds:[momoId]}])
+      : path === 'operations/transactions/'+payment.id
+        ? {contract_version:2,model:'canonical_evidence_ledger',resource_type:'transactions',current_actor_id:currentActor,
+            can_manage:false,resource:{...payment,provider_reference:evidenceKey}}
+        : {transaction:momo,sources:[],conflicting_attempt_ids:[]});
+    visit('/admin/payments',['payments.read'],'staff');
+    fireEvent.click(await screen.findByRole('button',{name:paymentRef}));
+    const detail=within(screen.getByRole('region',{name:'Record details'}));
+    expect(await detail.findByText('Allocated amount')).toBeVisible();
+    expect(detail.queryByText(evidenceKey)).not.toBeInTheDocument();
+    fireEvent.click(detail.getByRole('button',{name:'Open MoMo transaction'}));
+    const dialog=within(await screen.findByRole('dialog',{name:'Transaction details'}));
+    expect(await dialog.findByText(momoRef)).toBeVisible();
+    expect(dialog.queryByRole('heading',{name:'Source and processing history'})).not.toBeInTheDocument();
+  });
+
+  it.each([['/admin/sms-receipts','captures'],['/admin/member-receipts','captures'],
+    ['/admin/momo-receipts','sms'],['/admin/transactions?view=momo','momo'],['/admin/reconciliations','attention']])(
+    'opens the original %s bookmark in the same table with scope %s', async (path,scope) => {
+      mock.authMethod='phone_passcode'; mock.request.mockResolvedValue(activityPage([]));
+      visit(path,['payments.read','reconciliations.read','sms.read']);
+      await screen.findByText('No payments found');
+      expect(location()).toHaveTextContent('/admin/payments');
+      const queries=called('core/payment-activity?');
+      expect(queries).toHaveLength(1);
+      expect(new URLSearchParams(queries[0][0].split('?')[1]).get('scope')).toBe(scope);
+      expect(called('gateway/receipts')).toHaveLength(0);
+    });
+
+  it('fails closed on a mismatched scope, retained SMS data for Staff, and a duplicate linked source', async () => {
+    mock.authMethod='phone_passcode';
+    const denied=visit('/admin/payments?dataset=momo&account='+accountId,['payments.read'],'staff');
+    await screen.findByText('This filter isn’t available'); expect(mock.request).not.toHaveBeenCalled(); denied.unmount();
+    mock.request.mockResolvedValue(activityPage([{...financialItem,receipts:[nativeSource]}]));
+    const restricted=visit('/admin/payments',['payments.read','sms.read'],'staff');
+    await screen.findByText('Payments unavailable'); expect(screen.queryByText(smsId)).not.toBeInTheDocument(); restricted.unmount();
+    mock.request.mockResolvedValue(activityPage([{...financialItem,receipts:[nativeSource]},receiptItem]));
+    visit('/admin/payments',['payments.read','sms.read']); await screen.findByText('Payments unavailable');
+    expect(screen.queryByText(paymentRef)).not.toBeInTheDocument();
+  });
+
+  it('uses the same server pagination after search and recovers a failed page by retrying that query',async () => {
+    mock.authMethod='phone_passcode'; let failed=false;
+    const firstPage=Array.from({length:25},(_,i)=>{const id='77777777-7777-4777-8777-'+String(i).padStart(12,'0');
+      return {...financialItem,id,paymentId:id,reference:'REF-'+i};});
+    mock.request.mockImplementation(async (path:string)=>{
+      const query=new URLSearchParams(path.split('?')[1]); if(!query.get('offset') || query.get('offset')==='0')return activityPage(firstPage,26);
+      if(!failed){failed=true;throw Error('Connection failed');}
+      return activityPage([financialItem],26,25);
+    });
+    visit('/admin/payments?search=REF',['payments.read']);
+    fireEvent.click(await screen.findByRole('button',{name:'Next'})); await screen.findByText('Payments unavailable');
+    fireEvent.click(screen.getByRole('button',{name:'Try again'})); await screen.findByRole('button',{name:paymentRef});
+    expect(screen.getByRole('button',{name:'Next'})).toBeDisabled();
+    expect(screen.getByLabelText('Search payments')).toHaveValue('REF');
+    expect(called('core/payment-activity?').at(-1)?.[0]).toContain('offset=25&search=REF');
   });
 });

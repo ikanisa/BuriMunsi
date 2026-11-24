@@ -1,4 +1,22 @@
 .payments-workspace { min-inline-size: 0; }
+.payments-activity .operations-toolbar { align-items: center; }
+.payments-activity .operations-search { flex: 1; }
+.payments-activity .operations-search input { max-inline-size: 27rem; }
+.payments-active-filter { flex-basis: 100%; margin: 0; color: var(--admin-muted); }
+.payments-active-filter a { margin-inline-start: .5rem; }
+.payments-activity td > small { display: block; margin-block-start: .2rem; color: var(--admin-muted); }
+.payments-activity-detail { display: grid; gap: .75rem; justify-items: start; padding: .5rem; }
+.payments-activity-detail h2, .payments-activity-detail h3, .payments-activity-detail p { margin: 0; }
+.payments-activity-detail h2 { font-size: 1rem; }
+.payments-activity-detail h3 { font-size: .875rem; }
+.payments-receipt-detail { display: grid; justify-items: start; width: 100%; gap: .75rem; padding-block: .75rem; border-top: 1px solid var(--admin-line); }
+.payments-activity-detail code { white-space: normal; overflow-wrap: anywhere; }
+.payments-expanded-row { background: var(--admin-surface-soft); }
+@media (max-width: 720px) {
+  .payments-activity .operations-toolbar { align-items: stretch; }
+  .payments-activity .operations-receipt-table tr.payments-expanded-row { grid-template-columns: minmax(0, 1fr); }
+  .payments-activity .operations-search input { max-inline-size: none; }
+}
 .payments-nav { display: flex; flex-wrap: wrap; gap: .5rem; margin-block: .5rem 1rem; }
 .payments-nav a { display: inline-flex; align-items: center; justify-content: center; min-block-size: 44px; padding: .25rem .875rem; border-radius: 999px; text-decoration: none; font-weight: 600; }
 .payments-nav a[aria-current="page"] { background: var(--admin-accent-surface); color: var(--admin-accent-ink); text-decoration: underline; text-underline-offset: .25em; }

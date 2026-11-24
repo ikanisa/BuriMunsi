@@ -23,7 +23,8 @@ export function canReadMemberReceipts(access: PaymentAccess): boolean {
 export function canOpenPaymentView(view: PaymentView, access: PaymentAccess) {
   const {permissions} = access;
   if (view === 'recorded') return permissions.includes('payments.read');
-  if (view === 'attention') return permissions.includes('reconciliations.read');
+  if (view === 'attention') return permissions.includes('reconciliations.read') && (access.authMethod !== 'phone_passcode' ||
+    permissions.includes('payments.read') || permissions.includes('users.read') || canReadSmsEvidence(access));
   return canOpenReceiptSource('member', access) || canReadSmsEvidence(access);
 }
 
@@ -45,6 +46,12 @@ export function safePaymentListReturn(raw: string | null | undefined, view: Paym
   if (!candidate) return null;
   const url = new URL(candidate, 'https://admin.invalid'), params = url.searchParams;
   const keys = [...params.keys()];
+  if (url.pathname === paymentsPath && params.has('scope')) {
+    const scopes = ['all','payments','momo','sms','android','captures','attention'];
+    const allowed = ['scope','search','status','offset','group','account','from','to'];
+    return new Set(keys).size === keys.length && keys.every(key => allowed.includes(key)) &&
+      scopes.includes(params.get('scope') ?? '') ? candidate : null;
+  }
   const allowed = view === 'recorded' ? ['search', 'status', 'sort', 'page'] : view === 'attention'
     ? ['view', 'search', 'status', 'page'] : ['view', 'source', 'search', 'status', 'offset'];
   if (url.pathname !== paymentsPath || new Set(keys).size !== keys.length ||
