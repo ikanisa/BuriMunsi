@@ -868,10 +868,12 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         }
         }
     }
+    private fun leavesQuietHome(route:Route?)=route==Route.PAYMENTS||route==Route.MEMBERS
+
     /** The profile has already been revalidated. A navigation can abandon
      * the old screen's read without waiting for its blocking HTTP transport. */
     private suspend fun refreshQuietHome(grant:NativeSessionBootstrap.Grant):Boolean {
-        if(queuedNavigation?.first==Route.PAYMENTS)return false
+        if(leavesQuietHome(queuedNavigation?.first))return false
         val departure=CompletableDeferred<Unit>()
         leaveQuietHome=departure
         val records=repo()
@@ -977,11 +979,11 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         if(route in setOf(Route.PAYMENT,Route.MEMBER)&&id==null)return
         if(state.busy){
             // Only quiet reads may queue navigation. Once a quiet Home
-            // has verified the profile, Payments can leave its pending read.
+            // has verified the profile, either records tab can leave its pending read.
             if(quietRefreshInFlight&&!state.draftDirty){
                 queuedNavigation=route to id
                 operationLabel="Loading records"
-                if(route==Route.PAYMENTS)leaveQuietHome?.complete(Unit)
+                if(leavesQuietHome(route))leaveQuietHome?.complete(Unit)
             }
             return
         }
