@@ -151,7 +151,9 @@ export async function verifyAdminHandsets({owner,admin,database,fixtureRoot}){
    const inventoryBefore=await inventory(device);assert.equal(inventoryBefore.recordedCount,0);
    const start={...report,runId:randomUUID(),expectedConsentGeneration:generation};
    await checkpoint(device,start);
-   assert.equal((await checkpoint(device,{...start,state:'verified',collectionRevision:inventoryBefore.revision})).state,'verified');
+   const verified={...start,state:'verified',collectionRevision:inventoryBefore.revision};
+   assert.equal((await checkpoint(device,verified)).state,'verified');
+   return verified;
   }
   // Start the independently tested account-switch scenarios in a fresh budget
   // window. All subsequent PIN attempts still pass the ordinary rate limits.
@@ -169,7 +171,12 @@ export async function verifyAdminHandsets({owner,admin,database,fixtureRoot}){
   const denied=e=>e.code==='42501';
   assert.equal((await coverage()).state,'unknown');
   await assert.rejects(()=>dashboard(login,list),e=>denied(e)&&e.message==='group_access_denied');
-  await migrate(['20261122202000_burimunsi_current_admin_inbox_authority.sql','20261122203000_burimunsi_phone_admin_sms_read_scope.sql']);
+  await migrate(['20261122202000_burimunsi_current_admin_inbox_authority.sql','20261122203000_burimunsi_phone_admin_sms_read_scope.sql',
+    '20261124081102_burimunsi_inbox_check_freshness.sql']);
+  const freshness=(await owner.query(`SELECT state,age,private._burimunsi_inbox_check_fresh(state,200000000-age,200000000) fresh
+    FROM (VALUES ('verified',299999),('verified',300000),('checking',86399999),('checking',86400000),
+      ('checking',-1),('verified',-1)) cases(state,age)`)).rows;
+  assert.deepEqual(freshness.map(r=>r.fresh),[true,false,true,false,false,false]);
   await admin.query(`CREATE SCHEMA IF NOT EXISTS collect_ops;CREATE SCHEMA IF NOT EXISTS cron;
    CREATE TABLE IF NOT EXISTS cron.job(jobid bigint PRIMARY KEY,active boolean,jobname text,schedule text,command text,database text);
    CREATE TABLE IF NOT EXISTS collect_ops.jobs_config(singleton boolean,enabled boolean,cron_job_id bigint);
@@ -205,7 +212,13 @@ export async function verifyAdminHandsets({owner,admin,database,fixtureRoot}){
   assert.equal((await consent(shared)).enabled,true);assert.equal((await coverage()).state,'unknown');
   await emptySweep(shared,1);assert.equal((await coverage()).state,'verified');
   await sign(A);assert.equal((await coverage()).state,'unknown');
-  await emptySweep(A,1);
+  const currentProof=await emptySweep(A,1);
+  assert.equal((await coverage()).state,'verified');
+  // Exercise a handset clock jump in the actual scoped Admin query. A later
+  // complete, revalidated duplicate proof restores the server timestamp.
+  await admin.query("UPDATE private.burimunsi_inbox_checks SET checked_at=checked_at+3600000 WHERE installation_id=$1",[A.install]);
+  const stale=await coverage();assert.equal(stale.state,'incomplete');assert.equal(stale.headsMatch,null);
+  assert.equal((await checkpoint(A,currentProof)).state,'verified');
   assert.equal((await coverage()).state,'verified');
   await sign(shared);
   await native(shared,'/sms/observation-consent',{enabled:false,generation:2},'SELECT private.burimunsi_observation_set_consent(false,2) v');
