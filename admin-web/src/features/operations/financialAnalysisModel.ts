@@ -1,4 +1,8 @@
 import type {ReactNode} from 'react';
+import {analyzeFinancialRows, comparable, dateValue, hasCriteria}
+  from '../../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
+export {analyzeFinancialRows, hasCriteria};
+type Kind = FinancialColumn<unknown>['kind'];
 
 export interface FinancialColumn<T> {
   key: string;
@@ -25,25 +29,6 @@ const numberFormat = new Intl.NumberFormat('en-GB', {maximumFractionDigits:20});
 const dateFormat = new Intl.DateTimeFormat('en-GB', {dateStyle:'medium', timeZone:'Africa/Kigali'});
 const timeFormat = new Intl.DateTimeFormat('en-GB', {dateStyle:'medium', timeStyle:'short', timeZone:'Africa/Kigali'});
 const dateOnly = /^\d{4}-\d{2}-\d{2}$/;
-const day = 86_400_000;
-type Value = string | number | null;
-type Kind = FinancialColumn<unknown>['kind'];
-
-// The Admin's recorded calendar dates use Kigali time. Numeric timestamps are Unix milliseconds.
-function dateValue(value: string | number): number | null {
-  const at = typeof value === 'number' ? value : Date.parse(dateOnly.test(value) ? value + 'T00:00:00+02:00' : value);
-  return Number.isFinite(at) && Math.abs(at) <= 8.64e15 ? at : null;
-}
-function comparable(value: Value, kind: Kind): Value {
-  if (value === null || typeof value === 'string' && !value.trim()) return null;
-  if (kind === 'date') return dateValue(value);
-  if (kind === 'number') {const number = Number(value); return Number.isFinite(number) ? number : null;}
-  return String(value).trim();
-}
-function folded(value: string): string {
-  return value.normalize('NFKD').replace(/\p{M}/gu,'').toLocaleLowerCase('en');
-}
-
 export function initialColumnFilters<T>(columns: readonly FinancialColumn<T>[], initial?: Readonly<Record<string,string>>): ColumnFilters {
   const filters = new Map<string,ColumnFilter>();
   for (const column of columns) {
@@ -53,9 +38,6 @@ export function initialColumnFilters<T>(columns: readonly FinancialColumn<T>[], 
     if (column.kind === 'category') filters.set(column.key,{...emptyFilter,choices:[value]});
   }
   return filters;
-}
-export function hasCriteria(filter: ColumnFilter): boolean {
-  return filter.presence !== 'any' || !!filter.text.trim() || !!filter.min || !!filter.max || filter.choices.length > 0;
 }
 export function describeColumnFilter<T>(column: FinancialColumn<T>, filter: ColumnFilter): string {
   if (filter.presence === 'blank') return 'Blank';
@@ -85,43 +67,6 @@ export function rangeError(filter: ColumnFilter, kind: Kind): string | undefined
   if (from !== null && through !== null && from > through) {
     return kind === 'date' ? 'Enter an end date on or after the start date.' : 'The maximum must be at least the minimum.';
   }
-}
-
-function columnPredicate<T>(column: FinancialColumn<T>, filter: ColumnFilter) {
-  const {kind} = column;
-  const needle = folded(filter.text.trim());
-  const minimum = comparable(filter.min,kind), maximum = comparable(filter.max,kind);
-  const choices = new Set(filter.choices);
-  return (row: T): boolean => {
-    const value = comparable(column.value(row),kind);
-    if (filter.presence === 'blank') return value === null;
-    if (value === null) return false;
-    if (kind === 'text') return !needle || folded(String(value)).includes(needle);
-    if (kind === 'category') return !choices.size || choices.has(String(value));
-    if (typeof value !== 'number') return false;
-    if (typeof minimum === 'number' && value < minimum) return false;
-    if (typeof maximum !== 'number') return true;
-    return kind === 'date' ? value < maximum + day : value <= maximum;
-  };
-}
-
-export function analyzeFinancialRows<T>(rows: readonly T[], columns: readonly FinancialColumn<T>[], filters: ColumnFilters,
-    sort?: FinancialSort): readonly T[] {
-  const predicates = columns.flatMap(column => {
-    const filter = filters.get(column.key);
-    return filter && hasCriteria(filter) ? [columnPredicate(column,filter)] : [];
-  });
-  const matches = predicates.length ? rows.filter(row => predicates.every(test => test(row))) : rows;
-  const column = sort && columns.find(item => item.key === sort.key);
-  if (!column || !sort) return matches;
-  const direction = sort.direction === 'asc' ? 1 : -1;
-  return matches.map((row,index) => ({row,index,value:comparable(column.value(row),column.kind)}))
-    .sort((left,right) => {
-      const a = left.value, b = right.value;
-      if (a === null || b === null) return a === b ? left.index - right.index : a === null ? 1 : -1;
-      const compared = typeof a === 'number' && typeof b === 'number' ? a - b : collator.compare(String(a),String(b));
-      return direction * compared || left.index - right.index;
-    }).map(item => item.row);
 }
 
 export function categoryChoices<T>(column: FinancialColumn<T>, rows: readonly T[], selected: readonly string[]) {

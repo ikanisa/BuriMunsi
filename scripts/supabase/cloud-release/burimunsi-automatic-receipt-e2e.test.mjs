@@ -10,7 +10,7 @@ import {startPayerFixture} from './fixtures/burimunsi-payer-postgres.mjs';
 import {openFixturePayerWorker} from './fixtures/burimunsi-payer-delivery.mjs';
 import pg from '../node_modules/pg/lib/index.js';
 import {installNativeChain,installHandsetInventory,nativeRuntime,nativeActor,uuid,sha,testProfile} from './fixtures/burimunsi-native-chain.mjs';
-import {assignPayment} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-payments.js';
+import {assignPayment,readPaymentAnalysisRows,PAYMENT_ANALYSIS_LIMIT} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-payments.js';
 import {lockCollectMutation} from '../../../supabase/functions/_shared/postgres-mutation-lock.js';
 import {body as stripFraming} from './migrations.mjs';
 import {compileSql} from '../../../supabase/functions/_shared/postgres-compatibility-sql.js';
@@ -406,6 +406,101 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
  await f.client.query("BEGIN; SET LOCAL ROLE collect_runtime; SET LOCAL burimunsi.collection_id='another-group'");
  assert.equal((await f.client.query('SELECT count(*)::int n FROM burimunsi.raw_sms')).rows[0].n,0);
  await f.client.query('ROLLBACK');
+ await t.test('scoped analysis SQL masks SMS and bounds scans before matching, preserving each exact integer',async()=>{
+  const foreign='analysis-other-group';
+  await f.client.query("INSERT INTO private.burimunsi_scopes VALUES($1,'wallet',NULL)",[foreign]);
+  const seed=async(groupId,id,amount)=>{
+   await f.client.query(`INSERT INTO burimunsi.payments(id,collection_id,receiving_account_id,provider,direction,amount_rwf,counterparty_name)
+     VALUES($1,$2,'wallet','mtn_momo','incoming',$3::bigint,'Analysis fixture')`,[id,groupId,amount]);
+  };
+  await seed(group,'analysis-large-one','9007199254740991');
+  await seed(group,'analysis-large-two','9007199254740991');
+  await seed(foreign,'analysis-foreign','9007199254740991');
+  const rune=runtime.run('http_collect',{readOnly:true});
+  const scoped=(options={},id=group)=>rune(tx=>readPaymentAnalysisRows(tx,id,{q:'',showSms:false,...options}));
+  const maskedRead=await scoped();
+  assert.equal(maskedRead.rows.every(row=>row.sourceId===null),true);
+  assert.ok((await scoped({showSms:true})).rows.some(row=>row.sourceId!==null));
+  const matches=await scoped({q:'Analysis fixture'});
+  assert.equal(matches.rows.length,2);
+  assert.equal([...matches.amounts.values()].reduce((s,v)=>s+v,0n).toString(),'18014398509481982');
+  assert.deepEqual((await scoped({q:'Analysis fixture'},foreign)).rows,[]);
+
+  // The standalone Payments schema records only incoming/outgoing; a
+  // genuine reversal notice is not silently projected as a signed payment.
+  const reversalClause='Transaction reversed for RWF 5';
+  const reversalBody=reversalClause+'. FT Id: 1234567891.';
+  const reversalSource=await flow.route('',{...masked,requestId:uuid(997),sourceKey:sha('analysis-reversal'),rawBody:reversalBody});
+  flow.provider({...outgoing,event_kind:'reversal',wallet_effect:'credit',transaction_id_raw:'1234567891',
+    principal_amount_raw:'5',payer_name_raw:null,evidence:{...outgoing.evidence,incoming_success:reversalClause,principal:reversalClause,
+      transaction_id:'FT Id: 1234567891',payer:null}});
+  const identity=(await f.client.query(`SELECT pg_backend_pid() AS pid,current_setting('fixture.native_actor',true) AS actor,
+   current_setting('fixture.native_context',true) AS context,current_setting('fixture.native_profile',true) AS profile`)).rows[0];
+  const pgId=identity.pid;
+  const writer=new pg.Client({host:f.cluster.socket,port:f.cluster.port,database:'postgres',user:f.cluster.initialUser});
+  await writer.connect();
+  const reversalWorker=new pg.Client({host:f.cluster.socket,port:f.cluster.port,database:'postgres',user:f.cluster.initialUser});
+  await reversalWorker.connect();
+  await reversalWorker.query('SET ROLE postgres');
+  await reversalWorker.query(`SELECT set_config('fixture.native_actor',$1,false),
+    set_config('fixture.native_context',$2,false),set_config('fixture.native_profile',$3,false)`,[identity.actor,identity.context,identity.profile]);
+  const parallelParser=Object.assign(Object.create(Object.getPrototypeOf(flow.parser)),flow.parser,
+    {authority:{write:nativeRuntime(reversalWorker,group).run('jobs')}});
+  let frozen;
+  try{
+   await writer.query('SET ROLE postgres; BEGIN; SELECT pg_advisory_xact_lock(552711::bigint)');
+   // Test-only barrier after the reader's repeatable snapshot is established.
+   frozen=rune(tx=>readPaymentAnalysisRows({unsafe:(sql,args)=>tx.unsafe(
+     sql.replace('WITH candidate AS','WITH wait_barrier AS MATERIALIZED (SELECT pg_advisory_xact_lock_shared(552711::bigint)),candidate AS')
+       .replace('FROM checked','FROM checked CROSS JOIN wait_barrier'),args)},group,{q:'Analysis fixture',showSms:false}));
+   const deadline=performance.now()+3000;
+   while(!(await writer.query('SELECT pg_backend_pid()=ANY(pg_blocking_pids($1)) AS blocked',[pgId])).rows[0].blocked){
+    assert.ok(performance.now()<deadline);await new Promise(resolve=>setTimeout(resolve,10));
+   }
+   assert.deepEqual(await parallelParser.process(reversalSource.sourceId),{state:'non_payment'});
+   assert.equal((await reversalWorker.query('SELECT count(*)::int n FROM burimunsi.payments WHERE id=$1',[reversalSource.sourceId])).rows[0].n,0);
+   await writer.query(`INSERT INTO burimunsi.payments(id,collection_id,receiving_account_id,provider,direction,amount_rwf,counterparty_name)
+    VALUES ('analysis-in-addition',$1,'wallet','mtn_momo','incoming',13,'Analysis fixture'),
+     ('analysis-recorded-return',$1,'wallet','mtn_momo','outgoing',5,'Analysis fixture')`,[group]);
+   await writer.query('COMMIT');
+   const summarize=({rows,amounts})=>Object.fromEntries(['incoming','outgoing'].map(direction=>[direction,
+    rows.filter(row=>row.direction===direction).reduce((total,row)=>total+amounts.get(row.id),0n).toString()]));
+   const whileWriting=await frozen;
+   assert.equal(whileWriting.rows.length,2);
+   assert.deepEqual(summarize(whileWriting),{incoming:'18014398509481982',outgoing:'0'});
+   const next=await scoped({q:'Analysis fixture'});
+   assert.equal(next.rows.length,4);
+   const independently=(await f.client.query(`SELECT
+    coalesce(sum(amount_rwf) FILTER (WHERE direction='incoming'),0)::text AS incoming,
+    coalesce(sum(amount_rwf) FILTER (WHERE direction='outgoing'),0)::text AS outgoing
+    FROM burimunsi.payments WHERE collection_id=$1 AND counterparty_name='Analysis fixture'`,[group])).rows[0];
+   assert.deepEqual(summarize(next),independently);
+   assert.deepEqual(independently,{incoming:'18014398509481995',outgoing:'5'});
+  }finally{await reversalWorker.end();await writer.query('ROLLBACK');await writer.end();if(frozen)await frozen;}
+  const before=(await f.client.query('SELECT count(*)::int AS n FROM burimunsi.payments WHERE collection_id=$1',[group])).rows[0].n;
+  await f.client.query(`INSERT INTO burimunsi.payments(id,collection_id,receiving_account_id,provider,direction,amount_rwf)
+    SELECT 'analysis-benchmark-'||n,$1,'wallet','mtn_momo','incoming',1 FROM generate_series(1,$2::int) n`,
+    [group,PAYMENT_ANALYSIS_LIMIT-before]);
+  await f.client.query(`INSERT INTO burimunsi.payments(id,collection_id,receiving_account_id,provider,direction,amount_rwf)
+    SELECT 'analysis-outside-benchmark-'||n,$1,'wallet','mtn_momo','incoming',1 FROM generate_series(1,15000) n`,[foreign]);
+  await f.client.query('ANALYZE burimunsi.payments');
+  let statement,bindings;
+  const start=performance.now();
+  const cap=await rune(tx=>readPaymentAnalysisRows({unsafe:(sql,args)=>{
+    statement=sql;bindings=args;return tx.unsafe(sql,args);
+  }},group,{q:'',showSms:false}));
+  const ms=Math.round(performance.now()-start);
+  const plan=await rune(tx=>tx.unsafe('EXPLAIN (FORMAT JSON) '+statement,bindings));
+  const indexes=[...JSON.stringify(plan).matchAll(/"Index Name":"(burimunsi_payments_(?:recent|member))"/g)].map(x=>x[1]);
+  assert.ok(indexes.length,'analysis scan did not use an indexed collection prefix in the reviewed fixture');
+  t.diagnostic('Default PG indexed collection plan: '+indexes.join(',')+'; '+ms+'ms at '+cap.rows.length+' visible rows and 15001 other-group rows');
+
+  assert.equal(cap.rows.length,PAYMENT_ANALYSIS_LIMIT);
+  t.diagnostic('Co-located PG capped reader including row decode: '+Math.round(performance.now()-start)+'ms at '+cap.rows.length+' rows');
+  await seed(group,'analysis-over-limit','1');
+  await assert.rejects(scoped({q:'No existing match'}),{status:503,code:'payment_analysis_scope_too_large'});
+ });
+
 
  await t.test('a verified original inbox page adopts an exact earlier payment and parses a new held receipt once', async () => {
   await f.client.query(await load('20261124114504_burimunsi_verified_inbox_recovery.sql'));

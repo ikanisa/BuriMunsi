@@ -5,12 +5,14 @@ import {ApiError,json,readJson} from './core.js';
 import {lockCollectMutation} from '../postgres-mutation-lock.js';
 import {BuriError,requireThat} from './burimunsi/errors.js';
 import {PostgresNativeAuthority} from './burimunsi/postgres-authority.js';
-import {assignPayment,readPayment,readPayments,readPaymentsHome,setPaymentsScope} from './burimunsi/postgres-payments.js';
+import {assignPayment,readPayment,readPaymentAnalysisRows,readPayments,readPaymentsHome,setPaymentsScope} from './burimunsi/postgres-payments.js';
+import {analyzeCanonicalPaymentRows,parsePaymentAnalysisQuery} from './burimunsi/payment-analysis-shared.mjs';
 import {canonicalJson,exactKeys,requireId,requireRequestId,sha256} from './burimunsi/values.js';
 
 const base='/api/admin/burimunsi/';
 const operation='burimunsi.allocate';
-const scopeSql=`SELECT a.id,a.role,'payments.allocate'=ANY(a.capabilities) AS can_allocate
+const scopeSql=`SELECT a.id,a.role,'payments.allocate'=ANY(a.capabilities) AS can_allocate,
+ (resolved.actor->'permissions' ? 'sms.read') AND ('sms.read'=ANY(a.capabilities)) AS can_read_sms
  FROM private.burimunsi_browser_pin_session($1,$2,$3) AS resolved(actor)
  JOIN private.burimunsi_accounts a ON a.id=$4::uuid AND a.collection_id=$1
  WHERE resolved.actor->>'collectionId'=a.collection_id AND resolved.actor->>'accountId'=a.id::text
@@ -58,13 +60,43 @@ export async function adminBuriMunsiPayments(request,env) {
     requireThat(rows.length===1,'access_denied',403);
     const actor=rows[0];
     return {showSms:actor.role==='admin'&&account.permissions.includes('sms.read'),
+      canAnalyzeSms:actor.role==='admin'&&actor.can_read_sms===true&&account.permissions.includes('sms.read'),
       canAllocate:actor.can_allocate===true};
   };
   const relative=path.slice(base.length),match=/^payments\/([A-Za-z0-9_-]+)(\/allocate)?$/.exec(relative);
   const statusMatch=/^payments\/([A-Za-z0-9_-]+)\/allocation-receipt$/.exec(relative);
   try{
     let result;
-    if(request.method==='GET'&&relative==='home'){
+    if(relative==='payments/analysis'){
+      if(request.method!=='POST')throw new ApiError(404,'not_found','This Payments action does not exist.');
+      query(url,[]);
+      const input=await readJson(request,8192);
+      const {rows,amounts,query:criteria,showSms,asOf}=await db.withLockedReadSnapshot(async sql=>{
+        await sql.unsafe("SET LOCAL statement_timeout='1250ms'");
+        const {canAnalyzeSms:showSms}=await scoped(sql);
+        let criteria;
+        try{criteria=parsePaymentAnalysisQuery(input,showSms);}
+        catch(error){if(error instanceof TypeError)requireThat(false,'invalid_payment_analysis',400);throw error;}
+        const snapshot=await readPaymentAnalysisRows(sql,groupId,{q:criteria.q,showSms});
+        await authority.assertOwned();
+        return {...snapshot,query:criteria,showSms,asOf:new Date().toISOString()};
+      });
+      // Work on authorized in-memory projections after SQL and its locks have
+      // ended. Membership, ordering, count, totals and page use the same rows.
+      const matched=analyzeCanonicalPaymentRows(rows,criteria.filters,criteria.sort,showSms);
+      let incoming=0n,outgoing=0n;
+      for(const row of matched){
+        const exact=amounts.get(row.id);
+        requireThat(typeof exact==='bigint','payment_totals_unavailable',503);
+        if(row.direction==='incoming')incoming+=exact;
+        else if(row.direction==='outgoing')outgoing+=exact;
+        else requireThat(false,'payment_totals_unavailable',503);
+      }
+      const {offset,limit}=criteria;
+      await authority.assertOwned();
+      result={items:matched.slice(offset,offset+limit),totalCount:rows.length,matchingCount:matched.length,
+        directionTotalsRwf:{incoming:incoming.toString(),outgoing:outgoing.toString()},missing:0,offset,limit,asOf};
+    }else if(request.method==='GET'&&relative==='home'){
       query(url,[]);
       result=await db.withLockedReadSnapshot(async sql=>readPaymentsHome(sql,groupId,new Date().toISOString(),await scoped(sql)));
     }else if(request.method==='GET'&&relative==='payments'){
@@ -146,6 +178,8 @@ export async function adminBuriMunsiPayments(request,env) {
     return json(result,200,BURI_ADMIN_PRIVATE_HEADERS);
   }catch(error){
     if(error instanceof ApiError)throw error;
+    if(error instanceof BuriError&&error.code==='payment_analysis_scope_too_large')
+      throw new ApiError(503,error.code,'This collection is too large for exact payment analysis.');
     if(error instanceof BuriError)throw new ApiError(error.status,error.code,'Check the payment or chosen member and try again.');
     if(error?.code==='42501')throw new ApiError(403,'permission_required','This Payments action is unavailable.');
     throw new ApiError(503,'payments_unavailable','The Payments result could not be confirmed.');

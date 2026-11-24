@@ -62,6 +62,42 @@ export async function readPayments(sql,groupId,{q='',status=null,direction=null,
   return {items,totalCount,offset,limit,nextOffset:offset+items.length<totalCount?offset+items.length:null};
 }
 
+// Bound the scan before applying text search. A broad collection over the
+// reviewed limit returns no projection, never totals for a truncated sample.
+export const PAYMENT_ANALYSIS_LIMIT=5000;
+export async function readPaymentAnalysisRows(sql,groupId,{q,showSms}) {
+  const rows=await sql.unsafe(`WITH candidate AS MATERIALIZED (
+   SELECT p.id,p.collection_id,p.occurred_at,p.created_at,p.source_time,p.direction,p.amount_rwf::text AS amount_rwf,
+    p.provider_reference,p.counterparty_name,p.counterparty_identifier,p.member_id,p.allocation_state,p.version,
+    CASE WHEN $3::boolean THEN p.sms_source_id ELSE NULL END AS sms_source_id,
+    coalesce(p.occurred_at,p.created_at) AS page_at
+   FROM burimunsi.payments p WHERE p.collection_id=$1
+   LIMIT ($4::int+1)
+  ), checked AS (SELECT count(*)::int AS candidate_count FROM candidate)
+  SELECT result.*,checked.candidate_count FROM checked
+  LEFT JOIN LATERAL (
+   SELECT p.*,member.full_name AS member_name,member.momo_number AS member_phone
+   FROM candidate p LEFT JOIN app.users member ON member.id=p.member_id
+   WHERE checked.candidate_count<=$4::int AND ($2::text='' OR
+    concat_ws(' ',p.provider_reference,p.counterparty_name,p.counterparty_identifier,p.amount_rwf,
+      p.source_time,member.full_name,member.momo_number) ILIKE $2 ESCAPE '\\')
+  ) result ON true ORDER BY result.page_at DESC,result.id DESC`,[groupId,q?escaped(q):'',showSms,PAYMENT_ANALYSIS_LIMIT]);
+  const count=pgInteger(rows[0]?.candidate_count);
+  requireThat(count<=PAYMENT_ANALYSIS_LIMIT,'payment_analysis_scope_too_large',503);
+  const amounts=new Map(),records=[];
+  for(const row of rows){
+    if(row.id==null)continue;
+    // Payload keeps a numeric per-row amount only under the schema's safe
+    // limit. Sum the original decimal supplied by PostgreSQL, not that value.
+    const amount=row.amount_rwf;
+    requireThat(typeof amount==='string'&&/^[1-9][0-9]*$/.test(amount),'payment_totals_unavailable',503);
+    const record=paymentRecord(row,{showSms});
+    requireThat(String(record.amountRwf)===amount&&!amounts.has(record.id),'payment_totals_unavailable',503);
+    amounts.set(record.id,BigInt(amount));records.push(record);
+  }
+  return {rows:records,amounts};
+}
+
 export async function paymentListingRows(sql,groupId,memberId=null) {
   return sql.unsafe(display+(memberId?' AND p.member_id=$2':'')+' ORDER BY p.id LIMIT 100001',memberId?[groupId,memberId]:[groupId]);
 }

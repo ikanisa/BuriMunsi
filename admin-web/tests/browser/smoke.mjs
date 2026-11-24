@@ -185,8 +185,8 @@ try {
   assert.equal(await payments.getAttribute('href'), '#/admin/payments');
   const paymentListResponse = page.waitForResponse(response => {
     const url = new URL(response.url());
-    return url.origin === origin && url.pathname === '/api/admin/burimunsi/payments' &&
-      url.searchParams.get('limit') === '100' && url.searchParams.get('offset') === '0';
+    return url.origin === origin && url.pathname === '/api/admin/burimunsi/payments/analysis' && !url.search &&
+      response.request().method() === 'POST' && response.request().postDataJSON()?.offset === 0;
   });
   await payments.click();
   assert.equal((await paymentListResponse).status(), 200);
@@ -203,6 +203,7 @@ try {
   await directionFilter.getByRole('button', {name: 'Apply filter', exact: true}).click();
   await paymentRow(fixturePayment).waitFor({state: 'hidden'});
   await paymentRow(fixtureOutgoingPayment).waitFor();
+  await page.getByRole('region',{name:'Totals for matching payments'}).getByText('RWF −5,000',{exact:true}).waitFor();
   await page.getByRole('button', {name: 'Clear all filters', exact: true}).click();
   await paymentRow(fixturePayment).waitFor();
   const receiptInbox = page.getByRole('region', {name: 'M-Money SMS inbox', exact: true});

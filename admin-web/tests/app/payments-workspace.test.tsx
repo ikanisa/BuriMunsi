@@ -7,6 +7,7 @@ import {workspaceRoutes} from '../../src/app/WorkspaceRoutes';
 import {canOpenAdminPath} from '../../src/app/route-access';
 import {safePaymentListReturn} from '../../src/features/operations/paymentLocations';
 import {AdminTransportError} from '../../src/api/contracts';
+import {analyzeCanonicalPaymentRows, type PaymentAnalysisQuery} from '../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
 import coreFixture from '../core/canonical-core-fixtures.json';
 import reconciliationFixture from '../core/canonical-reconciliation-fixture.json';
 
@@ -19,10 +20,17 @@ const accountId = '22222222-2222-4222-8222-222222222222';
 const momoRef = 'MOMO-FIXTURE-01';
 const time = '2026-10-18T08:00:00.000Z';
 const buriPayment = {id:momoId,groupId:'fixture-group',version:1,direction:'incoming',amountRwf:5000,atRaw:time,ftId:momoRef,
-  payerNameRaw:'Fixture payer',payerPhoneRaw:'000071',memberId:null,memberName:null,memberPhone:null,state:'unallocated',sourceId:null};
+  payerNameRaw:'Fixture payer',payerPhoneRaw:'000071',memberId:null,memberName:null,memberPhone:null,state:'unallocated',sourceId:null as string|null};
 const outgoing = {...buriPayment,id:accountId,direction:'outgoing',ftId:'MOMO-OUT-FIXTURE',
   state:'allocated',memberId:currentActor,memberName:'Fixture member'};
-const buriPage = (items: object[]) => ({items,totalCount:items.length,offset:0,limit:100,nextOffset:null,asOf:time});
+const query99:PaymentAnalysisQuery={q:'',filters:[],sort:{key:'time',direction:'desc'},offset:0,limit:25};
+const buriPage = (items: (typeof buriPayment|typeof outgoing)[], query:PaymentAnalysisQuery=query99) => {
+  const matching=analyzeCanonicalPaymentRows(items,query.filters,query.sort,mock.role==='admin');
+  const totals={incoming:0n,outgoing:0n};
+  for (const item of matching) totals[item.direction as 'incoming'|'outgoing']+=BigInt(item.amountRwf);
+  return {items:matching.slice(query.offset,query.offset+25),totalCount:items.length,matchingCount:matching.length,offset:query.offset,limit:25,
+    missing:0,directionTotalsRwf:{incoming:String(totals.incoming),outgoing:String(totals.outgoing)},asOf:time};
+};
 const paymentRef = '100000000123';
 const payment = {...coreFixture.transactions.rows[0],payment_reference:paymentRef};
 const momo = {id:momoId,receiving_account_id:accountId,provider_transaction_id:momoRef,recipient_name:'Fixture receiver',public_code:'123456',payer_name:'Fixture payer',
@@ -285,10 +293,9 @@ describe('BuriMunsi phone Payments', () => {
   it('opens an old offset bookmark, sorts the complete set and opens a record from the last fetched page', async () => {
     mock.authMethod = 'phone_passcode';
     const rows = Array.from({length:105}, (_, i) => ({...buriPayment,id:'pay-' + i,ftId:'FT-' + i,amountRwf:105-i}));
-    mock.request.mockImplementation(async (path: string) => {
+    mock.request.mockImplementation(async (path: string, options: {body:PaymentAnalysisQuery}) => {
       if (path === 'burimunsi/payments/pay-104') return rows[104];
-      const offset = Number(new URLSearchParams(path.split('?')[1]).get('offset'));
-      return {...buriPage(rows.slice(offset,offset+100)),offset,totalCount:rows.length,nextOffset:offset === 0 ? 100 : null};
+      return buriPage(rows,options.body);
     });
     visit('/admin/payments?offset=25',['payments.read'],'staff');
     expect(await screen.findByRole('button',{name:'FT-25'})).toBeVisible();
@@ -296,9 +303,10 @@ describe('BuriMunsi phone Payments', () => {
     fireEvent.click(await screen.findByRole('button',{name:'FT-104'}));
     const detail = within(await screen.findByRole('region',{name:'Payment details'}));
     expect(await detail.findByText('pay-104')).toBeVisible();
-    expect(called('burimunsi/payments?').map(([path]) => path)).toEqual([
-      'burimunsi/payments?limit=100&offset=0', 'burimunsi/payments?limit=100&offset=100',
+    expect(called('burimunsi/payments/analysis').map(([,options]) => [options.method,options.body.offset,options.body.sort])).toEqual([
+      ['POST',25,{key:'time',direction:'desc'}], ['POST',0,{key:'amount',direction:'asc'}],
     ]);
+    expect(screen.getByRole('region',{name:'Totals for matching payments'})).toHaveTextContent('RWF 5,565');
   });
 
   it('loads the scoped Admin SMS health independently of Home payments', async () => {
@@ -332,7 +340,7 @@ describe('BuriMunsi phone Payments', () => {
     const evidence = (id: string, processing: string) => ({requestId:id,sourceId:id,admittedAt:time,retentionState:'retained',
       bodySha256:'a'.repeat(64),processing,paymentReference:null,payerStatus:null,payerReason:null});
     mock.request.mockImplementation(async (path: string) => {
-      if (path.startsWith('burimunsi/payments?')) return buriPage([linked]);
+      if (path === 'burimunsi/payments/analysis') return buriPage([linked]);
       if (path === 'burimunsi/payments/'+momoId) return linked;
       if (path === 'momo/observations/collections') return {contractVersion:1,asOf:time,items:[]};
       const search = new URLSearchParams(path.split('?')[1]);

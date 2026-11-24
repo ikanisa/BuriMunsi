@@ -1,5 +1,7 @@
 // Loopback browser fixture. Account changes use in-memory records only in explicit sign-in mode.
 import {createServer} from 'node:http';
+import {analyzeCanonicalPaymentRows,parsePaymentAnalysisQuery}
+  from '../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
 import {promises as fs} from 'node:fs';
 import path from 'node:path';
 import {versionedStatic} from '../../../deploy/platform-admin/src/static-recovery.js';
@@ -75,7 +77,8 @@ createServer(async (request, response) => {
     if (url.pathname.startsWith('/api/admin/auth/') || /^\/api\/admin\/team(?:\/|$)/.test(url.pathname)) {
       return phoneAccounts.handle(request, response, url.pathname.slice('/api/admin/'.length), session);
     }
-    if (request.method !== 'GET') return json(response, 405, {error: {code: 'fixture_read_only'}});
+    const paymentAnalysis = request.method === 'POST' && url.pathname === '/api/admin/burimunsi/payments/analysis';
+    if (!paymentAnalysis && request.method !== 'GET') return json(response, 405, {error: {code: 'fixture_read_only'}});
     if (!session) return json(response, 401, {error: {code: 'fixture_unauthorized'}});
     const payments = phoneAccounts.hasPermission(session, 'payments.read'), sms = phoneAccounts.hasPermission(session, 'sms.read');
     const visiblePayment = item => ({...item, sourceId: sms ? item.sourceId : null});
@@ -83,6 +86,21 @@ createServer(async (request, response) => {
       paymentCount:payments ? 2 : 0, memberCount:1, unallocatedCount:payments ? 2 : 0,
       recentPayments:payments ? [fixturePayment, fixtureOutgoingPayment].map(visiblePayment) : [], asOf:fixturePayment.atRaw,
     });
+    if (paymentAnalysis) {
+      if (!payments) return json(response,403,{error:{code:'forbidden'}});
+      let query;
+      try {if (url.search) throw new Error(); query=parsePaymentAnalysisQuery(await readFixtureBody(request),sms);}
+      catch {return json(response,400,{error:{code:'invalid_fixture'}});}
+      const q=query.q.toLowerCase();
+      const base=[fixtureOutgoingPayment,fixturePayment].map(visiblePayment)
+        .filter(item=>!q || `${item.ftId} ${item.payerNameRaw}`.toLowerCase().includes(q));
+      const matches=analyzeCanonicalPaymentRows(base,query.filters,query.sort,sms);
+      const sums={incoming:0n,outgoing:0n};
+      for(const item of matches)sums[item.direction]+=BigInt(item.amountRwf);
+      return json(response,200,{items:matches.slice(query.offset,query.offset+query.limit),totalCount:base.length,
+        matchingCount:matches.length,offset:query.offset,limit:query.limit,missing:0,asOf:fixturePayment.atRaw,
+        directionTotalsRwf:{incoming:String(sums.incoming),outgoing:String(sums.outgoing)}});
+    }
     if (url.pathname === '/api/admin/burimunsi/payments') {
       if (!payments) return json(response, 403, {error:{code:'forbidden'}});
       const result = readBuriMunsiPayments(url.searchParams, sms);

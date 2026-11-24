@@ -320,3 +320,64 @@ test('browser allocation receipt is a read-only exact current-session result, no
   for (const method of ['HEAD','POST','PATCH','DELETE']) assert.equal(standaloneAdminRoute(method,path),false);
   assert.equal(standaloneAdminRoute('GET',path+'/subpath'),false);
 });
+
+test('payment analysis uses the original authorized projection, exact full totals and one read snapshot',async()=>{
+  const {env,setGrants}=await fixture();
+  const login=await handleAdmin(request('phone-passcode',{body:{phone,pin}}),env);
+  const input={q:'Financial probe',offset:0,limit:25,filters:[],sort:{key:'amount',direction:'desc'}};
+  const {csrfToken}=await login.json(),cookie=login.headers.get('set-cookie').split(';')[0];
+  setGrants(['payments.read','sms.read']);
+  let sms=false,active=true,tooLarge=false,unsafeAmount=false,scans=0,snapshots=0,inSnapshot=false;
+  const raw=[
+    {id:'a',amount_rwf:'9007199254740991',direction:'incoming',allocation_state:'allocated'},
+    {id:'b',amount_rwf:'9007199254740991',direction:'incoming',allocation_state:'unallocated'},
+    {id:'c',amount_rwf:'7',direction:'outgoing',allocation_state:'unallocated'},
+  ];
+  const noWrite=()=>assert.fail('financial analysis attempted a write');
+  Object.assign(env.DB,{transaction:noWrite,context:noWrite,readContext:noWrite,applicationWork:{assert:async()=>{}},
+    withLockedReadSnapshot:async fn=>{
+      snapshots++;assert.equal(inSnapshot,false);inSnapshot=true;
+      try{return await fn({unsafe:async(sql,args)=>{
+        assert.equal(inSnapshot,true);
+        if(sql==="SET LOCAL statement_timeout='1250ms'")return [];
+        if(sql.startsWith('SELECT set_config')){assert.deepEqual(args,[group]);return [];}
+        if(sql.includes('burimunsi_browser_pin_session')){
+          assert.match(sql,/permissions.*'sms.read'/);
+          assert.equal(args[0],group);
+          return active?[{role:'admin',can_allocate:true,can_read_sms:sms}]:[];
+        }
+        assert.match(sql,/CASE WHEN \$3::boolean THEN p.sms_source_id ELSE NULL/);
+        assert.match(sql,/LIMIT \(\$4::int\+1\)/);
+        assert.deepEqual(args,[group,'%Financial probe%',sms,5000]);scans++;
+        if(tooLarge)return [{candidate_count:5001,id:null}];
+        return raw.map((row,i)=>({candidate_count:raw.length,collection_id:group,page_at:new Date(1760000000000-i),
+          sms_source_id:sms&&i===0?'linked-synthetic-source':null,version:1,...row,
+          ...(unsafeAmount&&i===0?{amount_rwf:'9007199254740993'}:{})}));
+      }});}finally{inSnapshot=false;}
+    }});
+  const call=(body=input,csrf=csrfToken)=>handleAdmin(routeRequest('burimunsi/payments/analysis',{body,cookie,csrf}),env);
+  const good=await call();
+  assert.equal(good.status,200);
+  assert.match(good.headers.get('cache-control'),/no-store/);
+  const result=await good.json();
+  assert.equal(result.totalCount,3);assert.equal(result.matchingCount,3);
+  assert.equal(result.items.length,3);assert.ok(result.items.every(row=>row.sourceId===null));
+  assert.deepEqual(result.directionTotalsRwf,{incoming:'18014398509481982',outgoing:'7'});
+  assert.equal(result.missing,0);assert.equal(snapshots,1);assert.equal(scans,1);
+  const filter={key:'sms',text:'',presence:'any',min:'',max:'',choices:['linked']};
+  assert.equal((await call({...input,filters:[filter]})).status,400);
+  assert.equal(scans,1,'stale browser SMS grant reached candidate lookup');
+  sms=true;
+  const linked=await (await call({...input,offset:0,filters:[filter]})).json();
+  assert.equal(linked.matchingCount,1);assert.equal(linked.items[0].sourceId,'linked-synthetic-source');
+  assert.deepEqual(linked.directionTotalsRwf,{incoming:'9007199254740991',outgoing:'0'});
+  active=false;
+  assert.equal((await call()).status,403);assert.equal(scans,2);
+  active=true;
+  assert.equal((await call(input,'invalid-csrf')).status,403);assert.equal(scans,2);
+  tooLarge=true;
+  const refused=await call();assert.equal(refused.status,503);
+  assert.match(await refused.text(),/payment_analysis_scope_too_large/);
+  tooLarge=false;unsafeAmount=true;
+  assert.equal((await call()).status,503);
+});

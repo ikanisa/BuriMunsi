@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useRef, useState, type FormEvent} from 'react';
+import {useCallback, useEffect, useRef, useState, type FormEvent} from 'react';
 import {Link, useSearchParams} from 'react-router';
 import {z} from 'zod';
 import {AdminRequestError} from '../../api/client';
@@ -13,8 +13,10 @@ import {Facts} from './OperationsRecords';
 import {ReceiverSmsPanel} from './ReceiverSmsPanel';
 import {CanonicalPaymentEvidence} from './CanonicalPaymentEvidence';
 import {FinancialAnalysisTable, type FinancialColumn} from './FinancialAnalysisTable';
-import {PaymentFlowTotals} from './PaymentFlowTotals';
-import {buriMunsiPayment, paymentAllocation, paymentDirection, paymentId, paymentInstant, paymentTime, readAllCanonicalPayments, type BuriMunsiPayment} from './canonicalPaymentAnalysis';
+import {PaymentTotalsSummary} from './PaymentFlowTotals';
+import {initialColumnFilters, type ColumnFilter, type FinancialSort} from './financialAnalysisModel';
+import {type PaymentAnalysisQuery} from '../../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
+import {buriMunsiPayment, paymentAllocation, paymentDirection, paymentId, paymentInstant, paymentTime, readCanonicalPaymentAnalysis, type BuriMunsiPayment} from './canonicalPaymentAnalysis';
 import {useOperationRead} from './useOperationRead';
 import './operations.css';
 import './paymentsWorkspace.css';
@@ -80,6 +82,15 @@ export function BuriMunsiPayments() {
 }
 
 function PaymentRecords() {
+  const {epoch, user} = useSession(), [params] = useSearchParams();
+  return <ScopedPaymentRecords key={JSON.stringify([epoch,user?.id,user?.sessionId,user?.role,user?.adminIdentity?.collectionId,
+    canReadSmsEvidence(user),params.get('q'),params.get('status'),params.get('direction')])} />;
+}
+
+const defaultSort: FinancialSort={key:'time',direction:'desc'};
+const categoryBookmarks = [{key:'allocation',kind:'category'},{key:'direction',kind:'category'}] as const;
+
+function ScopedPaymentRecords() {
   const {epoch, request, user} = useSession(), [params, setParams] = useSearchParams();
   const canReadSms = canReadSmsEvidence(user), group = user?.adminIdentity?.collectionId;
   const selected = params.get('view') === 'sms' ? undefined : paymentId.safeParse(params.get('payment')).data;
@@ -87,15 +98,30 @@ function PaymentRecords() {
   const allocation = paymentAllocation.safeParse(params.get('status')).data, direction = paymentDirection.safeParse(params.get('direction')).data;
   const offsetText = params.get('offset') ?? '0';
   const offset = /^\d{1,6}$/.test(offsetText) ? Number(offsetText) : 0;
-  const page = offset <= 100_000 && offset % 25 === 0 ? offset / 25 + 1 : 1;
-  const initialFilters: Record<string,string> = {};
-  if (allocation) initialFilters.allocation = allocation;
-  if (direction) initialFilters.direction = direction;
-  const load = useCallback((signal: AbortSignal) => readAllCanonicalPayments(request, signal, query, group), [group, query, request]);
-  const {result, retry} = useOperationRead(JSON.stringify([epoch, group, 'payments', query]), true, load,
-    {invalidResponse:'The complete payment list could not be confirmed. Please refresh.'});
-  const rows = result?.status === 'success' ? result.value : undefined;
-  const instants = useMemo(() => new Map(rows?.map(row => [row.id, paymentInstant(row.atRaw)])), [rows]);
+  const [resettingOffset,setResettingOffset] = useState(false);
+  const page = !resettingOffset && offset <= 100_000 && offset % 25 === 0 ? offset / 25 + 1 : 1;
+  if (offset===0 && resettingOffset) setResettingOffset(false);
+  const [filters,setFilters] = useState(() => initialColumnFilters(categoryBookmarks.map(column=>({...column,label:column.key,value:()=>null})),
+    {...(allocation && {allocation}), ...(direction && {direction})}));
+  const [sort,setSort] = useState(defaultSort);
+  const payload = JSON.stringify({q:query,offset:(page-1)*25,limit:25,filters:[...filters].map(([key,value])=>({key,...value})),sort});
+  const load = useCallback(async (signal: AbortSignal) => {
+    try {return await readCanonicalPaymentAnalysis(request, signal, JSON.parse(payload) as PaymentAnalysisQuery, group, canReadSms);}
+    catch (error) {
+      if (error instanceof AdminRequestError && error.code === 'payment_analysis_scope_too_large') {
+        throw new AdminRequestError('The collection is too large for this payment view. No partial totals are displayed.');
+      }
+      throw error;
+    }
+  }, [group, canReadSms, payload, request]);
+  const {result, retry} = useOperationRead(JSON.stringify([epoch, group, canReadSms, payload]), true, load,
+    {invalidResponse:'Matching payments and totals could not be confirmed. Please refresh.'});
+  const data = result?.status === 'success' ? result.value : null;
+  const rows = data?.items ?? [];
+  function changeCriteria(nextFilters:ReadonlyMap<string,ColumnFilter>,nextSort:FinancialSort) {
+    setFilters(nextFilters); setSort(nextSort);
+    if (page > 1) {setResettingOffset(true); changePage(1);}
+  }
   function changePage(nextPage: number) {
     const next = new URLSearchParams(params);
     if (nextPage > 1) next.set('offset',String((nextPage - 1) * 25)); else next.delete('offset');
@@ -113,7 +139,7 @@ function PaymentRecords() {
   }
   const columns: FinancialColumn<BuriMunsiPayment>[] = [
     {key:'reference',label:'FT reference',kind:'text',value:r=>recordedText(r.ftId),render:r=>rowButton(r, recordedText(r.ftId) ?? 'View payment')},
-    {key:'time',label:'Time (Kigali)',kind:'date',value:r=>instants.get(r.id) ?? null,render:r=>paymentTime(r.atRaw)},
+    {key:'time',label:'Time (Kigali)',kind:'date',value:r=>paymentInstant(r.atRaw),render:r=>paymentTime(r.atRaw)},
     {key:'amount',label:'Amount (RWF)',kind:'number',align:'end',value:r=>r.amountRwf,render:r=>r.amountRwf === null ? '—' : amountFormat.format(r.amountRwf)},
     {key:'direction',label:'Direction',kind:'category',value:r=>r.direction,render:r=>directionLabel(r.direction),
       options:[{value:'incoming',label:'Incoming'},{value:'outgoing',label:'Outgoing'}]},
@@ -134,13 +160,13 @@ function PaymentRecords() {
   }}>Clear search “{query}”</Button>}
     <Button icon="refresh" onClick={retry}>Refresh</Button></>;
   return <Card className="operations-records">
-    {result && !rows?.length && <div className="operations-toolbar">{actions}</div>}
-    {!result ? <LoadingState label="Loading payments" /> : result.status === 'error' ? <ErrorState message={result.message} onRetry={retry} /> :
-      rows?.length ? <FinancialAnalysisTable key={JSON.stringify([group, query, allocation, direction])} label="Payments" rows={rows}
-        columns={columns} rowKey={r=>r.id} initialSort={{key:'time',direction:'desc'}} initialFilters={initialFilters}
-        actions={actions} summary={matching => <PaymentFlowTotals rows={matching} />} pageSize={25} page={page} onPageChange={changePage}
-        expanded={selected && detail ? {key:selected,content:detail} : null} /> : <EmptyState title="No payments found" />}
-    {selected && rows && !rows.some(r=>r.id===selected) && detail}
+    {result?.status === 'error' && <ErrorState message={result.message} onRetry={retry} />}
+    <FinancialAnalysisTable label="Payments" rows={rows} columns={columns} rowKey={r=>r.id}
+      remote={{filters,sort,total:data?.totalCount ?? 0,matching:data?.matchingCount ?? 0,busy:!result || result.status==='error',onCriteria:changeCriteria}}
+      actions={actions} summary={data ? () => <><PaymentTotalsSummary {...data.directionTotalsRwf} missing={data.missing} />
+        <p>Payment totals as of <time dateTime={data.asOf}>{paymentTime(data.asOf)} (Kigali)</time>.</p></> : undefined}
+      pageSize={25} page={page} onPageChange={changePage} expanded={selected && detail ? {key:selected,content:detail} : null} />
+    {selected && result && !rows.some(r=>r.id===selected) && detail}
   </Card>;
 }
 

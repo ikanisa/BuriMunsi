@@ -14,6 +14,8 @@
     "supabase/functions/_shared/deployment-profile.js", "supabase/functions/_shared/burimunsi-standalone.js",
     "supabase/functions/_shared/burimunsi-privacy-support.js", "supabase/functions/_shared/burimunsi-support.js",
     "supabase/functions/_shared/domain/privacy_portal_style.js",
+    "supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs",
+    "supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.d.mts",
     "supabase/functions/_shared/domain/burimunsi/operator-access.mjs", "supabase/functions/_shared/domain/burimunsi/operator-access.d.mts",
     "supabase/functions/_shared/domain/burimunsi/wire/operator-capabilities.generated.mjs",
     "contracts/burimunsi-api/schema.json", "contracts/burimunsi-api/operator-access.json", "scripts/generate_burimunsi_wire.py",

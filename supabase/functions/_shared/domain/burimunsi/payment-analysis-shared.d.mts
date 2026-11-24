@@ -1,0 +1,13 @@
+type Value=string|number|null;
+type Kind='text'|'number'|'date'|'category';
+export type AnalysisFilter={presence:'any'|'blank'|'present';text:string;min:string;max:string;choices:readonly string[]};
+export type AnalysisSort={key:string;direction:'asc'|'desc'};
+export type PaymentAnalysisQuery={q:string;offset:number;limit:25;filters:readonly (AnalysisFilter&{key:string})[];sort:AnalysisSort};
+export function dateValue(value:string|number):number|null;
+export function comparable(value:Value,kind:Kind):Value;
+export function hasCriteria(filter:AnalysisFilter):boolean;
+export function validPaymentAmountBound(raw:string):boolean;
+export function paymentInstant(raw:string|null):number|null;
+export function analyzeFinancialRows<T>(rows:readonly T[],columns:readonly {key:string;kind:Kind;value:(row:T)=>Value}[],filters:ReadonlyMap<string,AnalysisFilter>,sort?:AnalysisSort):readonly T[];
+export function parsePaymentAnalysisQuery(value:unknown,showSms:boolean):PaymentAnalysisQuery;
+export function analyzeCanonicalPaymentRows<T>(rows:readonly T[],filters:PaymentAnalysisQuery['filters'],sort:AnalysisSort,showSms:boolean):readonly T[];

@@ -1,5 +1,6 @@
 import {Fragment, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode} from 'react';
 import {Button, Dialog, Icon} from '../../ui';
+import {validPaymentAmountBound} from '../../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
 import {useFocusScope} from '../../ui/useFocusScope';
 import {analyzeFinancialRows, categoryChoices, describeColumnFilter, emptyFilter, formatAnalysisCell, hasCriteria, initialColumnFilters, rangeError,
   type ColumnFilter, type FinancialColumn, type FinancialSort} from './financialAnalysisModel';
@@ -19,10 +20,12 @@ export interface FinancialAnalysisTableProps<T> {
   onPageChange?: (page: number) => void;
   summary?: (matching: readonly T[]) => ReactNode;
   actions?: ReactNode;
+  remote?: {filters: ReadonlyMap<string,ColumnFilter>; sort: FinancialSort; total: number; matching: number;
+    busy?: boolean; onCriteria: (filters: ReadonlyMap<string,ColumnFilter>,sort: FinancialSort)=>void};
 }
 
-function FilterEditor<T>({column, rows, active, close, apply}: {
-  column: FinancialColumn<T>; rows: readonly T[]; active: ColumnFilter; close: () => void; apply: (filter: ColumnFilter) => void;
+function FilterEditor<T>({column, rows, active, close, apply, remote}: {
+  column: FinancialColumn<T>; rows: readonly T[]; active: ColumnFilter; close: () => void; apply: (filter: ColumnFilter) => void; remote?:boolean;
 }) {
   const [draft,setDraft] = useState<ColumnFilter>(active);
   const [error,setError] = useState('');
@@ -31,7 +34,8 @@ function FilterEditor<T>({column, rows, active, close, apply}: {
   const update = (changes: Partial<ColumnFilter>) => {setDraft(current => ({...current,...changes})); setError('');};
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    const invalid = rangeError(draft,column.kind);
+    const invalid = remote && column.kind==='number' && draft.presence!=='blank' &&
+      (!validPaymentAmountBound(draft.min) || !validPaymentAmountBound(draft.max)) ? 'Enter a number that can be compared exactly.' : rangeError(draft,column.kind);
     if (invalid) {setError(invalid); return;}
     apply(draft.presence === 'blank' ? {...emptyFilter,presence:'blank'} : {...draft,text:draft.text.trim()});
   };
@@ -47,7 +51,7 @@ function FilterEditor<T>({column, rows, active, close, apply}: {
         <option value="any">All values</option><option value="blank">Blank only</option><option value="present">Non-blank only</option>
       </select></label>
       {draft.presence !== 'blank' && <>
-        {column.kind === 'text' && <label>Contains<input className="admin-input" type="search" autoComplete="off"
+        {column.kind === 'text' && <label>Contains<input className="admin-input" type="search" autoComplete="off" maxLength={remote ? 200 : undefined}
           value={draft.text} onChange={event => update({text:event.target.value})} /></label>}
         {range && <div className="financial-filter-range">
           {(['min','max'] as const).map((key,index) => <label key={key}>
@@ -70,29 +74,31 @@ function FilterEditor<T>({column, rows, active, close, apply}: {
 }
 
 export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, initialFilters, expanded, label='Payment activity',
-    pageSize=25, page, onPageChange, summary, actions}: FinancialAnalysisTableProps<T>) {
-  const [sort,setSort] = useState(initialSort);
-  const [filters,setFilters] = useState(() => initialColumnFilters(columns,initialFilters));
+    pageSize=25, page, onPageChange, summary, actions, remote}: FinancialAnalysisTableProps<T>) {
+  const [localSort,setSort] = useState(initialSort);
+  const sort=remote?.sort ?? localSort;
+  const [localFilters,setFilters] = useState(() => initialColumnFilters(columns,initialFilters));
+  const filters=remote?.filters ?? localFilters;
   const [editing,setEditing] = useState<string | null>(null);
   const [navigation,setNavigation] = useState<{position:number; given?:number; revealed?:string}>({position:page ?? 1,given:page});
   const [maximized,setMaximized] = useState(false);
   const panel = useRef<HTMLDivElement>(null), expandControl = useRef<HTMLButtonElement>(null);
   const instance = useId();
   useFocusScope(maximized,panel,() => setMaximized(false),expandControl);
-  const matching = useMemo(() => analyzeFinancialRows(rows,columns,filters,sort),[rows,columns,filters,sort]);
+  const matching = useMemo(() => remote ? rows : analyzeFinancialRows(rows,columns,filters,sort),[rows,columns,filters,sort,remote]);
   const size = Number.isSafeInteger(pageSize) && pageSize > 0 ? pageSize : 25;
-  const count = Math.max(1,Math.ceil(matching.length / size));
+  const count = Math.max(1,Math.ceil((remote?.matching ?? matching.length) / size));
   const selected = expanded?.key;
-  const selectedIndex = selected && selected !== navigation.revealed ? matching.findIndex(row => rowKey(row) === selected) : -1;
+  const selectedIndex = !remote && selected && selected !== navigation.revealed ? matching.findIndex(row => rowKey(row) === selected) : -1;
   const revealed = selected && selectedIndex >= 0 ? selected : selected ? navigation.revealed : undefined;
   const bookmark = Object.is(page,navigation.given) ? navigation.position : page ?? navigation.position;
   const requested = selectedIndex >= 0 ? Math.floor(selectedIndex / size) + 1 : bookmark;
-  const current = Math.max(1,Math.min(count,Number.isFinite(requested) ? Math.trunc(requested) : 1));
+  const current = remote?.busy ? (page ?? 1) : Math.max(1,Math.min(count,Number.isFinite(requested) ? Math.trunc(requested) : 1));
   if (navigation.position !== current || navigation.revealed !== revealed || !Object.is(navigation.given,page)) {
     setNavigation({position:current,given:page,revealed});
   }
   const offset = (current - 1) * size;
-  const visible = matching.slice(offset,offset + size);
+  const visible = remote ? rows : matching.slice(offset,offset + size);
   const activeColumns = columns.filter(column => filters.has(column.key));
   const editor = columns.find(column => column.key === editing);
   const changePage = (next: number) => {
@@ -101,29 +107,33 @@ export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, i
   };
   const lastPage = useRef(1), corrected = useRef('');
   useEffect(() => {
-    const correction = page === undefined || page === current ? '' : String(page) + '/' + current;
+    const correction = remote?.busy || page === undefined || page === current ? '' : String(page) + '/' + current;
     if (page === undefined && lastPage.current !== current || correction && corrected.current !== correction) onPageChange?.(current);
     lastPage.current = current;
     corrected.current = correction;
-  },[page,current,onPageChange]);
+  },[page,current,onPageChange,remote?.busy]);
   const apply = (column: string, filter: ColumnFilter) => {
-    setFilters(previous => {
-      const next = new Map(previous);
-      if (hasCriteria(filter)) next.set(column,filter); else next.delete(column);
-      return next;
-    });
+    const next = new Map(filters);
+    if (hasCriteria(filter)) next.set(column,filter); else next.delete(column);
+    if (remote) remote.onCriteria(next,remote.sort);
+    else {setFilters(next); changePage(1);}
     setEditing(null);
-    changePage(1);
   };
-  const clearAll = () => {setFilters(new Map()); changePage(1);};
+  const clearAll = () => {
+    if (remote) remote.onCriteria(new Map(),remote.sort);
+    else {setFilters(new Map()); changePage(1);}
+  };
   const sortBy = (column: FinancialColumn<T>, direction: FinancialSort['direction']) => {
-    setSort({key:column.key,direction}); changePage(1);
+    const next = {key:column.key,direction};
+    if (remote) remote.onCriteria(filters,next);
+    else {setSort(next); changePage(1);}
   };
-  const numberLabel = activeColumns.length ? matching.length + ' of ' + rows.length : rows.length;
+  const total = remote?.total ?? rows.length, matched = remote?.matching ?? matching.length;
+  const numberLabel = activeColumns.length ? matched + ' of ' + total : total;
   return <div ref={panel} className={'financial-analysis' + (maximized ? ' financial-analysis--expanded' : '')}
     role={maximized ? 'dialog' : undefined} aria-modal={maximized || undefined} aria-label={maximized ? label : undefined}>
     <div className="financial-analysis-tools">
-      <span className="financial-analysis-count" role="status">{numberLabel} {rows.length === 1 ? 'record' : 'records'}</span>
+      <span className="financial-analysis-count" role="status">{remote?.busy ? 'Loading payments' : numberLabel + (total === 1 ? ' record' : ' records')}</span>
       <button ref={expandControl} type="button" className="financial-analysis-expand" onClick={() => setMaximized(value => !value)}
         aria-label={maximized ? 'Restore table' : 'Expand table'} aria-expanded={maximized}>
         <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d={maximized ?
@@ -175,7 +185,7 @@ export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, i
           </td></tr>}</Fragment>;
         })}
         {!visible.length && <tr><td colSpan={Math.max(1,columns.length)} className="financial-analysis-empty">
-          <span>{activeColumns.length ? 'No matching records.' : 'No records.'}</span></td></tr>}
+          <span>{remote?.busy ? 'Loading payments…' : activeColumns.length ? 'No matching records.' : 'No records.'}</span></td></tr>}
         </tbody>
       </table>
     </div>
@@ -185,7 +195,7 @@ export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, i
       <button type="button" aria-label="Previous page" disabled={current === 1} onClick={() => changePage(current - 1)}>Previous</button>
       <button type="button" aria-label="Next page" disabled={current === count} onClick={() => changePage(current + 1)}>Next</button>
     </nav>}
-    {editor && <FilterEditor key={editor.key} column={editor} rows={rows} active={filters.get(editor.key) ?? emptyFilter}
+    {editor && <FilterEditor key={editor.key} column={editor} rows={rows} remote={!!remote} active={filters.get(editor.key) ?? emptyFilter}
       close={() => setEditing(null)} apply={filter => apply(editor.key,filter)} />}
   </div>;
 }
