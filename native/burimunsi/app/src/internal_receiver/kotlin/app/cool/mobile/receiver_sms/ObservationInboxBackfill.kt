@@ -83,7 +83,7 @@ internal class ObservationInboxBackfill(
         val owner=session.owner;val profile=initial.first;val fingerprint=profile.fingerprint();var position=initial.second
         val (consent,control)=initial.third
         if(position.last==position.end)return@synchronized Backfill.COMPLETE
-        val cursor = queryObservationInbox(app, position.last, profile.receipt.senders, through = position.end)
+        val cursor = queryObservationInbox(app, position.last, profile.receipt, through = position.end, bodyOwner = session, stopped = stopped)
             ?: return@synchronized Backfill.BLOCKED
         try{cursor.use{
             val idCol=it.getColumnIndexOrThrow("_id");val senderCol=it.getColumnIndexOrThrow("address")

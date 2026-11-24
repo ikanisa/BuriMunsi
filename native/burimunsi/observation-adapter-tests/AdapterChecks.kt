@@ -312,12 +312,77 @@ fun main(args:Array<String>) {
   ObservationRecovery(e.context).scan()
   check(pending(adminA).size==1&&e.context.contentResolver.querySelection=="_id > ?")
  }
+ test("refused or ignored sender SQL never projects unrelated bodies") {
+  for(refused in listOf(false,true)){
+   val e=setup();val resolver=e.context.contentResolver
+   resolver.rejectFilteredSelection=refused;resolver.ignoreFilteredSelection=!refused
+   resolver.rows=listOf(row(1,"private unrelated text")+("address" to "Other"),row(2))
+   check(ObservationRecovery(e.context).scanStatus()==ObservationRecovery.Scan.COMPLETE)
+   check(resolver.scanProjections.isNotEmpty()&&resolver.scanProjections.none{"body" in it})
+   check(resolver.itemQueries==listOf(2L)&&resolver.bodyRowIds==listOf(2L))
+   check(pending(adminA).map{it.observation.rawBody}==listOf(body))
+  }
+ }
+ test("unrelated metadata consumes a bounded scan page without body queries") {
+  val e=setup();val resolver=e.context.contentResolver
+  resolver.rejectFilteredSelection=true
+  resolver.rows=(1L..101L).map{row(it,"private unrelated text")+("address" to "Other")}+row(102)
+  val recovery=ObservationRecovery(e.context)
+  check(recovery.scanStatus()==ObservationRecovery.Scan.MORE)
+  check(resolver.cursorRowsRead>=100 && resolver.itemQueries.isEmpty() && resolver.bodyRowIds.isEmpty())
+  check(recovery.scanStatus()==ObservationRecovery.Scan.COMPLETE)
+  check(resolver.itemQueries==listOf(102L)&&resolver.bodyRowIds==listOf(102L)&&pending(adminA).size==1)
+ }
+ test("disappeared duplicate changed or unauthorized exact item blocks without body or checkpoint") {
+  for(reason in listOf("missing","duplicate","sender","date","sim","ignored_id","revoked","new_owner","paused","scope_change","consent_disabled")){
+   val e=setup();val resolver=e.context.contentResolver
+   resolver.rows=listOf(row(2))
+   resolver.beforeItemQuery={id->
+    check(id==2L)
+    when(reason){
+     "missing"->resolver.rows=emptyList()
+     "duplicate"->resolver.rows=listOf(row(2),row(2))
+     "sender"->resolver.rows=listOf(row(2)+("address" to "Other"))
+     "date"->resolver.rows=listOf(row(2)+("date" to (time+100)))
+     "sim"->resolver.rows=listOf(row(2)+("sub_id" to 9))
+     "ignored_id"->{resolver.ignoreItemUri=true;resolver.rows=listOf(row(1))}
+     "revoked"->e.context.denied=setOf(Manifest.permission.READ_SMS)
+     "new_owner"->NativeRepository.switch(adminB)
+     "paused"->ObservationConfigStore(e.context).setPaused(adminA,true)
+     "scope_change"->{
+       e.approved.put("senders",JSONArray().put("Other"))
+       ObservationConfigStore(e.context).saveProfile(adminA,e.approved,System.currentTimeMillis())
+     }
+     "consent_disabled"->ObservationConfigStore(e.context).saveConsent(adminA,
+       ObservationConsentState(ObservationConsentRevision(false,2),true))
+    }
+   }
+   check(ObservationRecovery(e.context).scanStatus()==ObservationRecovery.Scan.BLOCKED)
+   check(resolver.scanProjections.none{"body" in it}&&resolver.bodyRowIds.isEmpty()&&cursor(e.context)==null)
+   check(pending(adminA).isEmpty()&&e.repository.requests.isEmpty())
+  }
+ }
+ test("policy mutation while metadata is loading does not refresh the old body lease") {
+  val e=setup();val resolver=e.context.contentResolver
+  val recovery=ObservationRecovery(e.context)
+  check(recovery.scanStatus()==ObservationRecovery.Scan.COMPLETE)
+  val previous=cursor(e.context)
+  resolver.rows=listOf(row(2))
+  resolver.afterScanQuery={
+   resolver.afterScanQuery=null
+   ObservationConfigStore(e.context).saveConsent(adminA,ObservationConsentState(ObservationConsentRevision(true,2),true))
+  }
+  check(recovery.scanStatus()==ObservationRecovery.Scan.BLOCKED)
+  check(resolver.itemQueries.isEmpty()&&resolver.bodyRowIds.isEmpty()&&cursor(e.context)==previous)
+ }
  test("optional column fallback keeps both bounds and the approved sender selection") {
   val e = setup()
   val resolver = e.context.contentResolver
   resolver.unsupportedColumns = setOf("date_sent", "sub_id")
   resolver.rows = listOf(row(10), row(11), row(12) + ("address" to "Other"), row(13))
-  checkNotNull(queryObservationInbox(e.context, 10, setOf("M-Money"), through = 12)).use { cursor ->
+  val profile=ObservationConfigStore(e.context).profile(adminA,time)!!.receipt
+  val owner=NativeRepository.observationOwner(e.context)!!
+  checkNotNull(queryObservationInbox(e.context, 10, profile, through = 12, bodyOwner = owner)).use { cursor ->
    check(cursor.getColumnIndex("date_sent") == -1 && cursor.getColumnIndex("sub_id") == -1)
    check(cursor.moveToNext() && cursor.getLong(cursor.getColumnIndexOrThrow("_id")) == 11L)
    check(!cursor.moveToNext())
@@ -441,7 +506,7 @@ fun main(args:Array<String>) {
   val correlationReads=SecureStore.readCounts["pdu-correlation"]?:0
   println("correlation_prefilter_probe rows=${e.context.contentResolver.bodyReads} profile_reads=$profileReads consent_reads=$consentReads pdu_reads=$correlationReads")
   check(e.context.contentResolver.cursorRowsRead==500&&e.context.contentResolver.bodyReads==500)
-  check(profileReads==1&&consentReads==1&&correlationReads==1)
+  check(profileReads==2&&consentReads==2&&correlationReads==1)
   val state=PduCorrelationStore(e.context).read()
   check(state.inbox.isEmpty()&&PduInboxCorrelation.status(state,pdu.witnessId)==CorrelationStatus.WAITING)
   check(pending(adminA)==original&&e.repository.requests.isEmpty())

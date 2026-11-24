@@ -57,13 +57,15 @@ object ObservationCandidate {
                 it.isNotBlank() && body.contains(it, ignoreCase = true)
             }
 
-    fun accepts(sender:String,body:String,profile:ReceiptProfile):Boolean {
+    fun senderAllowed(sender:String,profile:ReceiptProfile):Boolean {
         if(profile.version.isBlank()||profile.version=="unverified"||profile.senders.isEmpty()||profile.senders.size>30||
             profile.senders.any{it.length>160||it.trim().isEmpty()||it.any{c->c=='\r'||c=='\n'||c=='\u0000'}})return false
         return sender.length in 1..96&&sender==sender.trim()&&!senderControls.containsMatchIn(sender)&&
-            profile.senders.any{it.lowercase(Locale.ROOT)==sender.lowercase(Locale.ROOT)}&&
-            body.toByteArray(Charsets.UTF_8).size in 1..3000&&!bodyControls.containsMatchIn(body)&&!hasCredentials(sender,body)
+            profile.senders.any{it.lowercase(Locale.ROOT)==sender.lowercase(Locale.ROOT)}
     }
+    fun accepts(sender:String,body:String,profile:ReceiptProfile):Boolean =
+        senderAllowed(sender,profile)&&
+            body.toByteArray(Charsets.UTF_8).size in 1..3000&&!bodyControls.containsMatchIn(body)&&!hasCredentials(sender,body)
 }
 
 /** A candidate receipt is evidence only: it does not identify a wallet or a ledger credit. */

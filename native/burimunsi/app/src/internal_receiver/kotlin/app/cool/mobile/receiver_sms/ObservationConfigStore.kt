@@ -8,6 +8,23 @@ import rw.ikanisa.burimunsi.core.*
 import rw.ikanisa.burimunsi.storage.SecureStore
 
 /** Candidate filters and consent belong to the signed-in account, not to a hardcoded wallet. */
+/** All writers of the protected SMS policy invalidate in-progress body leases.
+ * Metadata scans never need this lock. Exact body reads hold it only while
+ * obtaining the already-scoped cursor field. */
+internal object ObservationInboxPolicyRevision {
+    private val lock = Any()
+    private var revision = 0L
+    private var writes = 0
+    fun stable(): Long? = synchronized(lock) { revision.takeIf { writes == 0 } }
+    fun <T> whileCurrent(expected: Long, action: () -> T): T? = synchronized(lock) {
+        if (writes == 0 && revision == expected) action() else null
+    }
+    fun <T> changing(action: () -> T): T {
+        synchronized(lock) { writes++; revision++ }
+        return try { action() } finally { synchronized(lock) { writes--; revision++ } }
+    }
+}
+
 internal class ObservationConfigStore(context:Context) {
     data class Control(val paused:Boolean,val revision:Long)
     private val app=context.applicationContext
@@ -28,8 +45,8 @@ internal class ObservationConfigStore(context:Context) {
         return Control(value.getBoolean("paused"),value.getLong("revision"))
     }
     fun paused(owner:ObservationOwner)=controlState(owner).paused
-    fun setPaused(owner:ObservationOwner,paused:Boolean) {
-        val prior=controlState(owner);if(prior.paused==paused)return
+    fun setPaused(owner:ObservationOwner,paused:Boolean) = ObservationInboxPolicyRevision.changing {
+        val prior=controlState(owner);if(prior.paused==paused)return@changing
         checkContract(prior.revision<9_007_199_254_740_991L,"observation_store_unavailable")
         val target=control(owner)
         val encoded=JSONObject().put("collectionId",owner.collectionId).put("accountId",owner.accountId)
@@ -61,7 +78,7 @@ internal class ObservationConfigStore(context:Context) {
         return ObservationProfile(profile,value.getLong("issuedAt"),value.getLong("expiresAt"),
             if(value.has("legacyHold"))value.getBoolean("legacyHold") else null)
     }
-    fun saveProfile(owner:ObservationOwner,data:JSONObject,now:Long) {
+    fun saveProfile(owner:ObservationOwner,data:JSONObject,now:Long) = ObservationInboxPolicyRevision.changing {
         checkContract(owner.valid()&&decodeProfile(data).current(now),"invalid_observation_profile")
         val encoded=JSONObject().put("collectionId",owner.collectionId).put("accountId",owner.accountId).put("profile",data).toString()
         profiles.write(encoded);checkContract(profiles.read()==encoded,"observation_store_unavailable")
@@ -78,7 +95,7 @@ internal class ObservationConfigStore(context:Context) {
         checkContract(revision.generation in 1..ObservationConsent.MAX_GENERATION,"observation_store_unavailable")
         return ObservationConsentState(revision,value.getBoolean("confirmed"))
     }
-    fun saveConsent(owner:ObservationOwner,state:ObservationConsentState) {
+    fun saveConsent(owner:ObservationOwner,state:ObservationConsentState) = ObservationInboxPolicyRevision.changing {
         checkContract(owner.valid()&&state.revision.generation in 1..ObservationConsent.MAX_GENERATION,"invalid_consent_generation")
         val encoded=JSONObject().put("collectionId",owner.collectionId).put("accountId",owner.accountId)
             .put("enabled",state.revision.enabled).put("generation",state.revision.generation).put("confirmed",state.confirmed).toString()

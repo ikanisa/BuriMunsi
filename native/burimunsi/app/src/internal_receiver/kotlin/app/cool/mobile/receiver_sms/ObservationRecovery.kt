@@ -93,7 +93,7 @@ internal class ObservationRecovery(context:Context) {
                 }
             }
         }?:false
-        val cursor = queryObservationInbox(app, last, profile.receipt.senders) ?: return Scan.BLOCKED
+        val cursor = queryObservationInbox(app, last, profile.receipt, bodyOwner = session, stopped = stopped) ?: return Scan.BLOCKED
         var position=last;var count=0
         cursor.use{
             val idCol=it.getColumnIndexOrThrow("_id");val senderCol=it.getColumnIndexOrThrow("address")
@@ -151,13 +151,14 @@ internal class ObservationRecovery(context:Context) {
             if(config.paused(owner)||consent?.canCapture(observationInboxPermitted(app))!=true||profile==null||latest==null||
                 correlation.saturated||correlation.pdus.none{it.owner==owner})null else {
                 val fingerprint=profile.fingerprint()
-                Triple(fingerprint,latest,PduInboxCorrelation.InboxRelevance(correlation.pdus,owner,fingerprint))
+                Triple(fingerprint,latest to profile.receipt,PduInboxCorrelation.InboxRelevance(correlation.pdus,owner,fingerprint))
             }
         }}catch(_:Exception){null}?:return@synchronized
-        val (fingerprint,latest,relevance)=initial
+        val (fingerprint,position,relevance)=initial
+        val (latest,profile)=position
         if(relevance.empty)return@synchronized
         val start = (latest - 500L).coerceAtLeast(0L)
-        val cursor = queryObservationInbox(app, start) ?: return@synchronized
+        val cursor = queryObservationInbox(app, start, profile, through = latest, bodyOwner = session, stopped = stopped) ?: return@synchronized
         try{cursor.use{
             val idColumn=it.getColumnIndexOrThrow("_id");val senderColumn=it.getColumnIndexOrThrow("address")
             val bodyColumn=it.getColumnIndexOrThrow("body");val dateColumn=it.getColumnIndexOrThrow("date")
@@ -237,7 +238,7 @@ internal class ObservationRecovery(context:Context) {
                         config.profile(owner,System.currentTimeMillis())==profile&&heldInbox.deviceId()==device
                 }?:false
             }==true
-            val cursor = queryObservationInbox(app, 0, profile.receipt.senders, order = ObservationInboxOrder.NEWEST)
+            val cursor = queryObservationInbox(app, 0, profile.receipt, order = ObservationInboxOrder.NEWEST, bodyOwner = session, stopped = stopped)
                 ?: return@synchronized Latest.Blocked
             data class PhoneRow(val id:Long,val received:Long,val sender:String,val body:String,val sent:Long?,val sub:Int?)
             val newestBySubscription=mutableMapOf<Int?,PhoneRow>()
@@ -255,7 +256,7 @@ internal class ObservationRecovery(context:Context) {
                     val body=if(it.isNull(bodyCol))"" else it.getString(bodyCol)
                     val sent=if(sentCol<0||it.isNull(sentCol))null else it.getLong(sentCol).takeIf{v->v>0}
                     val sub=if(subCol<0||it.isNull(subCol))null else it.getInt(subCol).takeIf{v->v>=0}
-                    if(profile.receipt.senders.none{it.equals(sender,ignoreCase=true)})continue
+                    if(!ObservationCandidate.senderAllowed(sender,profile.receipt))continue
                     if(ObservationCandidate.excludeFromFinancialCensus(sender,body,profile.receipt))continue
                     val previous=newestBySubscription[sub]
                     if(previous==null||received>previous.received||received==previous.received&&id>previous.id)

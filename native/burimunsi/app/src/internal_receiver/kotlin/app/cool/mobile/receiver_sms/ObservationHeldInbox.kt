@@ -10,6 +10,7 @@ import org.json.JSONObject
 import rw.ikanisa.burimunsi.core.ObservationConsentState
 import rw.ikanisa.burimunsi.core.ObservationCursor
 import rw.ikanisa.burimunsi.core.ObservationJournal
+import rw.ikanisa.burimunsi.core.ObservationCandidate
 import rw.ikanisa.burimunsi.core.ObservationOwner
 import rw.ikanisa.burimunsi.core.ObservationProfile
 import rw.ikanisa.burimunsi.core.ObservationSessionOwner
@@ -111,13 +112,13 @@ internal class ObservationHeldInbox(
         val prior=if(legacy)null else previousCursor(owner, profile.fingerprint()).scanStart
         val ambiguous=if(legacy)emptySet() else ObservationStateStore(app).read().seen
             .filter{it.owner.collectionId==owner.collectionId&&it.inboxReceivedAt==null}.map{it.inboxRowId}.toSet()
-        val cursor=queryObservationInbox(app,0,profile.receipt.senders,metadataOnly=true)?:return null
+        val cursor=queryObservationInbox(app,0,profile.receipt)?:return null
         val keys=linkedSetOf<String>()
         cursor.use{
             val idCol=it.getColumnIndexOrThrow("_id");val dateCol=it.getColumnIndexOrThrow("date")
             val senderCol=it.getColumnIndexOrThrow("address")
             while(it.moveToNext()){
-                if(it.isNull(senderCol)||profile.receipt.senders.none{sender->sender.equals(it.getString(senderCol),ignoreCase=true)})continue
+                if(it.isNull(senderCol)||!ObservationCandidate.senderAllowed(it.getString(senderCol),profile.receipt))continue
                 if(stopped()||!observationInboxPermitted(app)||it.isNull(idCol))return null
                 val id=it.getLong(idCol)
                 if(prior!=null&&id>prior&&id !in ambiguous)continue

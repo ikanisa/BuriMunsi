@@ -193,9 +193,12 @@ internal class ObservationInboxAudit(
             completedAuditRevision=progress.collectionRevision
             return@synchronized Audit.COMPLETE
         }
-        fun open() = queryObservationInbox(app, progress.last, authority.profile.receipt.senders)
         fun takePage(checkStop:()->Boolean=stopped):List<AuditRow>? {
-            val cursor=open()?:return null;val rows=mutableListOf<AuditRow>();var previous=progress.last
+            // Late-response verification can finish local rechecks after the transport deadline,
+            // but never after scope cancellation. Body reads must use the same fence.
+            val cursor=queryObservationInbox(app, progress.last, authority.profile.receipt, bodyOwner = scope.session, stopped = checkStop)
+                ?:return null
+            val rows=mutableListOf<AuditRow>();var previous=progress.last
             cursor.use{
                 val id=it.getColumnIndexOrThrow("_id");val date=it.getColumnIndexOrThrow("date")
                 val sender=it.getColumnIndexOrThrow("address");val body=it.getColumnIndexOrThrow("body")
@@ -224,7 +227,7 @@ internal class ObservationInboxAudit(
         val decisions=mutableMapOf<Long,ObservationLegacyOwnership.Decision>()
         val candidatesByKey=mutableMapOf<String,AuditRow>()
         for(row in rows){
-            if(authority.profile.receipt.senders.none{it.equals(row.sender,ignoreCase=true)})continue
+            if(!ObservationCandidate.senderAllowed(row.sender,authority.profile.receipt))continue
             if(ObservationCandidate.excludeFromFinancialCensus(row.sender,row.body,authority.profile.receipt))continue
             val decision=ObservationLegacyOwnership.classify(app,owner,row.id,row.received,row.sender,row.body,row.sub)
             if(decision==ObservationLegacyOwnership.Decision.OTHER_SIM)continue
