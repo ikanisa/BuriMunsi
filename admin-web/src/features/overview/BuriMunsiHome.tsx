@@ -2,9 +2,11 @@ import {useCallback} from 'react';
 import {Link} from 'react-router';
 import {z} from 'zod';
 import {useSession} from '../../session/SessionProvider';
-import {canDisplaySessionRecords} from '../../session/sessionContext';
+import {hasScopedAdminAuthority} from '../../session/ownerIdentity';
+import {canDisplaySessionRecords, canReadSmsEvidence} from '../../session/sessionContext';
 import {Button, Card, EmptyState, ErrorState, LoadingState, PageHeader} from '../../ui';
-import {BuriMunsiPaymentRows, buriMunsiPayment, buriMunsiPaymentsPath} from '../operations/BuriMunsiPayments';
+import {BuriMunsiPaymentRows, buriMunsiPayment, buriMunsiPaymentsPath, buriMunsiSmsPath} from '../operations/BuriMunsiPayments';
+import {receiverPage} from '../operations/receiverSmsContract';
 import {useOperationRead} from '../operations/useOperationRead';
 import './overview.css';
 
@@ -14,6 +16,10 @@ const snapshot = z.object({
   asOf: z.string().refine(value => Number.isFinite(Date.parse(value))),
 }).refine(value => value.unallocatedCount <= value.paymentCount && value.recentPayments.length <= value.paymentCount &&
   new Set(value.recentPayments.map(row => row.id)).size === value.recentPayments.length);
+const smsHealthLabels = {
+  unknown: 'Inbox status unknown', checking: 'Checking Admin inbox',
+  incomplete: 'Sync pending', verified: 'Last inbox check matched',
+} as const;
 
 function Figure({label, value, to}: {label: string; value: number; to?: string}) {
   const content = <dl><dt>{label}</dt><dd>{value.toLocaleString('en-RW')}</dd></dl>;
@@ -27,7 +33,18 @@ export function BuriMunsiHome() {
   const payments = !!user?.permissions.includes('payments.read');
   const load = useCallback(async (signal: AbortSignal) => snapshot.parse(await request('burimunsi/home', {signal})), [request]);
   const {result, retry} = useOperationRead(`${epoch}:burimunsi-home`, visible, load);
-  return <><PageHeader title="Home" actions={<Button icon="refresh" aria-label="Refresh Home" onClick={retry} />} />
+  const collection = visible && user && canReadSmsEvidence(user) && hasScopedAdminAuthority(user) ? user.adminIdentity?.collectionId : undefined;
+  const loadSmsHealth = useCallback(async (signal: AbortSignal) => {
+    if (!collection) throw new Error('SMS scope is unavailable.');
+    const query = new URLSearchParams({collectionId: collection, limit: '1', includeProcessing: '1'});
+    return receiverPage(await request(`momo/observations?${query}`, {signal}), collection).inboxCheck;
+  }, [collection, request]);
+  const {result: health, retry: retryHealth} = useOperationRead(`${epoch}:burimunsi-sms-health:${collection}`, !!collection, loadSmsHealth);
+  const smsHealth = health?.status === 'success' ? smsHealthLabels[health.value.state] :
+    health?.status === 'error' ? 'Status unavailable' : 'Checking sync';
+  return <><PageHeader title="Home" actions={<Button icon="refresh" aria-label="Refresh Home" onClick={() => {retry(); if (collection) retryHealth();}} />} />
+    {collection && <p className="operations-note"><Link className="operations-link" to={buriMunsiSmsPath}>M-Money SMS</Link>
+      {' · '}<span role="status">{smsHealth}</span></p>}
     {!visible ? <ErrorState title="Access unavailable" message="Your account cannot view the group snapshot." /> : !result ? <LoadingState label="Loading Home" /> :
       result.status === 'error' ? <ErrorState message={result.message} onRetry={retry} /> : <>
         <section className="overview-summary" aria-label="Group snapshot">
