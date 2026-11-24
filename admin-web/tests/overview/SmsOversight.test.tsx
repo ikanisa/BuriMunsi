@@ -3,6 +3,7 @@ import {act, fireEvent, render, screen, waitFor, within} from '@testing-library/
 import {MemoryRouter, Route, Routes} from 'react-router';
 import {describe, expect, it, vi} from 'vitest';
 import {AdminRequestError} from '../../src/api/client';
+import {OperationsLiveContext} from '../../src/features/operations/operationsLiveContext';
 import {SmsOversight} from '../../src/features/overview/SmsOversight';
 import {parseSmsOversight} from '../../src/features/overview/smsOversightContract';
 
@@ -22,6 +23,27 @@ const healthAndSms = ['system_health.read', 'sms.read'];
 const nativeQueue = {pending: 0, retrying: 0, blocked: 0, unmatched: 0, posted: 7, oldest_pending_seconds: null};
 
 describe('SMS oversight', () => {
+  it('keeps idle standalone health checks 30 seconds apart and immediately refreshes a receipt change', async () => {
+    vi.useFakeTimers();
+    const request = vi.fn(async () => sample());
+    const disconnected = {connected: () => false, subscribe: () => () => {}};
+    const view = renderOversight(<OperationsLiveContext.Provider value={disconnected}>
+      <SmsOversight request={request} permissions={['system_health.read','sms.read']} authorityKey="operator" preferSmsHealth />
+    </OperationsLiveContext.Provider>);
+    try {
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(request).toHaveBeenCalledTimes(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(29_999); });
+      expect(request).toHaveBeenCalledTimes(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(request).toHaveBeenCalledTimes(2);
+      await act(async () => { window.dispatchEvent(new Event('burimunsi-operations-changed')); });
+      expect(request).toHaveBeenCalledTimes(3);
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
+  });
   it('rejects changed meaning, invalid timestamps and unbounded counts', () => {
     expect(parseSmsOversight(sample()).counts.queued).toBe(4);
     expect(() => parseSmsOversight({...sample(), worker_heartbeat: 'healthy'})).toThrow();

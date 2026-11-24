@@ -95,7 +95,7 @@ export async function installNativeChain(client,group){
    state text,active_attempt text,upload_unresolved boolean,delete_tombstone boolean,fingerprint text);
  CREATE TABLE private.storage_objects(LIKE private.storage_put_intents INCLUDING ALL);
  CREATE TABLE private.storage_payload_reservations(object_key text PRIMARY KEY,scope jsonb,aad text,key_id text,plaintext_sha256 text,source_fingerprint text,sealed_body text,cleared_at text);
- CREATE TABLE private.storage_delete_intents(object_key text PRIMARY KEY);
+ CREATE TABLE private.storage_delete_intents(object_key text PRIMARY KEY,operation_id text);
  CREATE FUNCTION private.burimunsi_setup_fence() RETURNS void LANGUAGE plpgsql AS $$BEGIN
   IF current_setting('role',true)<>'collect_runtime' OR current_setting('collect.edge_verified',true)<>'true' THEN RAISE insufficient_privilege;END IF;END$$;
  CREATE FUNCTION private.burimunsi_observation_actor(boolean) RETURNS jsonb LANGUAGE sql AS $$SELECT current_setting('fixture.native_actor')::jsonb$$;
@@ -114,6 +114,7 @@ export async function installNativeChain(client,group){
  GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA app TO collect_runtime;
  GRANT SELECT ON private.storage_namespace,private.storage_put_intents,private.storage_objects,private.storage_payload_reservations,private.storage_delete_intents TO collect_runtime;
  GRANT UPDATE ON private.storage_put_intents,private.storage_namespace TO collect_runtime;
+ GRANT UPDATE(object_key) ON private.storage_objects,private.storage_payload_reservations TO collect_runtime;
  `);
  const actor=nativeActor(group),profileHash=sha(testProfile.profile_json);
  await q('INSERT INTO private.burimunsi_observation_consents VALUES($1,$2,$3,$4,1,1,true)',[group,actor.accountId,actor.installationId,actor.grantId]);

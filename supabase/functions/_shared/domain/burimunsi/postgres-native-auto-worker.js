@@ -8,7 +8,6 @@ import {MOMO_MODEL,validateProviderProfile} from '../momo_pipeline.js';
 import {BuriError,requirePort,requireThat} from './errors.js';
 import {canonicalJson,requireId,requireRequestId,sha256} from './values.js';
 import {PostgresNativeAuthority} from './postgres-authority.js';
-import {lockCollectMutation} from '../../postgres-mutation-lock.js';
 import {PostgresPostingCustody} from './postgres-posting-custody.js';
 import {PostgresStorageWitnesses} from './postgres-storage-witnesses.js';
 import {prepareNativeAutoExtraction,validateNativeAutoExtraction} from './native-auto-parser.js';
@@ -173,8 +172,7 @@ export async function drainNativeAutoTransactions(env,{limit=1}={}){
  await work.assert();
  const collections=await db.transaction(async tx=>{
   check(db.applicationWork===work);await db.context(tx);
-  await lockCollectMutation(tx);
-  const rows=await tx.unsafe('SELECT private.burimunsi_auto_collections($1) AS result',[1]);
+  const rows=await tx.unsafe("SELECT private.burimunsi_native_job_candidates('parse',$1) AS result",[limit]);
   await work.assert();check(rows.length===1&&Array.isArray(rows[0].result)&&rows[0].result.length<=1);
   return rows[0].result;
  });

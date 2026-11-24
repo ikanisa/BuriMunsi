@@ -42,15 +42,17 @@ class NativeRepository() {
  val requests=mutableListOf<SmsObservation>()
  val reports=mutableListOf<ObservationInboxCheck>()
  val heldRequests=mutableListOf<SmsObservation>()
+ var afterHeldRecovery:(()->Unit)?=null
  fun recoverHeldObservation(item:SmsObservation,generation:Long):Boolean {
   check(generation==consent.generation);heldRequests.add(item)
   val key=checkNotNull(item.sourceKey);val id=retainedSources.getOrPut(key){"source-${retainedSources.size+1}"}
-  retainedSourceKeys.add(key);parserStates[id]="historical";return true
+  retainedSourceKeys.add(key);parserStates[id]="historical";afterHeldRecovery?.invoke();return true
  }
  val parserStates=mutableMapOf<String,String>()
  var reportFailure:Exception?=null
  fun verifiedObservationStatus()=observationReconcileStatus()
- fun reportInboxCheck(check:ObservationInboxCheck){reportFailure?.let{throw it};reports.add(check)}
+ var afterReport:((ObservationInboxCheck)->Unit)?=null
+ fun reportInboxCheck(check:ObservationInboxCheck){reportFailure?.let{throw it};reports.add(check);afterReport?.invoke(check)}
  fun observationProcessing(ids:List<SmsSourceRef.Observation>):Map<SmsSourceRef.Observation,ObservationProcessing>{
   processingReads++;return ids.associateWith{ObservationProcessing(parserStates[it.id]?:"parsed",false)}
  }

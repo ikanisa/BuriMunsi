@@ -51,13 +51,15 @@ test('SMS health matches the visible aggregates in one guarded batch without sca
   burimunsi_payer_sms:{pending:2,gateway_accepted:3,sent:4,delivered:5,failed:0,unknown:1,suppressed:0}};
  const f=fixture({selects:rows});
  f.account.permissions.push('sms.read');f.actor.permissions.add('sms.read');
+ let nativeInstalled=true;
  f.env.DB.adminReadBatch=async (_context,guard,statements)=>{
   assert.ok(guard.args.includes('system_health.read'));
   f.calls.push(statements);
   return statements.map(({sql})=>{
    const full=oversightHealthSql.indexOf(sql);
    if(full>=0)return {results:rows[full]};
-   if(sql.includes('to_regprocedure'))return {results:[{available:true}]};
+   if(sql.includes('to_regprocedure'))return {results:[{available:nativeInstalled}]};
+   if(sql.includes('private.burimunsi_admin_sms_operations'))return {results:[{result:null}]};
    if(sql.includes('private.burimunsi_admin_sms_health'))return {results:[{result:native}]};
    assert.match(sql,/FROM assisted_sms_jobs j LEFT JOIN assisted_sms_send_starts/);
    assert.doesNotMatch(sql,/assisted_sms_claims|notification_events|notification_deliveries|admin_email_events|admin_invitation_attempts|momo_processing_jobs/);
@@ -66,7 +68,15 @@ test('SMS health matches the visible aggregates in one guarded batch without sca
   });
  };
  const full=await f.read('health');
- assert.deepEqual(f.calls.map(batch=>batch.length),[7,1,1]);
+ assert.deepEqual(f.calls.map(batch=>batch.length),[1,8]);
+ f.calls.length=0;
+ assert.deepEqual(await f.read('health?evidenceVersion=2'),full);
+ assert.deepEqual(f.calls.map(batch=>batch.length),[1,9]);
+ nativeInstalled=false;f.calls.length=0;
+ const older=await f.read('health?evidenceVersion=2');
+ assert.equal(older.queues.burimunsi_sms,undefined);
+ assert.deepEqual(f.calls.map(batch=>batch.length),[1,8]);
+ nativeInstalled=true;
  f.calls.length=0;
  const narrow=await f.read('sms-health');
  assert.deepEqual(f.calls.map(batch=>batch.length),[3]);

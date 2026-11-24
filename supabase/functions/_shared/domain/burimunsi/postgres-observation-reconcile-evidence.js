@@ -18,6 +18,18 @@ import { canonicalJson, sha256 } from './values.js';
 
 const keyLookup = 'SELECT private.burimunsi_observation_key_lookup($1,$2,$3) AS result';
 
+function legacyRecords(result, actor, bodySha) {
+  check(Array.isArray(result) && result.length <= 4);
+  const records = result.map(row);
+  check(records.every(r => r.bodySha256 === bodySha && r.sessionId === actor.sessionId) &&
+    new Set(records.map(r => r.id)).size === records.length, 'observation_changed', 409);
+  return records;
+}
+
+function legacyLookupFailure(error) {
+  return error?.code === '55000' ? new BuriError('observation_item_unavailable', 503) : error;
+}
+
 /** Verify retained objects and the journal snapshots that authorize their use.
  * This port owns temporary decrypted bytes and staged storage witnesses. */
 export class PostgresObservationReconcileEvidence {
@@ -44,8 +56,28 @@ export class PostgresObservationReconcileEvidence {
     return tx.unsafe(keyLookup, [sourceKey, contentSha, bodySha]);
   }
 
-  async verifyJournal(tx, record) {
-    const journal = await this.custody.journal(tx, record.object_key, target(record));
+  async lookupSourceKeys(tx, values, hashes) {
+    const keys = values.map((v, i) => ({
+      key: v.sourceKey, content: hashes[i], body: v.bodySha256, envelope: v.gatewayEnvelopeId,
+    }));
+    // Use the same authorized functions in the same snapshot. Binding text
+    // avoids postgres.js encoding a serialized array as a JSON string.
+    const found = await tx.unsafe(`SELECT item->>'key' AS source_key,
+      CASE WHEN item->>'envelope' IS NULL THEN
+        private.burimunsi_observation_key_lookup(item->>'key', item->>'content', item->>'body')
+      ELSE private.burimunsi_observation_gateway_lookup((item->>'envelope')::uuid, item->>'body')
+      END AS result
+      FROM jsonb_array_elements($1::text::jsonb) WITH ORDINALITY AS input(item, pos) ORDER BY pos`,
+      [JSON.stringify(keys)]);
+    check(found.length === keys.length && found.every((r, i) => r.source_key === keys[i].key));
+    return found.map(r => r.result);
+  }
+
+  async verifyJournal(tx, record, keyedPage = false) {
+    const expect = target(record);
+    const journal = keyedPage && this.custody.keyedObservationJournal
+      ? await this.custody.keyedObservationJournal(tx, record.object_key, expect)
+      : await this.custody.journal(tx, record.object_key, expect);
     await verifyObservationJournal(record, journal);
     return journal;
   }
@@ -104,18 +136,23 @@ export class PostgresObservationReconcileEvidence {
         bodySha,
       ]);
     } catch (error) {
-      if (error?.code === '55000') throw new BuriError('observation_item_unavailable', 503);
-      throw error;
+      throw legacyLookupFailure(error);
     }
-    check(found.length === 1 && Array.isArray(found[0].result) && found[0].result.length <= 4);
-    const records = found[0].result.map(row);
-    check(
-      records.every((r) => r.bodySha256 === bodySha && r.sessionId === actor.sessionId) &&
-        new Set(records.map((r) => r.id)).size === records.length,
-      'observation_changed',
-      409,
-    );
-    return records;
+    check(found.length === 1);
+    return legacyRecords(found[0].result, actor, bodySha);
+  }
+
+  async readLegacyCandidateSets(tx, actor, bodyHashes) {
+    let found;
+    try {
+      found = await tx.unsafe(`SELECT body, private.burimunsi_observation_legacy_candidates(body) AS result
+        FROM jsonb_array_elements_text($1::text::jsonb) WITH ORDINALITY AS input(body, pos) ORDER BY pos`,
+        [JSON.stringify(bodyHashes)]);
+    } catch (error) {
+      throw legacyLookupFailure(error);
+    }
+    check(found.length === bodyHashes.length && found.every((r, i) => r.body === bodyHashes[i]));
+    return found.map(r => legacyRecords(r.result, actor, r.body));
   }
   /** Revalidate only a previously staged, decrypted legacy witness. This runs
    * inside an authority fence; sealed() checks local ciphertext and ownership

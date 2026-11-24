@@ -31,6 +31,7 @@ internal class ObservationInboxAudit(
     private val lock: Any,
 ) {
     companion object {
+        private var opening:Opening?=null
         private var auditProgress:AuditProgress?=null
         private var completedAuditStart:Long?=null
         private var completedAuditRevision:String?=null
@@ -39,10 +40,11 @@ internal class ObservationInboxAudit(
 
     private data class AuditScope(val session:ObservationSessionOwner,val fingerprint:String,val legacyHold:Boolean?,
         val consent:ObservationConsentState,val control:ObservationConfigStore.Control,val deviceScope:String,val heldScope:String,val revision:Long,val uncertainLegacy:Boolean)
+    private data class Opening(val scope:AuditScope,val startedAt:Long,val runId:String,val acknowledged:Boolean=false)
     private data class AuditProgress(val scope:AuditScope,val last:Long,val unconfirmed:Boolean,val startedAt:Long,
         val collectionRevision:String,val recordedCount:Int,
         val sourceIds:Set<String> = emptySet(),val phoneComplete:Boolean=false,
-        val runId:String=UUID.randomUUID().toString(),val pageSize:Int=OBSERVATION_RECONCILE_MAX_ITEMS,val repairTail:Boolean=false,val candidates:Int=0,val missing:Int=0,val pending:Int=0,
+        val runId:String,val incompleteResult:Audit?=null,val handledRepairs:Set<String> = emptySet(),val pageSize:Int=OBSERVATION_RECONCILE_MAX_ITEMS,val repairTail:Boolean=false,val candidates:Int=0,val missing:Int=0,val pending:Int=0,
         val phoneHead:Head?=null,val parsedHead:Head?=null,val queuedRepair:Boolean=false,val parserPending:Boolean=false,
         val awaiting:Pair<List<ObservationReconcileRequest>,List<ObservationReconcileReply?>>?=null)
     private data class Head(val received:Long,val rowId:Long,val key:String) {
@@ -110,7 +112,7 @@ internal class ObservationInboxAudit(
                 .joinToString(""){"${it.length}:$it"})
         }}catch(_:Exception){null}
     }
-    fun resetAudit()=synchronized(lock){auditProgress=null;completedAuditStart=null;completedAuditRevision=null;completedCheck=null}
+    fun resetAudit()=synchronized(lock){opening=null;auditProgress=null;completedAuditStart=null;completedAuditRevision=null;completedCheck=null}
     fun auditStartedAt():Long?=synchronized(lock){completedAuditStart}
     fun completedCheck():ObservationInboxCheck?=synchronized(lock){completedCheck}
     fun auditRevision():String?=synchronized(lock){completedAuditRevision}
@@ -118,11 +120,11 @@ internal class ObservationInboxAudit(
     /** Verify a bounded page, enqueue positively identified gaps, and certify only a full
      * stable sweep. The encrypted repair cursor is independent of any successful proof. */
     fun auditPage(repo:NativeRepository,stopped:()->Boolean={false},budgetExpired:()->Boolean={false}):Audit = synchronized(lock){
-        // A deadline never makes an in-flight page valid. Keep only progress
-        // saved before this call; the next cycle revalidates its whole scope.
+        // Budget expiry carries acknowledged steps into the next cycle, which
+        // revalidates the complete scope before it resumes. Cancellation clears them.
         fun interrupted():Audit {
             if(stopped()&&budgetExpired())return Audit.YIELD
-            auditProgress=null;return Audit.BLOCKED
+            resetAudit();return Audit.BLOCKED
         }
         // A reply received after the deadline may be checkpointed after the
         // local authority and inbox are rechecked. It cannot start another I/O.
@@ -130,36 +132,62 @@ internal class ObservationInboxAudit(
         val authority=try{auditAuthority(stopped)}catch(_:Exception){null}?:return@synchronized interrupted()
         val scope=authority.scope;val owner=scope.session.owner
         val clock=android.os.SystemClock.elapsedRealtime()
-        val previous=auditProgress?.takeIf{it.scope==scope&&clock>=it.startedAt&&clock-it.startedAt<24*60*60_000L}
+        fun current(previousScope:AuditScope,startedAt:Long)=
+            previousScope==scope && clock>=startedAt && clock-startedAt<24*60*60_000L
+        fun sameAuthority()=try{auditAuthority(localStop)?.scope==scope}catch(_:Exception){false}
+        fun report(check:ObservationInboxCheck){
+            try{repo.reportInboxCheck(check)}catch(error:ApiFailure){
+                // A terminal rejection invalidates this run. A lost response can replay its identical report.
+                if(error.status in 400..499 && error.status !in setOf(408,429))resetAudit()
+                throw error
+            }
+        }
+        fun reportIncomplete(page:AuditProgress,result:Audit):Audit {
+            auditProgress=page.copy(incompleteResult=result)
+            if(stopped())return if(budgetExpired())Audit.MORE else interrupted()
+            report(page.check("incomplete"))
+            if(!sameAuthority()){resetAudit();return Audit.BLOCKED}
+            auditProgress=null
+            return result
+        }
+        val previous=auditProgress?.takeIf{current(it.scope,it.startedAt)}
         val progress:AuditProgress=previous?:run{
-            completedAuditStart=null;completedAuditRevision=null;completedCheck=null
+            auditProgress=null;completedAuditStart=null;completedAuditRevision=null;completedCheck=null
             if(stopped())return@synchronized interrupted()
-            val runId=UUID.randomUUID().toString()
-            repo.reportInboxCheck(ObservationInboxCheck(runId,scope.consent.revision.generation,"checking"))
-            if(stopped()||try{auditAuthority(stopped)?.scope!=scope}catch(_:Exception){true})return@synchronized interrupted()
+            val start=opening?.takeIf{current(it.scope,it.startedAt)}
+                ?:Opening(scope,clock,UUID.randomUUID().toString()).also{opening=it}
+            if(!start.acknowledged){
+                report(ObservationInboxCheck(start.runId,scope.consent.revision.generation,"checking"))
+                if(!sameAuthority()){resetAudit();return@synchronized Audit.BLOCKED}
+                opening=start.copy(acknowledged=true)
+            }
+            if(stopped())return@synchronized if(budgetExpired())Audit.MORE else interrupted()
             val status=repo.verifiedObservationStatus()
-            if(try{auditAuthority(localStop)?.scope!=scope}catch(_:Exception){true})return@synchronized interrupted()
+            if(!sameAuthority()){resetAudit();return@synchronized Audit.BLOCKED}
             ObservationBackground.recordsChanged(app,status.revision)
-            if(status.recordedCount !in 0..100_000||status.hasRecorded!=(status.recordedCount>0))return@synchronized Audit.UNCONFIRMED
+            if(status.recordedCount !in 0..100_000||status.hasRecorded!=(status.recordedCount>0)){
+                resetAudit();return@synchronized Audit.UNCONFIRMED
+            }
             val resume=restartPosition(scope)
-            auditProgress=AuditProgress(scope,resume,scope.uncertainLegacy || status.hasPending || status.hasUnmatchedCanonical,clock,status.revision,status.recordedCount,runId=runId,repairTail=resume>0)
+            auditProgress=AuditProgress(scope,resume,scope.uncertainLegacy || status.hasPending || status.hasUnmatchedCanonical,
+                start.startedAt,status.revision,status.recordedCount,runId=start.runId,repairTail=resume>0)
+            opening=null
             return@synchronized Audit.MORE
         }
+        progress.incompleteResult?.let{return@synchronized reportIncomplete(progress,it)}
         if(progress.phoneComplete){
             if(stopped())return@synchronized interrupted()
             val status=repo.verifiedObservationStatus()
             if(try{auditAuthority(localStop)?.scope!=scope}catch(_:Exception){true})return@synchronized interrupted()
             ObservationBackground.recordsChanged(app,status.revision)
-            auditProgress=null
             if(status.hasPending||status.hasUnmatchedCanonical||status.revision!=progress.collectionRevision||status.recordedCount!=progress.recordedCount){
-                if(!stopped())repo.reportInboxCheck(progress.check("incomplete"))
-                return@synchronized Audit.RETRY
+                return@synchronized reportIncomplete(progress,Audit.RETRY)
             }
             if(status.hasRecorded!=(status.recordedCount>0)||progress.sourceIds.size!=status.recordedCount||
                 progress.candidates!=progress.sourceIds.size||progress.phoneHead!=progress.parsedHead){
-                if(!stopped())repo.reportInboxCheck(progress.check("incomplete"))
-                return@synchronized Audit.UNCONFIRMED
+                return@synchronized reportIncomplete(progress,Audit.UNCONFIRMED)
             }
+            auditProgress=null
             completedCheck=progress.check("verified")
             completedAuditStart=progress.startedAt
             completedAuditRevision=progress.collectionRevision
@@ -239,7 +267,8 @@ internal class ObservationInboxAudit(
                 }
             }
         }
-        val states=try{progress.awaiting?.takeIf{it.first==requests}?.second ?: verify(requests)}catch(error:Exception){
+        val savedPage=progress.awaiting?.takeIf{it.first==requests}
+        val states=try{savedPage?.second ?: verify(requests)}catch(error:Exception){
             // The managed endpoint can exceed the transport deadline when historical custody
             // checks are slow. Resume from exactly the same row with a smaller bounded page.
             if (error is ApiFailure && (error.status == 0 || error.status in 500..599) && rows.size > 1)
@@ -267,13 +296,21 @@ internal class ObservationInboxAudit(
             if(before!=ObservationLegacyOwnership.classify(app,owner,row.id,row.received,row.sender,row.body,row.sub)||
                 ObservationInboxRevision.snapshot()!=scope.revision||localStop())return@synchronized interrupted()
         }
+        val handledRepairs=if(savedPage==null)mutableSetOf() else progress.handledRepairs.toMutableSet()
+        fun rememberRepairs(){
+            auditProgress=progress.copy(awaiting=requests to states,handledRepairs=handledRepairs.toSet(),queuedRepair=queuedRepair)
+        }
         for((index,reply) in states.withIndex()){
             val key=requests[index].sourceKey
             val row=candidatesByKey.getValue(key)
             if(reply==null){uncertain=true;pending++;continue}
             if(reply.state=="missing"){
                 uncertain=true;missing++
-                if(stopped())return@synchronized interrupted()
+                if(key in handledRepairs)continue
+                // Reuse the acknowledged page after rechecking its exact rows and consent. Each
+                // repair still goes through its original source key and durable request journal.
+                rememberRepairs()
+                if(stopped())return@synchronized if(budgetExpired())Audit.MORE else interrupted()
                 // A baseline or an in-flight historical command never enters live payment processing.
                 if(decisions[row.id]==ObservationLegacyOwnership.Decision.OWNED){
                     val gateway=requests[index].gatewayEnvelopeId
@@ -296,6 +333,8 @@ internal class ObservationInboxAudit(
                     }
                     if(retained==ObservationCapture.Result.STORED || retained==ObservationCapture.Result.DUPLICATE)queuedRepair=true
                 }
+                handledRepairs.add(key)
+                rememberRepairs()
                 continue
             }
             val source=reply.sourceId
@@ -309,19 +348,16 @@ internal class ObservationInboxAudit(
         }
         if(try{auditAuthority(localStop)?.scope!=scope}catch(_:Exception){true})return@synchronized interrupted()
         val page=progress.copy(last=rows.lastOrNull()?.id?:progress.last,unconfirmed=uncertain,sourceIds=sourceIds,
-            awaiting=null,parserPending=parserPending,candidates=candidates,missing=missing,pending=pending,phoneHead=phoneHead,parsedHead=parsedHead,queuedRepair=queuedRepair)
+            awaiting=null,handledRepairs=emptySet(),parserPending=parserPending,candidates=candidates,missing=missing,pending=pending,phoneHead=phoneHead,parsedHead=parsedHead,queuedRepair=queuedRepair)
         savePosition(scope,if(rows.size<progress.pageSize)0 else page.last,progress.repairTail && rows.size==progress.pageSize)
-        if(progress.repairTail && rows.size<progress.pageSize){
-            if(stopped())return@synchronized interrupted()
-            repo.reportInboxCheck(page.check("incomplete"))
-            auditProgress=null
-            return@synchronized Audit.RETRY
-        }
-        if(rows.size<progress.pageSize && uncertain){
-            if(stopped())return@synchronized interrupted()
-            repo.reportInboxCheck(page.check("incomplete"))
-            auditProgress=null
-            return@synchronized when{queuedRepair->Audit.REPAIRED;parserPending->Audit.AWAITING_PARSER;else->Audit.UNCONFIRMED}
+        if(rows.size<progress.pageSize && (progress.repairTail || uncertain)){
+            val outcome=when {
+                progress.repairTail -> Audit.RETRY
+                queuedRepair -> Audit.REPAIRED
+                parserPending -> Audit.AWAITING_PARSER
+                else -> Audit.UNCONFIRMED
+            }
+            return@synchronized reportIncomplete(page,outcome)
         }
         auditProgress=page.copy(phoneComplete=rows.size<progress.pageSize)
         Audit.MORE
