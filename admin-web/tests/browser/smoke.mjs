@@ -287,7 +287,16 @@ try {
   const receiptCells = receiptRow.getByRole('cell');
   assert.match(await receiptCells.nth(1).innerText(), /\bParsed\b/);
   assert.equal(await page.getByRole('columnheader', {name: 'Payment reference', exact: true}).count(), 0);
-  assert.equal(await page.getByRole('columnheader', {name: 'Payer SMS', exact: true}).count(), 0);
+  await page.getByRole('columnheader', {name: 'Payer SMS', exact: true}).waitFor();
+  await receiptRow.getByRole('cell').filter({hasText: 'No receipt recorded'}).waitFor();
+  await page.route(receipts, async route => {
+    const response = await route.fetch();
+    const pageData = await response.json();
+    const [first, ...rest] = pageData.items;
+    await route.fulfill({response, json: {...pageData, items: [{...first, payerStatus: 'delivered'}, ...rest]}});
+  }, {times: 1});
+  await page.getByRole('button', {name: 'Refresh receiver'}).click();
+  await receiptRow.getByRole('cell').filter({hasText: 'Reported delivered'}).waitFor();
   await page.setViewportSize({width: 320, height: 768});
   assert.equal(await receiptRow.evaluate((row) => getComputedStyle(row).display), 'grid');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
@@ -420,7 +429,7 @@ try {
   assert.deepEqual(unexpectedAuth, []);
   assert.deepEqual(incorrectIdentityHeaders, []);
   const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'admin_home_reports_scoped_sms_health', 'retired_passcode_bookmark_returns_to_overview', 'three_daily_links_and_no_redundant_sidebar_search', 'both_payment_directions_and_390px_reflow', 'protected_sms_deep_link', 'filtered_member_detail_and_return', 'payment_details_link_to_authorized_sms_evidence', 'payment_without_source_and_320px_reflow', 'sms_read_failure_retry',
-      'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
+      'payer_sms_empty_and_reported_delivered', 'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
       'retired_authenticator_bookmark_preserves_safe_destination', 'missing_scoped_admin_identity_removes_controls', 'session_failure_and_recovery_require_server_authority', 'expired_request_and_history_return_require_sign_in',
       'mobile_drawer_traps_and_restores_focus_and_reflows', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, 'no_unexpected_auth_request', 'identity_version_only_on_session_exchanges'];
   console.log(JSON.stringify({status: 'pass', environment: 'synthetic_loopback', origin, count: checks.length, checks,
