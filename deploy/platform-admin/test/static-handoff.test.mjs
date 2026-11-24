@@ -21,6 +21,29 @@ test('the standalone profile routes versioned assets through the Worker', () => 
   assert.equal(configuration.assets.not_found_handling, 'single-page-application');
 });
 
+test('a browser can open the current workspace under an installed predecessor without forwarding its session', async () => {
+  const entry = createAdminWorker({fetchImpl: async () => {throw Error('The public entry must not dispatch an API request');}});
+  const calls = [];
+  const env = environment({fetch: async req => {
+    calls.push({url: req.url, method: req.method, headers: [...req.headers]});
+    return req.method === 'HEAD' ? new Response(null, {headers: {'Content-Type': 'text/html'}}) : html();
+  }});
+  const headers = {Accept: 'text/html,application/xhtml+xml', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document',
+    Cookie: 'example=private', Authorization: 'Bearer synthetic'};
+  for (const method of ['GET', 'HEAD']) {
+    const result = await entry.fetch(request('/api/admin/workspace?unused=private', {headers, method}), env);
+    assert.equal(result.status, 200);
+    assert.equal(result.headers.get('Cache-Control'), 'no-store, no-transform');
+    assert.equal(await result.text(), method === 'HEAD' ? '' : '<html>current fixture</html>');
+    assert.deepEqual(calls.at(-1), {url: origin + '/index.html', method, headers: []});
+  }
+  for (const override of [{Accept: 'application/json'}, {'Sec-Fetch-Mode': 'cors'}, {'Sec-Fetch-Dest': 'iframe'}]) {
+    assert.equal((await entry.fetch(request('/api/admin/workspace', {headers: {...headers, ...override}}), env)).status, 406);
+  }
+  assert.equal((await entry.fetch(request('/api/admin/workspace', {method: 'POST', headers}), env)).status, 405);
+  assert.equal(calls.length, 2);
+});
+
 test('missing predecessor main becomes explicit noncacheable recovery without provider dispatch', async () => {
   let calls = 0, upstream = 0;
   const entry = createAdminWorker({fetchImpl: async () => {upstream++; throw Error('No provider call');}});

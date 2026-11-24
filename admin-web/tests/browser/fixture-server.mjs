@@ -4,7 +4,7 @@ import {promises as fs} from 'node:fs';
 import path from 'node:path';
 import {versionedStatic} from '../../../deploy/platform-admin/src/static-recovery.js';
 import {createPhoneAccountFixture, fixtureAdminId} from './phone-account-fixture.mjs';
-import {fixtureMember, fixtureMomoDetail, fixtureMomoRecord, fixtureOutgoingPayment, fixturePayment, fixtureSmsEvidenceId,
+import {fixtureMembers, fixtureMomoDetail, fixtureMomoRecord, fixtureOutgoingPayment, fixturePayment, fixtureSmsEvidenceId,
   readBuriMunsiPayments, readMemberList, readMomoList} from './operator-read-fixture.mjs';
 
 const root = path.resolve(process.argv[2] ?? '');

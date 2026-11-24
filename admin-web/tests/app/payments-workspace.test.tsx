@@ -11,8 +11,9 @@ import coreFixture from '../core/canonical-core-fixtures.json';
 import reconciliationFixture from '../core/canonical-reconciliation-fixture.json';
 
 const mock = vi.hoisted(() => ({request:vi.fn(), permissions:[] as string[], status:'authenticated', role:'admin',
-  authMethod:undefined as AdminUser['authMethod']}));
+  authMethod:undefined as AdminUser['authMethod'], scoped:false}));
 const currentActor = reconciliationFixture.detail.current_actor_id;
+const currentPrincipal = reconciliationFixture.detail.current_principal_id;
 const momoId = '11111111-1111-4111-8111-111111111111';
 const accountId = '22222222-2222-4222-8222-222222222222';
 const momoRef = 'MOMO-FIXTURE-01';
@@ -31,8 +32,10 @@ const momoPage = {contract_version:1,currency:'RWF',date_basis:'provider_transac
 const emptyOperations = {rows:[],total:0};
 const emptyReconciliation = {...reconciliationFixture.queue, rows:[], total:0, next_offset:null};
 const sessionUser = () => ({id:currentActor,sessionId:'fixture-session',email:'fixture@example.test',role:mock.role as AdminUser['role'],
-  permissions:mock.permissions,principalId:reconciliationFixture.detail.current_principal_id,assuranceLevel:1,mfaAt:null,emailVerifiedAt:null,
-  expiresAt:'2030-01-01T00:00:00Z',financialModel:'canonical_evidence_ledger',authMethod:mock.authMethod} satisfies AdminUser);
+  permissions:mock.permissions,principalId:currentPrincipal,assuranceLevel:1,mfaAt:null,emailVerifiedAt:null,
+  expiresAt:'2030-01-01T00:00:00Z',financialModel:'canonical_evidence_ledger',authMethod:mock.authMethod,
+  ...(mock.scoped ? {accountId,adminIdentity:{schemaVersion:1,role:'admin',accountId,adminId:currentActor,principalId:currentPrincipal,
+    collectionId:'fixture-group'}} : {})} satisfies AdminUser);
 vi.mock('../../src/session/SessionProvider',async original => ({
   ...await original<typeof import('../../src/session/SessionProvider')>(),
   useSession:() => ({status:mock.status,epoch:1,user:sessionUser(),request:mock.request,isCurrentAuthority:() => true}),
@@ -52,7 +55,7 @@ const visit = (path: string, permissions: string[], role = 'admin') => {
 };
 const location = () => screen.getByLabelText('Current location');
 const called = (prefix: string) => mock.request.mock.calls.filter(([path]) => path.startsWith(prefix));
-afterEach(() => {mock.request.mockReset();mock.status='authenticated';mock.role='admin';mock.authMethod=undefined;});
+afterEach(() => {mock.request.mockReset();mock.status='authenticated';mock.role='admin';mock.authMethod=undefined;mock.scoped=false;});
 
 describe('consolidated Payments routes',()=>{
   it('makes the old payment list a guarded alias and returns through the new list with search preserved',async()=>{
@@ -259,10 +262,12 @@ describe('BuriMunsi phone Payments', () => {
     mock.request.mockImplementation(async (path: string) => path === 'burimunsi/home'
       ? {paymentCount:2,memberCount:5,unallocatedCount:2,recentPayments:[buriPayment,outgoing],asOf:time}
       : buriPage([buriPayment,outgoing]));
-    visit('/admin', ['overview.read','payments.read','reconciliations.read','ledger.read'], 'staff');
+    visit('/admin', ['overview.read','payments.read','reconciliations.read','ledger.read','sms.read'], 'staff');
     expect(await screen.findByRole('heading',{name:'Recent payments'})).toBeVisible();
     expect(screen.getByText('Incoming')).toBeVisible();
     expect(screen.getByText('Outgoing')).toBeVisible();
+    expect(screen.queryByRole('link',{name:'M-Money SMS'})).not.toBeInTheDocument();
+    expect(called('momo/observations')).toHaveLength(0);
     fireEvent.click(screen.getByRole('link',{name:'View all payments'}));
     expect(await screen.findByRole('button',{name:'MOMO-OUT-FIXTURE'})).toBeVisible();
     const filters = within(screen.getByRole('combobox',{name:'Status'}));
@@ -270,6 +275,26 @@ describe('BuriMunsi phone Payments', () => {
     expect(called('core/overview')).toHaveLength(0);
     expect(canOpenAdminPath('/admin/ledgers',sessionUser())).toBe(false);
     expect(canOpenAdminPath('/admin/reconciliations',sessionUser())).toBe(false);
+  });
+
+  it('loads the scoped Admin SMS health independently of Home payments', async () => {
+    mock.authMethod = 'phone_passcode';
+    mock.scoped = true;
+    let resolveHealth!: (value: unknown) => void;
+    const health = new Promise(resolve => { resolveHealth = resolve; });
+    mock.request.mockImplementation(async (path: string) => path === 'burimunsi/home'
+      ? {paymentCount:1,memberCount:5,unallocatedCount:1,recentPayments:[buriPayment],asOf:time}
+      : health);
+    visit('/admin', ['overview.read','payments.read','sms.read']);
+    expect(await screen.findByRole('heading',{name:'Recent payments'})).toBeVisible();
+    expect(screen.getByText('Checking sync')).toBeVisible();
+    expect(called('momo/observations').map(([path]) => path)).toEqual([
+      'momo/observations?collectionId=fixture-group&limit=1&includeProcessing=1',
+    ]);
+    await act(async () => resolveHealth({contractVersion:1,collectionId:'fixture-group',nextCursor:null,asOf:time,items:[],
+      inboxCheck:{state:'verified',checkedAt:time,candidateCount:0,missingCount:0,pendingCount:0,headsMatch:true}}));
+    expect(screen.getByText('Last inbox check matched')).toBeVisible();
+    expect(screen.getByRole('link',{name:'M-Money SMS'})).toHaveAttribute('href','/admin/payments?view=sms');
   });
 
   it('keeps the allocation intent after an uncertain response and updates the same payment', async () => {

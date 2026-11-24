@@ -7,6 +7,8 @@ import {BURIMUNSI_ADMIN_ORIGIN, BURIMUNSI_ADMIN_PROFILE_ID} from './admin-sessio
 
 const API_ROOT = '/api';
 const MANAGED_ROOTS = [API_ROOT, '/v1', '/functions', '/privacy/account-deletion'];
+// Every installed Admin worker passes this exact online document through to the host.
+const ONLINE_WORKSPACE = '/api/admin/workspace';
 
 function failure(status, code, message) {
   return Response.json({error: {code, message}}, {status, headers: {
@@ -37,8 +39,11 @@ async function validateManagedHost(env) {
 async function serveAssets(request, url, assets) {
   if (url.pathname.startsWith('/_build/')) return versionedStatic(request, assets);
   // Typed deep links and worker installs use the same physical shell.
-  const shell = ['GET', 'HEAD'].includes(request.method) && (url.pathname === '/' || hasRoot(url.pathname, '/admin'));
-  const response = await assets.fetch(shell ? new Request(new URL('/index.html', url), request) : request);
+  const shell = ['GET', 'HEAD'].includes(request.method) &&
+    (url.pathname === '/' || url.pathname === ONLINE_WORKSPACE || hasRoot(url.pathname, '/admin'));
+  // The public document is identical for every account. Only the normal API
+  // calls made by the running application should carry a session.
+  const response = await assets.fetch(shell ? new Request(new URL('/index.html', url), {method: request.method}) : request);
   if (response.headers.get('Content-Type')?.split(';', 1)[0].trim().toLowerCase() !== 'text/html') return response;
   const output = new Response(response.body, response);
   // The service worker verifies the exact shell bytes across intermediaries.
@@ -74,6 +79,18 @@ export function createAdminWorker({fetchImpl = (request, init) => globalThis.fet
       if (privacy) return privacy;
       if (hasRoot(url.pathname, '/.well-known') || isLocalChallengePath(url.pathname)) {
         return failure(404, 'not_found', 'This service route is unavailable.');
+      }
+      if (url.pathname === ONLINE_WORKSPACE) {
+        if (!['GET', 'HEAD'].includes(request.method)) {
+          return failure(405, 'method_not_allowed', 'Open the workspace in a browser.');
+        }
+        const mode = request.headers.get('Sec-Fetch-Mode');
+        const destination = request.headers.get('Sec-Fetch-Dest');
+        if ((mode && mode !== 'navigate') || (destination && destination !== 'document') ||
+            !request.headers.get('Accept')?.split(',').some(value => value.split(';')[0].trim().toLowerCase() === 'text/html')) {
+          return failure(406, 'document_required', 'Open the workspace in a browser.');
+        }
+        return serveAssets(request, url, env.ASSETS);
       }
       if (MANAGED_ROOTS.some(root => hasRoot(url.pathname, root))) {
         return await transport(request) ?? failure(404, 'not_found', 'This service route is unavailable.');
