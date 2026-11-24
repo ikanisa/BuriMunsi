@@ -35,7 +35,7 @@ export function SmsOversight({request, permissions, authorityKey, preferSmsHealt
     if (inFlight.current) {if (changed) invalidated.current = true;}
     else setRevision(value => value + 1);
   }, []);
-  useVisibleOperationsRefresh(allowed && !suspended, 5000, refresh);
+  useVisibleOperationsRefresh(allowed && !suspended, preferSmsHealth ? 30_000 : 5000, refresh);
   const hasSmsRead = permissions.includes('sms.read');
   const access = JSON.stringify([authorityKey, hasSmsRead]), scope = JSON.stringify([access, revision, refreshGeneration]);
   const current = state?.scope === scope || (state?.access === access && !state?.error) ? state : null;
