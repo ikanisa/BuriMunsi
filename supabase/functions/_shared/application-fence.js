@@ -21,6 +21,16 @@ function active(row,id,source,epoch){base(row,id,source,epoch);need(row.state===
 // enter the control plane. All values are bound parameters and remain private.
 const signatures={register:'private.collect_fence_register($1::uuid,$2::text,$3::text)',
  assert:'private.collect_fence_assert_work($1::uuid,$2::bigint,$3::text)',
+ // The protected lease runs on one private READ COMMITTED transaction. Bind
+ // the original tuple there once and still verify the returned identity every time.
+ bindReadWork:`private.collect_fence_assert_work(
+   pg_catalog.set_config('burimunsi.read_work_id',$1::text,true)::uuid,
+   pg_catalog.set_config('burimunsi.read_work_epoch',$2::text,true)::bigint,
+   pg_catalog.set_config('burimunsi.read_work_source',$3::text,true))`,
+ checkReadWork:`private.collect_fence_assert_work(
+   pg_catalog.current_setting('burimunsi.read_work_id')::uuid,
+   pg_catalog.current_setting('burimunsi.read_work_epoch')::bigint,
+   pg_catalog.current_setting('burimunsi.read_work_source'))`,
  close:'private.collect_fence_close($1::uuid,$2::bigint,$3::text,$4::text,$5::text,$6::integer,$7::integer)',
  status:'private.collect_fence_work_status($1::uuid)'};
 async function bounded(promise){let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(unavailable()),FENCE_IO_TIMEOUT_MS);})]);}finally{clearTimeout(timer);}}
@@ -123,11 +133,14 @@ export function sqlFenceBackend(businessSql,controlSql,verifyAdmission=undefined
     const begin='BEGIN ISOLATION LEVEL READ COMMITTED';
     if(standaloneRead)await tx.unsafe(begin+'; '+leaseSetupSql);
     else {await tx.unsafe(begin);await tx.unsafe(leaseSetupSql);}
-    const row=await result(tx,'assert',[id,epoch,source]);
+    const row=await result(tx,standaloneRead?'bindReadWork':'assert',[id,epoch,source]);
     reusable=active(row,id,source,epoch).mode==='open';
     return {row,async assert(){
      need(!cleanup&&!released);
-     try{return active(await bounded(result(tx,'assert',[id,epoch,source])),id,source,epoch);}
+     try{
+      const check=standaloneRead?result(tx,'checkReadWork',[]):result(tx,'assert',[id,epoch,source]);
+      return active(await bounded(check),id,source,epoch);
+     }
      catch(error){reusable=false;throw error;}
     },release};
    }catch(error){await release().catch(()=>{});throw error;}

@@ -9,6 +9,7 @@ import {prepareDeploymentCheck} from '../../functions/_shared/deployment-databas
 import {CONTRACT_VERSION} from '../../functions/_shared/domain/burimunsi/wire/native-contract.mjs';
 import {createPhonePinRequestGate, phonePinReadSelector} from '../../functions/_shared/domain/burimunsi/phone-pin-request.js';
 import {PostgresDatabase} from '../../functions/_shared/postgres.js';
+import {lockCollectMutation} from '../../functions/_shared/postgres-mutation-lock.js';
 import {PostgresNativeAuthStore} from '../../functions/_shared/domain/burimunsi/postgres-auth-store.js';
 import {PostgresPhonePinSessions} from '../../functions/_shared/domain/burimunsi/postgres-phone-pin-sessions.js';
 import {PostgresOperatorDirectory} from '../../functions/_shared/domain/burimunsi/postgres-operator-directory.js';
@@ -29,7 +30,7 @@ const token = () => randomBytes(32).toString('hex');
 const hash = raw => createHash('sha256').update(raw).digest('hex');
 const unused = () => { throw Error('Unexpected write or external operation'); };
 
-export async function qualifyNativeReads({pool, admissionPool, inspect, source}) {
+export async function qualifyNativeReads({pool, admissionPool, businessStatements, inspect, source}) {
   const [deployment] = await inspect('SELECT profile_raw, profile_sha256 FROM private.collect_deployment_identity WHERE singleton', []);
   const check = await prepareDeploymentCheck({COLLECT_DEPLOYMENT_PROFILE:deployment.profile_raw,
     COLLECT_DEPLOYMENT_PROFILE_SHA256:deployment.profile_sha256}, group);
@@ -61,12 +62,12 @@ export async function qualifyNativeReads({pool, admissionPool, inspect, source})
     return actor;
   }
 
-  async function read(actor, path, device = actor.device) {
+  async function read(actor, path, device = actor.device, {requestedGroup=group,clock=Date.now,status=200}={}) {
     return admitted(async db => {
       const sessions = new PostgresPhonePinSessions({db, groupId:group});
       const directory = new PostgresOperatorDirectory({db, groupId:group, managedSessions:sessions});
       const authority = new PostgresNativeAuthStore({db, groupId:group, sessionBinding:sessions,
-        operatorDirectory:directory, createOperatorPrincipal:unused});
+        operatorDirectory:directory, createOperatorPrincipal:unused,clock});
       const store = new PostgresRecordsStore({authority, nativeAutoRecordsEnabled:true,
         sourceReader:{revision:unused, page:unused, detail:unused}});
       const records = new RecordsService({store, groupId:group, cursor:{create:unused, read:unused}});
@@ -79,13 +80,13 @@ export async function qualifyNativeReads({pool, admissionPool, inspect, source})
         'X-BuriMunsi-Contract':CONTRACT_VERSION, 'X-BuriMunsi-Request':randomUUID(),
         'X-BuriMunsi-Generation':'1', 'X-BuriMunsi-Auth':'phone_pin',
         'X-BuriMunsi-Installation':actor.installation, 'X-BuriMunsi-Profile':actor.profile,
-        'X-BuriMunsi-Device':device, 'X-BuriMunsi-Group':group, Authorization:'Bearer '+actor.bearer,
+        'X-BuriMunsi-Device':device, 'X-BuriMunsi-Group':requestedGroup, Authorization:'Bearer '+actor.bearer,
       }});
       const gate = createPhonePinRequestGate({origin, secrets:{}, networkBucket:unused});
       const response = await gate({request, env:{DB:db, BURIMUNSI_PRODUCT_MODE:'standalone'}},
         (_principal, _env, boundRequest) => handler(boundRequest ?? request));
       const body = await response.json();
-      assert.equal(response.status, 200, JSON.stringify(body));
+      assert.equal(response.status, status, JSON.stringify(body));
       assert.equal(response.headers.get('Cache-Control'), 'no-store');
       return body.data;
     }, 'http_collect', nativeRead);
@@ -194,17 +195,37 @@ export async function qualifyNativeReads({pool, admissionPool, inspect, source})
         tx.release = () => connection.release();
         return tx;
       }};
-      const restricted = new PostgresDatabase(wrongModePool,{sub:'wrong_mode_fixture'},db.applicationWork);
-      await assert.rejects(restricted.withNativeReadSnapshot(() => assert.fail('wrong-mode read was dispatched')),
-        {code:'application_fence_unavailable'});
-      assert.ok(before && atRollback);
-      assert.deepEqual({...atRollback},{...before},'a rejected mode must install no role, claims or local settings');
+      for(const claims of [{},{sub:'wrong_mode_fixture'}]) {
+        const restricted = new PostgresDatabase(wrongModePool,claims,db.applicationWork);
+        await assert.rejects(restricted.withNativeReadSnapshot(() => assert.fail('wrong-mode read was dispatched')),
+          {code:'application_fence_unavailable'});
+        assert.ok(before && atRollback);
+        assert.deepEqual({...atRollback},{...before},'a rejected mode must install no role, claims or local settings');
+      }
     });
   }
   console.log('PASS wrong native isolation and writable mode install no scope before rollback');
   for (const account of accounts) {
     for (const [state, ttl] of [['current',1800000], ['due',45000], ['expired',2500]]) {
       const actor = await issue(account, ttl);
+      if(state==='current'){
+        for(const path of [home,payments]){
+          let start=businessStatements.length;
+          await read(actor,path);
+          const statements=businessStatements.slice(start);
+          assert.equal(statements.length,5);
+          assert.match(statements[0],/^BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY$/);
+          assert.match(statements[1],/set_config\('request.jwt.claims','\{\}',true\)/);
+          assert.match(statements[2],/^WITH bound AS MATERIALIZED/);
+          assert.match(statements[3],/app\.momo_transactions/);
+          assert.equal(statements[4],'COMMIT');
+          start=businessStatements.length;
+          await assert.rejects(read(actor,path,actor.device,{requestedGroup:'another-group'}),{code:'native_scope_changed'});
+          await read(actor,path,actor.device,{clock:()=>Date.now()+7200000,status:401});
+          assert.ok(!businessStatements.slice(start).includes(statements[3]),'no ledger query after wrong scope or expired actor');
+        }
+        console.log('PASS five business statements per fresh '+account.role+' screen; wrong collection and consumption-time expiry deny ledger access');
+      }
       const before = await lease(actor);
       assert.equal(before.renewed, null);
       if (state === 'expired') {
@@ -230,6 +251,18 @@ export async function qualifyNativeReads({pool, admissionPool, inspect, source})
       }
       await assertPayments(actor);
       assert.equal((await lease(actor)).renewed, after.renewed);
+      if(state==='current'){
+        await admitted(db=>db.transaction(async sql=>{
+          await db.context(sql);await lockCollectMutation(sql);
+          const [logout]=await sql.unsafe('SELECT private.burimunsi_pin_logout_barrier($1,$2::uuid,$3,$4,$5,$6) AS result',
+            [actor.bearer,actor.installation,actor.device,actor.profile,group,null]);
+          assert.equal(logout.result.accountId,actor.id);
+        }));
+        const start=businessStatements.length;
+        for(const path of [home,payments])await assert.rejects(read(actor,path),{code:'session_unavailable'});
+        assert.ok(!businessStatements.slice(start).some(text=>text.includes('app.momo_transactions')));
+        console.log('PASS real logout revokes '+account.role+' Home and Payments before financial data is read');
+      }
       console.log('PASS', account.role, account.profile, state, 'Home and Payments; wrong-device denied; original lease and renewal verified');
     }
   }

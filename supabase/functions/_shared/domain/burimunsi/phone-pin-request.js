@@ -7,6 +7,7 @@ import {BURIMUNSI_PRODUCT_MODE} from '../../burimunsi-standalone.js';
 import {requireActiveNativeRequest} from './wire/request-boundary.mjs';
 import {validateNativeRequest,requestBinding,bindNativeResponse,CONTRACT_VERSION} from './wire/native-contract.mjs';
 import {nativeRequestUrl,readNativeJson,requireNativeHttpsOrigin} from './wire/native-http.mjs';
+import {PIN_READ_ACTOR_SQL,PIN_CLOCK_SKEW_MS} from './postgres-session-row.js';
 import {pgInteger} from './postgres-values.js';
 
 // Proof is scoped to the admitted request-owned database, never an environment
@@ -25,9 +26,7 @@ export const PIN_SET_CONTEXT_SQL='SELECT private.burimunsi_set_pin_context($1,$2
 export const PIN_RENEW_SQL='SELECT * FROM private.burimunsi_pin_renew_session($1,$2::uuid,$3,$4,$5,$6)';
 export const PIN_LOGOUT_SQL='SELECT private.burimunsi_pin_logout_barrier($1,$2::uuid,$3,$4,$5,$6) AS result';
 export const RETIREMENT_OUTCOME_SQL='SELECT private.burimunsi_gateway_retirement_outcome($1,$2::uuid,$3,$4,$5::uuid,$6) AS result';
-// Matches the bound already enforced when PostgreSQL creates a PIN session.
-// This applies only after the database has independently validated the session.
-export const PIN_CLOCK_SKEW_MS=5000;
+export {PIN_CLOCK_SKEW_MS};
 export function hasPhonePinContext(db){return proofs.has(db);}
 
 function activeReadSnapshot(db) {
@@ -58,6 +57,29 @@ export function claimPhonePinReadSnapshot(db,groupId) {
   requireThat(!snapshot.claimed&&snapshot.identity.groupId===groupId,'request_not_admitted',503);
   snapshot.claimed=true;
   return snapshot.sql;
+}
+
+// Consume only the row from the exact proof and SQL snapshot already claimed
+// by this records request. All clocks, directory proof and permissions are still
+// checked by the session reader before it returns an actor.
+export function takePhonePinReadActor(db,sql,groupId,sessionId,now) {
+  const snapshot=activeReadSnapshot(db);
+  if(!snapshot?.actorEvidence)return undefined;
+  const {identity,actorEvidence}=snapshot;
+  requireThat(snapshot.selected&&snapshot.claimed&&snapshot.sql===sql&&db.ownsNativeRead(sql)&&
+    identity.groupId===groupId&&identity.sessionId===sessionId,'request_not_admitted',503);
+  snapshot.actorEvidence=undefined;
+  const {row,createdAt,dbCheckedAt,startedAt}=actorEvidence;
+  if(row===null)return null;
+  requireThat(row.collection_id===groupId&&row.session_id===sessionId&&row.id===identity.id&&
+    row.principal_user_id===snapshot.principalUserId&&row.installation_id===identity.installationId&&
+    row.installation_profile===proofs.get(db).values[3],'session_unavailable',401);
+  const expiresAt=integer(row.expires_at);
+  if(expiresAt<=now||createdAt>now+PIN_CLOCK_SKEW_MS)return null;
+  // The elapsed time starts before the SQL was sent. If database expiry could
+  // have elapsed in transit, run the original database check on this snapshot.
+  if(expiresAt-dbCheckedAt<=Math.ceil(performance.now()-startedAt))return undefined;
+  return row;
 }
 
 export function ownsPhonePinReadSnapshot(db,sql) {
@@ -146,10 +168,10 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
       requireThat(rows.length<=1,'session_unavailable',401);
       return rows[0]?.result;
     };
-    const serveRead=async(sql,principal,values,readRequest=request)=>{
+    const serveRead=async(sql,principal,values,readRequest=request,actorEvidence=undefined)=>{
       const identity=Object.freeze({id:principal.nativeAccountId,sessionId:principal.principalSessionId,
         installationId:installation,groupId:principal.groupId});
-      const snapshot={request:readRequest,work,identity,sql,claimed:false,selected:false,
+      const snapshot={request:readRequest,work,identity,sql,actorEvidence,principalUserId:principal.principalUserId,claimed:false,selected:false,
         binding:responseBindingHeaders.map(name=>readRequest.headers.get(name))};
       proofs.set(db,Object.freeze({groupId:principal.groupId,values,snapshot}));
       activeReadSnapshot(db);
@@ -279,11 +301,29 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
       if(combinedRead){
         const needsRenewal=new Error('native_read_needs_renewal');
         const readSnapshot=allowRenewal=>readOnly(async sql=>{
-          let row;
-          try{row=await setContext(sql,values);}
-          catch(error){if(allowRenewal&&error?.code==='42501')throw needsRenewal;throw error;}
+          let row,actorEvidence;
+          const readActor=env.BURIMUNSI_PRODUCT_MODE===BURIMUNSI_PRODUCT_MODE&&db.ownsNativeRead?.(sql)===true&&
+            (path==='/v1/burimunsi/payments'||readSession&&includeHome);
+          try{
+            if(readActor) {
+              const startedAt=performance.now();
+              const rows=await sql.unsafe(PIN_READ_ACTOR_SQL,[...values,requestedGroup,clock()]);
+              requireThat(rows.length===1,'session_unavailable',401);
+              row=rows[0].result;
+              actorEvidence={row:rows[0].actor??null,createdAt:integer(row?.created_at),
+                dbCheckedAt:integer(rows[0].checked_at),startedAt};
+            }else{
+              row=await setContext(sql,values);
+            }
+          }
+          catch(error){
+            // Only the PIN setter's missing or expired four-part proof may
+            // enter renewal. A directory or permission failure stays a denial.
+            if(allowRenewal&&error?.code==='42501'&&(!readActor||error.message==='session_changed'))throw needsRenewal;
+            throw error;
+          }
           if(allowRenewal&&(!row||integer(row.expires_at)<=clock()+60000))throw needsRenewal;
-          return serveRead(sql,readPrincipal(row),values);
+          return serveRead(sql,readPrincipal(row),values,request,actorEvidence);
         });
         try{
           let response;
