@@ -13,6 +13,9 @@ const snapshot=value=>JSON.parse(canonicalJson(value));
 const same=(a,b)=>canonicalJson(a)===canonicalJson(b);
 const sha=async bytes=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),v=>v.toString(16).padStart(2,'0')).join('');
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value)&&Object.getPrototypeOf(value)===Object.prototype;
+const objectFields='object_key,operation_id,fingerprint,sha256,size,scope,http_metadata,custom_metadata';
+const intentFields=objectFields+',state,active_attempt,upload_unresolved,delete_tombstone';
+const reservationFields='object_key,source_fingerprint,scope,aad,key_id,plaintext_sha256,sealed_body';
 function route(v){
   if(typeof v!=='string')return null;
   if(/^07[2389][0-9]{7}$/.test(v))return '250'+v.slice(1);
@@ -145,16 +148,40 @@ export class PostgresPostingCustody {
       receivingAccountId:r.job_account,credentialId:r.credential_id});
     return r;
   }
-  async journal(sql,key,{ownerId,purpose,entityId,plaintextSha256,aad}){
+  async journal(sql,key,expect){
     // The enclosing Collect global mutation lock must also cover retention.
     // These are the original storage-journal key and owner advisory-lock salts.
     await this.query(sql,'SELECT pg_advisory_xact_lock(hashtextextended($1,7346369))',[key]);
-    await this.query(sql,'SELECT pg_advisory_xact_lock(hashtextextended($1,7346370))',[ownerId]);
-    check((await this.query(sql,'SELECT subject_id FROM app.privacy_retention_barriers WHERE subject_id=$1',[ownerId])).length===0);
+    await this.query(sql,'SELECT pg_advisory_xact_lock(hashtextextended($1,7346370))',[expect.ownerId]);
+    check((await this.query(sql,'SELECT subject_id FROM app.privacy_retention_barriers WHERE subject_id=$1',[expect.ownerId])).length===0);
     check((await this.query(sql,'SELECT operation_id FROM private.storage_delete_intents WHERE object_key=$1',[key])).length===0);
-    const p=await this.one(sql,'SELECT object_key,operation_id,fingerprint,sha256,size,scope,http_metadata,custom_metadata,state,active_attempt,upload_unresolved,delete_tombstone FROM private.storage_put_intents WHERE object_key=$1 FOR UPDATE',[key]);
-    const m=await this.one(sql,'SELECT object_key,operation_id,fingerprint,sha256,size,scope,http_metadata,custom_metadata FROM private.storage_objects WHERE object_key=$1 FOR UPDATE',[key]);
-    const r=await this.one(sql,'SELECT object_key,source_fingerprint,scope,aad,key_id,plaintext_sha256,sealed_body FROM private.storage_payload_reservations WHERE object_key=$1 FOR UPDATE',[key]);
+    const p=await this.one(sql,`SELECT ${intentFields} FROM private.storage_put_intents WHERE object_key=$1 FOR UPDATE`,[key]);
+    const m=await this.one(sql,`SELECT ${objectFields} FROM private.storage_objects WHERE object_key=$1 FOR UPDATE`,[key]);
+    const r=await this.one(sql,`SELECT ${reservationFields} FROM private.storage_payload_reservations WHERE object_key=$1 FOR UPDATE`,[key]);
+    return this.#validateJournal(key,expect,p,m,r);
+  }
+
+  async keyedObservationJournal(sql,key,expect){
+    check(expect.purpose==='sms_receipt'&&key==='sms/'+expect.entityId);
+    // The materialized input takes the original key lock before the owner lock.
+    // Read barriers and rows in the next statement, after any lock wait.
+    await this.query(sql,`WITH key_lock AS MATERIALIZED (
+      SELECT pg_advisory_xact_lock(hashtextextended($1,7346369))
+    ) SELECT pg_advisory_xact_lock(hashtextextended($2,7346370)) FROM key_lock`,[key,expect.ownerId]);
+    const journal=await this.one(sql,`SELECT row_to_json(p) AS put, row_to_json(m) AS metadata, row_to_json(r) AS reservation,
+        p.size AS put_size, m.size AS metadata_size
+      FROM (SELECT ${intentFields} FROM private.storage_put_intents WHERE object_key=$1 FOR UPDATE) p
+      CROSS JOIN (SELECT ${objectFields} FROM private.storage_objects WHERE object_key=$1 FOR UPDATE) m
+      CROSS JOIN (SELECT ${reservationFields} FROM private.storage_payload_reservations WHERE object_key=$1 FOR UPDATE) r
+      WHERE NOT EXISTS (SELECT 1 FROM app.privacy_retention_barriers WHERE subject_id=$2)
+        AND NOT EXISTS (SELECT 1 FROM private.storage_delete_intents WHERE object_key=$1)`,[key,expect.ownerId]);
+    // Keep the driver's original int8 representation in both journal views.
+    journal.put.size=journal.put_size;
+    journal.metadata.size=journal.metadata_size;
+    return this.#validateJournal(key,expect,journal.put,journal.metadata,journal.reservation);
+  }
+
+  async #validateJournal(key,{ownerId,purpose,entityId,plaintextSha256,aad},p,m,r){
     const scope={ownerId,purpose,entityId};
     check(p.object_key===key&&m.object_key===key&&r.object_key===key&&p.state==='committed'&&
       p.active_attempt===null&&p.upload_unresolved===false&&p.delete_tombstone===false&&
