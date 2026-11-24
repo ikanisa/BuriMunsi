@@ -2,11 +2,12 @@ import {lazy} from 'react';
 import {useLocation, useNavigate} from 'react-router';
 import {OverviewPage} from '../../features/overview/OverviewPage';
 import {canReadRequestHistory} from '../../features/requests/permissions';
-import {canManageOperatorAccess, hasScopedAdminAuthority} from '../../session/ownerIdentity';
+import {hasScopedAdminAuthority} from '../../session/ownerIdentity';
 import {useSession} from '../../session/SessionProvider';
 import {verificationPath} from '../../session/returnLocation';
 import {useAccess, useSensitiveAccess} from './access';
 import {requiresPermissions, workspaceRoute} from './routePolicy';
+import {canOpenOperatorProfile, canOpenTeam} from './team-access';
 
 const RequestHistoryPage = lazy(() => import('../../features/requests/RequestHistoryPage').then(m => ({default: m.RequestHistoryPage})));
 const SmsReceiptsPage = lazy(() => import('../../features/operations/SmsReceiptPages').then(m => ({default: m.SmsReceiptsPage})));
@@ -51,13 +52,12 @@ function SmsControlsRoute() {
 function BuriMunsiRoute() {
   const go = useNavigate(), session = useSession();
   return <BuriMunsiPage operatorApprovalEnabled nativeAdministrationEnabled
-    onBack={() => go('/admin/admin-users')} onVerify={() => go(verificationPath(session.verificationMode, '/admin/burimunsi'))} />;
+    onBack={session.user && canOpenTeam(session.user) ? () => go('/admin/admin-users') : undefined} onVerify={() => go(verificationPath(session.verificationMode, '/admin/burimunsi'))} />;
 }
 
 const canReadSms = requiresPermissions('sms.read');
 const canReadGateway = requiresPermissions('gateway.read');
 const canReadPayments = requiresPermissions('payments.read');
-const canManageReceiverAccess = requiresPermissions('admin_users.manage', 'receivers.read', 'receivers.manage');
 
 export const requestHistoryRoute = workspaceRoute('requests', <RequestHistoryRoute />,
   user => canReadRequestHistory(user.financialModel, user.permissions));
@@ -76,6 +76,5 @@ export const operatorRoutes = [
   workspaceRoute('momo-receipts', <MomoReceiptsPage />, user => canReadSms(user) || canReadPayments(user)),
   workspaceRoute('notification-operator', <AssistedSmsRoute />, requiresPermissions('assisted_sms.read')),
   workspaceRoute('notification-settings', <SmsControlsRoute />, user => (user.accountId ? hasScopedAdminAuthority(user) : user.role === 'owner') && user.permissions.includes('admin_users.manage')),
-  workspaceRoute('burimunsi', <BuriMunsiRoute />, user => user.financialModel === 'canonical_evidence_ledger' &&
-    canManageOperatorAccess(user) && canManageReceiverAccess(user)),
+  workspaceRoute('burimunsi', <BuriMunsiRoute />, canOpenOperatorProfile),
 ];

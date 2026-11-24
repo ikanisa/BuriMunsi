@@ -112,6 +112,23 @@ describe('Admin navigation for the current session', () => {
   });
 
   it.each([
+    {permissions: ['collections.read', 'receivers.read'], route: '/admin/groups', contextual: true, fallback: false},
+    {permissions: ['collections.read'], route: '/admin/groups', contextual: false, fallback: false},
+    {permissions: ['receivers.read'], route: '/admin/licenses', contextual: false, fallback: true},
+  ])('keeps Receiving accounts discoverable without widening access ($permissions)', async ({permissions, route, contextual, fallback}) => {
+    const {requests} = openAdmin(route, {session: {user: {...account, permissions}}});
+    await screen.findByRole('heading', {name: route.endsWith('/groups') ? 'Groups' : 'Open-source licenses'});
+    expect(Boolean(screen.queryByRole('navigation', {name: 'Group workspace'}))).toBe(contextual);
+    fireEvent.click(screen.getByRole('button', {name: /^Account:/}));
+    const advanced = screen.queryByText('Advanced', {selector: 'summary'});
+    if (advanced) fireEvent.click(advanced);
+    const links = screen.queryAllByRole('link', {name: 'Receiving accounts'});
+    expect(links).toHaveLength(contextual || fallback ? 1 : 0);
+    if (links.length) expect(links[0]).toHaveAttribute('href', '#/admin/payees');
+    expect(requests).not.toContain('/api/admin/core/payees');
+  });
+
+  it.each([
     {description: 'managed staff', role: 'staff', model: 'canonical_evidence_ledger', attested: false, accountAccess: false, smsControls: false, requests: false, buri: false},
     {description: 'unattested managed owner', role: 'owner', model: 'canonical_evidence_ledger', attested: false, accountAccess: true, smsControls: true, requests: true, buri: false},
     {description: 'attested managed owner', role: 'owner', model: 'canonical_evidence_ledger', attested: true, accountAccess: true, smsControls: true, requests: true, buri: true},
@@ -138,6 +155,6 @@ describe('Admin navigation for the current session', () => {
     const advanced = screen.queryByText('Advanced', {selector: 'summary'});
     if (advanced) fireEvent.click(advanced);
     expect(Boolean(screen.queryByRole('link', {name: 'SMS controls'}))).toBe(smsControls);
-    expect(Boolean(screen.queryByRole('link', {name: 'Operator access'}))).toBe(buri);
+    expect(Boolean(screen.queryByRole('link', {name: 'Profile access'}))).toBe(buri);
   });
 });

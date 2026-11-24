@@ -1,5 +1,5 @@
 import {adminBrand} from '../branding';
-import {useEffect, useLayoutEffect, useRef, useState} from 'react';
+import {useEffect, useLayoutEffect, useRef, useState, type ReactNode} from 'react';
 import {Button, Card, EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge} from '../ui';
 import {CloudflareTeamPanel} from './CloudflareTeamPanel';
 import {InvitationRecoveryPanel, TeamManager} from './ManagedTeamPanel';
@@ -18,6 +18,7 @@ interface TeamPageProps {
   cloudflareRecoveryVersion?: 1;
   allowRecovery?: boolean;
   showVerification?: boolean;
+  profileAccess?: ReactNode;
 }
 
 function hasCurrentTeamVerification(session: SessionContextValue, actor: AdminUser): boolean {
@@ -77,7 +78,7 @@ function TeamDirectoryCard({team, changesUnavailable, showInvitations, actor}: {
 
 function TeamWorkspace({
   actor, session, fresh, onVerify, allowMutations = false, managedInvitationVersion = 2, cloudflareRecoveryVersion,
-  allowRecovery = true, showVerification = true,
+  allowRecovery = true, showVerification = true, profileAccess,
 }: TeamPageProps & {actor: AdminUser; session: SessionContextValue; fresh: boolean}) {
   const {request, epoch, verificationMode} = session;
   const path = teamDirectoryPath(actor, verificationMode, managedInvitationVersion, fresh);
@@ -142,7 +143,7 @@ function TeamWorkspace({
   } : team?.permissionsByRole;
   return <>
     <PageHeader title="Team access" subtitle={`Admins and staff who can use the ${adminBrand.product} workspace.`}
-      actions={<Button icon="refresh" onClick={refresh} disabled={displayed === null}>Refresh</Button>} />
+      actions={<>{profileAccess}<Button icon="refresh" onClick={refresh} disabled={displayed === null}>Refresh</Button></>} />
     {actionMessage && <p role="status">{actionMessage}</p>}
     {showVerification && (isOwnerManager || legacyRecovery) && <p><Button onClick={onVerify}>
       {legacyRecovery ? 'Verify email to review pending requests' : usesEmail ? 'Verify email to manage team access' : 'Verify authenticator to manage team access'}

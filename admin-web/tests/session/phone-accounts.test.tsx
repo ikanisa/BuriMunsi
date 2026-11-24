@@ -72,6 +72,47 @@ describe('dedicated phone accounts', () => {
     expect(hasScopedAdminAuthority(parseSessionUser({...cookie(staff), adminIdentity: body.adminIdentity}, Date.now()))).toBe(false);
   });
 
+  it.each([true, false])('shows Profile access in Team only with the existing route authority (%s)', async allowed => {
+    const body = cookie();
+    if (!allowed) body.user.permissions = body.user.permissions.filter(permission => permission !== 'receivers.manage');
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      const path = String(input);
+      if (path === '/api/admin/auth/session') return Response.json(body);
+      if (path === '/api/admin/momo/native-setup') return Response.json(scopes);
+      return Response.json({error: 'unavailable'}, {status: 503});
+    });
+    open('/admin/admin-users', fetchImpl);
+    await screen.findByRole('heading', {name: 'Team access'});
+    if (allowed) expect(screen.getByRole('link', {name: 'Profile access'})).toHaveAttribute('href', '#/admin/burimunsi');
+    else expect(screen.queryByRole('link', {name: 'Profile access'})).toBeNull();
+    fireEvent.click(screen.getByRole('button', {name: /^Account:/}));
+    const advanced = screen.queryByText('Advanced', {selector: 'summary'});
+    if (advanced) fireEvent.click(advanced);
+    expect(screen.getAllByRole('link', {name: 'Team'})).toHaveLength(1);
+    if (!allowed) {
+      expect(screen.queryByRole('link', {name: 'Profile access'})).toBeNull();
+      expect(fetchImpl.mock.calls.some(([path]) => String(path).includes('/native-setup'))).toBe(false);
+      return;
+    }
+    expect(screen.getAllByRole('link', {name: 'Profile access'})).toHaveLength(1);
+    fireEvent.click(screen.getByRole('link', {name: 'Profile access'}));
+    await screen.findByRole('heading', {name: 'BuriMunsi access'});
+    expect(screen.getByRole('button', {name: 'Back to team'})).toBeVisible();
+  });
+
+  it('keeps the permitted profile fallback when Team is unavailable', async () => {
+    const body = cookie();
+    body.user.permissions = body.user.permissions.filter(permission => permission !== 'admin_users.read');
+    const fetchImpl = vi.fn<typeof fetch>(async input => Response.json(String(input) === '/api/admin/auth/session' ? body : scopes));
+    open('/admin/burimunsi', fetchImpl);
+    await screen.findByRole('heading', {name: 'BuriMunsi access'});
+    expect(screen.queryByRole('button', {name: 'Back to team'})).toBeNull();
+    fireEvent.click(screen.getByRole('button', {name: /^Account:/}));
+    fireEvent.click(screen.getByText('Advanced', {selector: 'summary'}));
+    expect(screen.queryByRole('link', {name: 'Team'})).toBeNull();
+    expect(screen.getByRole('link', {name: 'Profile access'})).toHaveAttribute('href', '#/admin/burimunsi');
+  });
+
   it('opens the scoped Admin group and SMS controls with the current session after the old five-minute deadline', async () => {
     const groups = ['group-one', 'another-group'];
     const fetchImpl = vi.fn<typeof fetch>(async input => {

@@ -3,11 +3,12 @@ import {Navigate, Outlet, useLocation, useNavigate, type RouteObject} from 'reac
 import {LoginPage} from '../session/LoginPage';
 import {publicSessionPaths, safeAdminReturnLocation} from '../session/returnLocation';
 import {useSession, type SessionContextValue} from '../session/SessionProvider';
-import {AdminShell, type AdminAccountDestination, type AdminNavItem} from '../layout/AdminShell';
+import {AdminShell, type AdminNavItem} from '../layout/AdminShell';
 import {AdminUpdateNotice} from '../layout/AdminUpdateNotice';
 import {Button, ErrorState, LoadingState} from '../ui';
 import {InteractionSuspendedContext} from '../ui/useFocusScope';
 import {canOpenAdminPath} from './route-access';
+import type {AccountNavigationItem} from './navigation';
 
 export function SessionProblem({session}: {session: Pick<SessionContextValue, 'logoutUnconfirmed' | 'mfaRecoveryPending' | 'error' | 'signOut' | 'refresh'>}) {
   return <><ErrorState title={session.logoutUnconfirmed ? 'Sign-out not confirmed' : 'Workspace unavailable'}
@@ -26,7 +27,7 @@ export class ScreenBoundary extends Component<{children: ReactNode}, {failed: bo
   }
 }
 
-export function ProtectedShell({navigation, accountNavigation = []}: {navigation: readonly AdminNavItem[]; accountNavigation?: readonly AdminAccountDestination[]}) {
+export function ProtectedShell({navigation, accountNavigation = []}: {navigation: readonly AdminNavItem[]; accountNavigation?: readonly AccountNavigationItem[]}) {
   const session = useSession(), location = useLocation();
   if (session.status === 'loading') return <LoadingState label="Checking account access" />;
   if (session.status === 'error') return <SessionProblem session={session} />;
@@ -36,7 +37,8 @@ export function ProtectedShell({navigation, accountNavigation = []}: {navigation
   }
   const user = session.user;
   const permitted = navigation.filter(item => canOpenAdminPath(item.path, user));
-  const permittedAccount = accountNavigation.filter(item => canOpenAdminPath(item.path, user));
+  const permittedAccount = accountNavigation.filter(item => canOpenAdminPath(item.path, user) &&
+    (!item.contextualPath || !canOpenAdminPath(item.contextualPath, user)));
   const rechecking = session.status === 'rechecking';
   const signOut = () => {void session.signOut().catch(() => undefined);};
   return <>

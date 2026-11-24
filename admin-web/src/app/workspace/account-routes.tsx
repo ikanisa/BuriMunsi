@@ -1,11 +1,12 @@
 import {lazy} from 'react';
-import {useNavigate} from 'react-router';
+import {Link, useNavigate} from 'react-router';
 import {AccountSecurityPage} from '../../session/AccountSecurityPage';
 import {useSession, type AdminUser} from '../../session/SessionProvider';
 import {verificationPath} from '../../session/returnLocation';
 import {UnavailablePage} from '../UnavailablePage';
 import {useAccess, useSensitiveAccess} from './access';
 import {requiresPermissions, workspaceRoute} from './routePolicy';
+import {canOpenOperatorProfile, canOpenTeam} from './team-access';
 
 const LicensesPage = lazy(() => import('../../features/licenses/LicensesPage').then(m => ({default: m.LicensesPage})));
 const TeamPage = lazy(() => import('../../session/TeamPage').then(m => ({default: m.TeamPage})));
@@ -27,8 +28,10 @@ function AccountSecurityRoute() {
 
 function TeamRoute() {
   const session = useSession(), go = useNavigate();
-  if (session.verificationMode === 'passcode' && session.user?.accountId) return <PhoneTeamPage />;
-  return <TeamPage allowRecovery={session.verificationMode !== 'passcode'} showVerification={session.verificationMode !== 'passcode'}
+  const profileAccess = session.user && canOpenOperatorProfile(session.user) ? <Link
+    to="/admin/burimunsi" className="admin-btn admin-btn--secondary">Profile access</Link> : null;
+  if (session.verificationMode === 'passcode' && session.user?.accountId) return <PhoneTeamPage profileAccess={profileAccess} />;
+  return <TeamPage profileAccess={profileAccess} allowRecovery={session.verificationMode !== 'passcode'} showVerification={session.verificationMode !== 'passcode'}
     onVerify={() => go(verificationPath(session.verificationMode, '/admin/admin-users'))} />;
 }
 
@@ -42,6 +45,6 @@ function PrivacyRoute() {
 export const accountRoutes = [
   workspaceRoute('security', <AccountSecurityRoute />, canOpenOwnSecurity),
   workspaceRoute('licenses', <LicensesPage />, () => true),
-  workspaceRoute('admin-users', <TeamRoute />, user => (!user.accountId || user.role === 'admin') && user.permissions.includes('admin_users.read')),
+  workspaceRoute('admin-users', <TeamRoute />, canOpenTeam),
   workspaceRoute('privacy-requests', <PrivacyRoute />, requiresPermissions('privacy.review')),
 ];

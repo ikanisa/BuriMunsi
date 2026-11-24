@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useRef, useState, type FormEvent} from 'react';
+import {useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode} from 'react';
 import {AdminRequestError} from '../api/client';
 import {useOperationRead} from '../features/operations/useOperationRead';
 import {Button, Card, EmptyState, ErrorState, Field, LoadingState, PageHeader, StatusBadge} from '../ui';
@@ -7,7 +7,7 @@ import {confirmTeamReceipt, parsePhoneTeam, phoneTeamRoles, prepareTeamAccount,
   type PhoneTeam, type PhoneTeamMember, type PhoneTeamRole, type TeamChange} from './phoneTeam';
 import {useSession} from './SessionProvider';
 
-export function PhoneTeamPage() {
+export function PhoneTeamPage({profileAccess}: {profileAccess?: ReactNode} = {}) {
   const session = useSession(), actor = session.user;
   const accountId = actor?.accountId, phone = actor?.phone, role = actor?.role;
   const manageGrant = actor?.permissions.includes('admin_users.manage') === true;
@@ -19,7 +19,7 @@ export function PhoneTeamPage() {
   }, [request, accountId, phone, role, manageGrant]);
   const {result, retry} = useOperationRead(JSON.stringify([epoch, accountId]), canRead, load);
   const team = result?.status === 'success' ? result.value : null;
-  return <><PageHeader title="Team access" subtitle="Manage who can sign in to BuriMunsi." actions={<Button onClick={retry} icon="refresh">Refresh</Button>} />
+  return <><PageHeader title="Team access" subtitle="Manage who can sign in to BuriMunsi." actions={<>{canRead && profileAccess}<Button onClick={retry} icon="refresh">Refresh</Button></>} />
     {!canRead ? <ErrorState title="Access unavailable" message="Your account cannot view team access." /> :
       !result ? <LoadingState label="Loading team access" /> :
       result.status === 'error' ? <ErrorState title="Team access unavailable" message={result.message} onRetry={retry} /> :

@@ -1,7 +1,8 @@
 import {lazy, type ReactElement} from 'react';
-import {useLocation, useNavigate, useParams} from 'react-router';
+import {Link, useLocation, useNavigate, useParams} from 'react-router';
 import {Button} from '../../ui';
 import {CORE_PERMISSIONS, type CoreArea} from '../../features/core/types';
+import {useSession} from '../../session/SessionProvider';
 import {UnavailablePage} from '../UnavailablePage';
 import {useAccess, useCurrentAuthority, useSensitiveAccess} from './access';
 import {LegacyJournalCreateRoute, LegacyJournalEditRoute, TransactionEvidenceRoute} from './financial-routes';
@@ -116,8 +117,22 @@ const canManageLedgers = requiresPermissions('ledger.manage');
 const canEditLegacyPayee = requiresAdminRole('receivers.manage', 'collections.read', 'overview.read');
 const canCreateLegacyTransaction = requiresAdminRole('payments.manage', 'collections.read', 'receivers.read', 'overview.read');
 
+const canReadCoreArea = (area: CoreArea) => requiresPermissions(CORE_PERMISSIONS[area]);
+const canReadReceivingAccounts = canReadCoreArea('payees');
+
+function GroupListRoute() {
+  const {user} = useSession();
+  return <>
+    {user && canReadReceivingAccounts(user) && <nav className="group-workspace-links" aria-label="Group workspace">
+      <Link to="/admin/payees" className="admin-btn admin-btn--secondary">Receiving accounts</Link>
+    </nav>}
+    <CoreListRoute area="groups" />
+  </>;
+}
+
 const records: Record<CoreArea, RecordRoutes> = {
   groups: {
+    list: <GroupListRoute />,
     create: {element: <GroupCreateRoute />, access: requiresPermissions('collections.create')},
     edit: {element: <GroupEditRoute />, access: requiresPermissions('collections.manage')},
   },
@@ -148,7 +163,7 @@ const records: Record<CoreArea, RecordRoutes> = {
 
 export const recordRoutes = (Object.keys(CORE_PERMISSIONS) as CoreArea[]).flatMap(area => {
   const {list, create, edit} = records[area];
-  const canRead = requiresPermissions(CORE_PERMISSIONS[area]);
+  const canRead = area === 'payees' ? canReadReceivingAccounts : canReadCoreArea(area);
   return [
     workspaceRoute(area, list ?? <CoreListRoute area={area} />, canRead),
     workspaceRoute(area + '/new', create.element, user => canRead(user) && create.access(user)),
