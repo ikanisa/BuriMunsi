@@ -1,5 +1,5 @@
 import {createAdminReadDatabase} from './admin_read_database.js';
-import {activePhoneOperator,adminEmailArguments,adminPasscodeProof,requireFreshAdminEmail} from './admin_email_policy.js';
+import {activePhoneOperator,adminEmailArguments,adminPasscodeProof,phoneOperatorRoleAllowsPermission,requireFreshAdminEmail} from './admin_email_policy.js';
 import {ApiError,digest} from './core.js';
 import {validateAdminOrigin,adminCookieToken,LEGACY_ADMIN_OWNER_EMAIL} from '../admin-security.js';
 export {validateAdminOrigin};
@@ -41,6 +41,8 @@ function accountAssertion(env,account,permission,{owner=false,mfa=false,fresh=fa
  if(adminPasscodeProof(account)){
   const operator=activePhoneOperator(account);
   if(!operator || operator.collectionId!==env.BURIMUNSI_COLLECTION_ID)expired();
+  if(!phoneOperatorRoleAllowsPermission(operator.operatorRole,permission))
+   fail(403,'permission_required','This action is unavailable for this account.');
   // Read the same fenced, cookie-bound database projection as sign-in. The
   // effective permission list accounts for both native role and personal grants.
   const predicate=`EXISTS(
@@ -115,8 +117,11 @@ export function accountDatabase(env,account,permission=null,options={}){
 
 export function accountReadDatabase(env,account,permission){
  const db=env.DB;
- if(typeof db.adminReadBatch!=='function')return accountDatabase(env,account,permission);
- const {predicate,args}=accountAssertion(env,account,permission,{},true);
+ const permissions=Array.isArray(permission)?permission:[permission];
+ if(permissions.length===0)throw new TypeError('An Admin read requires at least one account check.');
+ if(typeof db.adminReadBatch!=='function')return permissions.reduce((scoped,capability)=>accountDatabase(scoped,account,capability),env);
+ const checks=permissions.map(capability=>accountAssertion(env,account,capability,{},true));
+ const predicate=checks.map(check=>check.predicate).join(' AND '),args=checks.flatMap(check=>check.args);
  const context=adminSessionContext(db,account),check=db.prepare(`SELECT ${predicate} AS allowed`).bind(...args);
  return {...env,ADMIN_ACCOUNT:account,DB:createAdminReadDatabase(db,context,check,error=>{
   if(error?.code==='40001')fail(403,'admin_access_changed','Your account access changed. Sign in again.');

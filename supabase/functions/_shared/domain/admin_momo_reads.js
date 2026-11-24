@@ -3,6 +3,28 @@ import {receiptFactColumns,receiptFactJoins,withReceiptFacts} from './receipt_fa
 
 const fail=(s,c,m)=>{throw new ApiError(s,c,m);};
 const exactMomoMeasurement=value=>{if(!Number.isSafeInteger(value))fail(503,'invalid_source_data','Transaction measurements are unavailable.');return value;};
+const paymentFields=[
+ 'id','provider','provider_transaction_id','original_transaction_id','payer_name','payer_last3','member_name','group_name',
+ 'payment_id','beneficiary_member_id','group_id','native_group_id','credited_amount_minor','version','created_at','transaction_at',
+ 'has_conflict','receiving_account_id','recipient_name','public_code','amount_minor','currency','currency_scale','fee_minor',
+ 'wallet_balance_after_minor','status','event_kind','allocation_state','provider_confirmation','settlement_status',
+ 'payment_version','intent_id','transaction_timezone','transaction_time_source','receiving_context',
+];
+const paymentFactFields=[
+ 'contract_version','kind','transaction_id','provider','provider_transaction_id','event_kind','payer_name','payer_last3',
+ 'amount_minor','currency','currency_scale','fee_minor','wallet_balance_after_minor','transaction_at','normalization_timezone',
+ 'transaction_time_source','public_reference','provider_confirmation','settlement_status',
+];
+const pickFields=(value,fields)=>Object.fromEntries(fields.filter(key=>Object.hasOwn(value,key)).map(key=>[key,value[key]]));
+
+function transactionView(row,sourceHistory){
+ const transaction=withReceiptFacts(row);
+ if(sourceHistory)return transaction;
+ // Preserve the validated financial projection without publishing underlying
+ // receipt IDs, digests, parser evidence, or raw payer evidence.
+ return {...pickFields(transaction,paymentFields),source_history_available:false,
+  receipt_facts:pickFields(transaction.receipt_facts,paymentFactFields)};
+}
 
 export async function momoReceivingAccounts(env, url) {
  queryMomoFilters(url, []);
@@ -91,24 +113,25 @@ export async function momoTransactionCandidates(env, transactionId, {search, lim
  return {rows:matches.results, total:exactMomoMeasurement(count.results[0].n), limit, offset};
 }
 
-export async function momoTransactionDetail(scoped, env, url, rawId) {
+export async function momoTransactionDetail(scoped, env, url, rawId,{sourceHistory=true}={}) {
  queryMomoFilters(url, []);
  const transactionId = uuid(rawId);
  const db = scoped.DB;
- const [transactions, sources, attempts, reviews] = await db.batch([
-  db.prepare(momoTransactionSql(env,{byId:true})).bind(transactionId),
+ const statements=[db.prepare(momoTransactionSql(env,{byId:true})).bind(transactionId)];
+ if(sourceHistory)statements.push(
   db.prepare(`SELECT s.raw_sms_id,s.relation,s.created_at,a.id AS attempt_id,a.outcome,a.model_id,a.schema_version,a.parser_version,a.validation_json
    FROM momo_transaction_sources s JOIN momo_parse_attempts a ON a.id=s.parse_attempt_id
    WHERE s.transaction_id=? ORDER BY a.created_at DESC LIMIT 100`).bind(transactionId),
   db.prepare("SELECT DISTINCT parse_attempt_id FROM momo_transaction_sources WHERE transaction_id=? AND relation='conflict' ORDER BY parse_attempt_id LIMIT 101").bind(transactionId),
   db.prepare("SELECT actor_user_id,details_json,created_at FROM audit_log WHERE action='momo.conflict.reviewed' AND entity_id=? ORDER BY id DESC LIMIT 25").bind(transactionId),
- ]);
+ );
+ const [transactions,sources,attempts,reviews]=await db.batch(statements);
  if (!transactions.results.length) fail(404, 'not_found', 'This transaction is unavailable.');
  return {
-  transaction:withReceiptFacts(transactions.results[0]),
-  sources:sources.results,
-  conflicting_attempt_ids:attempts.results.map((row) => row.parse_attempt_id),
-  conflict_reviews:reviews.results,
+  transaction:transactionView(transactions.results[0],sourceHistory),
+  sources:sources?.results??[],
+  conflicting_attempt_ids:attempts?.results.map(row=>row.parse_attempt_id)??[],
+  conflict_reviews:reviews?.results??[],
  };
 }
 
@@ -149,8 +172,8 @@ export function momoTransactionPredicates(url,f){const where=[],args=[];
  }
  for(const [key,op]of [['from','>='],['to','<=']])if(url.searchParams.has(key)){const value=url.searchParams.get(key);if(!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{3})?Z$/.test(value)||!Number.isFinite(Date.parse(value)))fail(400,'invalid_filter','Use an exact UTC transaction date.');where.push(`transaction_at ${op} ?`);args.push(value);}
  return {where:where.length?' WHERE '+where.join(' AND '):'',args};}
-export function momoTransactionPageRow(row,accountScope){
- const facts=withReceiptFacts(row);
+export function momoTransactionPageRow(row,accountScope,{sourceHistory=true}={}){
+ const facts=transactionView(row,sourceHistory);
  if(accountScope!==null&&row.receiving_account_id!==accountScope)
   fail(503,'invalid_source_data','Transaction account scope changed. Refresh to check again.');
  // Only the explicit new filter discloses this scoped identifier. The legacy
@@ -158,7 +181,7 @@ export function momoTransactionPageRow(row,accountScope){
  return accountScope!==null&&row.native_group_id!=null
   ?{...facts,capture_scope_account_id:row.receiving_account_id}:facts;
 }
-export async function momoTransactionPage(env,url){
+export async function momoTransactionPage(env,url,{sourceHistory=true}={}){
  const f=queryMomoFilters(url,['limit','offset','search','status','receiving_account_id','account_scope_id','group_id','from','to']);
  const filter=momoTransactionPredicates(url,f);
  // Share the guarded receipt projection and filtered rows between totals and
@@ -178,7 +201,7 @@ export async function momoTransactionPage(env,url){
  const summary=result.results[0];
  const scope=url.searchParams.has('account_scope_id')?uuid(url.searchParams.get('account_scope_id'),'account_scope_id'):null;
  const rows=result.results.flatMap(({page_total,page_received,page_credited,page_unallocated,...row})=>
-  row.id===null?[]:[momoTransactionPageRow(row,scope)]);
+  row.id===null?[]:[momoTransactionPageRow(row,scope,{sourceHistory})]);
  return {contract_version:1,rows,total:exactMomoMeasurement(summary.page_total),limit:f.limit,offset:f.offset,
   totals:{received_minor:exactMomoMeasurement(summary.page_received),credited_minor:exactMomoMeasurement(summary.page_credited),
    unallocated_minor:exactMomoMeasurement(summary.page_unallocated)},currency:'RWF',date_basis:'provider_transaction_time',as_of:now()};

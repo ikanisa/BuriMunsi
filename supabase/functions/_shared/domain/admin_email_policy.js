@@ -62,6 +62,9 @@ export function activePhoneOperator(subject){
     !Number.isSafeInteger(proof.expiresAt) || proof.expiresAt<=epoch())return null;
  return proof;
 }
+export function phoneOperatorRoleAllowsPermission(role,permission){
+ return role==='admin'||!permission?.startsWith('sms.');
+}
 export function adminEmailVerifiedAt(subject){const proof=current(subject);return proof?.passcode?null:proof?.at??null;}
 export function adminEmailProofId(subject){return current(subject)?.proofId??null;}
 export function hasFreshAdminEmail(subject,maxAge=300){
