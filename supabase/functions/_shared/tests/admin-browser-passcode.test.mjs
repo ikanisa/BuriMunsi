@@ -182,6 +182,23 @@ test('Staff receive their own limited account and can optionally change their pa
   assert.equal((await handleAdmin(request('phone-passcode',{body:{phone:staffPhone,pin:change.newPin}}),env)).status,200);
 });
 
+function useCanonicalPayments(env,role) {
+  let reads=0;
+  const unsupported=()=>assert.fail('a read attempted a mutation');
+  const sourceId=crypto.randomUUID();
+  Object.assign(env.DB,{transaction:unsupported,context:unsupported,readContext:unsupported,applicationWork:{assert:async()=>{}},
+    withLockedReadSnapshot:fn=>fn({unsafe:async(sql,args)=>{
+      if(sql.startsWith('SELECT set_config')){assert.deepEqual(args,[group]);return [];}
+      if(sql.includes('burimunsi_browser_pin_session')){
+        assert.equal(args[0],group);assert.match(sql,/private\.assert_actor\('payments.read'/);return [{role,can_allocate:false}];
+      }
+      assert.match(sql,/FROM burimunsi\.payments/);assert.equal(args[0],group);reads++;
+      return [{id:'synthetic-payment',collection_id:group,direction:'incoming',amount_rwf:100,version:1,total:1,
+        source_time:'synthetic original time',allocation_state:'unallocated',sms_source_id:sourceId}];
+    }})});
+  return {sourceId,reads:()=>reads};
+}
+
 test('an existing Staff cookie keeps Payments and loses inherited SMS access on all direct receipt routes', async () => {
   const {env,setGrants} = await fixture({role:'staff'});
   const login = await handleAdmin(request('phone-passcode',{body:{phone:staffPhone,pin}}),env);
@@ -195,30 +212,26 @@ test('an existing Staff cookie keeps Payments and loses inherited SMS access on 
   const actor=await adminCanonicalActor(sessionRequest,env,account,'payments.read');
   assert.deepEqual([...actor.permissions],['overview.read','payments.read']);
 
-  let paymentsReads=0;
-  env.DB.adminReadBatch=async (_context,authority,statements)=>{
-    assert.ok(authority.values.includes('payments.read'));
-    assert.ok(!authority.values.includes('sms.read'));
-    assert.match(statements[0].sql,/momo_transactions/);
-    paymentsReads++;
-    return [{results:[{id:null,page_total:0,page_received:0,page_credited:0,page_unallocated:0}]}];
-  };
+  const canonical=useCanonicalPayments(env,'staff');
+  env.DB.adminReadBatch=async()=>assert.fail('Staff reached a protected SMS read');
   assert.throws(()=>accountReadDatabase(env,account,'sms.read'),{status:403,code:'permission_required'});
   env.BURIMUNSI_ADMIN_SMS_OBSERVATIONS_ENABLED='true';
   const receiptId=crypto.randomUUID();
   for(const path of ['sms/receipts',`sms/receipts/capture/${receiptId}`,`sms/receipts/capture/${receiptId}/content`,
-    'gateway/receipts',`gateway/receipts/${receiptId}`,'momo/sources',`momo/sources/${receiptId}/content`,
     'momo/observations',`momo/observations/${receiptId}/content`]){
     const response=await handleAdmin(routeRequest(path,{cookie}),env);
     assert.equal(response.status,403,path);
   }
   const live=await handleAdmin(routeRequest('sync/live',{cookie,body:{},csrf:csrfToken}),env);
   assert.equal(live.status,403);
-  assert.equal(paymentsReads,0);
-  const payments=await handleAdmin(routeRequest('momo/transactions',{cookie}),env);
+  for(const path of ['gateway/receipts',`gateway/receipts/${receiptId}`,'momo/sources',`momo/sources/${receiptId}/content`,'momo/transactions']){
+    assert.equal((await handleAdmin(routeRequest(path,{cookie}),env)).status,404,path);
+  }
+  assert.equal(canonical.reads(),0);
+  const payments=await handleAdmin(routeRequest('burimunsi/payments',{cookie}),env);
   assert.equal(payments.status,200);
-  assert.deepEqual((await payments.json()).rows,[]);
-  assert.equal(paymentsReads,1);
+  const {items}=await payments.json();assert.equal(items.length,1);assert.equal(items[0].sourceId,null);
+  assert.equal(canonical.reads(),1);
 });
 
 test('a phone Admin needs both current grants to read full payment source history',async()=>{
@@ -227,6 +240,7 @@ test('a phone Admin needs both current grants to read full payment source histor
   assert.equal(login.status,200);
   const cookie=login.headers.get('set-cookie').split(';')[0];
   setGrants(['payments.read','sms.read']);
+  const canonical=useCanonicalPayments(env,'admin');
   const checks=[];
   env.DB.adminReadBatch=async (_context,authority,statements)=>{
     checks.push(authority.values.filter(value=>['payments.read','sms.read'].includes(value)));
@@ -238,14 +252,15 @@ test('a phone Admin needs both current grants to read full payment source histor
   const receipts=await handleAdmin(routeRequest('sms/receipts',{cookie}),env);
   assert.equal(receipts.status,200);
   assert.deepEqual((await receipts.json()).rows,[]);
-  const payments=await handleAdmin(routeRequest('momo/transactions',{cookie}),env);
+  const payments=await handleAdmin(routeRequest('burimunsi/payments',{cookie}),env);
   assert.equal(payments.status,200);
   const gateway=await handleAdmin(routeRequest('gateway/receipts',{cookie}),env);
-  assert.equal(gateway.status,200);
-  assert.deepEqual(await gateway.json(),{rows:[],total:0});
-  const paymentsAndSms=['payments.read','payments.read','payments.read','sms.read','sms.read','sms.read'];
-  assert.deepEqual(checks,[['sms.read','sms.read','sms.read'],paymentsAndSms,paymentsAndSms]);
+  assert.equal(gateway.status,404);
+  assert.equal((await payments.json()).items[0].sourceId,canonical.sourceId);
+  assert.deepEqual(checks,[['sms.read','sms.read','sms.read']]);
   setGrants(['payments.read']);
   assert.equal((await handleAdmin(routeRequest('sms/receipts',{cookie}),env)).status,403);
-  assert.equal((await handleAdmin(routeRequest('gateway/receipts',{cookie}),env)).status,403);
+  const redacted=await handleAdmin(routeRequest('burimunsi/payments',{cookie}),env);
+  assert.equal(redacted.status,200);assert.equal((await redacted.json()).items[0].sourceId,null);
+  assert.equal((await handleAdmin(routeRequest('gateway/receipts',{cookie}),env)).status,404);
 });

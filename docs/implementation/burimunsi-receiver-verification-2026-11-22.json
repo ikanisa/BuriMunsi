@@ -547,5 +547,72 @@
         "last_sender_heartbeat": "2026-11-24T09:35:30.615Z"
       }
     }
+  },
+  "canonicalAllocationVerification": {
+    "observedAt": "2026-11-24 10:45:56.107094+00",
+    "release": 93,
+    "sourceCommit": "9624378a0e96da817fbdb67dad8edb3fb15d99d7",
+    "coreSourceSha256": "c0c40942324aa5108903ece53f56bfec734219a0859136007aeb245b2f7c84f6",
+    "migrations": 121,
+    "allocationSmsEnabled": true,
+    "originalPostingSmsEnabled": false,
+    "forwardMigrationSHA256": [
+      "b980f74893ddb62ce40dc27f253686bfeb758d2a371a5e34399142db9f3e6d7b",
+      "ceee1e639a693155a6f6cedabaa85f6af90534b1723f39de70f0aa5c63b50c5f"
+    ],
+    "signedOrdinaryJobs": [
+      {
+        "slot": "2026-11-24 10:46:04+00",
+        "observed_at": "2026-11-24 10:46:08.232083+00",
+        "http_status": 200,
+        "response_sha256": "17f4bf236a765d1848e642a6a0652ea6f52a4cbf64a38656e502599bc701b65c",
+        "completed_at": "2026-11-24 10:46:07.904391+00",
+        "native_provider_calls": 0
+      },
+      {
+        "slot": "2026-11-24 10:45:04+00",
+        "observed_at": "2026-11-24 10:45:08.402083+00",
+        "http_status": 200,
+        "response_sha256": "fc691e1c4c110d95e8568b13b4046c54162887fa2084fcebd74ccc6183a1c7ab",
+        "completed_at": "2026-11-24 10:45:07.798112+00",
+        "native_provider_calls": 0
+      }
+    ],
+    "cronSchedule": "1 second",
+    "cronTicksInTenSeconds": 10,
+    "readySenders": 1,
+    "payments": {
+      "payments": 34,
+      "allocationNotices": {},
+      "storedRawEnvelopes": 0,
+      "durableHistoricalHolds": 8,
+      "byDirectionAndAllocation": {
+        "incoming_allocated": 11,
+        "incoming_unallocated": 11,
+        "outgoing_unallocated": 12
+      },
+      "carrierConfirmedPayments": 0,
+      "repeatedTransferReferences": 0,
+      "noticesWithoutIncomingAllocation": 0,
+      "paymentsWithMultipleGatewayMessages": 0
+    },
+    "latestHandsetCheck": {
+      "state": "checking",
+      "checkedAt": "2026-11-24T10:41:21.939+00:00",
+      "pageItems": 10,
+      "headsMatch": null,
+      "missingCount": null,
+      "pendingCount": null,
+      "candidateCount": null,
+      "pageSourcesMatched": 10,
+      "pageHistoricalHolds": 8
+    },
+    "legacyCreditsMatchedOnce": 11,
+    "sourceReceipts": {
+      "providerRelease": "b76128c71b040c2fc38e2c7f87503279146b62b8cee2df9f9e8883eaee57a19a",
+      "settingsReadback": "f9ada143fe512cea53b2761daf2460d33262f38ae1f1e13bea5d04beee0c9fd5",
+      "scheduler": "3a1bb5c62b0ac859f14ee252bd7d3b951b6151af91d445675a4ba00078bb85a1",
+      "paymentChain": "cd4988932761e3dbea9f363b04567ec2e3d0998bd8427c5f163fc769e1d478e6"
+    }
   }
 }

@@ -4,11 +4,26 @@ Initial review on 22 November 2026. Operational verification continued on 24 Nov
 
 Project `rrlduytparvsjfmegalh` · BuriMunsi Android, Admin and Supabase production
 
-This dated review records the former workflow as observed on releases through 87.
-The [current Payments workflow](../../README.md#account-roles-sms-access-and-payments)
-defines the active operator and SMS processing steps.
+## Current production verification on 24 November
 
-## Production check on 24 November
+Release **93** is serving commit `9624378`. Supabase retained all 119 earlier
+migration hashes and installed the two forward migrations for allocation
+receipts and phone session renewal. The three deployed core functions matched
+the compiled binaries. The independent SMS gateway archive also matched. The
+incoming-allocation SMS setting is active. [Allocation migration](../../supabase/migrations/20261124114502_burimunsi_allocation_receipts.sql) · [Scoped phone renewal](../../supabase/migrations/20261124114503_burimunsi_phone_renewal_lock.sql)
+
+| Check | Production result |
+| --- | --- |
+| Scheduler | The signed probe and two ordinary jobs returned HTTP 200. Supabase confirmed the ordinary jobs at 12:45:08 and 12:46:08 Kigali. Cron recorded ten checks in ten seconds. New eligible work signals the worker on commit. The idle heartbeat runs about once a minute. |
+| Payments | The 12:45:56 Kigali read counted 22 incoming and 12 outgoing payments with zero repeated transfer references. Eleven incoming payments had already been allocated. All 11 historical credit records matched their original payment once. |
+| Payer SMS | The first allocation of an incoming payment creates one obligation for its original payer. A retry reuses the original operation. One sender was ready. At this read there were zero new allocation obligations and zero carrier-confirmed deliveries. The PostgreSQL 17 test covered two simultaneous allocations, a lost acknowledgement and a multipart carrier callback. |
+| Android inbox | The most recent ten-item phone page matched ten stored sources. Eight first-enrollment sources still had historical review holds. The database had no positive completeness result for this phone at this check. |
+
+The current product records each transfer in Payments and lets an operator
+allocate it to a member. The earlier observations below describe production at
+the date of each check. [Current Payments workflow](../../README.md#account-roles-sms-access-and-payments) · [Verification results](./burimunsi-receiver-verification-2026-11-22.json)
+
+## Earlier checks on 24 November
 
 Release 87 opened at 11:32:22 Kigali on commit `faed25b`. All **116 migrations** matched the release record. The hosted database body and grants for the new empty-queue selector matched source. It uses the existing serialized worker whenever a receipt might need parsing or posting. The original 115 migrations, 78 protected settings and SMS gateway archive passed independent verification. The signed probe returned HTTP 200. Ordinary jobs returned signed HTTP 200 at **11:33:45 and 11:34:55**. At 11:35:40 Cron recorded nine checks in ten seconds, with zero queued native jobs and one ready sender. The two earlier jobs with uncertain outcomes retained their original dispositions. [Migration](../../supabase/migrations/20261124091329_burimunsi_idle_native_jobs.sql) · [Verification results](./burimunsi-receiver-verification-2026-11-22.json)
 
