@@ -23,6 +23,7 @@ internal val LocalBuriRouteColors=staticCompositionLocalOf{BuriRouteColors(Color
 object BuriTheme {
     val Canvas=Color(0xFF000000);val Surface=Color(0xFF161618);val Raised=Color(0xFF232326)
     val Text=Color(0xFFF4F4F4)
+    val NavigationSurface=Color(0xEE1F1F23);val NavigationSelected=Color(0xFF363639);val NavigationMuted=Color(0xFFA1A1A3)
     val Input:Color @Composable get()=if(LocalBuriRoute.current==Route.LOGIN)Color.Black.copy(alpha=.23f)else Color(0xFF28282B)
     val Muted:Color @Composable get()=LocalBuriRouteColors.current.muted
     val Blue:Color @Composable get()=LocalBuriRouteColors.current.blue

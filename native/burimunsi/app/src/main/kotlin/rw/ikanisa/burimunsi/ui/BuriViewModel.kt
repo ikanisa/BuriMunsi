@@ -606,7 +606,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             try{
                 val home=restored.home
                 if(home!=null&&SnapshotFreshness.reusable(restored.homeSavedAt,clock())){
-                    sessionBootstrap.withCurrent(grant){ showHome(home,false,restored.homeSavedAt,restored.reusedHome) }
+                    sessionBootstrap.withCurrent(grant){ showHome(home,false,restored.homeSavedAt) }
                     receiverStatus.startReceiver()
                 }else loadSessionRecords(grant)
             }catch(e:ApiFailure){
@@ -898,7 +898,6 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         if(state.sheet!=null||state.pending||state.offline||state.readbackRequired||state.draftDirty||
             !SnapshotFreshness.recent(state.savedAt,clock()))return false
         return when(state.route){
-            Route.HOME->state.home!=null
             Route.PAYMENTS->state.payments!=null
             Route.MEMBERS->state.members!=null
             else->false
@@ -995,7 +994,8 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             resetPanelInputs()
             state=(fresh?:remembered?.value?.let{rememberedContext(it)}?:UiState(operator=state.operator,route=route,routeId=id)).copy(operator=state.operator,
                 busy=true,pending=state.pending,failure=DisplayFailure.NONE,sheet=null,sheetId=null,error=null,selectedMember=null,draft=emptyMap(),draftDirty=false,discardRequested=false)
-            if(fresh==null){
+            if(route==Route.HOME)refreshNow()
+            else if(fresh==null){
                 val mayReuse=!old.offline&&!old.readbackRequired&&!old.pending
                 val useRecent=mayReuse&&(route==Route.PAYMENTS||
                     (route==Route.MEMBERS&&io{journalKnowledge()==JournalKnowledge.CLEAR}))
@@ -1026,7 +1026,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                 sheet=null,sheetId=null,raw=null,staff=null,audit=null,history=null,
                 selectedStaff=null,selectedMember=null,draft=emptyMap(),draftDirty=false,discardRequested=false)
             resetPanelInputs()
-            if(!fresh)refreshNow() else if(restoredSheet==null)refreshRememberedReceiverStatus()
+            if(!fresh||state.route==Route.HOME)refreshNow() else if(restoredSheet==null)refreshRememberedReceiverStatus()
             if(restoredSheet!=null){
                 // Evidence is re-read, never redisplayed from a remembered privileged panel.
                 state=state.copy(sheet=restoredSheet,sheetId=restoredId)
@@ -1147,15 +1147,20 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         receiverStatus.refreshHealth()
     }
 
-    private fun showHome(home:Home,cached:Boolean,savedAt:Long?,reused:Boolean=false) {
+    private fun showHome(home:Home,cached:Boolean,savedAt:Long?) {
         state=state.copy(home=home,gateway=null,offline=cached,savedAt=savedAt,readbackRequired=state.readbackRequired&&cached)
-        if(!cached&&!reused&&savedAt!=null)pendingFreshDraw=Route.HOME to home
+        if(!cached&&savedAt!=null)pendingFreshDraw=Route.HOME to home
         if(state.sheet==null)refreshHomeGatewayStatus()
     }
 
     private suspend fun refreshNow(allowRecentCache:Boolean=false){
         when(state.route){
-            Route.HOME->{val h=io{repo().home()};showHome(h,repo().lastReadFromCache,repo().lastReadSavedAt)}
+            Route.HOME->{
+                val records=repo()
+                val owner=state.operator?:throw ApiFailure("session_unavailable",401)
+                val snapshot=io{records.homeSnapshot()}
+                records.withCurrentProfile(owner){_,_->showHome(snapshot.value,snapshot.offline,snapshot.savedAt)}
+            }
             Route.PAYMENTS -> {
                 val request = pagedRestoration.request()
                 val listing = queryFor(ListingTarget.PAYMENTS)

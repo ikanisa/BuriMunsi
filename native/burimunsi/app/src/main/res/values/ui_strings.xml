@@ -609,4 +609,10 @@
     <string name="ui_open_burimunsi_admin">Open BuriMunsi Admin</string>
     <string name="ui_receive_payment_sms">Receive payment SMS</string>
     <string name="ui_install_burimunsi_admin">Install the signed BuriMunsi Admin app provided by your organization, then sign in with your mobile number and passcode.</string>
+    <string name="ui_account_tab">Account</string>
+    <string name="ui_account_operations">Operations</string>
+    <string name="ui_home_recorded_group_balance">Recorded group balance</string>
+    <string name="ui_home_balance_as_of">As of %1$s</string>
+    <string name="ui_home_recent_transactions">Recent transactions</string>
+    <string name="ui_home_no_recent_transactions">No recent transactions</string>
 </resources>

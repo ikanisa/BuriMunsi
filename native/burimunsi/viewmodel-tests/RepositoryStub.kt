@@ -23,7 +23,7 @@ object Fixture{
  var anchoredMembers:((String,ListingQuery)->Page<String>)?=null
  var restoredHome:Home?=null
  var restoredHomeSavedAt:Long?=null
- var restoredHomeReused=false
+ var homePaymentId="tx-1"
  var recentPaymentPage:Pair<Page<Payment>,Long>?=null
  @Volatile var managedCollection:String?="synthetic-group"
  val repositoryCollections=java.util.concurrent.CopyOnWriteArrayList<String>()
@@ -119,10 +119,10 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDis
  fun restore():Operator?{Fixture.restoreReads++;Fixture.restoreEntered?.countDown();
   check(Fixture.restoreBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false)
   Fixture.restoreFailure?.let{throw it};return operator}
- internal class Restoration(val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null,val reusedHome:Boolean=false)
- internal fun restoreForHome(allowRecentCache:Boolean,wantsHome:(String?,String)->Boolean):Restoration?=restore()?.let{
+ internal class Restoration(val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null)
+ internal fun restoreForHome(wantsHome:(String?,String)->Boolean):Restoration?=restore()?.let{
   val include=wantsHome(it.id,collectionId)
-  Restoration(it,Fixture.restoredHome.takeIf{include},Fixture.restoredHomeSavedAt.takeIf{include},include&&Fixture.restoredHomeReused)
+  Restoration(it,Fixture.restoredHome.takeIf{include},Fixture.restoredHomeSavedAt.takeIf{include})
  }
  internal fun refreshHome()=Restoration(refreshSession())
  internal fun loginForHome(phone:String,pin:String)=Restoration(login(phone,pin))
@@ -159,7 +159,8 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDis
  }
  fun pending():Any?{if(Fixture.journalFailure)throw ContractFailure("operation_store_unavailable");return if(Fixture.pendingFlag)"original-operation" else null}
  fun reconcilePending():JSONObject{Fixture.reconciles++;Fixture.recoveryFailure?.let{throw it};if(Fixture.resolveOnCheck&&Fixture.outcomeState in setOf("committed","cancelled"))Fixture.pendingFlag=false;return JSONObject().put("state",Fixture.outcomeState).put("financialState",Fixture.financialState)}
- fun home():Home{Fixture.readFailure?.let{throw it};provenance();Fixture.homeReads++;check(Fixture.homeBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false);return Home(10000,10000,1,1,listOf(Fixture.payment()),"now")}
+ fun home():Home{Fixture.readFailure?.let{throw it};provenance();Fixture.homeReads++;check(Fixture.homeBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false);return Home(10000,10000,1,1,listOf(Fixture.payment(Fixture.homePaymentId)),"now")}
+ internal fun homeSnapshot()=RecordSnapshot(home(),lastReadFromCache,lastReadSavedAt)
  internal class QuietHome(val payload:JSONObject)
  internal fun readQuietHome():QuietHome {
   Fixture.readFailure?.let{throw it}
@@ -168,7 +169,7 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDis
   return QuietHome(JSONObject())
  }
  internal fun acceptQuietHome(owner:Operator,result:QuietHome):Pair<Home,Long>? =
-  withCurrentProfile(owner){_,_->Home(10000,10000,1,1,listOf(Fixture.payment()),"now") to
+  withCurrentProfile(owner){_,_->Home(10000,10000,1,1,listOf(Fixture.payment(Fixture.homePaymentId)),"now") to
       (Fixture.recordSavedAt?:System.currentTimeMillis())}
  internal fun recentPayments(listing:ListingQuery):Pair<Page<Payment>,Long>?=Fixture.recentPaymentPage
  internal fun recentMembers(listing:ListingQuery):Pair<Page<Member>,Long>?=null

@@ -21,6 +21,8 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.cool.mobile.R
@@ -28,12 +30,11 @@ import rw.ikanisa.burimunsi.core.*
 import rw.ikanisa.burimunsi.core.export.ExportFormat
 
 // Keep the scrollable route viewport above the floating navigation bar.
-private val BottomNavHeight=68.dp
 private val BottomNavBottomGap=18.dp
-private val BottomNavClearance=BottomNavHeight+BottomNavBottomGap
+private val BottomNavVerticalPadding=6.dp
 
 private fun iconFor(route:Route)=when(route){Route.HOME->R.drawable.ic_home;Route.PAYMENTS->R.drawable.ic_activity;Route.MEMBERS->R.drawable.ic_members;else->R.drawable.ic_settings}
-private fun titleFor(route:Route)=when(route){Route.LOGIN->"Sign in";Route.HOME->"Home";Route.PAYMENTS->"Payments";Route.PAYMENT->"M-Money";Route.MEMBERS->"Members";Route.MEMBER->"Member";Route.SMS->"SMS";Route.SETTINGS->"Settings"}
+private fun titleFor(route:Route)=when(route){Route.LOGIN->"Sign in";Route.HOME->"Home";Route.PAYMENTS->"Payments";Route.PAYMENT->"M-Money";Route.MEMBERS->"Members";Route.MEMBER->"Member";Route.SMS->"SMS";Route.SETTINGS->"Account"}
 
 @Composable
 fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExport:(ExportFormat)->Unit,onPhoneSettings:()->Unit,
@@ -70,6 +71,8 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
     LaunchedEffect(read,gate,model.canExportListing){if(!read||gate!=ScreenGate.OPEN||!model.canExportListing)exportVisible=false}
     val focus=LocalFocusManager.current
     val imeVisible=WindowInsets.ime.getBottom(LocalDensity.current)>0
+    val navItemHeight=if(LocalDensity.current.fontScale>=1.5f)72.dp else 54.dp
+    val navClearance=navItemHeight+BottomNavVerticalPadding*2+BottomNavBottomGap
     val canBack=read&&(s.route!=Route.HOME||s.sheet!=null)
     val back:()->Unit={if(imeVisible){keyboard?.hide();focus.clearFocus()}else if(canBack)model.back()}
     BackHandler(enabled=imeVisible||canBack,onBack=back)
@@ -109,7 +112,7 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
                         if(read)RoundAction(R.drawable.ic_sync,t("Check previous action"),model::retry,enabled=presentation.mayCheckOutcome,size=48)
                     }
                 }
-                Box(Modifier.weight(1f).fillMaxWidth().padding(bottom=if(read)BottomNavClearance else 0.dp).semantics{
+                Box(Modifier.weight(1f).fillMaxWidth().padding(bottom=if(read)navClearance else 0.dp).semantics{
                     stateDescription=t(if(requestedRoute!=null&&requestedRoute!=s.route)"Loading records"else PresentationState.label(presentation.state))
                 }){
                     if(gate!=ScreenGate.OPEN){
@@ -154,7 +157,7 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
                     }}}
                 }
         }
-        if(read)BottomNav(displayedRoute,model::navigate,model.navigationBlocked||gate!=ScreenGate.OPEN,
+        if(read)BottomNav(displayedRoute,model::navigate,model.navigationBlocked||gate!=ScreenGate.OPEN,navItemHeight,
             Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom=BottomNavBottomGap))
     }
     if(s.sheet!=null&&((gate==ScreenGate.OPEN&&presentation.showRecords)||
@@ -192,10 +195,12 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
                 else RoundAction(R.drawable.ic_history,t("Contribution history"),{m.openSheet(Sheet.HISTORY)},enabled,size=48,tonal=false)
             }
             else->{
-                if(s.route==Route.HOME)Brand()
-                else if(s.route==Route.SMS)RoundAction(R.drawable.ic_back,t("Back to Home"),{m.navigate(Route.HOME)},enabled,size=48,tonal=false)
-                else Spacer(Modifier.size(48.dp))
-                Spacer(Modifier.weight(1f))
+                when(s.route){
+                    Route.HOME->{Brand();Spacer(Modifier.weight(1f))}
+                    Route.SMS->{RoundAction(R.drawable.ic_back,t("Back to Home"),{m.navigate(Route.HOME)},enabled,size=48,tonal=false);Spacer(Modifier.weight(1f))}
+                    else->Text(t(titleFor(s.route)),Modifier.weight(1f).semantics{heading()},style=MaterialTheme.typography.headlineMedium)
+                }
+                if(s.route==Route.HOME&&s.operator!=null)RoundAction(R.drawable.ic_sync,t("Refresh"),m::refresh,enabled,size=48,tonal=false)
                 if(s.route==Route.MEMBERS&&m.allows(Capability.ENROLL))RoundAction(R.drawable.ic_plus,t("Add member"),{m.openSheet(Sheet.ENROLL)},enabled&&!s.offline,size=48)
                 if(s.route==Route.PAYMENTS)RoundAction(R.drawable.ic_filter,t("Payment filters"),{m.openSheet(Sheet.FILTERS)},enabled,size=48)
                 when(s.route){
@@ -207,14 +212,23 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
         }
     }
 }
-@Composable private fun BottomNav(current:Route,onNavigate:(Route,String?)->Unit,busy:Boolean,modifier:Modifier=Modifier){
+@Composable private fun BottomNav(current:Route,onNavigate:(Route,String?)->Unit,busy:Boolean,itemHeight:Dp,modifier:Modifier=Modifier){
+    val t=LocalUiText.current
     val active=when(current){Route.PAYMENT->Route.PAYMENTS;Route.MEMBER->Route.MEMBERS;Route.SMS->Route.HOME;else->current}
-    Row(modifier.fillMaxWidth().padding(horizontal=16.dp).heightIn(min=BottomNavHeight).background(Color(0xEE1F1F23),RoundedCornerShape(34.dp)).padding(6.dp),horizontalArrangement=Arrangement.spacedBy(4.dp)){
-        for(route in listOf(Route.HOME,Route.PAYMENTS,Route.MEMBERS,Route.SETTINGS)){
+    Row(modifier.widthIn(max=520.dp).fillMaxWidth().padding(horizontal=16.dp)
+        .background(BuriTheme.NavigationSurface,RoundedCornerShape(34.dp)).padding(BottomNavVerticalPadding),horizontalArrangement=Arrangement.spacedBy(4.dp)){
+        for(route in listOf(Route.HOME,Route.MEMBERS,Route.PAYMENTS,Route.SETTINGS)){
             val chosen=active==route
+            val label=t(titleFor(route))
+            val color=if(chosen)BuriTheme.Text else BuriTheme.NavigationMuted
             val action=focusAction("navigation:${route.name}"){onNavigate(route,null)}
-            IconButton(onClick=action.click,enabled=!busy,modifier=action.modifier.weight(1f).height(54.dp).background(if(chosen)Color(0xFF363639)else Color.Transparent,RoundedCornerShape(28.dp)).semantics{selected=chosen;role=SemanticRole.Tab}){
-                Glyph(iconFor(route),titleFor(route),if(chosen)BuriTheme.Text else Color(0xFFA1A1A3),27)
+            IconButton(onClick=action.click,enabled=!busy,modifier=action.modifier.weight(1f).height(itemHeight)
+                .background(if(chosen)BuriTheme.NavigationSelected else Color.Transparent,RoundedCornerShape(28.dp))
+                .semantics{selected=chosen;role=SemanticRole.Tab;contentDescription=label}){
+                Column(horizontalAlignment=Alignment.CenterHorizontally){
+                    Glyph(iconFor(route),null,color,24)
+                    Text(label,Modifier.clearAndSetSemantics{},fontSize=11.sp,lineHeight=14.sp,color=color,maxLines=1,overflow=TextOverflow.Ellipsis)
+                }
             }
         }
     }

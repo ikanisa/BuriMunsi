@@ -3050,6 +3050,36 @@
       "key": "ui_install_burimunsi_admin",
       "en": "Install the signed BuriMunsi Admin app provided by your organization, then sign in with your mobile number and passcode.",
       "rw": "Shyiramo porogaramu yemejwe ya BuriMunsi Admin wahawe n’ikigo cyawe, hanyuma winjire ukoresheje nimero ya telefoni n’umubare wawe w’ibanga."
+    },
+    {
+      "key": "ui_account_tab",
+      "en": "Account",
+      "rw": "Konti"
+    },
+    {
+      "key": "ui_account_operations",
+      "en": "Operations",
+      "rw": "Imikorere"
+    },
+    {
+      "key": "ui_home_recorded_group_balance",
+      "en": "Recorded group balance",
+      "rw": "Amafaranga y’itsinda yanditswe"
+    },
+    {
+      "key": "ui_home_balance_as_of",
+      "en": "As of %1$s",
+      "rw": "Kugeza ku %1$s"
+    },
+    {
+      "key": "ui_home_recent_transactions",
+      "en": "Recent transactions",
+      "rw": "Ibikorwa by’imari biheruka"
+    },
+    {
+      "key": "ui_home_no_recent_transactions",
+      "en": "No recent transactions",
+      "rw": "Nta bikorwa by’imari biheruka"
     }
   ]
 }

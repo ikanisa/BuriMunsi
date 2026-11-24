@@ -57,10 +57,9 @@ fun main()=runBlocking {
     println("PASS fresh bundled Home avoids a separate request and emits one draw marker for the actual records")
     bundled.viewModelScope.cancel()
 
-    Fixture.restoredHomeReused=true
     val recent=BuriViewModel(Application()){now}
     recent.onForeground();idle(recent)
-    check(Fixture.homeReads==bundledReads&&!recent.consumeFreshDraw(Route.HOME,checkNotNull(recent.state.home)))
+    check(Fixture.homeReads==bundledReads&&recent.consumeFreshDraw(Route.HOME,checkNotNull(recent.state.home)))
     Fixture.recentPaymentPage=Fixture.page(listOf(Fixture.payment("recent-payment"))) to now
     recent.navigate(Route.PAYMENTS);idle(recent)
     check(recent.state.payments?.items?.single()?.id=="recent-payment")
@@ -76,8 +75,7 @@ fun main()=runBlocking {
     check(!recent.consumeFreshDraw(Route.PAYMENTS,checkNotNull(recent.state.payments)))
     Fixture.cached=false
     recent.viewModelScope.cancel()
-    Fixture.restoredHomeReused=false
-    println("PASS recent and offline records emit no fresh draw marker, while live Payments emits once")
+    println("PASS live bundled Home and Payments emit one marker; retained and offline Payments emit none")
 
     Fixture.restoredHomeSavedAt=now-SnapshotFreshness.TTL_MS-1
     val staleBundle=BuriViewModel(Application()){now}

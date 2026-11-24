@@ -309,7 +309,7 @@ private suspend fun bundledHomeRestores() {
         check(model.state.operator?.id == scenario.owner && model.state.home?.balanceRwf == 250L)
         check(Transport.calls.count { it.path.endsWith("/session?include=home") } == 1)
         check(Transport.calls.none { it.path.endsWith("/home") || it.path.endsWith("/session") })
-        val saved = JSONObject(checkNotNull(NativeRecordCache(scenario.app).read("/home"))).getJSONObject("entries").getJSONObject("/home")
+        val saved = checkNotNull(NativeRecordCache(scenario.app).read("/home")).getJSONObject("entries").getJSONObject("/home")
         check(JSONObject(saved.getString("payload")).getLong("groupBalanceRwf") == 250L)
     } finally {
         stop(model)
@@ -408,22 +408,30 @@ private suspend fun loginHomeRequests(include: Boolean, oldServer: Boolean = fal
     }
 }
 
-private suspend fun recentHomeKeepsAgeAndAuthorization() {
+private suspend fun recentHomeStillReadsAuthorizedData() {
     val scenario = SessionScenario()
     val repo = scenario.repository()
     scenario.signIn(repo)
     repo.home()
-    val originalTime = checkNotNull(repo.lastReadSavedAt)
+    val normal = Transport.handler
+    Transport.sessionHome = { request ->
+        val session = normal(request.copy(path = "/v1/burimunsi/session"))
+        val home = normal(request.copy(path = "/v1/burimunsi/home"))
+        JSONObject(session).put("home", JSONObject(home).put("groupBalanceRwf", 50L)).toString()
+    }
     Transport.calls.clear()
     val model = BuriViewModel(scenario.app)
     try {
         idle(model)
-        check(model.state.home != null && model.state.savedAt == originalTime && !model.state.offline)
-        check(Transport.calls.map { it.path } == listOf("/v1/burimunsi/session"))
+        check(model.state.home?.balanceRwf == 50L && !model.state.offline)
+        check(Transport.calls.map { it.path } == listOf("/v1/burimunsi/session?include=home"))
         model.onFixtureMain { refresh() }
         idle(model)
-        check(Transport.calls.count { it.path == "/v1/burimunsi/home" } == 1)
-    } finally { stop(model) }
+        check(model.state.home?.balanceRwf == 0L && Transport.calls.count { it.path == "/v1/burimunsi/home" } == 1)
+    } finally {
+        stop(model)
+        Transport.sessionHome = null
+    }
 
     val flag = if (BuildConfig.IS_GATEWAY) Capability.GATEWAY else Capability.ALLOCATE
     scenario.capabilities = listOf(Capability.READ,flag)
@@ -432,19 +440,36 @@ private suspend fun recentHomeKeepsAgeAndAuthorization() {
     try {
         idle(changed)
         check(changed.state.home != null && changed.allows(flag))
-        check(Transport.calls.any { it.path == "/v1/burimunsi/home" })
+        check(Transport.calls.map { it.path } ==
+            listOf("/v1/burimunsi/session?include=home", "/v1/burimunsi/session", "/v1/burimunsi/home"))
     } finally { stop(changed) }
+}
 
-    val cache=JSONObject(SecureStore.records.getValue("records"))
-    cache.getJSONObject("entries").getJSONObject("/home")
-        .put("savedAt",System.currentTimeMillis()-SnapshotFreshness.ONLINE_REUSE_MS-1)
-    SecureStore.records["records"]=cache.toString()
-    Transport.calls.clear()
-    val expired = BuriViewModel(scenario.app)
-    try {
-        idle(expired)
-        check(expired.state.home != null && Transport.calls.any { it.path == "/v1/burimunsi/session?include=home" })
-    } finally { stop(expired) }
+private fun appUpgradeDiscardsOnlyDisplaySnapshots() {
+    val scenario = SessionScenario()
+    val repo = scenario.repository()
+    scenario.signIn(repo)
+    repo.home()
+    val current = JSONObject(SecureStore.records.getValue("records"))
+    check(current.optInt("appVersionCode") == BuildConfig.VERSION_CODE)
+    SecureStore.records["pending-command"] = "original command"
+    SecureStore.records["receiver-retirement"] = "original receiver obligation"
+    SecureStore.records["ui-navigation"] = "original navigation"
+    val otherStores = SecureStore.records.filterKeys { it != "records" }
+    val server = Transport.handler
+    Transport.handler = { throw ApiFailure("connection_unavailable", 0) }
+    for (version in listOf(BuildConfig.VERSION_CODE - 1, null)) {
+        val predecessor = JSONObject(current.toString())
+        if (version == null) predecessor.remove("appVersionCode") else predecessor.put("appVersionCode", version)
+        SecureStore.records["records"] = predecessor.toString()
+        check(runCatching { repo.home() }.exceptionOrNull()?.let { it is ApiFailure && it.code == "connection_unavailable" } == true)
+        check(SecureStore.records == otherStores)
+    }
+    Transport.handler = server
+    repo.home()
+    check(JSONObject(SecureStore.records.getValue("records")).optInt("appVersionCode") == BuildConfig.VERSION_CODE)
+    Transport.handler = { throw ApiFailure("connection_unavailable", 0) }
+    check(repo.homeSnapshot().offline)
 }
 
 private fun firstPageCacheRequiresExactQuery() {
@@ -498,7 +523,7 @@ private fun olderQueuedHomeCannotOverwriteNewerLiveHome() {
         balance=20L
         check(second.home().balanceRwf==20L && checkNotNull(second.lastReadSavedAt)>older)
     } finally { release.countDown() }
-    val stored=JSONObject(checkNotNull(cache.read("/home"))).getJSONObject("entries").getJSONObject("/home")
+    val stored=checkNotNull(cache.read("/home")).getJSONObject("entries").getJSONObject("/home")
     check(JSONObject(stored.getString("payload")).getLong("groupBalanceRwf")==20L)
 }
 
@@ -511,15 +536,15 @@ private fun invalidationRejectsOldRecordWrites() {
     first.update(expired){error("The invalidated record cannot write")}
     check(first.read("/home")==null)
     val live=first.revision()
-    first.update(live){"fresh scoped synthetic snapshot"}
-    check(second.read("/home")=="fresh scoped synthetic snapshot")
+    first.update(live){JSONObject().put("payload", "fresh scoped synthetic snapshot")}
+    check(second.read("/home")?.getString("payload")=="fresh scoped synthetic snapshot")
     val entered=CountDownLatch(1);val release=CountDownLatch(1);val finished=CountDownLatch(1)
     val staleWrite=java.util.concurrent.atomic.AtomicBoolean(false)
     first.defer("/home",live) {
         try {
             entered.countDown()
             check(release.await(5,TimeUnit.SECONDS))
-            first.update(live) { staleWrite.set(true); "obsolete" }
+            first.update(live) { staleWrite.set(true); JSONObject() }
         } finally { finished.countDown() }
     }
     try {
@@ -550,7 +575,8 @@ fun main() = runBlocking {
         "a committed sign-in without its optional Home fetches only Home" to suspend { loginHomeRequests(include=false) },
         "an older server can reject the optional sign-in query before authentication" to suspend { loginHomeRequests(include=false,oldServer=true) },
         "an uncertain bundled sign-in never repeats a credential request" to suspend { loginHomeRequests(include=false,uncertain=true) },
-        "recent Home cache keeps its age and expires on access changes or timeout" to suspend { recentHomeKeepsAgeAndAuthorization() },
+        "recent Home cache cannot substitute for a current authorized server read" to suspend { recentHomeStillReadsAuthorizedData() },
+        "an APK upgrade deletes incompatible display snapshots and preserves protected work" to suspend { appUpgradeDiscardsOnlyDisplaySnapshots() },
         "recent first pages require an exact query and explicit reads still reach the server" to suspend { firstPageCacheRequiresExactQuery() },
         "an older queued Home cannot overwrite a newer live Home in another repository" to suspend { olderQueuedHomeCannotOverwriteNewerLiveHome() },
         "a cache invalidation fences a late write from another repository instance" to suspend { invalidationRejectsOldRecordWrites() },

@@ -15,7 +15,7 @@ internal class NativeSessionBootstrap(
     class Grant(val operator: Operator, val group: String, val revision: Long,
         val home: Home? = null, val homeSavedAt: Long? = null)
     class Restored(val grant: Grant?, val navigation: RestorationDecision, val home: Home? = null,
-        val homeSavedAt: Long? = null, val reusedHome: Boolean = false, val recovery: Recovery? = null)
+        val homeSavedAt: Long? = null, val recovery: Recovery? = null)
 
     sealed interface Recovery {
         data object PasscodePending : Recovery
@@ -66,7 +66,7 @@ internal class NativeSessionBootstrap(
         var savedScope: Pair<String?, String>? = null
         var bookmark: NavigationCheckpoint? = null
         val combined = try {
-            repository.restoreForHome(allowRecentCache = readJournal() == JournalKnowledge.CLEAR) { owner, group ->
+            repository.restoreForHome { owner, group ->
                 savedScope = owner to group
                 bookmark = readCheckpoint()
                 bookmark?.let { it.route == Route.HOME || owner == null || !it.validFor(owner, group, clock()) } ?: true
@@ -81,9 +81,9 @@ internal class NativeSessionBootstrap(
         if (grant != null && savedScope == null) bookmark = readCheckpoint()
         val navigation = ScreenRestoration.decide(bookmark, grant?.operator, grant?.group.orEmpty(),
             clock(), receiver, readJournal())
-        val acceptHome = navigation.route == Route.HOME && (combined?.reusedHome != true || !navigation.pending)
+        val acceptHome = navigation.route == Route.HOME
         return Restored(grant?.takeIf { navigation.route != Route.LOGIN }, navigation,
-            combined?.home?.takeIf { acceptHome }, combined?.homeSavedAt, combined?.reusedHome == true)
+            combined?.home?.takeIf { acceptHome }, combined?.homeSavedAt)
     }
 
     fun login(phone: String, pin: String): Grant =

@@ -246,11 +246,11 @@ class NativeUiContractTest {
     }
     @Test fun bottomNavigationCoversEverySignedInRouteAndMapsDetailSelection(){
         val c=FakeController(Route.HOME);show(c)
-        val expected=mapOf(Route.HOME to "Home",Route.PAYMENTS to "Payments",Route.PAYMENT to "Payments",Route.MEMBERS to "Members",Route.MEMBER to "Members",Route.SMS to "Home",Route.SETTINGS to "Settings")
+        val expected=mapOf(Route.HOME to "Home",Route.PAYMENTS to "Payments",Route.PAYMENT to "Payments",Route.MEMBERS to "Members",Route.MEMBER to "Members",Route.SMS to "Home",Route.SETTINGS to "Account")
         for((route,selected)in expected){
             if(route==Route.SMS&&!BuildConfig.IS_GATEWAY)continue
             ui.runOnIdle{c.state=c.state.copy(route=route)}
-            for(label in listOf("Home","Payments","Members","Settings"))ui.onNodeWithContentDescription(label).assertExists()
+            for(label in listOf("Home","Members","Payments","Account"))ui.onNodeWithContentDescription(label).assertExists()
             ui.onNodeWithContentDescription(selected).assertIsSelected().assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.Role,androidx.compose.ui.semantics.Role.Tab))
         }
     }
@@ -281,10 +281,30 @@ class NativeUiContractTest {
         list.performScrollToNode(hasContentDescription("All payments"))
         val allPayments=ui.onNodeWithContentDescription("All payments").performScrollTo().assertIsDisplayed()
         val actionBounds=allPayments.fetchSemanticsNode().boundsInRoot
-        val navBounds=ui.onNodeWithContentDescription("Settings").fetchSemanticsNode().boundsInRoot
-        check(actionBounds.bottom<=navBounds.top){"All payments is covered by Settings: action=$actionBounds; settings=$navBounds"}
+        val navBounds=ui.onNodeWithContentDescription("Account").fetchSemanticsNode().boundsInRoot
+        check(actionBounds.bottom<=navBounds.top){"All payments is covered by navigation: action=$actionBounds; nav=$navBounds"}
         allPayments.performClick()
         ui.runOnIdle{check(c.state.route==Route.PAYMENTS){"All payments opened ${c.state.route}"}}
+    }
+    @Test fun homeOpensActualRecentTransactionsAndDoesNotClaimPendingCredit(){
+        val c=FakeController(Route.HOME,Role.STAFF)
+        val home=c.state.home!!
+        val original=c.state.payment!!
+        val pending=original.copy(id="pending-1",payerNameRaw="EXAMPLE PENDING",state="recorded",outcome="pending")
+        val outgoing=original.copy(id="outgoing-1",payerNameRaw="EXAMPLE OUTGOING",state="recorded",direction="outgoing")
+        c.state=c.state.copy(home=home.copy(recent=emptyList()))
+        show(c)
+        val list=ui.onNode(hasScrollToIndexAction())
+        list.performScrollToNode(hasText("No recent transactions"))
+        ui.onNodeWithText("No recent transactions").assertIsDisplayed()
+        ui.runOnIdle{c.state=c.state.copy(home=home.copy(recent=listOf(pending,outgoing)))}
+        list.performScrollToNode(hasContentDescription("EXAMPLE PENDING"))
+        val pendingRow=ui.onNode(hasContentDescription("EXAMPLE PENDING") and hasClickAction())
+        pendingRow.assert(hasText("Pending")).assert(!hasText("Credited"))
+        list.performScrollToNode(hasContentDescription("EXAMPLE OUTGOING"))
+        val outgoingRow=ui.onNode(hasContentDescription("EXAMPLE OUTGOING") and hasClickAction())
+        outgoingRow.assert(hasText("Outgoing")).performClick()
+        ui.runOnIdle{check(c.state.route==Route.PAYMENT&&c.lastNavigationId==outgoing.id)}
     }
     @Test fun searchIsLiveAndHasNoAddedSubmitControl(){
         val c=FakeController(Route.PAYMENTS);show(c);ui.onNodeWithText("Search").performTextInput("Example")
@@ -378,7 +398,7 @@ class NativeUiContractTest {
         ui.runOnIdle{c.state=c.state.copy(gateway=healthy.copy(problem="permission_required"))};assertHomeHasNoGatewayControl()
         ui.runOnIdle{c.state=c.state.copy(gateway=null)};assertHomeHasNoGatewayControl()
         ui.runOnIdle{c.state=c.state.copy(gateway=healthy)}
-        ui.onNodeWithContentDescription("Settings").performClick()
+        ui.onNodeWithContentDescription("Account").performClick()
         if(BuildConfig.IS_GATEWAY){
             button("Gateway").performScrollTo().assertIsEnabled().performClick()
             ui.runOnIdle{check(c.state.sheet==Sheet.GATEWAY)}
@@ -387,7 +407,7 @@ class NativeUiContractTest {
         // A stale authorized receiver snapshot must not expose SMS controls to staff.
         ui.runOnIdle{c.state=c.state.copy(route=Route.HOME,operator=c.operator.copy(role=Role.STAFF,capabilities=setOf(Capability.READ.key)),gateway=healthy)}
         assertHomeHasNoGatewayControl();assertReceiverControlsAbsent(c)
-        ui.onNodeWithContentDescription("Settings").performClick();assertReceiverControlsAbsent(c)
+        ui.onNodeWithContentDescription("Account").performClick();assertReceiverControlsAbsent(c)
     }
     @Test fun gatewayObservationsCanSyncAndResumeButCannotPauseWithoutPairing(){
         val c=FakeController(Route.HOME);c.state=c.state.copy(gateway=GatewayStatus(true,true,null,0,null,null,null,null,observationMode=true),sheet=if(BuildConfig.IS_GATEWAY)Sheet.GATEWAY else null);show(c)
@@ -475,7 +495,7 @@ class NativeUiContractTest {
             ui.runOnIdle{check(requests==1&&settings==0);c.smsAccessGranted=true}
             row.assertIsEnabled().assert(hasText("Granted")).performClick()
             ui.runOnIdle{check(requests==1&&settings==1);c.state=c.state.copy(operator=c.operator.copy(role=Role.STAFF))}
-            row.assertIsNotEnabled().assert(hasText("Unavailable"))
+            row.assertDoesNotExist()
         }else{
             val target = InstrumentationRegistry.getInstrumentation().targetContext
             var opened: android.content.Intent? = null
@@ -494,8 +514,7 @@ class NativeUiContractTest {
                 check(opened?.data == null && opened?.extras == null)
             }
             ui.runOnIdle{c.state=c.state.copy(operator=c.operator.copy(role=Role.STAFF))}
-            ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("SMS permission") and hasClickAction())
-            row.assertIsNotEnabled().assert(hasText("Unavailable"))
+            row.assertDoesNotExist()
             ui.onNodeWithText("Open BuriMunsi Admin").assertDoesNotExist()
             ui.runOnIdle{check(requests==0&&settings==0)}
         }

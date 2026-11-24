@@ -25,12 +25,21 @@ fun main()=runBlocking {
     idle();m.onForeground();idle()
     ck("initial foreground revalidates session",Fixture.sessionReads==1&&m.screenGate==ScreenGate.OPEN)
     val recentHomeReads=Fixture.homeReads
-    val recentHomeAt=m.state.savedAt
     val beforeRecentResume=Fixture.sessionReads
+    now+=1;Fixture.recordSavedAt=now;Fixture.homePaymentId="latest-after-resume"
     m.onBackground();m.onForeground();idle()
-    ck("a known recent Home opens after server revalidation without rereading records or resetting age",
-        Fixture.sessionReads==beforeRecentResume+1&&Fixture.homeReads==recentHomeReads&&
-            m.state.savedAt==recentHomeAt&&m.screenGate==ScreenGate.OPEN)
+    ck("a recently viewed Home publishes the latest authorized server transactions on resume",
+        Fixture.sessionReads==beforeRecentResume+1&&Fixture.homeReads==recentHomeReads+1&&
+            m.state.savedAt==now&&m.state.home?.recent?.single()?.id=="latest-after-resume"&&m.screenGate==ScreenGate.OPEN)
+    m.navigate(Route.PAYMENTS);idle()
+    Fixture.homePaymentId="latest-on-back";m.back();idle()
+    ck("Back to Home reloads transactions instead of settling on navigation memory",
+        Fixture.homeReads==recentHomeReads+2&&m.state.home?.recent?.single()?.id=="latest-on-back")
+    m.navigate(Route.PAYMENTS);idle()
+    Fixture.homePaymentId="latest-on-home-tab";m.navigate(Route.HOME);idle()
+    ck("the Home tab reloads transactions even with a reusable snapshot",
+        Fixture.homeReads==recentHomeReads+3&&m.state.home?.recent?.single()?.id=="latest-on-home-tab")
+    Fixture.homePaymentId="tx-1"
     val beforeHint=Fixture.homeReads;val beforeHintSessions=Fixture.sessionReads;val mutations=Fixture.mutations
     m.onRecordsChanged();idle()
     ck("a local records event fetches the visible Home immediately using its existing session",

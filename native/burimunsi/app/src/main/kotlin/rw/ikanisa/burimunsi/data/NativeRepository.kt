@@ -50,20 +50,17 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
 
     fun restore(): Operator? = sessions.restore()?.operator
 
-    internal class Restoration(val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null,
-        val reusedHome:Boolean=false)
+    internal class Restoration(val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null)
 
-    internal fun restoreForHome(allowRecentCache:Boolean,wantsHome:(String?,String)->Boolean):Restoration? {
+    internal fun restoreForHome(wantsHome:(String?,String)->Boolean):Restoration? {
         val revision=cacheStore.revision()
-        val restored=sessions.restore(includeHome=true,canReuseHome={allowRecentCache&&records.hasRecentHome(it)},
-            wantsHome=wantsHome)?:return null
+        val restored=sessions.restore(includeHome=true,wantsHome=wantsHome)?:return null
         return withHome(restored,revision)
     }
 
     private fun withHome(verified:NativeSessions.ProfileRead,revision:Long):Restoration {
         val snapshot=verified.home?.let{records.acceptRestoredHome(verified.operator,it,revision)}
-            ?:if(verified.useRecentHome)records.recentHome(verified.operator)else null
-        return Restoration(verified.operator,snapshot?.first,snapshot?.second,verified.useRecentHome)
+        return Restoration(verified.operator,snapshot?.first,snapshot?.second)
     }
 
     internal fun refreshHome():Restoration {
@@ -96,7 +93,8 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
     fun recoverReceiverRetirement(): JSONObject? = receiverPairing.recoverReceiverRetirement()
     fun pairGateway(code: String, replace: Boolean): JSONObject = receiverPairing.pairGateway(code, replace)
 
-    fun home(): Home = records.home()
+    fun home(): Home = homeSnapshot().value
+    internal fun homeSnapshot(): RecordSnapshot<Home> = records.home()
 
     /** A quiet Home read can finish after the screen has left. No cache or
      * shared read provenance is written until the controller accepts it. */

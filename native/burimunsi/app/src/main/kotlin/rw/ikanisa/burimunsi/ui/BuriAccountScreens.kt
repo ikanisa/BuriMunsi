@@ -24,7 +24,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.*
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.cool.mobile.BuildConfig
@@ -34,58 +33,72 @@ import rw.ikanisa.burimunsi.core.*
 import rw.ikanisa.burimunsi.core.Role
 
 @Composable internal fun SettingRow(icon:Int,title:String,subtitle:String?=null,enabled:Boolean=true,click:()->Unit){
-    val action=focusAction("setting:$icon",click)
-    Row(action.modifier.fillMaxWidth().heightIn(min=58.dp).clickable(enabled=enabled,role=SemanticRole.Button,onClick=action.click).semantics(mergeDescendants=true){}.padding(vertical=16.dp),verticalAlignment=Alignment.CenterVertically){
-        Box(Modifier.size(42.dp).background(BuriTheme.Tone,CircleShape),contentAlignment=Alignment.Center){Glyph(icon,null,if(enabled)BuriTheme.Text else BuriTheme.Muted,23)};Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)){Text(title,fontSize=19.sp,maxLines=2,overflow=TextOverflow.Ellipsis,lineHeight=27.sp);if(subtitle!=null){Spacer(Modifier.height(5.dp));Text(subtitle,fontSize=14.sp,color=BuriTheme.Muted,lineHeight=22.sp)}}
+    val action=focusAction("setting:$title",click)
+    Row(action.modifier.fillMaxWidth().heightIn(min=58.dp).clickable(enabled=enabled,role=SemanticRole.Button,onClick=action.click).semantics(mergeDescendants=true){}.padding(vertical=12.dp),verticalAlignment=Alignment.CenterVertically){
+        Box(Modifier.size(38.dp).background(BuriTheme.Tone,CircleShape),contentAlignment=Alignment.Center){Glyph(icon,null,if(enabled)BuriTheme.Text else BuriTheme.Muted,22)};Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)){Text(title,style=MaterialTheme.typography.titleSmall);if(subtitle!=null){Spacer(Modifier.height(2.dp));Text(subtitle,style=MaterialTheme.typography.bodySmall,color=BuriTheme.Muted)}}
         Glyph(R.drawable.ic_arrow,null,BuriTheme.Muted,18)
     }
 }
+@Composable private fun AccountGroup(content:@Composable ()->Unit){
+    Column(Modifier.fillMaxWidth().background(BuriTheme.Group,RoundedCornerShape(20.dp)).padding(horizontal=14.dp),content={content()})
+}
 @Composable internal fun SettingsScreen(s:UiState,m:BuriController,onPermissions:()->Unit,onPhoneSettings:()->Unit,onNotifications:()->Unit,onBatteryOptimization:()->Unit){
     val t=LocalUiText.current
-    LazyColumn(Modifier.fillMaxSize(),state=routeList(s,m),contentPadding=PaddingValues(20.dp,4.dp,20.dp,26.dp)){
-        item{OverviewTitle(t("Settings"))}
-        item{Row(Modifier.fillMaxWidth().clickable(enabled=!s.busy){m.openSheet(Sheet.PROFILE)}.padding(vertical=20.dp),verticalAlignment=Alignment.CenterVertically){
-            Avatar(s.operator?.name.orEmpty(),62,initialsSize=21);Spacer(Modifier.width(16.dp));Column(Modifier.weight(1f)){SingleLineName(s.operator?.name.orEmpty(),size=24);Text(t(if(s.operator?.role==Role.ADMIN)"Admin" else "Staff"),fontSize=14.sp,color=BuriTheme.Muted)};Glyph(R.drawable.ic_arrow,null,BuriTheme.Muted,18)
+    val admin=s.operator?.role==Role.ADMIN
+    val canManageStaff=m.allows(Capability.STAFF)
+    val canManageSms=BuildConfig.IS_GATEWAY&&admin
+    val canHandoffToReceiver=!BuildConfig.IS_GATEWAY&&admin
+    LazyColumn(Modifier.fillMaxSize(),state=routeList(s,m),contentPadding=PaddingValues(20.dp,4.dp,20.dp,22.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
+        item{Row(Modifier.fillMaxWidth().clickable(enabled=!s.busy,role=SemanticRole.Button){m.openSheet(Sheet.PROFILE)}.padding(vertical=10.dp),verticalAlignment=Alignment.CenterVertically){
+            Avatar(s.operator?.name.orEmpty(),52,initialsSize=18);Spacer(Modifier.width(12.dp));Column(Modifier.weight(1f)){SingleLineName(s.operator?.name.orEmpty(),size=22);Text(t(if(admin)"Admin" else "Staff"),style=MaterialTheme.typography.bodySmall,color=BuriTheme.Muted)};Glyph(R.drawable.ic_arrow,null,BuriTheme.Muted,18)
         }}
-        item{Column(Modifier.fillMaxWidth().background(BuriTheme.Group,RoundedCornerShape(24.dp)).padding(horizontal=16.dp,vertical=2.dp)){
-            if(m.allows(Capability.STAFF)){SettingRow(R.drawable.ic_members,t("Staff access"),s.staff?.totalCount?.let{t("%1\$d accounts",it)},enabled=!s.busy,click={m.openSheet(Sheet.STAFF)});HorizontalDivider(color=Color.White.copy(alpha=.08f))}
-            if(BuildConfig.IS_GATEWAY&&s.operator?.role==Role.ADMIN){SettingRow(R.drawable.ic_device,t("Gateway"),s.gateway?.let{t(GatewayHealth.describe(it).title)},enabled=!s.busy,click={m.openSheet(Sheet.GATEWAY)});HorizontalDivider(color=Color.White.copy(alpha=.08f))}
-            if(m.allows(Capability.STAFF)){SettingRow(R.drawable.ic_history,t("Activity"),enabled=!s.busy,click={m.openSheet(Sheet.AUDIT)});HorizontalDivider(color=Color.White.copy(alpha=.08f))}
-            val canManageSms=BuildConfig.IS_GATEWAY&&s.operator?.role==Role.ADMIN
-            if (!BuildConfig.IS_GATEWAY && s.operator?.role == Role.ADMIN) {
-                val context = LocalContext.current
-                if (AdminReceiverEntry.intent(context) != null) {
-                    SettingRow(R.drawable.ic_sms, t("Open BuriMunsi Admin"), t("Receive payment SMS"),
-                        enabled = !s.busy, click = { AdminReceiverEntry.open(context,s.operator?.role) })
-                } else {
-                    Column(Modifier.fillMaxWidth().padding(vertical=16.dp)) {
-                        Text(t("Receive payment SMS"), fontSize=19.sp, lineHeight=27.sp)
-                        Spacer(Modifier.height(5.dp))
-                        Text(t("Install the signed BuriMunsi Admin app provided by your organization, then sign in with your mobile number and passcode."),
-                            fontSize=14.sp, color=BuriTheme.Muted, lineHeight=22.sp)
-                    }
-                }
-            } else {
-                SettingRow(R.drawable.ic_sms,t("SMS permission"),t(if(!canManageSms)"Unavailable" else if(m.smsAccessGranted)"Granted" else "Required"),enabled=canManageSms&&!s.busy,click={if(m.smsAccessGranted)onPhoneSettings()else onPermissions()})
-            }
+        item{AccountGroup{
+            SettingRow(R.drawable.ic_lock,t("Change passcode"),enabled=!s.busy,click={m.openSheet(Sheet.PIN)})
             HorizontalDivider(color=Color.White.copy(alpha=.08f))
-            if(canManageSms){
-                SettingRow(R.drawable.ic_sms,t("Sync notifications"),t(when(m.notificationAccessGranted){true->"Allowed";false->"Required";else->"Checking access"}),enabled=!s.busy,click=onNotifications);HorizontalDivider(color=Color.White.copy(alpha=.08f))
-                SettingRow(R.drawable.ic_device,t("Battery optimization"),t(when(m.batteryExemptionGranted){true->"Unrestricted";false->"Optimized";else->"Checking access"}),enabled=!s.busy,click=onBatteryOptimization);HorizontalDivider(color=Color.White.copy(alpha=.08f))
-                val syncLabel=when(m.continuousSyncProblem){
-                    "authorization_required"->"Authorization required";"paused"->"Sync paused"
-                    "permission_required"->"SMS access required";"notification_permission_required"->"Notification access required"
-                    "connection_waiting"->"Waiting for connection";"start_not_allowed"->"Open the app to resume sync"
-                    "receiver_retired"->"Receiver retired";"sync_unconfirmed"->"Sync unconfirmed"
-                    else->if(m.continuousSyncRunning==true)"Sync is running" else "Starting sync"
-                }
-                SettingRow(R.drawable.ic_sync,t("Background sync"),t(syncLabel),enabled=!s.busy,click={m.openSheet(Sheet.GATEWAY)});HorizontalDivider(color=Color.White.copy(alpha=.08f))
-            }
-            SettingRow(R.drawable.ic_lock,t("Change passcode"),enabled=!s.busy,click={m.openSheet(Sheet.PIN)});HorizontalDivider(color=Color.White.copy(alpha=.08f))
             SettingRow(R.drawable.ic_help,t("Help"),enabled=!s.busy,click={m.openSheet(Sheet.HELP)})
         }}
-        item{Column(Modifier.fillMaxWidth().padding(top=35.dp,bottom=15.dp),horizontalAlignment=Alignment.CenterHorizontally){RoundAction(R.drawable.ic_out,t("Sign out"),m::logout,!s.busy,56);Spacer(Modifier.height(20.dp));Text("BuriMunsi · Collect",fontSize=12.sp,color=BuriTheme.Muted)}}
+        if(canManageStaff||canManageSms||canHandoffToReceiver)item{
+            Text(t("Operations"),Modifier.padding(top=4.dp,bottom=6.dp).semantics{heading()},style=MaterialTheme.typography.titleMedium)
+            AccountGroup{
+                if(canManageStaff){
+                    SettingRow(R.drawable.ic_members,t("Staff access"),s.staff?.totalCount?.let{t("%1\$d accounts",it)},enabled=!s.busy,click={m.openSheet(Sheet.STAFF)})
+                    HorizontalDivider(color=Color.White.copy(alpha=.08f))
+                    SettingRow(R.drawable.ic_history,t("Activity"),enabled=!s.busy,click={m.openSheet(Sheet.AUDIT)})
+                    if(canManageSms||canHandoffToReceiver)HorizontalDivider(color=Color.White.copy(alpha=.08f))
+                }
+                if (canHandoffToReceiver) {
+                    val context = LocalContext.current
+                    if (AdminReceiverEntry.intent(context) != null) {
+                        SettingRow(R.drawable.ic_sms, t("Open BuriMunsi Admin"), t("Receive payment SMS"),
+                            enabled = !s.busy, click = { AdminReceiverEntry.open(context,s.operator?.role) })
+                    } else {
+                        Column(Modifier.fillMaxWidth().padding(vertical=16.dp)) {
+                            Text(t("Receive payment SMS"), fontSize=19.sp, lineHeight=27.sp)
+                            Spacer(Modifier.height(5.dp))
+                            Text(t("Install the signed BuriMunsi Admin app provided by your organization, then sign in with your mobile number and passcode."),
+                                fontSize=14.sp, color=BuriTheme.Muted, lineHeight=22.sp)
+                        }
+                    }
+                }
+                if(canManageSms){
+                    SettingRow(R.drawable.ic_device,t("Gateway"),s.gateway?.let{t(GatewayHealth.describe(it).title)},enabled=!s.busy,click={m.openSheet(Sheet.GATEWAY)})
+                    HorizontalDivider(color=Color.White.copy(alpha=.08f))
+                    SettingRow(R.drawable.ic_sms,t("SMS permission"),t(if(m.smsAccessGranted)"Granted" else "Required"),enabled=!s.busy,click={if(m.smsAccessGranted)onPhoneSettings()else onPermissions()})
+                    HorizontalDivider(color=Color.White.copy(alpha=.08f))
+                    SettingRow(R.drawable.ic_sms,t("Sync notifications"),t(when(m.notificationAccessGranted){true->"Allowed";false->"Required";else->"Checking access"}),enabled=!s.busy,click=onNotifications);HorizontalDivider(color=Color.White.copy(alpha=.08f))
+                    SettingRow(R.drawable.ic_device,t("Battery optimization"),t(when(m.batteryExemptionGranted){true->"Unrestricted";false->"Optimized";else->"Checking access"}),enabled=!s.busy,click=onBatteryOptimization);HorizontalDivider(color=Color.White.copy(alpha=.08f))
+                    val syncLabel=when(m.continuousSyncProblem){
+                        "authorization_required"->"Authorization required";"paused"->"Sync paused"
+                        "permission_required"->"SMS access required";"notification_permission_required"->"Notification access required"
+                        "connection_waiting"->"Waiting for connection";"start_not_allowed"->"Open the app to resume sync"
+                        "receiver_retired"->"Receiver retired";"sync_unconfirmed"->"Sync unconfirmed"
+                        else->if(m.continuousSyncRunning==true)"Sync is running" else "Starting sync"
+                    }
+                    SettingRow(R.drawable.ic_sync,t("Background sync"),t(syncLabel),enabled=!s.busy,click={m.openSheet(Sheet.GATEWAY)})
+                }
+            }
+        }
     }
 }
 @Composable internal fun Entry(label:String,value:String,change:(String)->Unit,phone:Boolean=false,pin:Boolean=false,enabled:Boolean=true,

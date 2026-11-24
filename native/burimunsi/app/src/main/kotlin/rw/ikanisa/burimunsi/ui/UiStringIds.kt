@@ -613,4 +613,10 @@ internal val UiStringIds:Map<String,Int> = mapOf(
     "Open BuriMunsi Admin" to R.string.ui_open_burimunsi_admin,
     "Receive payment SMS" to R.string.ui_receive_payment_sms,
     "Install the signed BuriMunsi Admin app provided by your organization, then sign in with your mobile number and passcode." to R.string.ui_install_burimunsi_admin,
+    "Account" to R.string.ui_account_tab,
+    "Operations" to R.string.ui_account_operations,
+    "Recorded group balance" to R.string.ui_home_recorded_group_balance,
+    "As of %1\$s" to R.string.ui_home_balance_as_of,
+    "Recent transactions" to R.string.ui_home_recent_transactions,
+    "No recent transactions" to R.string.ui_home_no_recent_transactions,
 )
