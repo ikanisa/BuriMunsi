@@ -287,7 +287,16 @@ try {
   const receiptCells = receiptRow.getByRole('cell');
   assert.match(await receiptCells.nth(1).innerText(), /\bParsed\b/);
   assert.equal(await page.getByRole('columnheader', {name: 'Payment reference', exact: true}).count(), 0);
-  assert.equal(await page.getByRole('columnheader', {name: 'Payer SMS', exact: true}).count(), 0);
+  await page.getByRole('columnheader', {name: 'Payer SMS', exact: true}).waitFor();
+  await receiptRow.getByText('No receipt recorded', {exact: true}).waitFor();
+  await page.route(receipts, async route => {
+    const response = await route.fetch();
+    const pageData = await response.json();
+    const [first, ...rest] = pageData.items;
+    await route.fulfill({response, json: {...pageData, items: [{...first, payerStatus: 'delivered'}, ...rest]}});
+  }, {times: 1});
+  await page.getByRole('button', {name: 'Refresh receiver'}).click();
+  await receiptRow.getByText('Reported delivered', {exact: true}).waitFor();
   await page.setViewportSize({width: 320, height: 768});
   assert.equal(await receiptRow.evaluate((row) => getComputedStyle(row).display), 'grid');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
