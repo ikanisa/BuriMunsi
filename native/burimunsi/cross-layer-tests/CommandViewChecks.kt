@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit
 
 /** Host integration only. No Android storage/JSON/lifecycle, TLS or server/database execution. */
 private class Scenario(private val role: String = "admin") {
- var postMode="ok";var effect="posted";var proofState="committed";var statusState="committed"
+ var postMode="ok";var effect="allocated";var proofState="committed";var statusState="committed"
  var owner="operator-1";var token="a".repeat(64);var operation="burimunsi.allocate"
  var recordFailure=false;var failureAfterPost=false;var deniedProof=false;var badStatus=false
  var recordReads=0;var committed=false;var uiClockOffset=0L
@@ -24,12 +24,16 @@ private class Scenario(private val role: String = "admin") {
  private fun page(vararg values:JSONObject)=JSONObject().put("items",JSONArray().also{a->values.forEach{a.put(it)}})
   .put("totalCount",values.size).put("revision","fixture-v1").put("asOf","2026-11-09T10:00:00Z").put("nextCursor",JSONObject.NULL).toString()
  private fun member()=JSONObject().put("id","member-1").put("groupId","synthetic-group").put("name","Synthetic Member").put("phone","+250780000816")
-  .put("balanceRwf",10000).put("active",memberActive).put("version",memberVersion)
- private fun payment()=JSONObject().put("id",if(committed)postReadPaymentId else "payment-1").put("groupId","synthetic-group")
-  .put("memberId",JSONObject.NULL).put("memberPhone",JSONObject.NULL).put("sourceId",JSONObject.NULL)
-  .put("payerNameRaw","Synthetic Payer").put("payerPhoneRaw","+250780000816")
-  .put("amountRwf",10000).put("atRaw","2026-11-09 10:00:00").put("ftId","ft-1")
-  .put("state",if(committed&&postReadVersion>1)"posted" else "unallocated").put("version",if(committed)postReadVersion else 1)
+  .put("active",memberActive).put("version",memberVersion)
+ private fun payment():JSONObject {
+  val allocated=committed&&postReadVersion>1&&effect=="allocated"
+  return JSONObject().put("id",if(committed)postReadPaymentId else "payment-1").put("groupId","synthetic-group")
+   .put("memberId",if(allocated)"member-1" else JSONObject.NULL)
+   .put("memberPhone",if(allocated)"+250780000816" else JSONObject.NULL).put("sourceId",JSONObject.NULL)
+   .put("payerNameRaw","Synthetic Payer").put("payerPhoneRaw","+250780000816")
+   .put("amountRwf",10000).put("atRaw","2026-11-09 10:00:00").put("ftId","ft-1")
+   .put("state",if(allocated)"allocated" else "unallocated").put("version",if(committed)postReadVersion else 1)
+ }
  private fun staff()=JSONObject().put("id","staff-1").put("groupId","synthetic-group").put("name","Synthetic Staff").put("phone","+250780000002")
   .put("active",true).put("version",1).put("capabilities",JSONArray().put("records.read"))
  init {
@@ -56,11 +60,14 @@ private class Scenario(private val role: String = "admin") {
    r.path.contains("/operations/")->{
     statusEntered?.countDown();check(releaseStatus?.await(10,TimeUnit.SECONDS)!=false)
     JSONObject().put("contractVersion",if(badStatus)3 else 2).put("requestId",r.path.substringAfterLast('/')).put("groupId","synthetic-group")
-     .put("actorId",owner).put("state",statusState).put("operation",operation).put("financialState",effect).toString()
+     .put("actorId",owner).put("state",statusState).put("operation",operation).also {
+      if (effect=="allocated") it.put("allocationState","allocated")
+      if (effect in setOf("reversed","corrected")) it.put("financialState",effect)
+     }.toString()
    }
    else->{recordReads++;if(recordFailure)throw ApiFailure("connection_unavailable",0)
     when {
-     r.path.endsWith("/home")->JSONObject().put("groupBalanceRwf",10000).put("todayRwf",10000).put("memberCount",1).put("unallocatedCount",1)
+     r.path.endsWith("/home")->JSONObject().put("paymentCount",1).put("memberCount",1).put("unallocatedCount",1)
       .put("recentPayments",JSONArray().put(payment())).put("asOf","2026-11-09T10:00:00Z").toString()
      r.path.contains("/payments/payment-1")->payment().toString()
      r.path.endsWith("/payments/payment-2")->payment().put("id","payment-2").put("state","unallocated").put("version",1).toString()
@@ -74,7 +81,6 @@ private class Scenario(private val role: String = "admin") {
      // member-scoped payment listing.
      r.path.contains("/payments?")&&r.path.contains("memberId=")->page()
      r.path.contains("/payments?")->page(payment())
-     r.path.contains("/ledger?")->page(JSONObject().put("id","ledger-1").put("groupId","synthetic-group").put("memberPhone","+250780000816").put("transactionId","payment-1").put("amountRwf",10000).put("atRaw","2026-11-09").put("ftId","ft-1").put("payerNameRaw","Synthetic Payer"))
      r.path.contains("/staff?")->page(staff())
      else->error("Unexpected fixture endpoint ${r.path}")
     }
@@ -83,7 +89,7 @@ private class Scenario(private val role: String = "admin") {
  }
  suspend fun idle(){withTimeout(15000){while(model.state.busy)delay(2)};delay(10)}
  suspend fun start(){model=BuriViewModel(Application()){System.currentTimeMillis()+uiClockOffset};idle();model.login("0780000001","2468");idle();check(model.state.operator!=null)}
- suspend fun allocation(){model.navigate(Route.PAYMENT,"payment-1");idle();model.openSheet(Sheet.ALLOCATE);idle();model.selectMember(model.state.members!!.items.single());model.editDraft("note","Verified original identity")}
+ suspend fun allocation(){model.navigate(Route.PAYMENT,"payment-1");idle();model.openSheet(Sheet.ALLOCATE);idle();model.selectMember(model.state.members!!.items.single());model.editDraft("query","Example")}
  suspend fun recreate(){
   close()
   val protectedRecords=SecureStore.records.toMap()
@@ -91,7 +97,7 @@ private class Scenario(private val role: String = "admin") {
   SecureStore.records.putAll(protectedRecords)
   model=BuriViewModel(Application());idle()
  }
- suspend fun submit(){model.allocate("Verified original identity");idle()}
+ suspend fun submit(){model.allocate();idle()}
  suspend fun close(){releaseStatus?.countDown();model.viewModelScope.coroutineContext[Job]!!.cancelAndJoin()}
  fun posts()=Transport.calls.count{it.method!="GET"&&!it.path.contains("/session/")}
  fun journal()=SecureStore.records["pending-command"]
@@ -102,7 +108,7 @@ fun main()=runBlocking {
  suspend fun scenario(role:String="admin",block:suspend (Scenario)->Unit){val s=Scenario(role);try{s.start();block(s)}finally{s.close()}}
  for(role in listOf("staff","admin"))scenario(role){s->
   s.model.navigate(Route.MEMBER,"member-1");s.idle()
-  ck("$role original member route shows the verified balance",s.model.state.member?.id=="member-1"&&s.model.state.member?.balanceRwf==10000L)
+  ck("$role original member route shows the member details",s.model.state.member?.id=="member-1"&&s.model.state.member?.phone=="+250780000816")
   val cached=SecureStore.records["records"]
   val payments=Transport.calls.count{it.path.contains("memberId=member-1")}
   s.detailMemberId="different-member";s.model.refresh();s.idle()
@@ -111,7 +117,7 @@ fun main()=runBlocking {
           cached!=null&&SecureStore.records["records"]==cached&&Transport.calls.count{it.path.contains("memberId=member-1")}==payments)
   s.detailMemberId="member-1";s.model.refresh();s.idle()
   ck("$role matching readback restores the original member without a command",
-      s.model.state.member?.id=="member-1"&&s.model.state.member?.balanceRwf==10000L&&
+      s.model.state.member?.id=="member-1"&&s.model.state.member?.phone=="+250780000816"&&
           !s.model.state.readbackRequired&&s.posts()==0&&s.journal()==null)
  }
  scenario{s->
@@ -135,8 +141,9 @@ fun main()=runBlocking {
   s.allocation()
   val original=s.model.state.selectedMember!!
   when(reason){"inactive member"->s.memberActive=false;"new member version"->s.memberVersion++;else->s.memberListed=false}
+  s.model.editDraft("query","refreshed results")
   s.model.allocationSearch("refreshed results");s.idle()
-  ck("$reason removes the old allocation selection and retains the note",s.model.state.selectedMember==null&&s.model.state.draft["note"]=="Verified original identity")
+  ck("$reason removes the old selection and retains the search",s.model.state.selectedMember==null&&s.model.state.draft["query"]=="refreshed results")
   s.model.selectMember(original)
   ck("$reason ignores a delayed click from the previous member list",s.model.state.selectedMember==null)
   s.submit()
@@ -154,9 +161,9 @@ fun main()=runBlocking {
   s.model.editDraft("query",replacementQuery)
   s.model.allocationSearch(replacementQuery)
   s.idle()
-  ck("$role failed replacement search drops stale candidates and keeps the new query and note",
+  ck("$role failed replacement search drops stale candidates and keeps the new query",
       s.model.state.members==null&&s.model.state.selectedMember==null&&
-          s.model.state.allocationQuery==replacementQuery&&s.model.state.draft["note"]=="Verified original identity")
+          s.model.state.allocationQuery==replacementQuery&&s.model.state.draft["query"]==replacementQuery)
   s.model.selectMember(former)
   s.submit()
   ck("$role a failed replacement search cannot allocate to the previous beneficiary",s.posts()==0&&s.journal()==null)
@@ -247,7 +254,7 @@ fun main()=runBlocking {
   ck("$role $mode offline cold restart restores only the accepted receipt after a regressed reply",s.model.state.payment?.id=="payment-1"&&s.model.state.payment?.version==2L&&s.model.state.offline&&s.posts()==1)
  }
  scenario{s->s.allocation();s.effect="reversed";s.submit()
-  ck("direct reversed commit clears journal without fresh-credit success",s.journal()==null&&s.model.state.error?.contains("financial effect changed")==true)
+  ck("changed predecessor allocation clears the journal and requests current payment readback",s.journal()==null&&s.model.state.error?.contains("This payment changed after the original action.")==true)
   ck("direct reversed commit clears stale record and selection",s.model.state.payment==null&&s.model.state.selectedMember==null&&s.model.state.sheet==null)
   s.submit();ck("reversed result never replays old selection",s.posts()==1)
  }
@@ -265,13 +272,13 @@ fun main()=runBlocking {
   s.allocation();s.postMode="lost";s.submit();s.effect=effect;s.recordFailure=true
   s.model.retry();s.idle()
   ck("$effect recovery consumes journal before a failed record refresh",s.journal()==null&&!s.model.state.pending&&s.posts()==1)
-  ck("$effect notice survives record read failure",s.model.state.commandNotice?.contains("reversed or corrected")==true&&s.model.state.error=="Offline. Reconnect and refresh.")
+  ck("$effect notice survives record read failure",s.model.state.commandNotice?.contains("This payment changed after the original action.")==true&&s.model.state.error=="Offline. Reconnect and refresh.")
   ck("$effect recovery leaves no pre-command records or draft",s.model.state.payment==null&&s.model.state.sheet==null&&s.model.state.selectedMember==null&&s.model.state.draft.isEmpty())
-  s.model.refresh();s.idle();ck("$effect notice survives repeated failed refresh",s.model.state.commandNotice?.contains("do not repeat")==true&&s.posts()==1)
+  s.model.refresh();s.idle();ck("$effect notice survives repeated failed refresh",s.model.state.commandNotice?.contains("This payment changed after the original action.")==true&&s.posts()==1)
   s.recordFailure=false;s.model.refresh();s.idle();ck("$effect refresh reads authoritative record without mutation",s.model.state.payment?.version==2L&&s.posts()==1)
  }
  scenario{s->s.allocation();s.failureAfterPost=true;s.submit()
-  ck("posted outcome remains distinguishable from failed refresh",s.model.state.commandNotice?.startsWith("The original action committed.")==true&&s.model.state.error!=null)
+  ck("completed allocation remains distinguishable from failed refresh",s.model.state.commandNotice?.startsWith("The original action committed.")==true&&s.model.state.error!=null)
   s.recordFailure=false;s.model.refresh();s.idle();ck("readback preserves completed notice and never dispatches",s.model.state.commandNotice!=null&&s.model.state.payment?.version==2L&&s.posts()==1)
   s.model.logout();s.idle();ck("signout does not expose previous operator notice",s.model.state.operator==null&&s.model.state.commandNotice==null)
  }
@@ -323,7 +330,7 @@ fun main()=runBlocking {
   ck("transport rejection cannot revive actionable selection",s.model.state.sheet==null&&s.model.state.selectedMember==null&&s.posts()==1)
  }
  scenario{s->s.allocation();s.statusState="pending";s.statusEntered=CountDownLatch(1);s.releaseStatus=CountDownLatch(1)
-  s.model.allocate("Verified original identity");check(withContext(Dispatchers.IO){s.statusEntered!!.await(10,TimeUnit.SECONDS)})
+  s.model.allocate();check(withContext(Dispatchers.IO){s.statusEntered!!.await(10,TimeUnit.SECONDS)})
   val original=JSONObject(s.journal()!!);s.uiClockOffset=7200000;s.model.onForeground()
   withTimeout(10000){while(s.model.screenGate==ScreenGate.OPEN)delay(20)}
   s.releaseStatus!!.countDown();s.idle();delay(50)

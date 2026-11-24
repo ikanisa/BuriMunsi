@@ -4,7 +4,8 @@ import {promises as fs} from 'node:fs';
 import path from 'node:path';
 import {versionedStatic} from '../../../deploy/platform-admin/src/static-recovery.js';
 import {createPhoneAccountFixture, fixtureAdminId} from './phone-account-fixture.mjs';
-import {fixtureMember, fixtureMomoDetail, fixtureMomoRecord, readMemberList, readMomoList} from './operator-read-fixture.mjs';
+import {fixtureMember, fixtureMomoDetail, fixtureMomoRecord, fixtureOutgoingPayment, fixturePayment, fixtureSmsEvidenceId,
+  readBuriMunsiPayments, readMemberList, readMomoList} from './operator-read-fixture.mjs';
 
 const root = path.resolve(process.argv[2] ?? '');
 if (!process.argv[2] || !(await fs.stat(root)).isDirectory()) throw new Error('Provide a candidate directory.');
@@ -76,14 +77,40 @@ createServer(async (request, response) => {
     }
     if (request.method !== 'GET') return json(response, 405, {error: {code: 'fixture_read_only'}});
     if (!session) return json(response, 401, {error: {code: 'fixture_unauthorized'}});
+    const payments = phoneAccounts.hasPermission(session, 'payments.read'), sms = phoneAccounts.hasPermission(session, 'sms.read');
+    const visiblePayment = item => ({...item, sourceId: sms ? item.sourceId : null});
+    if (url.pathname === '/api/admin/burimunsi/home') return json(response, 200, {
+      paymentCount:payments ? 2 : 0, memberCount:1, unallocatedCount:payments ? 2 : 0,
+      recentPayments:payments ? [fixturePayment, fixtureOutgoingPayment].map(visiblePayment) : [], asOf:fixturePayment.atRaw,
+    });
+    if (url.pathname === '/api/admin/burimunsi/payments') {
+      if (!payments) return json(response, 403, {error:{code:'forbidden'}});
+      const result = readBuriMunsiPayments(url.searchParams, sms);
+      return result ? json(response, 200, result) : json(response, 400, {error:{code:'invalid_fixture'}});
+    }
+    const payment = [fixturePayment, fixtureOutgoingPayment].find(item => url.pathname === '/api/admin/burimunsi/payments/' + item.id);
+    if (payment) return payments ? json(response, 200, visiblePayment(payment)) : json(response, 403, {error:{code:'forbidden'}});
+    if (url.pathname === '/api/admin/momo/observations/collections') return sms ? json(response, 200, {
+      contractVersion:1,asOf:fixturePayment.atRaw,items:[{collectionId:'fixture-group',label:'Synthetic group'}],
+    }) : json(response, 403, {error:{code:'forbidden'}});
+    if (url.pathname === '/api/admin/momo/observations') return sms ? json(response, 200, {
+      contractVersion:1,collectionId:'fixture-group',nextCursor:null,asOf:fixturePayment.atRaw,
+      inboxCheck:{state:'unknown',checkedAt:null,candidateCount:null,missingCount:null,pendingCount:null,headsMatch:null},
+      items:[{requestId:fixturePayment.id,sourceId:fixtureSmsEvidenceId,admittedAt:fixturePayment.atRaw,retentionState:'retained',
+        bodySha256:'b'.repeat(64),processing:'parsed',paymentReference:null,payerStatus:null,payerReason:null}],
+    }) : json(response, 403, {error:{code:'forbidden'}});
     if (url.pathname === '/api/admin/core/overview') return json(response, 200, overview);
-    if (['/api/admin/core/members', '/api/admin/core/users'].includes(url.pathname) ||
-        url.pathname === `/api/admin/operations/users/${fixtureMember.id}`) {
+    if (['/api/admin/core/members', '/api/admin/core/users'].includes(url.pathname) || /^\/api\/admin\/operations\/(members|users)\//.test(url.pathname)) {
       if (!phoneAccounts.hasPermission(session, 'users.read')) return json(response, 403, {error: {code: 'forbidden'}});
-      if (url.pathname.startsWith('/api/admin/core/')) return json(response, 200, readMemberList(url.searchParams));
-      return json(response, 200, {contract_version: 2, model: 'canonical_evidence_ledger', resource_type: 'users',
-        current_actor_id: fixtureAdminId, can_manage: false, resource: fixtureMember, related_truncated: false,
-        related: {memberships: [{id: '93939393-9393-4393-8393-939393939393', group_title: 'Synthetic group', role: 'member', status: 'active'}]}});
+      // This fixture grants the two collection-scoped roster reads. A generic person read cannot satisfy the walkthrough.
+      if (url.pathname === '/api/admin/core/members' && url.searchParams.get('directory') === 'roster') {
+        return json(response, 200, readMemberList(url.searchParams));
+      }
+      const member = fixtureMembers.rows.find(row => url.pathname === '/api/admin/operations/members/' + row.id);
+      if (!member) return json(response, 403, {error: {code: 'expected_group_roster'}});
+      return json(response, 200, {contract_version: 2, model: 'canonical_evidence_ledger', resource_type: 'members',
+        current_actor_id: fixtureAdminId, can_manage: false, resource: member, related_truncated: false,
+        related: {memberships: [{id: '93939393-9393-4393-8393-939393939393', group_title: 'Synthetic group', role: 'member', status: member.membership_status}]}});
     }
     if (url.pathname === '/api/admin/momo/transactions' ||
         url.pathname === `/api/admin/momo/transactions/${fixtureMomoRecord.id}`) {

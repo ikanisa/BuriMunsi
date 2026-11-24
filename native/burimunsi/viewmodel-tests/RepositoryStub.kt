@@ -23,7 +23,7 @@ object Fixture{
  var anchoredMembers:((String,ListingQuery)->Page<String>)?=null
  var restoredHome:Home?=null
  var restoredHomeSavedAt:Long?=null
- var restoredHomeReused=false
+ var homePaymentId="tx-1"
  var recentPaymentPage:Pair<Page<Payment>,Long>?=null
  @Volatile var managedCollection:String?="synthetic-group"
  val repositoryCollections=java.util.concurrent.CopyOnWriteArrayList<String>()
@@ -86,10 +86,8 @@ object Fixture{
  var homeBarrier:java.util.concurrent.CountDownLatch?=null
  var allocateBarrier:java.util.concurrent.CountDownLatch?=null
  var enrollMutations=0;var staffMutations=0;var reconciles=0
- var historySavedAt:Long?=null
 
  var paymentFailure=false;var recordSavedAt:Long?=null;var refreshedRole:Role?=null;var refreshedCaps:Set<String>?=null;var paymentReads=0;
- var historyFailure=false;var historyReads=0;var historyRevision="history-v1";var historyLoop=false;var historyOverlap=false;var lastHistoryId="";var historyDelay=0L;
  @Volatile var rawBarrier:java.util.concurrent.CountDownLatch?=null;@Volatile var rawEntered:java.util.concurrent.CountDownLatch?=null;var rawApiFailure:ApiFailure?=null;var lastRawReason=""
  var rawFailure=false;var rawReads=0;var mutations=0;var role=Role.ADMIN;var cached=false;var memberCached=false;var lifecycleCalls=0;var homeReads=0
  var observationReads=0;var observationRevealReads=0;var observationRows:List<ObservationListRow> = emptyList();var observationFailure:ApiFailure?=null
@@ -102,12 +100,12 @@ object Fixture{
  var observationBody="synthetic unverified message";var observationHints:ObservationHintSet?=null
  var lastFilter="";val saved=1794063600000L
  fun operator()=Operator(ownerId, "Example Operator", "+250780000001",role,Capability.entries.map{it.key}.toSet(),System.currentTimeMillis()+3600000)
- val member=Member("member-1","Example Member","+250780000816",10000,true,1)
+ val member=Member("member-1","Example Member","+250780000816",true,1)
  fun payment(id:String="tx-1")=Payment(id,"Example Payer","+250780000816",10000,"2026-11-07 12:00:00","90001","unallocated",1)
  fun <T> page(items:List<T>,next:String?=null)=Page(items,next,2,"v1","2026-11-07T12:00:00Z")
 }
 class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDisplayCacheWrites:Boolean=false){
- private val postedPayments=java.util.concurrent.ConcurrentHashMap<String,Payment>()
+ private val allocatedPayments=java.util.concurrent.ConcurrentHashMap<String,Payment>()
  private val readScopeOwner=Any();private var readScopeRevision=0L
  val sessionRevision:Long? get()=operator?.let{readScopeRevision + Fixture.processSessionEpoch.get()}
  private var bound=group?:Fixture.managedCollection.takeUnless{Fixture.restoreSignedOut}
@@ -119,10 +117,10 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDis
  fun restore():Operator?{Fixture.restoreReads++;Fixture.restoreEntered?.countDown();
   check(Fixture.restoreBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false)
   Fixture.restoreFailure?.let{throw it};return operator}
- internal class Restoration(val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null,val reusedHome:Boolean=false)
- internal fun restoreForHome(allowRecentCache:Boolean,wantsHome:(String?,String)->Boolean):Restoration?=restore()?.let{
+ internal class Restoration(val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null)
+ internal fun restoreForHome(wantsHome:(String?,String)->Boolean):Restoration?=restore()?.let{
   val include=wantsHome(it.id,collectionId)
-  Restoration(it,Fixture.restoredHome.takeIf{include},Fixture.restoredHomeSavedAt.takeIf{include},include&&Fixture.restoredHomeReused)
+  Restoration(it,Fixture.restoredHome.takeIf{include},Fixture.restoredHomeSavedAt.takeIf{include})
  }
  internal fun refreshHome()=Restoration(refreshSession())
  internal fun loginForHome(phone:String,pin:String)=Restoration(login(phone,pin))
@@ -159,7 +157,8 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDis
  }
  fun pending():Any?{if(Fixture.journalFailure)throw ContractFailure("operation_store_unavailable");return if(Fixture.pendingFlag)"original-operation" else null}
  fun reconcilePending():JSONObject{Fixture.reconciles++;Fixture.recoveryFailure?.let{throw it};if(Fixture.resolveOnCheck&&Fixture.outcomeState in setOf("committed","cancelled"))Fixture.pendingFlag=false;return JSONObject().put("state",Fixture.outcomeState).put("financialState",Fixture.financialState)}
- fun home():Home{Fixture.readFailure?.let{throw it};provenance();Fixture.homeReads++;check(Fixture.homeBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false);return Home(10000,10000,1,1,listOf(Fixture.payment()),"now")}
+ fun home():Home{Fixture.readFailure?.let{throw it};provenance();Fixture.homeReads++;check(Fixture.homeBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false);return Home(10000,1,1,listOf(Fixture.payment(Fixture.homePaymentId)),"now")}
+ internal fun homeSnapshot()=RecordSnapshot(home(),lastReadFromCache,lastReadSavedAt)
  internal class QuietHome(val payload:JSONObject)
  internal fun readQuietHome():QuietHome {
   Fixture.readFailure?.let{throw it}
@@ -168,7 +167,7 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDis
   return QuietHome(JSONObject())
  }
  internal fun acceptQuietHome(owner:Operator,result:QuietHome):Pair<Home,Long>? =
-  withCurrentProfile(owner){_,_->Home(10000,10000,1,1,listOf(Fixture.payment()),"now") to
+  withCurrentProfile(owner){_,_->Home(10000,1,1,listOf(Fixture.payment(Fixture.homePaymentId)),"now") to
       (Fixture.recordSavedAt?:System.currentTimeMillis())}
  internal fun recentPayments(listing:ListingQuery):Pair<Page<Payment>,Long>?=Fixture.recentPaymentPage
  internal fun recentMembers(listing:ListingQuery):Pair<Page<Member>,Long>?=null
@@ -199,8 +198,6 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDis
     Page(result.items.map{Fixture.member.copy(id=it)},result.nextCursor,result.totalCount,result.revision,result.asOf)
    }else members(listing.q,cursor)
   }
- fun ledger(id:String,listing:ListingQuery,cursor:String?=null,scope:RecordReadScope?=null):Page<LedgerRow> =
-  typedListing(ListingTarget.LEDGER,listing,cursor,id,scope){ledger(id,cursor)}
  fun sms(listing:ListingQuery,cursor:String?=null,scope:RecordReadScope?=null,limit:Int=100):Page<SmsRow> =
   typedListing(ListingTarget.SMS,listing,cursor,null,scope,limit){sms(listing.q,cursor,listing.filter,limit)}
  fun observationPage(listing:ListingQuery,cursor:String?=null,scope:RecordReadScope?=null,limit:Int=100):Page<ObservationListRow> =
@@ -209,15 +206,13 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDis
   typedListing(ListingTarget.STAFF,listing,cursor,null,scope){staff(cursor)}
  fun audit(listing:ListingQuery,cursor:String?=null,scope:RecordReadScope?=null):Page<AuditRow> =
   typedListing(ListingTarget.AUDIT,listing,cursor,null,scope){audit(cursor)}
- fun paymentHistory(id:String,listing:ListingQuery,cursor:String?=null,scope:RecordReadScope?=null):Page<PaymentEvent> =
-  typedListing(ListingTarget.HISTORY,listing,cursor,id,scope){paymentHistory(id,cursor)}
- fun payments(q:String="",filter:String="all",cursor:String?=null,memberId:String?=null):Page<Payment>{Fixture.paymentsEntered?.countDown();check(Fixture.paymentsBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false);Fixture.readFailure?.let{throw it};if(memberId!=null&&cursor!=null&&Fixture.memberPaymentScopeFailureOnCursor)throw ContractFailure("invalid_member_payment_scope");provenance();Fixture.lastFilter=filter;Fixture.paged?.let{handler->val p=handler(if(memberId==null)"PAYMENTS"else "MEMBER",cursor,memberId?:q,filter);provenance();return Page(p.items.map{Fixture.payment(it).copy(memberId=memberId)},p.nextCursor,p.totalCount,p.revision,p.asOf)};if(Fixture.readEmpty)return Page(emptyList(),null,0,"empty","2026-11-09T00:00:00Z");return Fixture.page(listOf(Fixture.payment(if(cursor==null)"tx-1" else "tx-2").copy(memberId=memberId)),if(memberId==null&&cursor==null)"more" else null)}
+ fun payments(q:String="",filter:String="all",cursor:String?=null,memberId:String?=null):Page<Payment>{Fixture.paymentsEntered?.countDown();check(Fixture.paymentsBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false);Fixture.readFailure?.let{throw it};if(memberId!=null&&cursor!=null&&Fixture.memberPaymentScopeFailureOnCursor)throw ContractFailure("invalid_member_payment_scope");provenance();Fixture.lastFilter=filter;Fixture.paged?.let{handler->val p=handler(if(memberId==null)"PAYMENTS"else "MEMBER",cursor,memberId?:q,filter);provenance();return Page(p.items.map{Fixture.payment(it).copy(memberId=memberId)},p.nextCursor,p.totalCount,p.revision,p.asOf)};if(Fixture.readEmpty)return Page(emptyList(),null,0,"empty","2026-11-09T00:00:00Z");val item=Fixture.payment(if(cursor==null)"tx-1" else "tx-2").copy(memberId=memberId);return if(memberId!=null)Page(listOf(item.copy(state="allocated")),null,1,"v1","2026-11-07T12:00:00Z") else Fixture.page(listOf(item),if(cursor==null)"more" else null)}
  fun members(q:String="",cursor:String?=null):Page<Member>{
   Fixture.membersFailure?.let{if(it.status==401)operator=null;throw it}
   fun memberProvenance(){provenance(Fixture.membersCachedOverride?:Fixture.cached);Fixture.membersSavedAtOverride?.let{lastReadSavedAt=it}}
   memberProvenance();Fixture.paged?.let{handler->val p=handler("MEMBERS",cursor,q,"all");memberProvenance();return Page(p.items.map{Fixture.member.copy(id=it)},p.nextCursor,p.totalCount,p.revision,p.asOf)};return Fixture.page(listOf(Fixture.member.copy(id=if(cursor==null)"member-1" else "member-2")),if(cursor==null)"more" else null)
  }
- fun payment(id:String):Payment{Fixture.paymentReads++;if(Fixture.paymentFailure)throw ApiFailure("connection_unavailable",0);provenance();return postedPayments[id]?:Fixture.payment(id)}
+ fun payment(id:String):Payment{Fixture.paymentReads++;if(Fixture.paymentFailure)throw ApiFailure("connection_unavailable",0);provenance();return allocatedPayments[id]?:Fixture.payment(id)}
  fun member(id:String):Member{Fixture.memberReadFailure?.let{throw it};provenance(Fixture.memberCached||Fixture.cached);return Fixture.member.copy(id=id)}
  internal fun memberRecord(id:String):RecordSnapshot<Member>{
   val value=member(id)
@@ -229,7 +224,6 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDis
   val cached=Fixture.cached
   return RecordSnapshot(value,cached,if(Fixture.missingReadTimestamp)null else if(cached)Fixture.saved else Fixture.recordSavedAt?:System.currentTimeMillis())
  }
- fun ledger(id:String,cursor:String?=null):Page<LedgerRow>{provenance();Fixture.paged?.let{handler->val p=handler("MEMBER",cursor,id,"all");provenance();return Page(p.items.map{LedgerRow(it,"tx-1",10000,"at","90001","Payer")},p.nextCursor,p.totalCount,p.revision,p.asOf)};return Page(listOf(LedgerRow("l-1","tx-1",10000,"2026-11-07T12:00:00Z","90001","Payer")),null,1,"v1","2026-11-07T12:00:00Z")}
  fun sms(q:String="",cursor:String?=null,filter:String="all",limit:Int?=null):Page<SmsRow>{Fixture.smsQueries.add(q);Fixture.lastFilter=filter;Fixture.paged?.let{handler->val p=handler("SMS",cursor,q,filter);return Page(p.items.map{SmsRow(it,"M-Money","at","synthetic",filter,null)},p.nextCursor,p.totalCount,p.revision,p.asOf)};return Fixture.page(listOf(SmsRow("s-1","M-Money","at","synthetic",filter,null)))}
  fun observationPage(q:String="",cursor:String?=null,limit:Int?=null):Page<ObservationListRow> {Fixture.observationQueries.add(q);Fixture.observationReads++;Fixture.observationFailure?.let{throw it};Fixture.observationPaged?.let{return it(q,cursor)};return Page(Fixture.observationRows,null,Fixture.observationRows.size,"observations-v1","2026-11-09T00:00:00Z")}
  fun observationProcessing(sources:List<SmsSourceRef.Observation>):Map<SmsSourceRef.Observation,ObservationProcessing> = emptyMap()
@@ -244,9 +238,9 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDis
   if(reason=="Automatic SMS list preview"){Fixture.smsListRevealReads++;Fixture.listRevealReasons.add(reason);Fixture.listRevealSources.add("canonical:"+id);Fixture.listRevealEntered?.countDown();check(Fixture.listRevealRelease?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false);Fixture.listRevealFailure?.let{throw it};return RawSms(id,"SyntheticSender","at",Fixture.listBodies[id]?:"synthetic canonical body",null)}
   Fixture.rawReads++;Fixture.lastRawReason=reason;Fixture.rawEntered?.countDown();check(Fixture.rawBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false);Fixture.rawApiFailure?.let{throw it};if(Fixture.rawFailure)throw ApiFailure("connection_unavailable",0);return RawSms(id,"M-Money","at","unaltered", "tx-1")
  }
- fun allocate(p:Payment,m:Member,note:String):JSONObject{
+ fun allocate(p:Payment,m:Member):JSONObject{
   Fixture.mutations++;check(Fixture.allocateBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false)
-  postedPayments[p.id]=p.copy(state="posted",version=p.version+1,memberId=m.id)
+  allocatedPayments[p.id]=p.copy(state="allocated",version=p.version+1,memberId=m.id)
   return JSONObject()
  }
  fun enroll(name:String,phone:String):JSONObject{Fixture.enrollMutations++;Fixture.enrollmentCollections.add(collectionId);Fixture.enrollEntered?.countDown();check(Fixture.enrollBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false);return JSONObject().put("groupId",Fixture.enrollResponseGroup?:collectionId).also{j->Fixture.enrollResponseId?.let{j.put("createdMemberId",it)}}}
@@ -288,12 +282,5 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDis
   if(Fixture.pinUncertain){operator=null;Fixture.pendingFlag=true;throw ApiFailure("passcode_change_unconfirmed",503,true)}
   return operator?:throw ApiFailure("session_unavailable",401)
  }
- fun paymentHistory(id:String,cursor:String?=null):Page<PaymentEvent>{
-  Fixture.historyReads++;Fixture.lastHistoryId=id;if(Fixture.historyDelay>0)Thread.sleep(Fixture.historyDelay)
-  if(Fixture.historyFailure)throw ApiFailure("connection_unavailable",0)
-  provenance();Fixture.historySavedAt?.let{lastReadSavedAt=it};val first=cursor==null||Fixture.historyOverlap
-  val event=if(first)PaymentEvent("transaction:$id",id,"transaction_recorded","2026-11-08T10:00:00Z",null,null)
-    else PaymentEvent("ledger:l-1",id,"ledger_entry","2026-11-08T10:00:01Z",10000,"member-1")
-  return Page(listOf(event),if(cursor==null||Fixture.historyLoop)"history-more" else null,2,Fixture.historyRevision,"2026-11-08T10:00:02Z")
- }
+
 }

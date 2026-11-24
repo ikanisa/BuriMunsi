@@ -50,20 +50,17 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
 
     fun restore(): Operator? = sessions.restore()?.operator
 
-    internal class Restoration(val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null,
-        val reusedHome:Boolean=false)
+    internal class Restoration(val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null)
 
-    internal fun restoreForHome(allowRecentCache:Boolean,wantsHome:(String?,String)->Boolean):Restoration? {
+    internal fun restoreForHome(wantsHome:(String?,String)->Boolean):Restoration? {
         val revision=cacheStore.revision()
-        val restored=sessions.restore(includeHome=true,canReuseHome={allowRecentCache&&records.hasRecentHome(it)},
-            wantsHome=wantsHome)?:return null
+        val restored=sessions.restore(includeHome=true,wantsHome=wantsHome)?:return null
         return withHome(restored,revision)
     }
 
     private fun withHome(verified:NativeSessions.ProfileRead,revision:Long):Restoration {
         val snapshot=verified.home?.let{records.acceptRestoredHome(verified.operator,it,revision)}
-            ?:if(verified.useRecentHome)records.recentHome(verified.operator)else null
-        return Restoration(verified.operator,snapshot?.first,snapshot?.second,verified.useRecentHome)
+        return Restoration(verified.operator,snapshot?.first,snapshot?.second)
     }
 
     internal fun refreshHome():Restoration {
@@ -96,7 +93,8 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
     fun recoverReceiverRetirement(): JSONObject? = receiverPairing.recoverReceiverRetirement()
     fun pairGateway(code: String, replace: Boolean): JSONObject = receiverPairing.pairGateway(code, replace)
 
-    fun home(): Home = records.home()
+    fun home(): Home = homeSnapshot().value
+    internal fun homeSnapshot(): RecordSnapshot<Home> = records.home()
 
     /** A quiet Home read can finish after the screen has left. No cache or
      * shared read provenance is written until the controller accepts it. */
@@ -122,9 +120,6 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
     fun members(listing: ListingQuery, cursor: String? = null, scope: RecordReadScope? = null, anchorId: String? = null): Page<Member> =
         records.members(listing, cursor, scope, anchorId)
 
-    fun ledger(id: String, listing: ListingQuery, cursor: String? = null, scope: RecordReadScope? = null): Page<LedgerRow> =
-        records.ledger(id, listing, cursor, scope)
-
     fun sms(listing: ListingQuery, cursor: String? = null, scope: RecordReadScope? = null, limit: Int = 100): Page<SmsRow> =
         records.sms(listing, cursor, scope, limit)
 
@@ -134,9 +129,6 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
     fun audit(listing: ListingQuery, cursor: String? = null, scope: RecordReadScope? = null): Page<AuditRow> =
         records.audit(listing, cursor, scope)
 
-    fun paymentHistory(id: String, listing: ListingQuery, cursor: String? = null, scope: RecordReadScope? = null): Page<PaymentEvent> =
-        records.paymentHistory(id, listing, cursor, scope)
-
     fun payments(q: String = "", filter: String = "all", cursor: String? = null, memberId: String? = null): Page<Payment> =
         records.payments(q, filter, cursor, memberId)
 
@@ -144,14 +136,12 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
     fun payment(id: String): Payment = records.payment(id)
     fun member(id: String): Member = records.member(id)
     internal fun memberRecord(id: String) = records.memberRecord(id)
-    fun ledger(id: String, cursor: String? = null): Page<LedgerRow> = records.ledger(id, cursor)
 
     fun sms(q: String = "", cursor: String? = null, filter: String = "all", limit: Int? = null): Page<SmsRow> =
         records.sms(q, cursor, filter, limit)
 
     fun staff(cursor: String? = null): Page<StaffAccount> = records.staff(cursor)
     fun audit(cursor: String? = null): Page<AuditRow> = records.audit(cursor)
-    fun paymentHistory(id: String, cursor: String? = null): Page<PaymentEvent> = records.paymentHistory(id, cursor)
 
     fun observationProfile(): JSONObject = smsData.observationProfile()
 
@@ -197,10 +187,10 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
 
     fun raw(id: String, reason: String): RawSms = smsData.raw(id, reason)
 
-    fun allocate(p:Payment,member:Member,note:String):JSONObject {
+    fun allocate(p:Payment,member:Member):JSONObject {
         checkContract(PaymentPresentation.canAllocate(p)&&member.active,"allocation_unavailable")
-        checkContract(Presentation.validNote(note),"invalid_note")
-        return mutate("POST","/payments/${Values.id(p.id)}/allocate",JSONObject().put("memberId",member.id).put("expectedVersion",p.version).put("note",note.trim()),allocation=p)
+        return mutate("POST","/payments/${Values.id(p.id)}/allocate",
+            JSONObject().put("memberId",Values.id(member.id)).put("expectedVersion",p.version),allocation=p)
     }
     fun enroll(name:String,phone:String)=mutate("POST","/members",JSONObject().put("name",name.trim()).put("phone",Values.phone(phone)))
     fun onboardingSuggestions(q:String,cursor:String?):JSONObject = JSONObject(sessions.request("GET","/members/suggestions"+

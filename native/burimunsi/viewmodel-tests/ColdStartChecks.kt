@@ -44,12 +44,12 @@ fun main()=runBlocking {
     first.viewModelScope.cancel()
 
     Fixture.restoreEntered=null;Fixture.restoreBarrier=null
-    Fixture.restoredHome=Home(12000,12000,1,0,emptyList(),"now")
+    Fixture.restoredHome=Home(12000,1,0,emptyList(),"now")
     Fixture.restoredHomeSavedAt=now
     val bundledReads=Fixture.homeReads
     val bundled=BuriViewModel(Application()){now}
     bundled.onForeground();idle(bundled)
-    check(Fixture.homeReads==bundledReads&&bundled.state.home?.balanceRwf==12000L&&
+    check(Fixture.homeReads==bundledReads&&bundled.state.home?.paymentCount==12000&&
         bundled.state.savedAt==now&&bundled.presentation.showRecords)
     val freshHome=checkNotNull(bundled.state.home)
     check(!bundled.consumeFreshDraw(Route.HOME,freshHome.copy()))
@@ -57,10 +57,9 @@ fun main()=runBlocking {
     println("PASS fresh bundled Home avoids a separate request and emits one draw marker for the actual records")
     bundled.viewModelScope.cancel()
 
-    Fixture.restoredHomeReused=true
     val recent=BuriViewModel(Application()){now}
     recent.onForeground();idle(recent)
-    check(Fixture.homeReads==bundledReads&&!recent.consumeFreshDraw(Route.HOME,checkNotNull(recent.state.home)))
+    check(Fixture.homeReads==bundledReads&&recent.consumeFreshDraw(Route.HOME,checkNotNull(recent.state.home)))
     Fixture.recentPaymentPage=Fixture.page(listOf(Fixture.payment("recent-payment"))) to now
     recent.navigate(Route.PAYMENTS);idle(recent)
     check(recent.state.payments?.items?.single()?.id=="recent-payment")
@@ -76,13 +75,12 @@ fun main()=runBlocking {
     check(!recent.consumeFreshDraw(Route.PAYMENTS,checkNotNull(recent.state.payments)))
     Fixture.cached=false
     recent.viewModelScope.cancel()
-    Fixture.restoredHomeReused=false
-    println("PASS recent and offline records emit no fresh draw marker, while live Payments emits once")
+    println("PASS live bundled Home and Payments emit one marker; retained and offline Payments emit none")
 
     Fixture.restoredHomeSavedAt=now-SnapshotFreshness.TTL_MS-1
     val staleBundle=BuriViewModel(Application()){now}
     staleBundle.onForeground();idle(staleBundle)
-    check(Fixture.homeReads==bundledReads+1&&staleBundle.state.home?.balanceRwf==10000L)
+    check(Fixture.homeReads==bundledReads+1&&staleBundle.state.home?.paymentCount==10000)
     println("PASS a stale bundled Home cannot replace a fresh records read")
     staleBundle.viewModelScope.cancel()
     Fixture.restoredHome=null;Fixture.restoredHomeSavedAt=null

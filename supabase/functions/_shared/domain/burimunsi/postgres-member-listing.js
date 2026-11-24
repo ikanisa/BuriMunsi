@@ -56,7 +56,8 @@ function seek(plan,pivot,inclusive,field,idColumn) {
 
 // Resolve only a visible pivot. The signed cursor stores an ID and exact total,
 // so normalized names and phone numbers never travel in a readable token.
-export async function readMemberListing(sql,{groupId,listing,after,anchorId}) {
+export async function readMemberListing(sql,{groupId,listing,after,anchorId,includeBalance=true}) {
+  if(!includeBalance)requireThat(!listing.sort.startsWith('balance_')&&listing.minRwf===null&&listing.maxRwf===null,'invalid_query');
   if(after!==null){
     requireThat(after&&Object.keys(after).length===2&&Number.isSafeInteger(after.total)&&after.total>0,'invalid_cursor');
     requireId(after.id);
@@ -70,7 +71,7 @@ export async function readMemberListing(sql,{groupId,listing,after,anchorId}) {
   // A text-only search cannot match any new characters from a signed integer.
   // Name, date and phone pages without a money filter need sums only for the
   // selected rows. Amount sorts and filters aggregate the group once in SQL.
-  const balanceFilter=listing.minRwf!==null||listing.maxRwf!==null||listing.advanced&&!textToken&&/[0-9-]/.test(listing.q);
+  const balanceFilter=includeBalance&&(listing.minRwf!==null||listing.maxRwf!==null||listing.advanced&&!textToken&&/[0-9-]/.test(listing.q));
   const usesBalances=balanceFilter||order.type==='numeric';
   let pivot=null;
   if(after||anchorId){
@@ -105,7 +106,7 @@ export async function readMemberListing(sql,{groupId,listing,after,anchorId}) {
   if(pivot)predicates.push(seek(page,pivot,after===null,field,idColumn));
   const limit=page.bind(listing.limit+1);
   const selected=`${select}${where(predicates)} ORDER BY ${field} ${order.direction} NULLS LAST,${idColumn} ${order.tie} LIMIT ${limit}`;
-  const sqlPage=usesBalances?selected:`WITH page AS MATERIALIZED (${selected})
+  const sqlPage=usesBalances||!includeBalance?selected:`WITH page AS MATERIALIZED (${selected})
     SELECT page.*,coalesce((SELECT sum(l.amount_minor) FROM app.ledger_entries l
       WHERE l.collection_id=page.collection_id AND l.member_id=page.id),0) AS balance
     FROM page ORDER BY page.${resultKey} ${order.direction} NULLS LAST,page.id COLLATE "C" ${order.tie}`;

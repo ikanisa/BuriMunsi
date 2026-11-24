@@ -33,7 +33,7 @@ fun main(){
  paymentState="corrected"
  val correctedRecord=repo.payments(memberId="member-1").items.single();check(correctedRecord.state=="corrected")
  val before=api.calls.size
- val corrected=runCatching{repo.allocate(correctedRecord,Member("member-1","Example Member","+250780000816",0,true,1),"verified member")}.exceptionOrNull()
+ val corrected=runCatching{repo.allocate(correctedRecord,Member("member-1","Example Member","+250780000816",true,1))}.exceptionOrNull()
  check(corrected is ContractFailure&&corrected.code=="allocation_unavailable"&&api.calls.size==before)
  bad=true
  val wrong=runCatching{repo.payments(memberId="member-1")}.exceptionOrNull()

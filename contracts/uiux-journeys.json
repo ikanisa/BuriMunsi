@@ -1,7 +1,7 @@
 {
-  "version": "0.17.0-uiux.1",
-  "definition": "This continuation makes twelve executable controller scenarios explicit from the existing routes and panels. It does not assert these names were a previously enumerated canonical acceptance list.",
-  "controllerScope": "Actual BuriViewModel with platform, repository and gateway doubles; not Compose or provider end-to-end execution.",
+  "version": "0.17.0-uiux.2",
+  "definition": "Acceptance journeys for BuriMunsi sign-in, members, M-Money SMS, Payments and member allocation.",
+  "controllerScope": "BuriViewModel with platform, repository and gateway doubles. Device acceptance is recorded separately.",
   "journeys": [
     {
       "id": "J01",
@@ -14,34 +14,34 @@
     {
       "id": "J02",
       "title": "Home and unallocated shortcut",
-      "controllerCoverage": "Repository values; unallocated filter applied before read",
-      "controllerStatus": "passed",
+      "controllerCoverage": "Payment and member counts, recent Payments and the Unallocated shortcut",
+      "controllerStatus": "pending",
       "deviceAcceptanceStatus": "not_executed",
-      "deviceAcceptance": "Compare canonical balances, empty/error/loading/offline states and screen-reader order."
+      "deviceAcceptance": "Compare Home counts and recent incoming and outgoing payments with the scoped records. Exercise empty, error, loading and offline states."
     },
     {
       "id": "J03",
       "title": "Payment search, filters, pagination and Back",
-      "controllerCoverage": "Second page; query/filter/list position restored in memory",
-      "controllerStatus": "passed",
+      "controllerCoverage": "One Payments list, incoming and outgoing directions, Allocated and Unallocated filters, pagination and Back",
+      "controllerStatus": "pending",
       "deviceAcceptanceStatus": "not_executed",
       "deviceAcceptance": "Exercise two or more real pages, long names, Back/rotation/process death and keyboard dismissal."
     },
     {
       "id": "J04",
-      "title": "Payment history and original receipt",
-      "controllerCoverage": "Transaction-scoped history pagination; unchanged raw receipt; no mutation",
-      "controllerStatus": "passed",
+      "title": "Payment details and raw M-Money SMS",
+      "controllerCoverage": "Recorded payment details and authorized Admin access to retained raw SMS",
+      "controllerStatus": "pending",
       "deviceAcceptanceStatus": "not_executed",
-      "deviceAcceptance": "Verify original SMS, identifiers, timestamps, history ordering, clipboard selection and role restrictions."
+      "deviceAcceptance": "Verify the parsed amount and direction, original SMS, references, times and Admin-only raw evidence access."
     },
     {
       "id": "J05",
-      "title": "Allocation and unresolved actions",
-      "controllerCoverage": "Selection required; unresolved action blocks duplicate dispatch; explicit command clears selection",
-      "controllerStatus": "passed",
+      "title": "Allocate a payment to a group member",
+      "controllerCoverage": "Same-group selection, current payment version and original idempotency key",
+      "controllerStatus": "pending",
       "deviceAcceptanceStatus": "not_executed",
-      "deviceAcceptance": "Use genuine identities and PostgreSQL/provider reconciliation. Drop network after submit and verify one canonical posting."
+      "deviceAcceptance": "Allocate an Unallocated payment and observe Allocated and the selected member. Interrupt the response and verify an exact retry changes the original payment once."
     },
     {
       "id": "J06",
@@ -53,11 +53,11 @@
     },
     {
       "id": "J07",
-      "title": "Member ledger, export and lifecycle",
-      "controllerCoverage": "Member-scoped ledger/export; explicit lifecycle command",
-      "controllerStatus": "passed",
+      "title": "Member details and lifecycle",
+      "controllerCoverage": "Scoped member details, group membership and authorized lifecycle actions",
+      "controllerStatus": "pending",
       "deviceAcceptanceStatus": "not_executed",
-      "deviceAcceptance": "Reconcile actual ledger signs/balances and exported statement, file picker cancellation, access revocation and lifecycle policy."
+      "deviceAcceptance": "Exercise member and group access boundaries, lifecycle controls and access revocation."
     },
     {
       "id": "J08",
@@ -77,19 +77,19 @@
     },
     {
       "id": "J10",
-      "title": "Receiving-phone diagnostics and capture controls",
-      "controllerCoverage": "Upload hold distinguished from member credit; pause/resume preserves queue",
-      "controllerStatus": "passed",
+      "title": "Admin SMS consent and sync",
+      "controllerCoverage": "Profile-based Admin authority, Android SMS access, pending raw SMS and sync recovery",
+      "controllerStatus": "pending",
       "deviceAcceptanceStatus": "not_executed",
-      "deviceAcceptance": "Pair an authorized receiving phone, change SIM, replace phone, deny permissions, check queue retention and real carrier receipts. Staff APK must have no SMS access."
+      "deviceAcceptance": "Grant and revoke SMS permission for the signed-in Admin. Verify background and power-off catch-up with an eligible carrier message, and confirm Staff has no SMS access."
     },
     {
       "id": "J11",
       "title": "SMS filter, original evidence and access revocation",
-      "controllerCoverage": "Queue filter; original source reachable; revocation removes SMS/raw state",
-      "controllerStatus": "passed",
+      "controllerCoverage": "Retained raw SMS and parse results under the authorized Admin scope, with access cleared on revocation",
+      "controllerStatus": "pending",
       "deviceAcceptanceStatus": "not_executed",
-      "deviceAcceptance": "Test real queue statuses, malformed/duplicate receipts, raw evidence readability, and server-authorized revocation."
+      "deviceAcceptance": "Verify raw retention and source access for supported, malformed and duplicate M-Money SMS. Confirm duplicate SMS does not create a second payment."
     },
     {
       "id": "J12",
@@ -97,7 +97,7 @@
       "controllerCoverage": "Foreground guard; blocked navigation until validation; recovery does not replay commands",
       "controllerStatus": "passed",
       "deviceAcceptanceStatus": "not_executed",
-      "deviceAcceptance": "Real process kill/restart, offline cache expiry, return from settings, keystore restore failure and unknown financial outcomes."
+      "deviceAcceptance": "Test process restart, offline cache expiry, return from Account, keystore restore failure and an interrupted member allocation."
     }
   ]
 }

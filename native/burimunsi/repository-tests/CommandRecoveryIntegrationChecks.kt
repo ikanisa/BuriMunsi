@@ -22,7 +22,7 @@ internal class Fixture {
     var beforePost:(()->Unit)?=null
     var beforeResponse:(()->Unit)?=null
     val payment=Payment("payment-1","Payer","+250780000001",10000,"at","ft-1","unallocated",1)
-    val member=Member("member-1","Member","+250780000001",10000,true,1)
+    val member=Member("member-1","Member","+250780000001",true,1)
     init {
         api.handler={req->when {
             req.path.endsWith("/session/login")||req.path.endsWith("/session")->JSONObject()
@@ -49,7 +49,7 @@ internal class Fixture {
     }
     fun login(){if(repo.current()!=null)repo.clearOperator();repo.login("0780000001","2468")}
     fun unknown():PendingOperation {
-        runCatching { repo.allocate(payment,member,"Synthetic verified identity") }
+        runCatching { repo.allocate(payment,member) }
         return repo.pending()!!.also{check(it.state==OperationState.UNKNOWN)}
     }
     fun prepared():PendingOperation {
@@ -71,15 +71,15 @@ fun main(){
     fun test(label:String,run:()->Unit){SecureStore.reset();run();checks++;println("PASS $label")}
     test("a stale controller cannot reopen the same allocation after verified cleanup") {
         val f=Fixture();f.postFailure=null;f.state="committed"
-        f.repo.allocate(f.payment,f.member,"Confirmed original")
+        f.repo.allocate(f.payment,f.member)
         val original=f.api.calls.single{it.path.endsWith("/allocate")}.body!!.getString("requestId")
         val store=AllocationReceiptVersions(Context())
-        val stale=runCatching{f.repo.allocate(f.payment,f.member,"Stale original receipt")}.exceptionOrNull()
+        val stale=runCatching{f.repo.allocate(f.payment,f.member)}.exceptionOrNull()
         check(stale is ApiFailure && stale.code=="record_unavailable" && f.posts.get()==1 && f.repo.pending()==null)
         store.requireNewer("different-operator","group-1",f.payment.id,f.payment.version)
         store.requireNewer("operator-1","different-group",f.payment.id,f.payment.version)
         store.requireNewer("operator-1","group-1",f.payment.id,f.payment.version+1)
-        f.repo.allocate(f.payment.copy(id="payment-2"),f.member,"Separate verified receipt")
+        f.repo.allocate(f.payment.copy(id="payment-2"),f.member)
         check(f.posts.get()==2 && f.repo.pending()==null)
         val key="allocation-readback-"+Values.sha256("operator-1/group-1/"+f.payment.id)
         val record=JSONObject(SecureStore.records.getValue(key))
@@ -88,12 +88,12 @@ fun main(){
     }
     test("a stale allocation leaves another unresolved payment and its original evidence intact") {
         val f=Fixture();f.postFailure=null;f.state="committed"
-        f.repo.allocate(f.payment,f.member,"Confirmed original")
+        f.repo.allocate(f.payment,f.member)
         f.postFailure=ApiFailure("connection_unavailable",0,true);f.state="pending"
-        check(runCatching{f.repo.allocate(f.payment.copy(id="payment-2"),f.member,"Independent action")}.isFailure)
+        check(runCatching{f.repo.allocate(f.payment.copy(id="payment-2"),f.member)}.isFailure)
         val other=f.repo.pending()!!;val saved=SecureStore.records.getValue("pending-command")
         check(JSONObject(other.body).getString("path")=="/payments/payment-2/allocate")
-        check(runCatching{f.repo.allocate(f.payment,f.member,"Stale original")}.isFailure)
+        check(runCatching{f.repo.allocate(f.payment,f.member)}.isFailure)
         check(f.repo.pending()==other && SecureStore.records["pending-command"]==saved && f.posts.get()==2)
     }
     for(mode in listOf("throw","drop"))test("$mode of allocation readback leaves original committed journal recoverable") {
@@ -124,7 +124,7 @@ fun main(){
         test("first POST HTTP $status retains operation and cannot authorize replacement") {
             val f=Fixture();f.postFailure=ApiFailure("synthetic_http_error",status,false)
             val original=f.unknown();f.login()
-            check(runCatching { f.repo.allocate(f.payment,f.member,"Another action") }.isFailure)
+            check(runCatching { f.repo.allocate(f.payment,f.member) }.isFailure)
             check(runCatching { f.repo.retryPending() }.isFailure)
             check(f.posts.get()==1&&f.repo.pending()==original)
         }
@@ -141,7 +141,7 @@ fun main(){
         test("$mode during prepare prevents all financial dispatch") {
             val f=Fixture()
             if(mode=="throw")SecureStore.failWrite="pending-command" else SecureStore.dropWrite="pending-command"
-            check(runCatching{f.repo.allocate(f.payment,f.member,"Original action")}.isFailure)
+            check(runCatching{f.repo.allocate(f.payment,f.member)}.isFailure)
             check(f.posts.get()==0)
         }
         test("$mode during SENT fence prevents all financial dispatch") {
@@ -279,7 +279,7 @@ fun main(){
             errorCode("operation_identity_changed"){f.repo.reconcilePending()}
             check(f.repo.pending()==replacement&&f.repo.pending()?.state==OperationState.COMMITTED&&f.posts.get()==1)
             SecureStore.beforeClear=null
-            check(runCatching{f.repo.allocate(f.payment,f.member,"Blocked replacement")}.isFailure)
+            check(runCatching{f.repo.allocate(f.payment,f.member)}.isFailure)
         }
     }
     for(replacementState in listOf(OperationState.REJECTED,OperationState.UNKNOWN)){

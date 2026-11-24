@@ -17,6 +17,7 @@ export function MomoSourceRevealPanel({source, enabled = false, onCandidate, obs
   return <MomoSourceRevealSession key={scope} source={source} session={session} user={user} onCandidate={onCandidate} observationGroup={observationGroup} />;
 }
 function MomoSourceRevealSession({source, session, user, onCandidate, observationGroup}: {source: Pick<MomoSourceJob, 'raw_sms_id' | 'body_sha256'>; observationGroup?: string; session: SessionContextValue; user: AdminUser; onCandidate?: (candidate: MomoExtraction | null) => void}) {
+  const simplePayments = user.authMethod === 'phone_passcode';
   const live = useRef(session), mounted = useRef(false), pending = useRef<AbortController | null>(null), busyRef = useRef(false);
   useLayoutEffect(() => {live.current = session;}, [session]);
   useLayoutEffect(() => {mounted.current = true; return () => {mounted.current = false; pending.current?.abort();};}, []);
@@ -42,7 +43,8 @@ function MomoSourceRevealSession({source, session, user, onCandidate, observatio
       verifyFresh: async () => {const actor = live.current.user; return !!actor && actor.id === user.id && actor.sessionId === user.sessionId && await verifySensitiveAccess(live.current, actor);}};
     try {
       const result = await revealMomoSource(context, reviewReason);
-      if (current()) {setContent(result); onCandidate?.(result.candidate ?? null); setMessage('Source access recorded. The message is evidence and does not confirm provider settlement.');}
+      if (current()) {setContent(result); onCandidate?.(result.candidate ?? null); setMessage(simplePayments ? 'Source access recorded.' :
+        'Source access recorded. The message is evidence and does not confirm provider settlement.');}
     } catch (error) {
       if (current()) {
         const verification = error instanceof Error && error.message.includes('current verification'); setNeedsVerification(verification);
@@ -50,7 +52,7 @@ function MomoSourceRevealSession({source, session, user, onCandidate, observatio
       }
     } finally {pending.current = null; busyRef.current = false; if (current()) {setBusy(false); setReviewReason(null); setConfirmed(false);}}
   };
-  return <section className="momo-assignment" aria-label="Original source access"><h3>Original source</h3><p>Viewing this message records your reason and access. The message is evidence and does not by itself credit a contribution or confirm provider settlement.</p>
+  return <section className="momo-assignment" aria-label="Original source access"><h3>Original source</h3><p>Viewing this message records your reason and access.{!simplePayments && ' The message is evidence and does not by itself credit a contribution or confirm provider settlement.'}</p>
     {message && <p role="status">{message}</p>}
     {needsVerification && <p><Link className="operations-link" to={verificationPath(session.verificationMode, '/admin/momo-receipts')}>{session.verificationMode === 'passcode' ? 'Verify passcode' : 'Verify identity'}</Link></p>}
     {!content && <form className="operations-action-form" onSubmit={review}><Field label="Reason to review the original source" htmlFor="momo-source-reason"><input id="momo-source-reason" className="admin-input" value={reason} onChange={(event) => setReason(event.target.value)} minLength={8} maxLength={500} required disabled={busy || reviewReason !== null} /></Field><Button type="submit" disabled={busy || reviewReason !== null}>Review source access</Button></form>}

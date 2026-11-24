@@ -3,10 +3,10 @@ package rw.ikanisa.burimunsi.ui
 import androidx.compose.runtime.SnapshotMutationPolicy
 import rw.ikanisa.burimunsi.core.*
 
-enum class Sheet { PROFILE, PIN, HELP, ALLOCATE, ENROLL, STAFF, STAFF_EDIT, REMOVE_STAFF, GATEWAY, RAW, MEMBER_DETAILS, HISTORY, AUDIT, FILTERS, REPLACE_DEVICE }
+enum class Sheet { PROFILE, PIN, HELP, ALLOCATE, ENROLL, STAFF, STAFF_EDIT, REMOVE_STAFF, GATEWAY, RAW, MEMBER_DETAILS, AUDIT, FILTERS, REPLACE_DEVICE }
 data class UiState(
     val operator:Operator?=null,val route:Route=Route.LOGIN,val sheet:Sheet?=null,val busy:Boolean=false,val error:String?=null,
-    val home:Home?=null,val payments:Page<Payment>?=null,val members:Page<Member>?=null,val ledger:Page<LedgerRow>?=null,val memberTransactions:Page<Payment>?=null,
+    val home:Home?=null,val payments:Page<Payment>?=null,val members:Page<Member>?=null,
     val payment:Payment?=null,val allocatedFromVersion:Long?=null,val member:Member?=null,val messages:Page<SmsRow>?=null,val observations:Page<ObservationListRow>?=null,
     val queuedObservations:List<QueuedObservationRow>?=null,val queuedUnavailable:Boolean=false,
     val observationProcessing:Map<SmsSourceRef.Observation,ObservationProcessing> = emptyMap(),val observationRetryNotice:String?=null,
@@ -15,7 +15,6 @@ data class UiState(
     val rawDisclosure:RawDisclosureState=RawDisclosureState.AWAITING_REASON,val rawError:String?=null,val rawExposure:Long=0,
     val staff:Page<StaffAccount>?=null,val selectedStaff:StaffAccount?=null,val audit:Page<AuditRow>?=null,
     val panelSavedAt:Long?=null,
-    val history:Page<PaymentEvent>?=null,val historyPaymentId:String?=null,val historyOffline:Boolean=false,val historySavedAt:Long?=null,
     val gateway:GatewayStatus?=null,val search:String="",val queuedSearch:String="",val filter:String="all",val selectedMember:Member?=null,
     val failure:DisplayFailure=DisplayFailure.NONE,
     val readbackRequired:Boolean=false,
@@ -35,7 +34,7 @@ fun UiState.presentation(gate:ScreenGate,now:Long):ScreenPresentation {
     val loaded=when(route){
         Route.LOGIN->false;Route.HOME->home!=null;Route.PAYMENTS->payments!=null
         Route.PAYMENT->payment!=null;Route.MEMBERS->members!=null
-        Route.MEMBER->member!=null&&memberTransactions!=null;Route.SMS->messages!=null||observations!=null||queuedObservations!=null||observationUnavailable;Route.SETTINGS->operator!=null
+        Route.MEMBER->member!=null;Route.SMS->messages!=null||observations!=null||queuedObservations!=null||observationUnavailable;Route.SETTINGS->operator!=null
     }
     val count=when(route){
         Route.PAYMENTS->payments?.items?.size?:0;Route.MEMBERS->members?.items?.size?:0
@@ -45,14 +44,13 @@ fun UiState.presentation(gate:ScreenGate,now:Long):ScreenPresentation {
     val panelLoaded=when(sheet){
         Sheet.STAFF,Sheet.STAFF_EDIT,Sheet.REMOVE_STAFF->staff!=null||selectedStaff!=null
         Sheet.AUDIT->audit!=null;Sheet.RAW->raw!=null;Sheet.GATEWAY->gateway!=null
-        Sheet.ALLOCATE->members!=null||selectedMember!=null;Sheet.HISTORY->history!=null
+        Sheet.ALLOCATE->members!=null||selectedMember!=null
         else->false
     }
-    val panelClock=if(sheet==Sheet.HISTORY)historySavedAt else panelSavedAt
     val fresh=!readbackRequired&&(route==Route.SETTINGS||!loaded||SnapshotFreshness.reusable(savedAt,now))&&
-        (!panelLoaded||SnapshotFreshness.reusable(panelClock,now))
+        (!panelLoaded||SnapshotFreshness.reusable(panelSavedAt,now))
     return PresentationState.reduce(DisplayInput(operator!=null&&now<operator.expiresAt,gate,loaded,count,busy,
-        offline||historyOffline&&sheet==Sheet.HISTORY,fresh,pending,
+        offline,fresh,pending,
         if(readbackRequired&&failure==DisplayFailure.NONE)DisplayFailure.CONFLICT else failure))
 }
 

@@ -27,10 +27,9 @@ internal class NativeListingQueries(private val collectionId: () -> String?) {
     fun target(state: UiState): ListingTarget? = when (state.sheet) {
         Sheet.STAFF -> ListingTarget.STAFF
         Sheet.AUDIT -> ListingTarget.AUDIT
-        Sheet.HISTORY -> ListingTarget.HISTORY
         Sheet.FILTERS -> origin?.target
         null -> when (state.route) {
-            Route.PAYMENTS, Route.MEMBER -> ListingTarget.PAYMENTS
+            Route.PAYMENTS -> ListingTarget.PAYMENTS
             Route.MEMBERS -> ListingTarget.MEMBERS
             Route.SMS -> ListingTarget.SMS
             else -> null

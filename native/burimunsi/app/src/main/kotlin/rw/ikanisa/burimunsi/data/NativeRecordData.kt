@@ -1,6 +1,7 @@
 package rw.ikanisa.burimunsi.data
 
 import android.content.Context
+import app.cool.mobile.BuildConfig
 import org.json.JSONObject
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
@@ -39,12 +40,12 @@ internal class NativeRecordCache(context:Context) {
     private val file=SecureStore(context,"records")
 
     fun revision():Long=epoch.get()
-    fun read(path:String):String? {
+    fun read(path:String):JSONObject? {
         // A subsequent read of this entry can immediately rely on a preceding live result,
         // including the first offline read after a successful response.
         val write = synchronized(pending) { pending[path]?.takeIf { it.revision == epoch.get() } }
         write?.finished?.await()
-        return file.read()
+        return synchronized(lock) { currentCache() }
     }
 
     fun defer(path: String, revision: Long, persist: () -> Unit) {
@@ -62,8 +63,21 @@ internal class NativeRecordCache(context:Context) {
         }
     }
 
-    fun update(revision:Long,replace:(String?)->String?):Unit=synchronized(lock){
-        if(revision==epoch.get())replace(file.read())?.let(file::write)
+    fun update(revision:Long,replace:(JSONObject?)->JSONObject?):Unit=synchronized(lock){
+        if(revision==epoch.get())replace(currentCache())?.let{cache->
+            val encoded=cache.put("appVersionCode",BuildConfig.VERSION_CODE).toString()
+            if(encoded.toByteArray(Charsets.UTF_8).size<=1_000_000)file.write(encoded)
+        }
+    }
+
+    // This file contains only disposable display snapshots. An APK update must
+    // never restore an older build's records, and leaves all other stores alone.
+    private fun currentCache():JSONObject? {
+        val stored=file.read()?:return null
+        val cache=try{JSONObject(stored)}catch(_:Exception){null}
+        if(cache?.optInt("appVersionCode")==BuildConfig.VERSION_CODE)return cache
+        file.clear()
+        return null
     }
 
     fun clear(verify:Boolean=false):Unit=synchronized(lock){
@@ -86,10 +100,10 @@ internal class NativeRecordData(
     private fun accessScope(owner:Operator)=owner.role.name+":"+owner.capabilities.sorted().joinToString(",")
 
     private fun cachedRecord(path:String,group:String,owner:Operator,sessionScope:String,now:Long,recent:Boolean):CachedRecord? {
-        val cache=try{cacheStore.read(path)?.let(::JSONObject)}catch(_:Exception){null}?:return null
+        val cache=try{cacheStore.read(path)}catch(_:Exception){null}?:return null
         if(cache.optString("contractVersion")!=BuriMunsiSchemas.VERSION||cache.optString("sessionScope")!=sessionScope||
-            cache.optString("groupId")!=group||cache.optString("accountId")!=owner.id)return null
-        if((recent||cache.has("accessScope"))&&cache.optString("accessScope")!=accessScope(owner))return null
+            cache.optString("groupId")!=group||cache.optString("accountId")!=owner.id||
+            cache.optString("accessScope")!=accessScope(owner))return null
         val entry=cache.optJSONObject("entries")?.optJSONObject(path)?:return null
         val stored=entry.opt("savedAt")
         if(stored !is Long&&stored !is Int)return null
@@ -98,17 +112,10 @@ internal class NativeRecordData(
         return if(current)CachedRecord(entry.optString("payload"),saved)else null
     }
 
-    fun hasRecentHome(saved:SavedNativeSession):Boolean {
-        val owner=saved.operatorOrNull()?:return false
-        val now=System.currentTimeMillis()
-        return now<owner.expiresAt&&cachedRecord("/home",saved.groupId,owner,Values.sha256(saved.token),now,recent=true)!=null
-    }
-
-    private fun <T> recentRecord(path:String,expectedOwner:Operator?=null,decode:(String)->T):Pair<T,Long>? {
+    private fun <T> recentRecord(path:String,decode:(String)->T):Pair<T,Long>? {
         val witness=ownedSession()
         return authority.withCurrent(witness){
             val owner=operator?:throw ApiFailure("session_unavailable",401)
-            checkContract(expectedOwner==null||owner===expectedOwner,"session_changed")
             val now=System.currentTimeMillis()
             checkContract(now<owner.expiresAt,"session_unavailable")
             val entry=cachedRecord(path,groupId,owner,Values.sha256(witness.token),now,recent=true)
@@ -121,12 +128,6 @@ internal class NativeRecordData(
             }catch(_:Exception){return@withCurrent null}
             record to entry.savedAt
         }
-    }
-
-    // Preserve financial rows while requiring a live receipt read for its SMS source.
-    fun recentHome(owner:Operator)=recentRecord("/home",owner){ value->
-        val home=decodeHome(JSONObject(value))
-        home.copy(recent=home.recent.map{it.copy(sourceId=null)})
     }
 
     fun recentPayments(listing:ListingQuery)=recentRecord(listingPath("/payments",ListingTarget.PAYMENTS,listing,null)){ value->
@@ -181,7 +182,7 @@ internal class NativeRecordData(
     private fun saveRecord(path:String,payload:String,owner:Operator,group:String,sessionScope:String,now:Long,revision:Long) {
         try {
             cacheStore.update(revision){stored->
-                var cache=stored?.let(::JSONObject)
+                var cache=stored
                 val access=accessScope(owner)
                 if(cache?.optString("sessionScope")!=sessionScope||cache.optString("contractVersion")!=BuriMunsiSchemas.VERSION||
                     cache.optString("groupId")!=group||cache.optString("accountId")!=owner.id||
@@ -191,9 +192,8 @@ internal class NativeRecordData(
                 if((entries.optJSONObject(path)?.opt("savedAt") as? Number)?.toLong()?.let{it>now}==true)return@update null
                 entries.put(path,JSONObject().put("savedAt",now).put("payload",payload))
                 while(entries.length()>8){val key=entries.keys().asSequence().minByOrNull{entries.getJSONObject(it).getLong("savedAt")}?:break;entries.remove(key)}
-                val saved=JSONObject().put("contractVersion",BuriMunsiSchemas.VERSION).put("groupId",group).put("accountId",owner.id)
-                    .put("sessionScope",sessionScope).put("accessScope",access).put("entries",entries).toString()
-                saved.takeIf{it.toByteArray(Charsets.UTF_8).size<=1_000_000}
+                JSONObject().put("contractVersion",BuriMunsiSchemas.VERSION).put("groupId",group).put("accountId",owner.id)
+                    .put("sessionScope",sessionScope).put("accessScope",access).put("entries",entries)
             }
         }catch(_:Exception){/* Cache persistence cannot change the canonical response. */}
     }
@@ -216,7 +216,7 @@ internal class NativeRecordData(
         }
     }
 
-    fun home():Home=snapshot("/home",firstDisplay=true){value,_->decodeHome(JSONObject(value))}.value
+    fun home():RecordSnapshot<Home> = snapshot("/home",firstDisplay=true){value,_->decodeHome(JSONObject(value))}
 
     fun readQuietHome(): JSONObject {
         val scope = recordReadScope { witness, _ -> sessions.requestUnpublishedHome(witness) }
@@ -224,7 +224,16 @@ internal class NativeRecordData(
     }
     private fun decodeHome(j:JSONObject):Home{
         val a=j.getJSONArray("recentPayments")
-        return Home(j.amount("groupBalanceRwf"),j.amount("todayRwf"),j.getInt("memberCount"),j.getInt("unallocatedCount"),(0 until a.length()).map{decodePayment(a.getJSONObject(it))},j.getString("asOf"),if(j.has("unallocatedAmountRwf")&&!j.isNull("unallocatedAmountRwf"))j.amount("unallocatedAmountRwf")else null)
+        val paymentCount = if (j.has("paymentCount") && !j.isNull("paymentCount")) j.counter("paymentCount", Int.MAX_VALUE.toLong()).toInt() else null
+        val unallocated = j.counter("unallocatedCount", Int.MAX_VALUE.toLong()).toInt()
+        checkContract(paymentCount == null || (unallocated <= paymentCount && a.length() <= paymentCount), "invalid_api_response")
+        return Home(
+            paymentCount = paymentCount,
+            memberCount = j.counter("memberCount", Int.MAX_VALUE.toLong()).toInt(),
+            unallocatedCount = unallocated,
+            recent = (0 until a.length()).map { decodePayment(a.getJSONObject(it)) },
+            asOf = j.getString("asOf"),
+        )
     }
     /** Full-query export collectors use online reads with one immutable local
      * identity witness. Server cursors independently bind group/actor/query and
@@ -248,7 +257,7 @@ internal class NativeRecordData(
     }
     fun validateRecordReadScope(scope:RecordReadScope){scope.validate(recordReadOwner)}
     private fun listingRead(target:ListingTarget,path:String,scope:RecordReadScope?):String {
-        return scope?.read(recordReadOwner,path)?:if(target in setOf(ListingTarget.PAYMENTS,ListingTarget.MEMBERS,ListingTarget.LEDGER,ListingTarget.HISTORY))records(path)else sessions.request("GET",path)
+        return scope?.read(recordReadOwner,path)?:if(target==ListingTarget.PAYMENTS||target==ListingTarget.MEMBERS)records(path)else sessions.request("GET",path)
     }
     fun payments(listing:ListingQuery,cursor:String?=null,memberId:String?=null,scope:RecordReadScope?=null):Page<Payment> {
         if(scope==null)return paymentPage(listing,cursor,memberId).value
@@ -272,18 +281,12 @@ internal class NativeRecordData(
             mapOf("anchorId" to anchorId?.let(Values::id)))
         return page(listingRead(ListingTarget.MEMBERS, path, scope), ::decodeMember)
     }
-    fun ledger(id:String,listing:ListingQuery,cursor:String?=null,scope:RecordReadScope?=null):Page<LedgerRow> =
-        page(listingRead(ListingTarget.LEDGER,listingPath("/ledger",ListingTarget.LEDGER,listing,cursor,mapOf("memberId" to Values.id(id))),scope),::decodeLedger)
     fun sms(listing:ListingQuery,cursor:String?=null,scope:RecordReadScope?=null,limit:Int=100):Page<SmsRow> =
         page(listingRead(ListingTarget.SMS,listingPath("/sms",ListingTarget.SMS,listing,cursor,limit=limit),scope),::decodeSms)
     fun staff(listing:ListingQuery,cursor:String?=null,scope:RecordReadScope?=null):Page<StaffAccount> =
         page(listingRead(ListingTarget.STAFF,listingPath("/staff",ListingTarget.STAFF,listing,cursor),scope),::decodeStaff)
     fun audit(listing:ListingQuery,cursor:String?=null,scope:RecordReadScope?=null):Page<AuditRow> =
         page(listingRead(ListingTarget.AUDIT,listingPath("/audit",ListingTarget.AUDIT,listing,cursor),scope)){j->AuditRow(j.getString("id"),j.getString("action"),j.getString("at"))}
-    fun paymentHistory(id:String,listing:ListingQuery,cursor:String?=null,scope:RecordReadScope?=null):Page<PaymentEvent> {
-        val transactionId=Values.id(id)
-        return decodePaymentHistory(listingRead(ListingTarget.HISTORY,listingPath("/payments/$transactionId/history",ListingTarget.HISTORY,listing,cursor),scope),groupId,transactionId)
-    }
     fun payments(q:String="",filter:String="all",cursor:String?=null,memberId:String?=null):Page<Payment>{
         val member=memberId?.let(Values::id)
         val result=page(records("/payments"+query(mapOf("q" to q,"filter" to filter,"cursor" to cursor,"memberId" to member))),::decodePayment)
@@ -310,12 +313,7 @@ internal class NativeRecordData(
             member
         }
     }
-    fun ledger(id:String,cursor:String?=null)=page(records("/ledger"+query(mapOf("memberId" to Values.id(id),"cursor" to cursor))),::decodeLedger)
     fun sms(q:String="",cursor:String?=null,filter:String="all",limit:Int?=null)=page(sessions.request("GET","/sms"+query(mapOf("q" to q,"cursor" to cursor,"filter" to filter,"limit" to limit?.coerceIn(1,100)?.toString()))),::decodeSms)
     fun staff(cursor:String?=null)=page(sessions.request("GET","/staff"+query(mapOf("cursor" to cursor))),::decodeStaff)
     fun audit(cursor:String?=null)=page(sessions.request("GET","/audit"+query(mapOf("cursor" to cursor)))){j->AuditRow(j.getString("id"),j.getString("action"),j.getString("at"))}
-    fun paymentHistory(id:String,cursor:String?=null):Page<PaymentEvent> {
-        val transactionId=Values.id(id)
-        return decodePaymentHistory(records("/payments/$transactionId/history"+query(mapOf("cursor" to cursor))),groupId,transactionId)
-    }
 }

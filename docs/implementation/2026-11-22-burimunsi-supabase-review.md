@@ -4,6 +4,10 @@ Initial review on 22 November 2026. Operational verification continued on 24 Nov
 
 Project `rrlduytparvsjfmegalh` · BuriMunsi Android, Admin and Supabase production
 
+This dated review records the former workflow as observed on releases through 87.
+The [current Payments workflow](../../README.md#account-roles-sms-access-and-payments)
+defines the active operator and SMS processing steps.
+
 ## Production check on 24 November
 
 Release 87 opened at 11:32:22 Kigali on commit `faed25b`. All **116 migrations** matched the release record. The hosted database body and grants for the new empty-queue selector matched source. It uses the existing serialized worker whenever a receipt might need parsing or posting. The original 115 migrations, 78 protected settings and SMS gateway archive passed independent verification. The signed probe returned HTTP 200. Ordinary jobs returned signed HTTP 200 at **11:33:45 and 11:34:55**. At 11:35:40 Cron recorded nine checks in ten seconds, with zero queued native jobs and one ready sender. The two earlier jobs with uncertain outcomes retained their original dispositions. [Migration](../../supabase/migrations/20261124091329_burimunsi_idle_native_jobs.sql) · [Verification results](./burimunsi-receiver-verification-2026-11-22.json)

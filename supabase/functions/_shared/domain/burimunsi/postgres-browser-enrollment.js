@@ -3,7 +3,6 @@ import {requireThat} from './errors.js';
 import {canonicalJson,requireId,requireRequestId,sha256} from './values.js';
 import {PostgresNativeAuthority} from './postgres-authority.js';
 import {validateDirectMemberInput,writeDirectMemberRecord} from './postgres-collect-members.js';
-import {PostgresMemberRematchQueue} from './postgres-rematch-job-store.js';
 import {COLLECT_MUTATION_LOCK} from '../../postgres-mutation-lock.js';
 
 const OPERATION='burimunsi.browser_member_enrollment';
@@ -24,10 +23,10 @@ const SCOPE_SQL=`SELECT c.title AS label,floor(extract(epoch FROM clock_timestam
 function checkedMember(member,groupId) {
   requireThat(member&&typeof member==='object'&&member.groupId===groupId&&typeof member.name==='string'&&
     member.name.trim().length>0&&typeof member.phone==='string'&&/^\+2507[2389]\d{7}$/.test(member.phone)&&
-    typeof member.active==='boolean'&&Number.isSafeInteger(member.version)&&member.version>=1&&Number.isSafeInteger(member.balanceRwf),
+    typeof member.active==='boolean'&&Number.isSafeInteger(member.version)&&member.version>=1,
     'member_contract_violation',503);
   requireId(member.id);
-  return {id:member.id,groupId,name:member.name,phone:member.phone,active:member.active,version:member.version,balanceRwf:member.balanceRwf};
+  return {id:member.id,groupId,name:member.name,phone:member.phone,active:member.active,version:member.version};
 }
 
 export class PostgresBrowserEnrollment {
@@ -37,7 +36,6 @@ export class PostgresBrowserEnrollment {
     this.sessionId=account.auth_session_id;
     this.actor={userId:account.principal_id,sessionId:this.sessionId};
     this.authority=new PostgresNativeAuthority({db,groupId:this.groupId});
-    this.queue=new PostgresMemberRematchQueue(this.groupId);
     this.scopeArgs=[this.groupId,account.token_hash,account.origin,this.actorId,
       this.actor.userId,this.sessionId,account.public_id,account.id];
   }
@@ -104,9 +102,7 @@ export class PostgresBrowserEnrollment {
       const current=await this.scope(sql);
       const prior=await this.prior(sql,requestId,fingerprint);
       if(prior)return prior;
-      // Match the native lock order even while automated posting is paused.
-      await this.queue.scope(sql,{allowDisabled:true});
-      const record=await writeDirectMemberRecord(this.authority,sql,{groupId:this.groupId,name,phone},current.now);
+      const record=await writeDirectMemberRecord(this.authority,sql,{groupId:this.groupId,name,phone},current.now,{includeBalance:false});
       const member=checkedMember(record,this.groupId);
       const audited=await this.authority.db.statement(sql,auditStatement({DB:this.authority.db},this.actor,
         record.existing?'burimunsi.enrollment.attested':'burimunsi.enroll','user',member.id,{
@@ -116,7 +112,6 @@ export class PostgresBrowserEnrollment {
       await sql.unsafe(`INSERT INTO private.burimunsi_audit (id,collection_id,actor_id,action,entity_id,request_id,at_ms)
         VALUES ($1::uuid,$2,$3::uuid,'burimunsi.members_import.attested',$4,$5::uuid,$6)`,
         [crypto.randomUUID(),this.groupId,this.actorId,member.id,requestId,current.now]);
-      if(!record.existing)await this.queue.enqueueInTransaction(sql,{groupId:this.groupId,memberId:member.id,requestId});
       await this.scope(sql);
       const retained=await sql.unsafe(`INSERT INTO private.burimunsi_command_receipts
         (collection_id,actor_id,request_id,session_id,operation,fingerprint,response,created_at)

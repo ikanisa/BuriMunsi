@@ -1,6 +1,6 @@
 # BuriMunsi
 
-BuriMunsi runs group savings for its configured group. The Android Staff app handles member and payment workflows. Admin Sync captures eligible M-Money receipts for the signed-in Admin. The web Admin handles operator access, member and financial oversight, and reconciliation.
+BuriMunsi records incoming and outgoing M-Money payments for its configured group. Staff and Admin work from the same Payments area. Admin Sync captures the group's eligible M-Money SMS, while Web Admin provides operator access, members, payments and authorized SMS evidence.
 
 For BuriMunsi support or an account deletion request, [contact support on WhatsApp at +250 788 767 816](https://wa.me/250788767816).
 
@@ -10,14 +10,14 @@ For BuriMunsi support or an account deletion request, [contact support on WhatsA
 | --- | --- |
 | Android Staff and Admin Sync | `native/burimunsi/`, Kotlin/Compose with pinned receiver source in `vendor/receiver-compat/` |
 | Web Admin | `admin-web/` and `deploy/platform-admin/wrangler.burimunsi.jsonc` |
-| API, ledger, evidence and jobs | `supabase/functions/`, `supabase/migrations/`, `supabase/jobs/` and `deploy/collect-sms/` |
+| API, payments, SMS evidence and jobs | `supabase/functions/`, `supabase/migrations/`, `supabase/jobs/` and `deploy/collect-sms/` |
 | Generated contracts | `contracts/` and the generators under `scripts/` |
 
-The tracked source was extracted from `ikanisa/COOL` at `192c24f8574f42dc4be8736f787ab6e8d5cd97c5`. Builds use this checkout’s own source, including the verified receiver code under `vendor/receiver-compat/`. The BuriMunsi production target is the existing Supabase Cloud project `rrlduytparvsjfmegalh`. The web Admin target is `https://burimunsi-admin.ikanisa.com`. This preserves the current financial ledger and receipt evidence while giving each release its own source and deployment identity.
+The tracked source was extracted from `ikanisa/COOL` at `192c24f8574f42dc4be8736f787ab6e8d5cd97c5`. Builds use this checkout’s own source, including the verified receiver code under `vendor/receiver-compat/`. The BuriMunsi production target is the existing Supabase Cloud project `rrlduytparvsjfmegalh`. The web Admin target is `https://burimunsi-admin.ikanisa.com`. Each release has its own source and deployment identity.
 
 ## Build and verification
 
-Use Node 24.19.0, Deno 2.9.6, Python 3, JDK 17 and the pinned Gradle and Android SDK described by `native/burimunsi/scripts/setup_native_toolchain.py`. Use a disposable PostgreSQL 17 cluster for managed-schema and ledger rehearsals.
+Use Node 24.19.0, Deno 2.9.6, Python 3, JDK 17 and the pinned Gradle and Android SDK described by `native/burimunsi/scripts/setup_native_toolchain.py`. Use a disposable PostgreSQL 17 cluster for managed-schema, SMS parsing and payment-allocation tests.
 
 ```sh
 npm ci --prefix admin-web --no-audit --no-fund
@@ -45,14 +45,17 @@ Admin sign-in and once Android's SMS permissions are granted. No device or SIM
 registration, manual pairing, or phone handoff is part of the product workflow.
 The login number identifies the user, not the phone or SIM.
 
-Payment processing is automatic. The system validates and deduplicates eligible
-receipts and posts verified payments without manual transaction review or
-approval. A receipt that cannot be validated must not post as a payment.
+Admin Sync stores each eligible raw SMS in Supabase and preserves it separately
+from the parsed payment. The parser records supported incoming and outgoing
+payments in `burimunsi.payments`. The Payments area shows both directions in
+one list. Each payment starts **Unallocated** and becomes **Allocated** when
+assigned to a member of the same group. Allocation uses the current payment
+version and an idempotency key. A duplicate SMS or allocation retry preserves
+the original payment.
 
-This is the product requirement, not a claim that an existing build or
-deployment already meets it. Historical receiver documents remain release
-evidence, not the current product workflow. Release verification must confirm
-that the Android apps and backend follow the profile-based model.
+Release verification checks the profile-based SMS consent and access model,
+raw SMS retention, parsing, the single Payments list and member allocation.
+Historical receiver documents remain available as evidence.
 
 The release record binds the Android artifacts, Admin build and live Edge
 source. See [scheduler operation](supabase/jobs/README.md) for background

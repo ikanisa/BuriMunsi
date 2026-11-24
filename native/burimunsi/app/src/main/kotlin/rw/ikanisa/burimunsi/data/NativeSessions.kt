@@ -113,10 +113,9 @@ internal class NativeSessions(
         if(ownedWitness==witness)clearMemoryOperator()
     }
 
-    class ProfileRead(val operator:Operator,val home:JSONObject?=null,val useRecentHome:Boolean=false)
+    class ProfileRead(val operator:Operator,val home:JSONObject?=null)
 
-    fun restore(includeHome:Boolean=false,canReuseHome:(SavedNativeSession)->Boolean={false},
-        wantsHome:(String?,String)->Boolean={_,_->true}):ProfileRead?{
+    fun restore(includeHome:Boolean=false,wantsHome:(String?,String)->Boolean={_,_->true}):ProfileRead?{
         // Snapshot, validate and attach under one process-wide lock. A second
         // activity with the same saved bearer joins the existing generation.
         val restored=synchronized(authority){
@@ -150,7 +149,7 @@ internal class NativeSessions(
         // The checkpoint selects work only. It can block on local storage, so
         // neither authority nor the shared profile lock can be held here.
         val loadHome=includeHome&&saved.pendingPasscode?.stage!=PasscodeStage.INFLIGHT&&wantsHome(saved.owner,saved.groupId)
-        return resumeAttachedSession(witness,saved,loadHome,canReuseHome)
+        return resumeAttachedSession(witness,saved,loadHome)
     }
     fun login(phone:String,pin:String,includeHome:Boolean=false):ProfileRead {
         val normalizedPhone=Values.phone(phone);val normalizedPin=Values.pin(pin)
@@ -220,18 +219,13 @@ internal class NativeSessions(
     }
     private fun resumeAttachedSession(
         witness:SessionWitness,saved:SavedNativeSession,includeHome:Boolean=false,
-        canReuseHome:(SavedNativeSession)->Boolean={false},
     ):ProfileRead =
         synchronized(sessionRefreshLock){
             try{
                 val pending=saved.pendingPasscode
                 if(pending?.stage==PasscodeStage.INFLIGHT)
                     ProfileRead(recoverPasscode(witness,pending.token,checkNotNull(saved.owner)))
-                else {
-                    val useRecent=includeHome&&api.resolvesLoginScope&&canReuseHome(saved)
-                    val confirmed=refreshSessionLocked(witness,saved.owner,includeHome&&!useRecent)
-                    ProfileRead(confirmed.operator,confirmed.home,useRecent)
-                }
+                else refreshSessionLocked(witness,saved.owner,includeHome)
             }catch(error:Exception){
                 // Settle this failed read before another refresh of the same
                 // witness can publish. A replacement never inherits this cleanup.

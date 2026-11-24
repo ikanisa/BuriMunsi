@@ -62,7 +62,7 @@ interface BuriController {
     fun revealRaw(reason:String)
     fun selectMember(member:Member)
     fun allocationSearch(q:String)
-    fun allocate(note:String)
+    fun allocate()
     fun enroll(name:String,phone:String)
     /** Smart onboarding actions remain session-bound; implementations never retain document bytes. */
     fun onboardingOptions() {}

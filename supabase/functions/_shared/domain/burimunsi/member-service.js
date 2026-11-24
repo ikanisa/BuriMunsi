@@ -9,7 +9,7 @@ async function importRowRequestId(groupId,actorId,requestId,row){
 }
 /** Existing Collect Direct-member command is mandatory. No standalone person table. */
 export class MemberService {
-  constructor({store,groupId,clock=()=>Date.now()}){requirePort(store,['inMemberTransaction']);Object.assign(this,{store,groupId,clock});}
+  constructor({store,groupId,clock=()=>Date.now(),paymentsOnly=false}){requirePort(store,['inMemberTransaction']);Object.assign(this,{store,groupId,clock,paymentsOnly});}
   async enroll(actor,{name,phone,requestId}){
     actor={id:actor?.id,sessionId:actor?.sessionId};
     requireThat(typeof name==='string'&&name.trim().length>=2&&name.trim().length<=100&&!/[\u0000-\u001f\u007f]/.test(name),'invalid_name');
@@ -26,7 +26,7 @@ export class MemberService {
       // Opening an existing member is not an enrollment and must not queue a
       // fresh rematch. The internal marker is not part of the public member DTO.
       const {existing,...response}=result;
-      if(!existing)await tx.enqueueEligibleRematch({groupId:this.groupId,memberId:result.id,requestId,cause:'enrollment'});
+      if(!this.paymentsOnly&&!existing)await tx.enqueueEligibleRematch({groupId:this.groupId,memberId:result.id,requestId,cause:'enrollment'});
       await revalidateCommandActor(tx,fresh,this.groupId,'members.enroll',this.clock());
       await tx.retainCommand({operation:'burimunsi.enroll',groupId:this.groupId,actorId:fresh.id,sessionId:fresh.sessionId,requestId,fingerprint,response});return response;
     });
@@ -76,7 +76,7 @@ export class MemberService {
             (member.existing===undefined||member.existing===true),'member_contract_violation',503);
           memberId=member.id;status=member.existing?'already_registered':'created';
           await tx.recordMemberImportAttestation({groupId:this.groupId,memberId,requestId:rowRequestId,actorId:fresh.id,sessionId:fresh.sessionId});
-          if(!member.existing)await tx.enqueueEligibleRematch({groupId:this.groupId,memberId,requestId:rowRequestId,cause:'enrollment'});
+          if(!this.paymentsOnly&&!member.existing)await tx.enqueueEligibleRematch({groupId:this.groupId,memberId,requestId:rowRequestId,cause:'enrollment'});
         }
         results.push({row:row.row,status,memberId});
       }
@@ -99,7 +99,7 @@ export class MemberService {
       if(previous){requireThat(previous.fingerprint===fingerprint&&previous.sessionId===fresh.sessionId,'idempotency_conflict',409);return previous.response;}
       const result=await tx.setMembershipActive({groupId:this.groupId,memberId,active,expectedVersion,requestId,actorId:fresh.id,sessionId:fresh.sessionId});
       requireThat(result?.applied===true,'membership_changed',409);
-      if(active) {
+      if(active&&!this.paymentsOnly) {
         requirePort(tx,['enqueueEligibleRematch']);
         await tx.enqueueEligibleRematch({groupId:this.groupId,memberId,requestId,cause:'reactivation'});
       }

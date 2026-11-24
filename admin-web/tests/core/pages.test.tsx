@@ -1,9 +1,13 @@
 import { webcrypto } from 'node:crypto';
+import {MemoryRouter} from 'react-router';
+import type {AdminUser} from '../../src/session/sessionResponses';
+import {MemberDirectoryActions} from '../../src/features/core/MemberDirectory';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import fixture from './canonical-core-fixtures.json';
 import relatedFixture from './group-detail-fixtures.json';
 import reconciliationFixture from './canonical-reconciliation-fixture.json';
+import {AdminRequestError} from '../../src/api/client';
 import { CoreListPage } from '../../src/features/core/CoreListPage';
 import { CoreRecordPage } from '../../src/features/core/CoreRecordPage';
 import type { FeatureAccess } from '../../src/features/core/types';
@@ -65,12 +69,63 @@ describe('core list access and authority', () => {
     expect(screen.queryByRole('button', {name: 'Check evidence request'})).not.toBeInTheDocument();
   });
 
-  it('offers legacy person-creation recovery while writes are disabled', () => {
-    const navigate = vi.fn(), request = vi.fn(async () => ({}));
-    render(<CoreListPage {...base} financialModel="transaction_journals" permissions={['users.read', 'users.manage', 'overview.read']} request={request} navigate={navigate} area="users" />);
-    fireEvent.click(screen.getByRole('button', { name: 'Check person creation request' }));
-    expect(navigate).toHaveBeenCalledWith('/admin/users/new');
-    expect(screen.queryByRole('button', { name: 'Create person' })).not.toBeInTheDocument();
+  it('requests the group roster and displays membership activity independently of person access', async () => {
+    const member = {...fixture.members.rows[0], title: '123456', public_id: '123456', membership_status: 'inactive',
+      active_groups: 0, amount: '0 groups', status: 'active', account_status: 'active'};
+    const request = vi.fn().mockResolvedValue({...fixture.members, rows: [member], total: 1});
+    const navigate = vi.fn();
+    render(<CoreListPage {...base} area="members" scopedMember permissions={['users.read']} request={request} navigate={navigate}
+      locationSearch="?status=inactive" />);
+    const row = await screen.findByRole('row', {name: /123456/});
+    expect(within(row).getByText('Inactive')).toBeVisible();
+    const query = new URL(request.mock.calls[0][0], 'https://fixture.invalid').searchParams;
+    expect(query.get('directory')).toBe('roster');
+    expect(query.get('status')).toBe('inactive');
+    fireEvent.change(screen.getByRole('combobox', {name: 'Status'}), {target: {value: 'active'}});
+    expect(navigate).toHaveBeenCalledWith('/admin/members?status=active');
+  });
+
+  it('shows a service interruption and retries the same member search', async () => {
+    const page = {...fixture.members, rows: [], total: 0};
+    const request = vi.fn().mockRejectedValueOnce(new AdminRequestError('Paused', {statusCode: 503, code: 'application_fenced'}))
+      .mockResolvedValue(page);
+    render(<CoreListPage {...base} area="members" scopedMember permissions={['users.read']} request={request} locationSearch="?status=inactive" />);
+    expect(await screen.findByText('Members are temporarily unavailable. Try again.')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', {name: 'Try again'}));
+    expect(await screen.findByText('No records found')).toBeVisible();
+    expect(request.mock.calls[1][0]).toBe(request.mock.calls[0][0]);
+  });
+
+  it('opens an inactive member with the roster status in their profile', async () => {
+    const member = {...fixture.members.rows[0], membership_status:'inactive', active_groups:0, amount:'0 groups',
+      status:'active', account_status:'active'};
+    const request = vi.fn().mockResolvedValue({contract_version:2, model:base.financialModel,
+      resource_type:'members', resource:member, current_actor_id:base.actorId, can_manage:false, related:{}, related_truncated:false});
+    render(<CoreRecordPage {...base} area="members" id={member.id} permissions={['users.read']} request={request} scopedMember />);
+    expect(await screen.findByText('Inactive')).toBeVisible();
+    expect(request.mock.calls[0][0]).toBe('operations/members/' + member.id);
+  });
+
+  it('offers one Add member action and a separate recovery link only when a person request exists', async () => {
+    Object.defineProperty(globalThis, 'crypto', {value: webcrypto, configurable: true});
+    sessionStorage.clear();
+    const id = base.actorId, accountId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const user: AdminUser = {id, role: 'admin', accountId, email: '', sessionId: 'same-session', authMethod: 'phone_passcode',
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(), financialModel: 'canonical_evidence_ledger',
+      assuranceLevel: 1, emailVerifiedAt: null, mfaAt: null, principalId: id, permissions: ['users.read', 'users.manage', 'collections.manage'],
+      adminIdentity: {schemaVersion: 1, adminId: id, accountId, principalId: id, collectionId: id, role: 'admin'}};
+    const view = render(<MemoryRouter><MemberDirectoryActions user={user} identity={user} /></MemoryRouter>);
+    expect(screen.getByRole('link', {name: 'Add member'})).toHaveAttribute('href', '/admin/members/new');
+    expect(screen.queryByText(/pending person request/i)).not.toBeInTheDocument();
+    view.unmount();
+    try {
+      await retainPending(user, 'operating-createuser', 'new', 'reference-123', 'users.manage', {reason: 'Create person'});
+      render(<MemoryRouter><MemberDirectoryActions user={user} identity={user} /></MemoryRouter>);
+      expect(await screen.findByRole('link', {name: 'Review pending person request'})).toHaveAttribute('href', '/admin/users/new');
+      expect(screen.getAllByRole('link', {name: 'Add member'})).toHaveLength(1);
+    } finally {
+      sessionStorage.clear();
+    }
   });
 
   it('offers legacy group creation recovery to staff while writes are disabled', () => {

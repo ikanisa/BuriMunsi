@@ -29,7 +29,10 @@ fun main()=runBlocking{
     ck("clock rollback refuses checkpoint",!base.validFor(base.ownerId,base.groupId,now-1))
     ck("LOGIN cannot be persisted",runCatching{base.copy(route=Route.LOGIN,filter="all").encode()}.isFailure)
     ck("detail requires bounded opaque record ID",runCatching{base.copy(route=Route.PAYMENT,filter="all").encode()}.isFailure&&runCatching{base.copy(route=Route.MEMBER,filter="all",routeId="../private").encode()}.isFailure)
-    ck("list cannot carry a detail ID",runCatching{base.copy(routeId="member-1").encode()}.isFailure)
+    val scopedPayments = base.copy(routeId="member-1")
+    ck("Payments preserves a valid member filter",NavigationCheckpoint.decode(scopedPayments.encode())==scopedPayments)
+    ck("Payments refuses an invalid member filter",runCatching{base.copy(routeId="bad/member").encode()}.isFailure)
+    ck("member directory cannot carry a detail ID",runCatching{base.copy(route=Route.MEMBERS,routeId="member-1",filter="all").encode()}.isFailure)
     ck("filter cannot cross route boundaries",runCatching{base.copy(route=Route.MEMBERS).encode()}.isFailure)
     ck("query controls and overlength rejected",runCatching{base.copy(query="x\u007fy").encode()}.isFailure&&runCatching{base.copy(query="x".repeat(81)).encode()}.isFailure)
     ck("scroll offsets are bounded",runCatching{base.copy(index=-1).encode()}.isFailure&&runCatching{base.copy(offset=100001).encode()}.isFailure)
@@ -116,7 +119,9 @@ fun main()=runBlocking{
     for(effect in listOf("reversed","corrected")){
         Fixture.financialState=effect;Fixture.outcomeState="committed"
         val oldMutations=Fixture.mutations;financial.retry();idle(financial)
-        ck("A04 $effect recovery displays financial warning without POST",financial.state.commandNotice?.contains("reversed or corrected")==true&&financial.state.error==null&&Fixture.mutations==oldMutations)
+        ck("A04 $effect recovery displays the current payment warning without POST",
+            financial.state.commandNotice?.contains("This payment changed after the original action.")==true&&
+                financial.state.error==null&&Fixture.mutations==oldMutations)
     }
     financial.viewModelScope.cancel();Fixture.pendingFlag=false;Fixture.financialState="posted"
     println("RESULT: $checks checkpoint and actual-controller restoration checks passed; storage encryption and Android process lifecycle not executed.")

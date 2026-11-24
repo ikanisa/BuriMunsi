@@ -40,7 +40,7 @@ private class Connection(url:URL):HttpURLConnection(url){
     url.path.contains("/operations/")->JSONObject().put("contractVersion",2).put("requestId",url.path.substringAfterLast('/'))
         .put("groupId","group-1").put("actorId","actor-1").put("state","committed")
         .put("operation","burimunsi.allocate").put("financialState","posted")
-    url.path.endsWith("/allocate")->JSONObject("""{"transactionId":"payment-1","memberId":"member-1","amountRwf":1000,"currency":"RWF","ledgerEntryId":"ledger-1","memberBalanceRwf":1000,"groupBalanceRwf":1000}""")
+    url.path.endsWith("/allocate")->JSONObject("""{"paymentId":"payment-1","memberId":"member-1","state":"allocated","version":2}""")
     url.path.contains("/sms/observations/")&&url.path.endsWith("/reveal")-> {
         val text="Received 1,000 RWF";val amount="1,000 RWF";val start=text.indexOf(amount)
         JSONObject().put("groupId","group-1").put("sourceKind","observation").put("sourceId","source-1")
@@ -53,7 +53,7 @@ private class Connection(url:URL):HttpURLConnection(url){
     url.path.endsWith("/reveal")->JSONObject().put("id","sms-1").put("groupId","group-1").put("sender","").put("at","2026-11-09T08:00:00Z").put("rawBody","SMS y’umwimerere 🧾").put("transactionId",JSONObject.NULL)
     url.path.endsWith("/payments")->JSONObject().put("items",org.json.JSONArray()).put("totalCount",0)
         .put("nextCursor",JSONObject.NULL).put("revision","fixture-v1").put("asOf","2026-11-09T08:00:00Z")
-    else->JSONObject("""{"groupBalanceRwf":17000,"todayRwf":1000,"memberCount":1,"unallocatedCount":0,"asOf":"2026-11-09T08:00:00Z","recentPayments":[]}""")
+    else->JSONObject("""{"paymentCount":17,"memberCount":1,"unallocatedCount":0,"asOf":"2026-11-09T08:00:00Z","recentPayments":[]}""")
    }
    val value=JSONObject().put("contractVersion",BuriMunsiSchemas.VERSION).put("ok",true).put("binding",binding).put("data",data)
    Wire.reply.transform(value);return value.toString()
@@ -209,16 +209,27 @@ fun main(){
  }
  importPreview()
  val id="00000000-0000-4000-8000-000000000004"
- fun command()=JSONObject().put("requestId",id).put("memberId","member-1").put("expectedVersion",1).put("note","Synthetic identification")
+ fun command()=JSONObject().put("requestId",id).put("memberId","member-1").put("expectedVersion",1)
  fun request(post:Boolean=false)=api.call(if(post)"POST" else "GET",if(post)"/v1/burimunsi/payments/payment-1/allocate" else "/v1/burimunsi/home",token="a".repeat(64),body=if(post)command()else null,contractContext=scope)
  fun failure(post:Boolean=false)=runCatching{request(post)}.exceptionOrNull() as ApiFailure
- ck("valid strict JSON response decoded",JSONObject(request()).getLong("groupBalanceRwf")==17000L)
+ ck("valid strict JSON response decoded",JSONObject(request()).getInt("paymentCount")==17)
  ck("redirects disabled",Wire.last?.instanceFollowRedirects==false)
  ck("bounded timeouts",Wire.last?.connectTimeout==15000&&Wire.last?.readTimeout in 1..20000)
  ck("operator bearer attached",Wire.last?.getRequestProperty("Authorization")=="Bearer "+"a".repeat(64))
  ck("product version is explicit",Wire.last?.getRequestProperty("X-BuriMunsi-Contract")==BuriMunsiSchemas.VERSION)
  ck("generation sent",Wire.last?.getRequestProperty("X-BuriMunsi-Generation")=="3")
  ck("payment reference negotiation stays off unrelated reads",Wire.last?.getRequestProperty(PAYMENT_REFERENCE_VERSION_HEADER)==null)
+ val allocation = JSONObject(request(true))
+ ck("allocation sends only member, payment revision, and idempotency key",
+    JSONObject(Wire.last!!.written.toString("UTF-8")).keys().asSequence().toSet()==setOf("memberId","expectedVersion","requestId"))
+ ck("allocation acknowledgement is bound to the payment, member and advanced revision",
+    allocation.getString("paymentId")=="payment-1"&&allocation.getString("memberId")=="member-1"&&
+    allocation.getString("state")=="allocated"&&allocation.getLong("version")==2L)
+ Wire.reply=Reply(transform={v->v.getJSONObject("data").put("version",1)})
+ ck("stale acknowledgement leaves the original action uncertain",failure(true).let{it.code=="contract_state"&&it.uncertain})
+ Wire.reply=Reply(transform={v->v.getJSONObject("data").put("memberId","other-member")})
+ ck("foreign member acknowledgement leaves the original action uncertain",failure(true).let{it.code=="contract_identity"&&it.uncertain})
+ Wire.reply=Reply()
  fun readPayment()=JSONObject(api.call("GET","/v1/burimunsi/payments/payment-1",token="a".repeat(64),contractContext=scope))
  val originalPayment=JSONObject("""{"id":"payment-1","groupId":"group-1","payerNameRaw":"Fixture","payerPhoneRaw":"masked","amountRwf":1000,"atRaw":"recorded","ftId":"FT-EXAMPLE","state":"reversed","version":3,"memberId":null,"memberPhone":null,"sourceId":"source-1"}""")
  fun paymentReply(reference:Any=JSONObject.NULL,headers:Map<String,List<String>> = mapOf(PAYMENT_REFERENCE_VERSION_HEADER to listOf("1")),row:JSONObject=originalPayment)=
@@ -262,8 +273,8 @@ fun main(){
   ck("protocol mutation $index rejected before display",failure().let{it.code==pair.first&&!it.uncertain})
   ck("protocol mutation $index cannot settle dispatched command",failure(true).let{it.code==pair.first&&it.uncertain})
  }
- Wire.reply=Reply(transform={v->v.put("data",v.getJSONObject("data").put("groupBalanceRwf","17000"))})
- ck("numeric string rejected",failure().code=="contract_amount")
+ Wire.reply=Reply(transform={v->v.put("data",v.getJSONObject("data").put("paymentCount","17"))})
+ ck("payment count rejects numeric strings",failure().code=="contract_type")
  Wire.reply=Reply(body="{\"x\":1,\"x\":2}");ck("duplicate keys rejected",failure().code=="contract_duplicate_key")
  Wire.reply=Reply(body="{\"x\":1e3}");ck("exponent coercion rejected",failure().code=="contract_number")
  Wire.reply=Reply(body="not-json");ck("malformed JSON not offline",failure().code=="contract_json")
@@ -329,8 +340,6 @@ fun main(){
  Wire.reply=Reply(bytes=byteArrayOf(0xc3.toByte(),0x28));ck("invalid UTF-8 preserves uncertainty",failure(true).let{it.code=="invalid_api_response"&&it.uncertain})
  Wire.reply=Reply(breakWrite=true);ck("write failure conservatively uncertain",failure(true).let{it.code=="connection_unavailable"&&it.uncertain})
  Wire.reply=Reply(body=" ".repeat(2_000_001));ck("response body bounded",failure().code=="response_too_large")
- Wire.reply=Reply(type="text/csv",body="id,amount\n1,1000\n")
- ck("CSV is an explicit separate route",api.call("GET","/v1/burimunsi/members/member-1/ledger.csv",csv=true,contractContext=scope).contains("1000"))
  Wire.reply=Reply();val recovery="/v1/burimunsi/operations/$id/recovery";val digest="b".repeat(64)
  api.call("GET",recovery,token="a".repeat(64),recoveryOrigin=digest,contractContext=scope)
  ck("recovery selector only in header",Wire.last?.getRequestProperty("X-BuriMunsi-Operation-Origin")==digest&&!Wire.last!!.url.toString().contains(digest))
@@ -379,8 +388,8 @@ fun main(){
  }
  ck("payment history accepts its supported search query",BuriMunsiSchemas.contract.query("history","q=receipt")["q"]=="receipt")
  val beforeCsv=Wire.opened
- val csvError=runCatching{api.call("GET","/v1/burimunsi/members/member-1/ledger.csv?limit=1",csv=true,contractContext=scope)}.exceptionOrNull() as ApiFailure
- ck("CSV does not bypass query admission",csvError.code=="contract_query"&&Wire.opened==beforeCsv)
+ val csvError=runCatching{api.call("GET","/v1/burimunsi/members/member-1/ledger.csv",contractContext=scope)}.exceptionOrNull() as ApiFailure
+ ck("retired CSV path cannot dispatch",csvError.code=="contract_operation"&&Wire.opened==beforeCsv)
 
  // r3 response-framing failures cannot settle an already-dispatched command.
  for((headers,code) in listOf(
@@ -402,7 +411,7 @@ fun main(){
    ck("ambiguous media cannot settle command",failure(true).let{it.code=="contract_content_type"&&it.uncertain})
  }
  Wire.reply=Reply(type="application/json; charset=\"UTF-8\"")
- ck("quoted UTF-8 response remains compatible",JSONObject(request()).getLong("groupBalanceRwf")==17000L)
+ ck("quoted UTF-8 response remains compatible",JSONObject(request()).getInt("paymentCount")==17)
  ck("transparent compression is disabled",Wire.last?.getRequestProperty("Accept-Encoding")=="identity")
  Wire.reply=Reply(streamFactory={object:InputStream(){override fun read()=0;override fun read(b:ByteArray,o:Int,n:Int)=0}})
  ck("non-progress stream rejected",failure(true).let{it.code=="contract_response_stream"&&it.uncertain})
@@ -410,6 +419,11 @@ fun main(){
  ck("cleanup failure cannot settle command or leak detail",failure(true).let{it.code=="connection_unavailable"&&it.uncertain&&!it.message.orEmpty().contains("private")})
  Wire.reply=Reply()
  fun outcome()=api.call("GET","/v1/burimunsi/operations/$id",token="a".repeat(64),contractContext=scope)
+ Wire.reply=Reply(transform={v->v.getJSONObject("data").remove("financialState");v.getJSONObject("data").put("allocationState","allocated")})
+ ck("allocation recovery accepts the current outcome",JSONObject(outcome()).getString("allocationState")=="allocated")
+ Wire.reply=Reply(transform={v->v.getJSONObject("data").put("allocationState","allocated")})
+ ck("mixed predecessor and current status cannot settle an allocation",runCatching{outcome()}.exceptionOrNull() is ApiFailure)
+ Wire.reply=Reply()
  for(effect in listOf("posted","reversed","corrected")) {
   Wire.reply=Reply(transform={it.put("data",it.getJSONObject("data").put("financialState",effect))})
   ck("strict native transport retains A04 v2 $effect outcome",JSONObject(outcome()).getString("financialState")==effect)
@@ -427,7 +441,7 @@ fun main(){
  Wire.reply=Reply()
  val prefix="/functions/v1/collect-api"
  val shared=ApiClient("https://test.invalid","installation-1",prefix){"d".repeat(64)}
- ck("shared Edge prefix preserves logical home contract",JSONObject(shared.call("GET","/v1/burimunsi/home",token="a".repeat(64),contractContext=scope)).getLong("groupBalanceRwf")==17000L)
+ ck("shared Edge prefix preserves logical home contract",JSONObject(shared.call("GET","/v1/burimunsi/home",token="a".repeat(64),contractContext=scope)).getInt("paymentCount")==17)
  ck("shared Edge URL is exact and same origin",Wire.last!!.url.toString()=="https://test.invalid$prefix/v1/burimunsi/home")
  ck("shared Edge retains contract and operator identity",Wire.last!!.getRequestProperty("X-BuriMunsi-Contract")==BuriMunsiSchemas.VERSION&&Wire.last!!.getRequestProperty("Authorization")=="Bearer "+"a".repeat(64))
  val search="q=hello%20world%2Fteam&filter=all"
@@ -508,11 +522,11 @@ fun main(){
  val bundledLogin="/v1/burimunsi/session/login?include=home"
  val loginBody=JSONObject().put("phone","+250780000001").put("pin","2468")
  val loginContext=mapOf("generation" to "18")
- val homeData=JSONObject("""{"groupBalanceRwf":17000,"todayRwf":1000,"memberCount":1,"unallocatedCount":0,"asOf":"2026-11-09T08:00:00Z","recentPayments":[]}""")
+ val homeData=JSONObject("""{"paymentCount":17,"memberCount":1,"unallocatedCount":0,"asOf":"2026-11-09T08:00:00Z","recentPayments":[]}""")
  Wire.reply=Reply(transform={v->v.getJSONObject("data").put("groupId","group-1").put("home",homeData)})
  val bundled=JSONObject(native.call("POST",bundledLogin,body=loginBody,contractContext=loginContext))
  ck("bundled login validates Home on the same scope-discovering request",
-    bundled.getJSONObject("home").getLong("groupBalanceRwf")==17000L&&Wire.last?.url?.query=="include=home"&&
+    bundled.getJSONObject("home").getInt("paymentCount")==17&&Wire.last?.url?.query=="include=home"&&
         Wire.last?.getRequestProperty("X-BuriMunsi-Group")==null)
  ck("unrequested Home cannot accompany a legacy sign-in response",
     runCatching{native.call("POST",bundledLogin.substringBefore('?'),body=loginBody,contractContext=loginContext)}.isFailure)

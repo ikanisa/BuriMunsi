@@ -14,7 +14,7 @@ function sessionProfile(actor){
  * Do not replace the current router or bypass its application fence.
  * Origin/networkBucket are server-owned deployment inputs, not forwarded client claims.
  */
-export function createNativeHandler({auth,records,contributions,members,gateway,observations=null,cursor=null,origin,networkBucket,strictContract=false,groupId,requestReadTimeoutMs=15000,verifiedObservationStatusEnabled=false,readRecordActor=null}) {
+export function createNativeHandler({auth,records,contributions,members,gateway,observations=null,cursor=null,origin,networkBucket,strictContract=false,groupId,requestReadTimeoutMs=15000,verifiedObservationStatusEnabled=false,readRecordActor=null,paymentsOnly=false}) {
   requirePort(auth,['login','authenticate','logout','changePasscode','manageStaff']);
   requirePort(records,['home','page','detail','exportLedger','commandStatus']);
   requirePort(contributions,['allocate']);requirePort(members,['enroll','setActive']);
@@ -48,6 +48,7 @@ export function createNativeHandler({auth,records,contributions,members,gateway,
       const url=nativeRequestUrl(req,origin);
       requireThat(url.pathname.startsWith('/v1/burimunsi/'),'not_found',404);
       const route=url.pathname.slice('/v1/burimunsi'.length),method=req.method;
+      if(paymentsOnly)requireThat(!/^\/(?:ledger(?:\/|$)|members\/[^/]+\/ledger\.csv$|payments\/[^/]+\/history$)/.test(route),'not_found',404);
       const heldOperation=heldObservationOperation(url.pathname);
       if(heldOperation)requireThat(verifiedObservationStatusEnabled===true&&strictContract&&
         method===(heldOperation==='observationReconcileVerifiedStatus'?'GET':'POST'),'not_found',404);
@@ -224,7 +225,11 @@ export function createNativeHandler({auth,records,contributions,members,gateway,
           requestId:requireRequestId(req.headers.get('x-burimunsi-request'))}));
       }
       const allocation=/^\/payments\/([A-Za-z0-9_-]+)\/allocate$/.exec(route);
-      if(allocation&&method==='POST')return json(await contributions.allocate(actor,{...await body(req,['memberId','expectedVersion','note','requestId']),transactionId:allocation[1]}));
+      if(allocation&&method==='POST'){
+        const required=['memberId','expectedVersion','requestId'];
+        const input=await body(req,[...required,'note'],paymentsOnly?required:[...required,'note']);
+        return json(await contributions.allocate(actor,{...input,[paymentsOnly?'paymentId':'transactionId']:allocation[1]}));
+      }
       if(route==='/members'&&method==='POST')return json(await members.enroll(actor,await body(req,['name','phone','requestId'])));
       if(detail?.[1]==='members'&&method==='PATCH')return json(await members.setActive(actor,{...await body(req,['active','expectedVersion','requestId']),memberId:detail[2]}));
       if(route==='/staff'&&method==='POST')return json(await auth.manageStaff(actor,await body(req,['action','phone','pin','name','capabilities','requestId'],['action','phone','name','capabilities','requestId'])));

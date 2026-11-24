@@ -7,6 +7,7 @@ import { digest } from '../core.js';
 import { observationDisplayHints } from './observation-display-hints.js';
 import { storageEntity, verifyRetainedObject } from '../../storage-identity.js';
 import { readObservationListing } from './postgres-observation-listing.js';
+import { committedRawSmsEnvelope, readRawSmsEnvelope, storeRawSmsEnvelope } from './postgres-raw-sms.js';
 import { PostgresObservationReconciliation, readObservationProcessingStatus } from './postgres-observation-reconciliation.js';
 import {
  approvedObservationProfile as approvedProfile,
@@ -354,6 +355,7 @@ export class PostgresNativeObservations {
     objectSize = bytes.length,
     objectSha = await digest(bytes),
     objectKey = 'sms/' + id;
+   let envelope = null;
    try {
     if (await this.uploadUnresolved(actor, value, fingerprint, id, initial, objectSha)) {
      throw new ObservationUploadUnresolved(value.requestId);
@@ -361,13 +363,16 @@ export class PostgresNativeObservations {
     const sealed = await encrypt(this.env, bytes, `sms:${id}:${objectSha}`);
     await this.authority.assertOwned();
     try {
-     await this.env.PRIVATE_MEDIA.put(objectKey, sealed, {
+     const acknowledgement = await this.env.PRIVATE_MEDIA.put(objectKey, sealed, {
       scope: { ownerId: actor.principalUserId, purpose: 'sms_receipt', entityId: id },
       aad: `sms:${id}:${objectSha}`,
       sourceDigest: fingerprint,
       httpMetadata: { contentType: 'application/octet-stream' },
       customMetadata: { sha256: objectSha, key_id: this.env.DATA_KEY_ID },
      });
+     if (this.env.BURIMUNSI_PRODUCT_MODE === 'standalone') {
+      envelope = await committedRawSmsEnvelope(this.env.PRIVATE_MEDIA, objectKey, sealed, acknowledgement);
+     }
     } catch (error) {
      await this.unresolvedAfterFailure(actor, value, fingerprint, id, initial, objectSha, error);
     }
@@ -410,7 +415,12 @@ export class PostgresNativeObservations {
       ],
      );
      check(r.length === 1);
-     return row(r[0].result);
+     const retained = row(r[0].result);
+     if (envelope !== null) {
+      check(retained.id === id && retained.object_sha256 === objectSha, 'observation_changed', 409);
+      await storeRawSmsEnvelope(tx, this.groupId, id, objectSha, envelope);
+     }
+     return retained;
     });
    } catch (error) {
     // An uncertain transaction outcome is reconciled against the same immutable
@@ -502,11 +512,13 @@ export class PostgresNativeObservations {
      identity: this.identity(current),
      source: record,
     };
-    const plan = await this.storageWitnesses.stage(binding, [{ key: record.object_key, journal }]);
-    return { identity: this.identity(current), record, namespace, journal, plan, hintProfile };
+    const inline = this.env.BURIMUNSI_PRODUCT_MODE === 'standalone'
+     ? await readRawSmsEnvelope(tx, this.groupId, record, journal) : null;
+    const plan = inline === null ? await this.storageWitnesses.stage(binding, [{ key: record.object_key, journal }]) : null;
+    return { identity: this.identity(current), record, namespace, journal, inline, plan, hintProfile };
    });
-   await this.storageWitnesses.prefetch(initial.plan);
-   const sealed = await this.storageWitnesses.sealed(binding, initial.record.object_key, initial.journal);
+   if (initial.plan !== null) await this.storageWitnesses.prefetch(initial.plan);
+   const sealed = initial.inline ?? await this.storageWitnesses.sealed(binding, initial.record.object_key, initial.journal);
    bytes = await this.custody.decrypt(sealed, target(initial.record).aad);
    check(
     bytes instanceof Uint8Array && bytes.length === initial.record.size_bytes &&
@@ -527,7 +539,8 @@ export class PostgresNativeObservations {
     const journal = await this.custody.journal(tx, record.object_key, target(record));
     await this.checkJournal(record, journal);
     check(this.custody.sameJournal(journal, initial.journal));
-    await this.storageWitnesses.sealed(binding, record.object_key, journal);
+    if (initial.inline === null) await this.storageWitnesses.sealed(binding, record.object_key, journal);
+    else check(await readRawSmsEnvelope(tx, this.groupId, record, journal) === initial.inline, 'observation_changed', 409);
     const profileResult = hintsEnabled
      ? await tx.unsafe('SELECT private.burimunsi_observation_hint_profile($1) AS result', [id])
      : null;

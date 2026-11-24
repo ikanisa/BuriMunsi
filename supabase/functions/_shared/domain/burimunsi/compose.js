@@ -3,6 +3,7 @@ import {PinHasher} from './pin.js';
 import {RecordsService} from './records-service.js';
 import {ScopedCursor} from './cursor.js';
 import {ContributionService} from './contribution-service.js';
+import {PaymentAllocationService} from './payment-allocation.js';
 import {MemberService} from './member-service.js';
 import {GatewayRegistry} from './gateway-registry.js';
 import {createNativeHandler} from './http.js';
@@ -25,17 +26,19 @@ export function composeNativeRequest({admission,config,ports,secrets,networkBuck
   const auth=new NativeAuthService({store:ports.auth,hasher:new PinHasher({pepper:secrets.pinPepper,pepperId:secrets.pinPepperId}),groupId,clock,sessionTtlMs:config.sessionTtlMs??1800000,
     preserveStaffPinOnPhoneChange:config.preserveStaffPinOnPhoneChange===true,defaultStaffPin:secrets.defaultStaffPin,
     defaultOnlyOnCreate:secrets.defaultOnlyOnCreate===true});
-  const contributions=composeNativeContributions({config,ports,clock});
-  const members=new MemberService({store:ports.canonical,groupId,clock});
+  const paymentsOnly=ports.paymentsOnly===true;
+  const contributions=paymentsOnly?new PaymentAllocationService({store:ports.canonical,groupId,clock}):
+    composeNativeContributions({config,ports,clock});
+  const members=new MemberService({store:ports.canonical,groupId,clock,paymentsOnly});
   const gateway=new GatewayRegistry({store:ports.gateway,groupId,clock});
   requireThat(config.smartOnboardingAdvancedEnabled===undefined||typeof config.smartOnboardingAdvancedEnabled==='boolean','invalid_worker_config',503);
   const smartOnboardingImport=config.smartOnboardingAdvancedEnabled===true?ports.smartOnboardingImport:null;
   if(config.smartOnboardingAdvancedEnabled===true)requirePort(smartOnboardingImport,['preview']);
   else requireThat(ports.smartOnboardingImport===undefined,'smart_import_config_conflict',503);
   const cursor=new ScopedCursor(secrets.cursorKey);
-  const records=new RecordsService({store:ports.records,groupId,cursor,clock,smartOnboardingImport});
+  const records=new RecordsService({store:ports.records,groupId,cursor,clock,smartOnboardingImport,paymentsOnly});
   return createNativeHandler({auth,records,contributions,members,gateway,observations:ports.observations,cursor,
-    origin:config.origin,networkBucket,groupId,strictContract:true,verifiedObservationStatusEnabled:!!ports.observations,readRecordActor});
+    origin:config.origin,networkBucket,groupId,strictContract:true,verifiedObservationStatusEnabled:!!ports.observations,readRecordActor,paymentsOnly});
 }
 
 /** Shared request/worker selection. Enabled preparation can never silently fall

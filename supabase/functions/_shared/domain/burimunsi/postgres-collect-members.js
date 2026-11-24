@@ -28,14 +28,15 @@ export function validateDirectMemberInput(cmd) {
 
 /** Used inside an authorized, serialized enrollment transaction. A duplicate
  * returns the existing membership and never reactivates it or changes its name. */
-export async function writeDirectMemberRecord(authority,sql,cmd,nowMs) {
+export async function writeDirectMemberRecord(authority,sql,cmd,nowMs,{includeBalance=true}={}) {
   const {db,groupId}=authority;
   requireThat(groupId===cmd.groupId,'access_denied',403);
   const local='0'+cmd.phone.slice(4),digits=cmd.phone.slice(1),national=cmd.phone.slice(4);
+  const balance=includeBalance?`,coalesce((SELECT sum(l.amount_minor) FROM app.ledger_entries l
+    WHERE l.collection_id=m.collection_id AND l.member_id=u.id),0) AS balance`:'';
   // Open the existing member only when the canonical MoMo route identifies one
   // unambiguous member. Never create a second beneficiary or reactivate it here.
-  const duplicate=await sql.unsafe(`SELECT u.id,u.full_name,u.momo_number,m.active,m.revision,
-   coalesce((SELECT sum(l.amount_minor) FROM app.ledger_entries l WHERE l.collection_id=m.collection_id AND l.member_id=u.id),0) AS balance
+  const duplicate=await sql.unsafe(`SELECT u.id,u.full_name,u.momo_number,m.active,m.revision${balance}
    FROM app.memberships m JOIN app.users u ON u.id=m.user_id
    WHERE m.collection_id=$1 AND (${compactRoute('u.momo_number')} IN($2,$3,$4,$5,$6) OR
     ${compactRoute('u.phone')} IN($2,$3,$4,$5,$6)) LIMIT 2`,[groupId,local,cmd.phone,digits,'00'+digits,national]);
@@ -48,20 +49,20 @@ export async function writeDirectMemberRecord(authority,sql,cmd,nowMs) {
     'duplicate_phone',409);
    const active=pgInteger(row.active);requireThat(active===0||active===1,'member_contract_violation',503);
    return {id:row.id,groupId,name:row.full_name,phone:cmd.phone,
-    active:active===1,version:integer(row.revision),balanceRwf:pgInteger(row.balance),existing:true};
+    active:active===1,version:integer(row.revision),...(includeBalance?{balanceRwf:pgInteger(row.balance)}:{}),existing:true};
   }
   const id=crypto.randomUUID(),timestamp=new Date(nowMs).toISOString();
   await checkedStatement(authority,sql,personInsertStatement(db,{id,name:cmd.name,phone:null,email:null,memberType:'direct',
    provider:'',momo:local,code:'',status:'active',timestamp}));
   await checkedStatement(authority,sql,membershipWriteStatement(db,{create:true,id:crypto.randomUUID(),groupId,userId:id,
    role:'member',active:1,timestamp}));
-  const rows=await sql.unsafe(`SELECT u.id,u.full_name,u.momo_number,u.member_type,u.access_status,m.role,m.active,m.revision,
-   coalesce((SELECT sum(l.amount_minor) FROM app.ledger_entries l WHERE l.collection_id=m.collection_id AND l.member_id=u.id),0) AS balance
+  const rows=await sql.unsafe(`SELECT u.id,u.full_name,u.momo_number,u.member_type,u.access_status,m.role,m.active,m.revision${balance}
    FROM app.memberships m JOIN app.users u ON u.id=m.user_id WHERE m.collection_id=$1 AND u.id=$2`,[groupId,id]);
   const row=rows[0];requireThat(rows.length===1&&row.id===id&&row.member_type==='direct'&&row.access_status==='active'&&
    row.full_name===cmd.name&&row.role==='member'&&integer(row.active)===1&&integer(row.revision)===1&&normalizePhone(row.momo_number)===cmd.phone,
    'member_contract_violation',503);
-  return {id,groupId,name:row.full_name,phone:cmd.phone,active:true,version:integer(row.revision),balanceRwf:pgInteger(row.balance)};
+  return {id,groupId,name:row.full_name,phone:cmd.phone,active:true,version:integer(row.revision),
+   ...(includeBalance?{balanceRwf:pgInteger(row.balance)}:{})};
 }
 
 /** The caller owns the admitted transaction and Collect mutation lock. Reuses
@@ -71,10 +72,10 @@ export async function writeDirectMemberRecord(authority,sql,cmd,nowMs) {
  * A shared read-only staff role cannot gain writes from a native capability.
  */
 export class PostgresCollectMemberCommands {
- constructor({authority}){
+ constructor({authority,paymentsOnly=false}){
   requirePort(authority,['assertOwned','session']);requireId(authority.groupId);
   requirePort(authority.db,['prepare','statement']);
-  this.authority=authority;this.db=authority.db;this.groupId=authority.groupId;
+  this.authority=authority;this.db=authority.db;this.groupId=authority.groupId;this.paymentsOnly=paymentsOnly;
  }
  async owned(){await this.authority.assertOwned();}
  async current(sql,cmd,{admin=false}={}){
@@ -132,7 +133,7 @@ export class PostgresCollectMemberCommands {
   validateDirectMemberInput(cmd);
   const initial=await this.current(sql,cmd);await this.group(sql);
   await this.guard(sql,initial.canonical,'users.manage');await this.guard(sql,initial.canonical,'collections.manage');
-  const response=await writeDirectMemberRecord(this.authority,sql,cmd,initial.canonical.nowMs);
+  const response=await writeDirectMemberRecord(this.authority,sql,cmd,initial.canonical.nowMs,{includeBalance:!this.paymentsOnly});
   if(!response.existing)await this.statement(sql,auditStatement({DB:this.db},{userId:initial.canonical.userId,sessionId:initial.canonical.sessionId},
    'burimunsi.enroll','user',response.id,{collection_id:this.groupId,native_actor_id:cmd.actorId,native_session_id:cmd.sessionId},cmd.requestId));
   const final=await this.finish(sql,cmd,initial);

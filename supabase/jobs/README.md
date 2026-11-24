@@ -10,6 +10,12 @@ reply against the original dispatch.
 
 Start with the managed release tools in `scripts/supabase/cloud-release/`.
 
+The BuriMunsi scheduler processes retained raw M-Money SMS into incoming and
+outgoing payments in `burimunsi.payments`. Member allocation is an authorized
+operator action on the recorded payment. Follow the
+[BuriMunsi release scope](../../README.md#account-roles-sms-access-and-payments)
+and the exact release receipts when qualifying the scheduler.
+
 | Tool | Purpose |
 | --- | --- |
 | `managed-jobs-scheduler.mjs` | Render the Cloud scheduler and read back its source hashes without connecting |
@@ -21,7 +27,7 @@ renderer and an isolated PostgreSQL test fixture. The Cloud installation starts
 inactive. The active schedule and runtime gates come from the exact deployed
 migration and live readback.
 
-## Modes and private server configuration
+## Shared Collect modes and private server configuration
 
 | `COLLECT_JOBS_MODE` | Readiness file format | Receipt pause | Required request contracts |
 | --- | --- | --- | --- |
@@ -52,8 +58,8 @@ scheduler. Existing auth/Admin SMTP delivery is not contribution-email delivery.
 Keep the original dispatch ID for reconciliation. A scheduled SQL call or HTTP
 request ID confirms queueing. Confirmation requires the authenticated response
 and its matching digest. Pause and reconcile an unresolved outcome before a
-new dispatch. The scheduler retains uncertainty while business lanes keep their
-own durable receipt, ledger and delivery state.
+new dispatch. For BuriMunsi, verify the retained SMS and its linked Payments row
+before retrying processing with an uncertain outcome.
 
 ## Separate receipt email
 

@@ -71,13 +71,13 @@ export function projectPayment(row) {
   };
 }
 
-export function projectMember(row) {
+export function projectMember(row,{includeBalance=true}={}) {
   return {
     id: row.id,
     groupId: row.collection_id,
     name: row.full_name,
     phone: memberPhone(row.momo_number),
-    balanceRwf: pgInteger(row.balance),
+    ...(includeBalance?{balanceRwf:pgInteger(row.balance)}:{}),
     active: pgInteger(row.active) === 1,
     version: pgInteger(row.revision),
   };

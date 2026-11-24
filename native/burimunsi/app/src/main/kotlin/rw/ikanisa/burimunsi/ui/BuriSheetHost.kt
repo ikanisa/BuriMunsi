@@ -33,7 +33,7 @@ import rw.ikanisa.burimunsi.core.Role
     onPickMemberFile:()->Unit,onPreviewMemberFile:(requestId:String)->Unit,onTakeMemberPhoto:()->Unit,onPickMemberPhoto:()->Unit,onExport:()->Unit){
     val t=LocalUiText.current
     val sheet=s.sheet?:return
-    val title=when(sheet){Sheet.PROFILE->t("Profile");Sheet.PIN->t("Change passcode");Sheet.HELP->t("Help");Sheet.ALLOCATE->t("Allocate");Sheet.ENROLL->t("Add member");Sheet.STAFF->t("Staff access");Sheet.STAFF_EDIT->if(s.selectedStaff==null)t("Add staff")else t("Edit staff");Sheet.REMOVE_STAFF->t("Remove access?");Sheet.GATEWAY->t("Gateway");Sheet.REPLACE_DEVICE->t("Replace receiver");Sheet.RAW->s.raw?.sender?.takeIf{it.isNotBlank()}?:t("SMS receipt");Sheet.MEMBER_DETAILS->t("Member details");Sheet.HISTORY->t("Contribution history");Sheet.AUDIT->t("Activity log");Sheet.FILTERS->t("Filters")}
+    val title=when(sheet){Sheet.PROFILE->t("Profile");Sheet.PIN->t("Change passcode");Sheet.HELP->t("Help");Sheet.ALLOCATE->t("Allocate");Sheet.ENROLL->t("Add member");Sheet.STAFF->t("Staff access");Sheet.STAFF_EDIT->if(s.selectedStaff==null)t("Add staff")else t("Edit staff");Sheet.REMOVE_STAFF->t("Remove access?");Sheet.GATEWAY->t("Gateway");Sheet.REPLACE_DEVICE->t("Replace receiver");Sheet.RAW->s.raw?.sender?.takeIf{it.isNotBlank()}?:t("SMS receipt");Sheet.MEMBER_DETAILS->t("Member details");Sheet.AUDIT->t("Activity log");Sheet.FILTERS->t("Filters")}
     key(sheet,s.sheetId){
     val latest=rememberUpdatedState(s)
     val sheetState=rememberModalBottomSheetState(skipPartiallyExpanded=true,confirmValueChange={target->
@@ -60,7 +60,7 @@ import rw.ikanisa.burimunsi.core.Role
             m.exportFeedback?.takeIf{m.screenGate==ScreenGate.OPEN&&m.presentation.showRecords}?.let{BuriExportFeedback(it,m::cancelExport,m::dismissExportFeedback)}
             s.error?.let{message->
                 Text(t(message),Modifier.padding(horizontal=24.dp,vertical=8.dp).semantics{liveRegion=LiveRegionMode.Polite},color=BuriTheme.Bad)
-                if(sheet in setOf(Sheet.STAFF,Sheet.AUDIT,Sheet.ALLOCATE,Sheet.GATEWAY,Sheet.HISTORY,Sheet.MEMBER_DETAILS))
+                if(sheet in setOf(Sheet.STAFF,Sheet.AUDIT,Sheet.ALLOCATE,Sheet.GATEWAY,Sheet.MEMBER_DETAILS))
                     TextButton(m::refresh,enabled=!s.busy,modifier=Modifier.padding(horizontal=16.dp)){Text(t("Retry loading"))}
             }
             // Bounded list avoids unbounded nested-scroll measurement on compact phones and IME.
@@ -93,7 +93,7 @@ import rw.ikanisa.burimunsi.core.Role
                     Sheet.STAFF_EDIT->StaffPanel(s,m)
                     Sheet.REMOVE_STAFF->Panel(footer={Primary(t("Remove access"),{m.staffAction("remove")},!s.busy&&!s.offline&&!s.pending,danger=true,working=s.busy&&m.operation==UiOperation.COMMAND)}){
                         item{SingleLineName(s.selectedStaff?.name.orEmpty(),Modifier.fillMaxWidth(),20)}
-                        item{Text(t("Sign-in will stop. Financial history remains."),fontSize=15.sp,color=BuriTheme.Muted,lineHeight=23.sp)}
+                        item{Text(t("This staff member will no longer be able to sign in."),fontSize=15.sp,color=BuriTheme.Muted,lineHeight=23.sp)}
                     }
                     Sheet.GATEWAY->GatewayPanel(s,m,onPermissions)
                     Sheet.REPLACE_DEVICE->ReplaceReceiverPanel(s,m,onPermissions)
@@ -103,26 +103,6 @@ import rw.ikanisa.burimunsi.core.Role
                         Panel(footer=if(member!=null&&s.operator?.role==Role.ADMIN&&m.allows(Capability.ENROLL)){{Primary(if(member.active)t("Deactivate membership") else t("Reactivate membership"),{m.setMemberActive(!member.active)},!s.busy&&!s.offline&&!s.pending,secondary=true,working=s.busy&&m.operation==UiOperation.COMMAND)}}else null){
                             member?.let{item{FactGroup(listOf(t("Name") to it.name,t("MoMo number") to it.phone,t("Membership") to if(it.active)t("Active") else t("Inactive")),BuriTheme.Group)}}
                         }
-                    }
-                    Sheet.HISTORY->Panel{
-                        item{ListingToolbar(m,onExport)}
-                        s.payment?.let{p->item{Fact(t("FT Id"),p.ftId?:t("Unavailable"));Fact(t("from"),p.payerNameRaw);Fact(t("MoMo"),p.payerPhoneRaw);Fact(t("Provider time"),p.atRaw);Fact(t("Current status"),t(PaymentPresentation.payment(p).label))}}
-                        item{Section(t("Recorded events"));Text(t("Only canonical transaction and ledger records are shown. A transaction record is not confirmation of member credit."),fontSize=15.sp,color=BuriTheme.Muted,lineHeight=23.sp)}
-                        if(s.historyOffline)item{Text(t("Saved history · may be out of date")+(s.historySavedAt?.let{" · "+historyTime(java.time.Instant.ofEpochMilli(it).toString(),LocalUiText.current.locale)}?:""),color=BuriTheme.Warn,fontSize=14.sp,lineHeight=22.sp)}
-                        if(s.history==null&&s.error==null)item{if(s.busy){BuriInlineLoading("Loading recorded events");BuriSkeletonRows(3)}else Empty(t("History has not loaded."));if(!s.busy)TextButton(m::refresh){Text(t("Retry loading"))}}
-                        items(s.history?.items.orEmpty(),key={it.id}){event->
-                            Column(Modifier.fillMaxWidth().background(BuriTheme.Raised,RoundedCornerShape(20.dp)).padding(18.dp)){
-                                Text(if(event.kind=="transaction_recorded")t("Transaction recorded") else t("Ledger entry recorded"),fontSize=19.sp,fontWeight=FontWeight.Medium,lineHeight=27.sp)
-                                Spacer(Modifier.height(6.dp));Text(historyTime(event.recordedAt,LocalUiText.current.locale),fontSize=14.sp,color=BuriTheme.Muted,lineHeight=22.sp)
-                                event.amountRwf?.let{amount->
-                                    Spacer(Modifier.height(10.dp));Text(t("Ledger change (RWF)"),fontSize=14.sp,color=BuriTheme.Muted,lineHeight=22.sp)
-                                    MoneyText(amount,Modifier.fillMaxWidth(),22,positiveSign=true,showHint=true)
-                                }
-                            }
-                        }
-                        if(s.history?.items?.isEmpty()==true)item{Empty(t("No recorded events in this response"))}
-                        s.history?.let{page->item{Text(t("%1\$d of %2\$d recorded events · %3\$s",page.items.size,page.totalCount,t(listingSortLabel(m.listingQuery.sort))),fontSize=14.sp,color=BuriTheme.Muted,lineHeight=22.sp)}}
-                        moreButton(s.history?.nextCursor,s.busy,m::more,autoEnabled=!s.offline&&s.error==null)
                     }
                     Sheet.AUDIT->Panel{
                         item{ListingToolbar(m,onExport)}

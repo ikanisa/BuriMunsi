@@ -1,6 +1,6 @@
 import { isObject, isSafeCount } from './contracts';
 
-const relations: Record<string, readonly string[]> = { groups: ['memberships', 'payees', 'accounts'], users: ['memberships'], payees: [], transactions: ['evidence', 'reviews', 'allocations', 'journals', 'payer_insights', 'ledger_entries'], journals: ['entries'], ledgers: [] };
+const relations: Record<string, readonly string[]> = { groups: ['memberships', 'payees', 'accounts'], users: ['memberships'], members: ['memberships'], payees: [], transactions: ['evidence', 'reviews', 'allocations', 'journals', 'payer_insights', 'ledger_entries'], journals: ['entries'], ledgers: [] };
 export interface RelatedPage { total: number; limit: number; offset: number; nextOffset: number | null }
 
 export function relatedPage(data: Record<string, unknown>, name: string, rows: unknown[]): RelatedPage | null {

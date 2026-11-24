@@ -61,7 +61,10 @@ async function runNativeAuto(env, nativeEnv, admission, processNativeAuto, proce
     nativeAuto = {status: 'unconfirmed', code: 'native_auto_processing_unconfirmed'};
   }
 
-  // Finish a bounded backlog after parsing, preserving per-receipt ordering.
+  if (env.BURIMUNSI_PRODUCT_MODE === 'standalone') {
+    return {nativeAuto, nativeLedger: null};
+  }
+
   let nativeLedger;
   try {
     nativeLedger = nativeSmsLedgerResult(await processNativeSmsLedger(nativeEnv, {limit: 4}));
@@ -75,17 +78,7 @@ async function runPaymentSms(env, enabled, admitted, processPaymentSms) {
   if (!enabled) return null;
   if (!admitted) return {status: 'held', processed: 0};
   try {
-    const first=scheduledPaymentSmsResult(await processPaymentSms(env));
-    if(env.BURIMUNSI_PRODUCT_MODE!=='standalone'||first.processed!==1||first.status!=='complete')return first;
-    const outcomes=[first];
-    const started=performance.now();
-    while(outcomes.length<4 && performance.now()-started<15000){
-      const next=scheduledPaymentSmsResult(await processPaymentSms(env));
-      if(next.processed===0&&next.status==='complete')break;
-      if(next.processed===1)outcomes.push(next);
-      if(next.status!=='complete')return {status:next.status,processed:outcomes.length,outcomes};
-    }
-    return outcomes.length===1 ? first : {status:'complete',processed:outcomes.length,outcomes};
+    return scheduledPaymentSmsResult(await processPaymentSms(env));
   } catch {
     return {status: 'unconfirmed', processed: 0};
   }
@@ -114,27 +107,33 @@ export async function runEdgeJobCycle(env, payload, dispatch, nativeGate, {
   cleanup, processReceipts, processNotifications, processNativeAuto, processNativeSmsLedger,
   processPaymentSms, processCanonical, processNativeFinancialWork, cleanupDiagnostics,
 }) {
+  const standalone = env.BURIMUNSI_PRODUCT_MODE === 'standalone';
+  const admission = scheduledProcessingAdmission(env, dispatch);
+  if (standalone && (!admission.allowed || admission.processing || admission.notifications)) {
+    return {status: 503, body: {code: 'standalone_job_admission_unavailable'}};
+  }
   // Credential cleanup and Realtime hints keep their original budgets and run
   // even while receipt processing is paused.
   const maintenance = await maintainAuth(env, cleanup);
   const realtime = await publishMemberRealtime(env);
-  const admission = scheduledProcessingAdmission(env, dispatch);
-  const processing = await runReceipts(env, admission, processReceipts);
-  const notifications = await runNotifications(env, admission, processNotifications);
+  const processing = standalone
+    ? {status: 'disabled', paused: true, processed: 0, results: []}
+    : await runReceipts(env, admission, processReceipts);
+  const notifications = standalone ? null : await runNotifications(env, admission, processNotifications);
 
   // The native provider budget and managed processing admission are independent.
   const nativeEnv = nativeGate.enabled ? withNativeProviderBudget(env, payload) : env;
   const {nativeAuto, nativeLedger} = await runNativeAuto(env, nativeEnv, admission, processNativeAuto, processNativeSmsLedger);
-  const paymentSmsEnabled = env.BURIMUNSI_PAYMENT_SMS_ENABLED === 'true';
+  const paymentSmsEnabled = !standalone && env.BURIMUNSI_PAYMENT_SMS_ENABLED === 'true';
   const paymentSmsAdmitted = paymentSmsEnabled && nativeGate.enabled && admission.allowed;
   const paymentSms = await runPaymentSms(env, paymentSmsEnabled, paymentSmsAdmitted, processPaymentSms);
 
-  const canonical = await scheduledCanonicalDrain(env, admission, {runCycle: processCanonical});
-  const nativeFinancial = await processNativeFinancialWork(env, admission);
+  const canonical = standalone ? null : await scheduledCanonicalDrain(env, admission, {runCycle: processCanonical});
+  const nativeFinancial = standalone ? null : await processNativeFinancialWork(env, admission);
   const diagnostics = await maintainDiagnostics(env, cleanupDiagnostics);
 
   const complete = maintenance.status === 'complete' &&
-    processing.status !== 'unconfirmed' && notifications.status !== 'unconfirmed' &&
+    processing.status !== 'unconfirmed' && notifications?.status !== 'unconfirmed' &&
     [nativeAuto, nativeLedger, canonical, nativeFinancial].every(result => result?.status !== 'unconfirmed') &&
     (!paymentSmsAdmitted || paymentSms?.status === 'complete');
   const {dispatchId} = dispatch;
@@ -146,7 +145,8 @@ export async function runEdgeJobCycle(env, payload, dispatch, nativeGate, {
       ...(nativeGate.enabled ? {native_sms_admission: nativeGate.admission} : {}),
       ...(admission.processing ? {processing_admission: admission.processing} : {}),
       ...(admission.notifications ? {notification_admission: admission.notifications} : {}),
-      maintenance, processing, notifications,
+      maintenance, processing,
+      ...(notifications ? {notifications} : {}),
       ...(nativeAuto ? {native_auto_processing: nativeAuto} : {}),
       ...(nativeLedger ? {native_sms_ledger: nativeLedger} : {}),
       ...(paymentSms ? {payment_receipt_sms: paymentSms} : {}),

@@ -16,7 +16,8 @@ try{
   'env.DB = globalThis.__managedJobsFixture.db;');
  runtime=once(runtime,'await assertRuntimeDeployment(env.DB.sql, env, standaloneCollectionId);',
   'await globalThis.__managedJobsFixture.check();');
- runtime=once(runtime,'backend: sqlFenceBackend(env.DB.sql, fenceConnection(env.COLLECT_DATABASE_URL, env), this.beforeRegister),',
+ runtime=once(runtime,`backend: sqlFenceBackend(env.DB.sql, fenceConnection(env.COLLECT_DATABASE_URL, env), this.beforeRegister,
+        waitForReadCapacity ? signal : undefined, standaloneRead),`,
   'backend: globalThis.__managedJobsFixture.backend,');
  runtime=once(runtime,'env.PRIVATE_MEDIA = new SupabaseObjectBucket(env);',
   'env.PRIVATE_MEDIA = {};');
@@ -25,8 +26,9 @@ try{
  await writeFile(join(shared,'edge-runtime.js'),runtime);
  const script=String.raw`
 import assert from 'node:assert/strict';
-import {createScheduledHandler} from './serve.js';
-import {dispatchMessage} from '../../../supabase/functions/_shared/managed-jobs-dispatch-auth.mjs';
+import {createScheduledHandler} from './edge-jobs-handler.js';
+import {canonicalProfile} from './deployment-profile.js';
+import {dispatchMessage} from './managed-jobs-dispatch-auth.mjs';
 const project='rrlduytparvsjfmegalh',source='a'.repeat(64),key='b'.repeat(64);
 const base={APP_ENVIRONMENT:'test',SUPABASE_URL:'https://'+project+'.supabase.co',COLLECT_DATABASE_URL:'postgres://fixture:fixture@127.0.0.1:5432/fixture',
  SUPABASE_PUBLISHABLE_KEY:'synthetic-public',SUPABASE_SECRET_KEY:'synthetic-secret',BUILD_SOURCE_ID:source,COLLECT_JOB_AUTH_MODE:'supabase_dispatch_hmac_v1',COLLECT_JOB_SIGNING_KEY:key,
@@ -61,6 +63,29 @@ Deno.test('native processing requires matching source, approval and model admiss
  const good=ticket({native_sms_admission:admission}),reply=await h(make(good,await sign(good)));assert.equal(reply.status,200);const data=await reply.clone().json();
  assert.deepEqual(data.native_sms_admission,admission);assert.equal(data.native_auto_processing.status,'complete');assert.equal(data.native_sms_ledger.status,'complete');
  assert.equal(counts.auto,1);assert.equal(counts.ledger,1);assert.equal(tickets.get(good.dispatch_id).digest,await digest(reply));
+});
+Deno.test('a signed standalone dispatch records through the parser only',async()=>{
+ const origin='https://'+project+'.supabase.co';
+ const profile=canonicalProfile({format:'collect.deployment.v1',id:'collect-managed-production-cloud',mode:'managed',
+  environment:'production',supabase_origin:origin,member_api_origin:origin,admin_origin:origin,public_origin:origin,google_callback_origin:origin});
+ const profileSha=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(profile))),x=>x.toString(16).padStart(2,'0')).join('');
+ const approval='c'.repeat(64),admission={contract:'collect.native-sms-automation.v1',source_sha256:source,approval_sha256:approval,model_id:'fixture-model',batch_limit:1};
+ const env={...base,APP_ENVIRONMENT:'production',COLLECT_DEPLOYMENT_PROFILE:profile,COLLECT_DEPLOYMENT_PROFILE_SHA256:profileSha,
+  COLLECT_DATABASE_URL:'postgres://fixture:fixture@db.'+project+'.supabase.co:5432/postgres',
+  SUPABASE_PUBLISHABLE_KEY:'sb_publishable_fixture',SUPABASE_SECRET_KEY:'sb_secret_fixture',
+  BURIMUNSI_PRODUCT_MODE:'standalone',BURIMUNSI_COLLECTION_ID:'fixture-group',
+  BURIMUNSI_NATIVE_AUTO_TRANSACTIONS_ENABLED:'true',COLLECT_JOB_NATIVE_SMS_APPROVAL_SHA256:approval,MOMO_AI_ENABLED:'true',
+  MOMO_AI_MODEL:'fixture-model',OPENAI_API_KEY:'fixture',BURIMUNSI_PAYMENT_SMS_ENABLED:'true'};
+ const oldLane=async()=>assert.fail('standalone dispatch called a disabled lane');
+ const before=counts.auto,p=ticket({native_sms_admission:admission});
+ const h=createScheduledHandler(()=>env,cleanup,oldLane,{...opts,standalone:true,processNativeSmsLedger:oldLane,
+  processPaymentSms:oldLane,processNotifications:oldLane,processCanonical:oldLane,processNativeFinancialWork:oldLane});
+ const reply=await h(make(p,await sign(p)));
+ assert.equal(reply.status,200);assert.equal(counts.auto,before+1);assert.equal(tickets.get(p.dispatch_id).digest,await digest(reply));
+ const data=await reply.json();
+ assert.deepEqual(data.native_auto_processing,{status:'complete',processed:1,results:[{state:'completed',relation:'duplicate'}]});
+ for(const field of ['native_sms_ledger','payment_receipt_sms','canonical_processing','native_financial_work','notifications'])
+  assert.equal(Object.hasOwn(data,field),false);
 });
 Deno.test('maintenance completes a signed ticket while payment SMS is held without admission',async()=>{
  const env={...base,BURIMUNSI_PAYMENT_SMS_ENABLED:'true',BURIMUNSI_NATIVE_AUTO_TRANSACTIONS_ENABLED:'false'};
@@ -106,5 +131,5 @@ Deno.test('payer receipt observations are bounded and unconfirmed work cannot co
   const result=spawnSync(deno,args,{cwd,encoding:'utf8',timeout:120000,maxBuffer:2*1024*1024});
   if(result.status!==0){process.stderr.write(result.stderr||result.stdout);throw Error('candidate_handler_fixture_failed');}
  }
- console.log(JSON.stringify({suite:'managed-jobs-handler',checks:4,edge_source:'Cloud handler with isolated dependencies',provider_calls:0}));
+ console.log(JSON.stringify({suite:'managed-jobs-handler',checks:5,edge_source:'Cloud handler with isolated dependencies',provider_calls:0}));
 }finally{await rm(dir,{recursive:true,force:true});}

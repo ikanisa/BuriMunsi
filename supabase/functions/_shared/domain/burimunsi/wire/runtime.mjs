@@ -113,6 +113,8 @@ export function semantics(product,operation,r,expected={}) {
   function rows(list){const ids=new Set();for(const row of list){if(row.groupId!==r.binding.groupId)fail('CONTRACT_IDENTITY');if(ids.has(row.id))fail('CONTRACT_DUPLICATE');ids.add(row.id);}}
   if(data.items&&operation!=='observationReconcileBatch'){rows(data.items);if(data.totalCount<data.items.length||(data.nextCursor!==null&&!data.items.length))fail('CONTRACT_PAGE');}
   if(data.recentPayments)rows(data.recentPayments);
+  const home=operation==='home'?data:data.home;
+  if(home&&(!Object.hasOwn(home,'paymentCount')&&(!Object.hasOwn(home,'groupBalanceRwf')||!Object.hasOwn(home,'todayRwf'))))fail('CONTRACT_STATE');
   if(operation==='session'||operation==='login'){
    if(Object.hasOwn(data,'home')!==(expected.includeHome===true))fail('CONTRACT_CONTEXT');
    if(data.home)rows(data.home.recentPayments);
@@ -153,7 +155,14 @@ export function semantics(product,operation,r,expected={}) {
    }
   }
   if(data.profile){if(data.profile.id!==r.binding.actorId)fail('CONTRACT_IDENTITY');if(expected.phone!==undefined&&data.profile.phone!==expected.phone)fail('CONTRACT_IDENTITY');if(expected.now!==undefined&&data.expiresAt<=expected.now)fail('CONTRACT_EXPIRED');}
-  if(operation==='allocate'&&(data.transactionId!==expected.recordId||data.memberId!==expected.memberId))fail('CONTRACT_IDENTITY');
+  if(operation==='allocate'){
+   const current=Object.hasOwn(data,'paymentId');
+   if((current?data.paymentId:data.transactionId)!==expected.recordId||data.memberId!==expected.memberId)fail('CONTRACT_IDENTITY');
+   if(current?(data.state!=='allocated'||!Number.isSafeInteger(data.version)||data.version<2||
+      Object.hasOwn(data,'ledgerEntryId')||Object.hasOwn(data,'transactionId')):
+      !Object.hasOwn(data,'ledgerEntryId')||!Object.hasOwn(data,'memberBalanceRwf')||
+      !Object.hasOwn(data,'groupBalanceRwf')||data.currency!=='RWF'||!Number.isSafeInteger(data.amountRwf))fail('CONTRACT_STATE');
+  }
   if(operation==='enroll'&&data.phone!==expected.phone)fail('CONTRACT_IDENTITY');
   if(operation==='onboardingSuggestions')for(const row of data.items)if(row.id!==row.candidateId)fail('CONTRACT_IDENTITY');
   if(operation==='membersImport'){
@@ -172,7 +181,10 @@ export function semantics(product,operation,r,expected={}) {
   if(['operation','recovery','staffResolution'].includes(operation)&&data.requestId!==expected.recordId)fail('CONTRACT_IDENTITY');
   if(operation==='operation'){
    if(data.actorId!==r.binding.actorId)fail('CONTRACT_IDENTITY');
-   if(data.state==='pending'){
+   if(!Object.hasOwn(data,'financialState')){
+    if(data.state==='pending'?(Object.hasOwn(data,'operation')||Object.hasOwn(data,'allocationState')):
+       typeof data.operation!=='string'||(data.operation==='burimunsi.allocate')!==(data.allocationState==='allocated'))fail('CONTRACT_STATE');
+   }else if(data.state==='pending'){
     if(data.financialState!=='unresolved'||Object.hasOwn(data,'operation'))fail('CONTRACT_STATE');
    }else{
     if(typeof data.operation!=='string'||data.financialState==='unresolved'||

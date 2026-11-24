@@ -47,6 +47,7 @@ async function fixture(){
  f.source={collectionId:gid,sourceId,requestId,bodySha256:bodyHash,ownerUserId:principal,objectKey:'sms/'+sourceId,
   objectSha256:objHash,sizeBytes:encoded.length,fingerprint,keyId:'test-key',sourceFingerprint,
   storageOperationId:'synthetic-operation',storageFingerprint:'d'.repeat(64),cipherSha256:await digest(sealedBytes),cipherSize:sealedBytes.length,admittedAt:Date.now()};
+ f.sealed=sealed;f.inlineEnvelope=null;
  f.rows=[{...f.source,retentionState:'retained'}];
  env.PRIVATE_MEDIA={get:async()=>({key:f.source.objectKey,size:f.source.cipherSize,sha256:f.source.cipherSha256,
   customMetadata:{sha256:objHash,key_id:'test-key',source_fingerprint:sourceFingerprint},text:async()=>{if(f.onRead)await f.onRead();return sealed;}})};
@@ -58,7 +59,13 @@ async function fixture(){
     const [collectionId,limit,offset,financial]=s.args;if(!f.allowed.has(collectionId))throw denied();
     const items=f.rows.slice(offset,offset+limit);
     const result={collectionId,totalCount:f.rows.length,revision:f.revision,items};
-    if(s.sql.includes('burimunsi_admin_observation_outcomes(')){
+    if(s.sql.includes('burimunsi_admin_payment_observation_outcomes(')){
+     assert.equal(s.args.length,3);
+     assert.ok(s.sql.includes('burimunsi_observation_admin_inbox_check('));
+     result.outcomes=items.map(({sourceId},i)=>({sourceId,processing:f.processing?.[i]??'parsed',
+      paymentReference:null,payerStatus:f.legacyPayerStatus??null,payerReason:null}));
+     result.inboxCheck=f.check;
+    }else if(s.sql.includes('burimunsi_admin_observation_outcomes(')){
      assert.ok(s.sql.includes('burimunsi_observation_admin_inbox_check('));
      result.outcomes=items.map(({sourceId})=>({sourceId,processing:'posted',paymentReference:financial?'100000000001':null,
        payerStatus:financial?'delivered':null,payerReason:null}));
@@ -72,8 +79,16 @@ async function fixture(){
    if(s.sql.startsWith('SELECT private.burimunsi_observation_admin_source(')){
     if(!f.allowed.has(s.args[0]))throw denied();return {results:[{result:s.args[1]===sourceId?structuredClone(f.source):null}]};
    }
+   if(s.sql.startsWith('SELECT private.burimunsi_observation_admin_payment_source(')){
+    if(!f.allowed.has(s.args[0]))throw denied();
+    const result=s.args[1]===sourceId?{source:structuredClone(f.source),inlineEnvelope:f.inlineEnvelope}:null;
+    if(f.onReadInline)f.onReadInline();
+    return {results:[{result}]};
+   }
    if(s.sql.startsWith('INSERT INTO admin_bridge_guards')){
-    if(!f.allowed.has(s.args[1])||canonicalJson(s.args[3])!==canonicalJson(f.source)||
+    const current=s.sql.includes('burimunsi_observation_admin_payment_source')
+     ?{source:f.source,inlineEnvelope:f.inlineEnvelope}:f.source;
+    if(!f.allowed.has(s.args[1])||canonicalJson(s.args[3])!==canonicalJson(current)||
      s.args.length>4&&canonicalJson(s.args[6])!==canonicalJson(f.hintProfile))throw denied();
    }
    if(s.sql.startsWith('INSERT INTO audit_log')){if(f.failAudit)throw Error('synthetic audit failure');pending.push(s.args);}
@@ -127,6 +142,22 @@ test('reveal returns verified content only after current email, grants, scope an
  const audit=f.audits[0];assert.ok(!JSON.stringify(audit).includes(message));
  const final=f.batches.at(-1);assert.ok(final.some(s=>s.sql.includes('private.assert_admin_email_context(300)')));
  assert.ok(final.some(s=>s.sql.includes('burimunsi_observation_admin_source')));
+});
+test('standalone source reveal reads the verified table envelope and rechecks it in the audit transaction',async()=>{
+ for(const mode of ['valid','corrupt','changed']){
+  const f=await fixture();f.env.BURIMUNSI_PRODUCT_MODE='standalone';
+  f.inlineEnvelope=mode==='corrupt'?'altered':f.sealed;
+  f.env.PRIVATE_MEDIA={get(){assert.fail('inline content must not read Storage');}};
+  if(mode==='changed')f.onReadInline=()=>{f.inlineEnvelope=null;};
+  const reveal=()=>call(f,`observations/${sourceId}/content?collectionId=${gid}`,{'X-Collect-Review-Reason':'Review this source'});
+  if(mode==='valid'){
+   assert.equal((await(await reveal()).json()).rawBody,message);
+   assert.equal(f.audits.length,1);
+  }else{
+   await assert.rejects(reveal());
+   assert.equal(f.audits.length,0);
+  }
+ }
 });
 test('scope revocation or audit failure after retrieval never returns plaintext',async()=>{
  for(const cause of ['revoke','audit']){
@@ -208,4 +239,18 @@ test('receiver list returns the scoped posting, reported payer delivery and full
  assert.equal(page.items[0].payerStatus,'delivered');assert.equal(page.inboxCheck.state,'verified');assert.ok(!JSON.stringify(page).includes(message));
  f.check.headsMatch=false;await assert.rejects(call(f,endpoint),error(503,'observation_unavailable'));
  await assert.rejects(call(f,'observations?collectionId='+other+'&includeProcessing=1'),error(403,'permission_required'));
+});
+
+test('standalone receiver parses the new status and rejects any legacy financial disclosure',async()=>{
+ const f=await fixture();f.env.BURIMUNSI_PRODUCT_MODE='standalone';f.actor.permissions.add('payments.read');
+ f.rows.push({...f.rows[0],sourceId:'99999999-9999-4999-8999-999999999999'});
+ f.processing=['parsed','non_payment'];
+ f.check={state:'verified',checkedAt:Date.now(),candidateCount:2,missingCount:0,pendingCount:0,headsMatch:true};
+ const endpoint='observations?collectionId='+gid+'&includeProcessing=1';
+ const result=await(await call(f,endpoint)).json();
+ assert.deepEqual(result.items.map(x=>[x.processing,x.paymentReference,x.payerStatus,x.payerReason]),
+  [['parsed',null,null,null],['non_payment',null,null,null]]);
+ assert.equal(result.inboxCheck.state,'verified');
+ f.legacyPayerStatus='delivered';
+ await assert.rejects(call(f,endpoint),error(503,'observation_unavailable'));
 });

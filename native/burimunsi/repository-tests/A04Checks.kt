@@ -19,7 +19,7 @@ private class Scenario {
  var statusEntered:CountDownLatch?=null;var releaseStatus:CountDownLatch?=null
  val repo:NativeRepository
  val payment=Payment("payment-1","Payer","+250780000816",10000,"at","ft-1","unallocated",1)
- val member=Member("member-1","Member","+250780000816",10000,true,1)
+ val member=Member("member-1","Member","+250780000816",true,1)
  init{
   SecureStore.reset()
   api.handler={r->when{
@@ -40,7 +40,7 @@ private class Scenario {
   repo=NativeRepository(Context(),api,"group-1");login()
  }
  fun login(){if(repo.current()!=null)repo.clearOperator();repo.login("0780000001","2468")}
- fun submit()=repo.allocate(payment,member,"Explicit verified identity note")
+ fun submit()=repo.allocate(payment,member)
  fun unknown(){postFailure=true;runCatching{submit()};check(repo.pending()?.state==OperationState.UNKNOWN)}
  fun posts()=api.calls.count{it.method!="GET"&&!it.path.endsWith("/session/login")}
  fun statusReads()=api.calls.count{it.path.contains("/operations/")&&!it.path.endsWith("/recovery")}

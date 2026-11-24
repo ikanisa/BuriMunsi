@@ -12,6 +12,9 @@ import {rosterRpc,functionRpc as rosterFunction} from './roster.js';
 import {receiptFunction} from './receipts.js';
 import {operatorNoteRpc} from './operator_notes.js';
 import {assistedSmsConsentRpc} from './notification_operator_consent.js';
+import {BURIMUNSI_PRODUCT_MODE} from '../burimunsi-standalone.js';
+
+const retiredStandalonePaymentHandlers=new Set([financialRpc,contributionCommandRpc,compensationRpc,receiptFunction]);
 
 export const publicRpcNames=Object.freeze([
   'get_public_runtime_config','get_collection_type_catalog',
@@ -93,6 +96,8 @@ export const operationInventory=Object.freeze(registered.sort((a,b)=>a.path.loca
 
 export async function dispatchOperation(kind,name,body,env,actor){
   const handler=handlers.get(`${kind}:${name}`);
+  if(env.BURIMUNSI_PRODUCT_MODE===BURIMUNSI_PRODUCT_MODE&&retiredStandalonePaymentHandlers.has(handler))
+    throw new ApiError(404,'not_found','This Payments action does not exist.');
   if(!handler)throw new ApiError(501,'operation_unavailable','This action is not available yet. Please contact support.');
   const result=await handler(name,body,env,actor);
   if(!result||result.handled!==true)throw new Error('Registered API operation has no handler.');

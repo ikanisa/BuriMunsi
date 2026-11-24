@@ -1,18 +1,24 @@
 import {lazy, type ReactElement} from 'react';
 import {Link, Navigate, useLocation, useParams} from 'react-router';
 import {canOpenPaymentView, paymentViews, paymentsPath} from '../../features/operations/paymentLocations';
+import {isValidId} from '../../features/operations/contracts';
 import {CORE_PERMISSIONS, type CoreArea} from '../../features/core/types';
+import {canAddMember} from '../../features/core/addMemberAccess';
+import {listLocation, readFilters} from '../../features/core/coreListFilters';
+import {MemberDirectoryActions} from '../../features/core/MemberDirectory';
 import {useSession} from '../../session/SessionProvider';
+import {usesPhoneCanonicalRecords} from '../../session/sessionContext';
 import {UnavailablePage} from '../UnavailablePage';
 import {useAccess, useCurrentAuthority, useSensitiveAccess} from './access';
 import {LegacyJournalCreateRoute, LegacyJournalEditRoute, TransactionEvidenceRoute} from './financial-routes';
-import {requiresAdminRole, requiresPermissions, workspaceRoute, type WorkspaceAccess} from './routePolicy';
+import {collectWorkspaceOnly, requiresAdminRole, requiresPermissions, workspaceRoute, type WorkspaceAccess} from './routePolicy';
 
 const CoreListPage = lazy(() => import('../../features/core/CoreListPage').then(m => ({default: m.CoreListPage})));
 const CoreRecordPage = lazy(() => import('../../features/core/CoreRecordPage').then(m => ({default: m.CoreRecordPage})));
 const GroupCreatePage = lazy(() => import('../../features/core/GroupCreatePage').then(m => ({default: m.GroupCreatePage})));
 const GroupEditPage = lazy(() => import('../../features/core/GroupEditPage').then(m => ({default: m.GroupEditPage})));
 const UserCreatePage = lazy(() => import('../../features/core/UserCreatePage').then(m => ({default: m.UserCreatePage})));
+const AddMemberPage = lazy(() => import('../../features/core/AddMemberPage').then(m => ({default: m.AddMemberPage})));
 const UserEditPage = lazy(() => import('../../features/core/UserEditPage').then(m => ({default: m.UserEditPage})));
 const MembershipCreatePage = lazy(() => import('../../features/core/MembershipCreatePage').then(m => ({default: m.MembershipCreatePage})));
 const MembershipEditPage = lazy(() => import('../../features/core/MembershipEditPage').then(m => ({default: m.MembershipEditPage})));
@@ -23,14 +29,37 @@ const LegacyLedgerAccountCreatePage = lazy(() => import('../../features/legacy-l
 const GroupSelectionPage = lazy(() => import('../../features/route-compat/GroupSelectionPage').then(m => ({default: m.GroupSelectionPage})));
 
 function CoreListRoute({area}: {area: CoreArea}) {
-  const access = useAccess(), location = useLocation();
-  return <CoreListPage key={`${access.authorityKey}:${area}`} {...access} area={area} locationSearch={location.search} />;
+  const access = useAccess(), location = useLocation(), {user} = useSession();
+  return <CoreListPage key={`${access.authorityKey}:${area}`} {...access} area={area} locationSearch={location.search}
+    simplePayments={user?.authMethod === 'phone_passcode'} />;
+}
+
+function PeopleListRoute() {
+  const {search} = useLocation();
+  const session = useSession();
+  if (!usesPhoneCanonicalRecords(session)) return <CoreListRoute area="users" />;
+  return <Navigate replace to={listLocation('members', readFilters(search, 'members', 'canonical_evidence_ledger', true))} />;
+}
+
+function MemberListRoute() {
+  const access = useAccess(), {identity} = useSensitiveAccess(), session = useSession(), {search} = useLocation();
+  const scopedMember = usesPhoneCanonicalRecords(session);
+  return <CoreListPage key={access.authorityKey} {...access} area="members" locationSearch={search}
+    simplePayments={session.user?.authMethod === 'phone_passcode'} scopedMember={scopedMember}
+    memberActions={scopedMember && session.user && <MemberDirectoryActions user={session.user} identity={identity} />} />;
+}
+
+function MemberCreateRoute() {
+  const session = useSession();
+  return usesPhoneCanonicalRecords(session) ? <AddMemberPage /> : <GroupSelectionRoute action="member" />;
 }
 
 function CoreDetailRoute({area}: {area: CoreArea}) {
-  const access = useAccess(), sensitive = useSensitiveAccess(), isCurrent = useCurrentAuthority(), {id = ''} = useParams(), location = useLocation();
+  const access = useAccess(), sensitive = useSensitiveAccess(), isCurrent = useCurrentAuthority(), {id = ''} = useParams(), location = useLocation(), session = useSession();
+  const scopedMember = usesPhoneCanonicalRecords(session) && (area === 'members' || area === 'users');
   return <CoreRecordPage key={`${access.authorityKey}:${area}:${id}`} {...access} identity={sensitive.identity} area={area} id={id}
-    isCurrent={isCurrent} returnTo={new URLSearchParams(location.search).get('returnTo')} />;
+    scopedMember={scopedMember} isCurrent={isCurrent} returnTo={new URLSearchParams(location.search).get('returnTo')}
+    simplePayments={session.user?.authMethod === 'phone_passcode'} />;
 }
 
 function GroupEditRoute() {
@@ -87,20 +116,36 @@ function GroupSelectionRoute({action}: {action: 'member' | 'payee'}) {
 }
 
 const PaymentsWorkArea = lazy(() => import('../../features/operations/PaymentsWorkArea').then(m => ({default: m.PaymentsWorkArea})));
+const BuriMunsiPayments = lazy(() => import('../../features/operations/BuriMunsiPayments').then(m => ({default: m.BuriMunsiPayments})));
 
 function PaymentsRoute() {
-  const access = useAccess();
-  return <PaymentsWorkArea key={access.authorityKey} {...access} />;
+  const access = useAccess(), {user} = useSession();
+  return user?.authMethod === 'phone_passcode' ? <BuriMunsiPayments key={access.authorityKey} /> :
+    <PaymentsWorkArea key={access.authorityKey} {...access} />;
 }
 
 function TransactionListRoute() {
-  const params = new URLSearchParams(useLocation().search), next = new URLSearchParams();
+  const {user} = useSession(), params = new URLSearchParams(useLocation().search), next = new URLSearchParams();
+  if (user?.authMethod === 'phone_passcode') {
+    const query = params.get('q') ?? params.get('search');
+    const status = params.get('status');
+    if (query) next.set('q', query);
+    if (status === 'allocated' || status === 'unallocated') next.set('status', status);
+    return <Navigate replace to={paymentsPath + (next.size ? '?' + next : '')} />;
+  }
   if (params.get('view') === 'momo') next.set('dataset', 'momo');
   for (const key of ['search', 'status', 'sort', 'page']) {
     const values = params.getAll(key);
     if (values.length === 1) next.set(key, values[0]);
   }
   return <Navigate replace to={paymentsPath + (next.size ? '?' + next : '')} />;
+}
+
+function TransactionDetailRoute() {
+  const {user} = useSession(), {id} = useParams();
+  if (user?.authMethod === 'phone_passcode') return <Navigate replace
+    to={isValidId(id) ? paymentsPath + '?' + new URLSearchParams({payment: id}) : paymentsPath} />;
+  return <CoreDetailRoute area="transactions" />;
 }
 
 interface RecordAction {
@@ -122,7 +167,7 @@ const canEditLegacyPayee = requiresAdminRole('receivers.manage', 'collections.re
 const canCreateLegacyTransaction = requiresAdminRole('payments.manage', 'collections.read', 'receivers.read', 'overview.read');
 
 const canReadCoreArea = (area: CoreArea) => requiresPermissions(CORE_PERMISSIONS[area]);
-const canReadReceivingAccounts = canReadCoreArea('payees');
+const canReadReceivingAccounts = collectWorkspaceOnly(canReadCoreArea('payees'));
 
 function GroupListRoute() {
   const {user} = useSession();
@@ -141,11 +186,13 @@ const records: Record<CoreArea, RecordRoutes> = {
     edit: {element: <GroupEditRoute />, access: requiresPermissions('collections.manage')},
   },
   users: {
+    list: <PeopleListRoute />,
     create: {element: <UserCreateRoute />, access: canManageUsers},
     edit: {element: <UserEditRoute returnArea="users" />, access: canManageUsers},
   },
   members: {
-    create: {element: <GroupSelectionRoute action="member" />, access: canManageUsers},
+    list: <MemberListRoute />,
+    create: {element: <MemberCreateRoute />, access: user => user.financialModel === 'canonical_evidence_ledger' && user.authMethod === 'phone_passcode' ? canAddMember(user) : canManageUsers(user)},
     edit: {element: <UserEditRoute returnArea="members" />, access: canManageUsers},
   },
   payees: {
@@ -169,12 +216,14 @@ export const recordRoutes = [
   workspaceRoute('payments', <PaymentsRoute />, user => paymentViews.some(({id}) => canOpenPaymentView(id, user))),
   ...(Object.keys(CORE_PERMISSIONS) as CoreArea[]).flatMap(area => {
     const {list, create, edit} = records[area];
-    const canRead = area === 'payees' ? canReadReceivingAccounts : canReadCoreArea(area);
+    const canRead = area === 'payees' ? canReadReceivingAccounts :
+      area === 'ledgers' ? collectWorkspaceOnly(canReadCoreArea(area)) : canReadCoreArea(area);
+    const canModify = area === 'transactions' ? collectWorkspaceOnly(canRead) : canRead;
     return [
       workspaceRoute(area, list ?? <CoreListRoute area={area} />, canRead),
-      workspaceRoute(area + '/new', create.element, user => canRead(user) && create.access(user)),
-      workspaceRoute(area + '/:id/edit', edit.element, user => canRead(user) && edit.access(user)),
-      workspaceRoute(area + '/:id', <CoreDetailRoute area={area} />, canRead),
+      workspaceRoute(area + '/new', create.element, user => canModify(user) && create.access(user)),
+      workspaceRoute(area + '/:id/edit', edit.element, user => canModify(user) && edit.access(user)),
+      workspaceRoute(area + '/:id', area === 'transactions' ? <TransactionDetailRoute /> : <CoreDetailRoute area={area} />, canRead),
     ];
   }),
 ];
@@ -184,7 +233,7 @@ const canManageMemberships = requiresPermissions('collections.read', 'users.mana
 export const groupRecordRoutes = [
   workspaceRoute('groups/:id/members/new', <MembershipCreateRoute />, canManageMemberships),
   workspaceRoute('groups/:groupId/members/:userId/edit', <MembershipEditRoute />, canManageMemberships),
-  workspaceRoute('groups/:groupId/payees/new', <LegacyPayeeCreateRoute />, requiresPermissions('collections.read', 'receivers.manage')),
+  workspaceRoute('groups/:groupId/payees/new', <LegacyPayeeCreateRoute />, collectWorkspaceOnly(requiresPermissions('collections.read', 'receivers.manage'))),
   workspaceRoute('groups/:groupId/ledger-accounts/new', <LegacyLedgerAccountCreateRoute />,
-    requiresAdminRole('collections.read', 'ledger.read', 'ledger.manage', 'overview.read')),
+    collectWorkspaceOnly(requiresAdminRole('collections.read', 'ledger.read', 'ledger.manage', 'overview.read'))),
 ];

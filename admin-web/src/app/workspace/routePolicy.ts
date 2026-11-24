@@ -17,3 +17,7 @@ export function requiresAdminRole(...permissions: string[]): WorkspaceAccess {
   const allowed = requiresPermissions(...permissions);
   return user => user.role !== 'staff' && allowed(user);
 }
+
+export function collectWorkspaceOnly(access: WorkspaceAccess): WorkspaceAccess {
+  return user => user.authMethod !== 'phone_passcode' && access(user);
+}

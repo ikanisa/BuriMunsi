@@ -11,7 +11,8 @@ export function BuriDirectoryView({directory, provisioning, provisioningError, p
   return <>
     <Card><div className="core-detail">
       <h2>{phoneAccounts ? 'BuriMunsi operators' : 'Collect operators'}</h2>
-      {!directory.configured && <p>The BuriMunsi group and receiving account need to be configured before approving access.</p>}
+      {!directory.configured && <p>{phoneAccounts ? 'BuriMunsi group access needs to be configured.' :
+        'The BuriMunsi group and receiving account need to be configured before approving access.'}</p>}
       {operators.length === 0 ? <p>No Collect accounts or approvals are recorded for this group.</p> :
         <div className="admin-table-wrap" role="region" aria-label="BuriMunsi operator records" tabIndex={0}>
           <table className="admin-table">
@@ -40,7 +41,7 @@ export function BuriDirectoryView({directory, provisioning, provisioningError, p
           <h3>Installation grants</h3>
           <ul>{provisioning.grants.map(grant => <li key={grant.id}>{grant.installationId} · {grant.profile} · {grant.active ? 'recorded active' : 'recorded inactive'} · version {grant.version}</li>)}</ul>
         </>}
-        <p>A recorded grant does not confirm physical device possession, carrier delivery or payment settlement.</p>
+        {!phoneAccounts && <p>A recorded grant does not confirm physical device possession, carrier delivery or payment settlement.</p>}
       </>}
     </div></Card>
   </>;

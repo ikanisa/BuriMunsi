@@ -131,6 +131,18 @@ export function parseCoreRow(area: CoreArea, model: FinancialModel, input: unkno
   return input as DataRow;
 }
 
+export function validateMemberStatus(row: DataRow, status = ''): void {
+  if (row.member_type === 'operator' || !['active', 'inactive'].includes(String(row.membership_status)) ||
+      row.active_groups !== (row.membership_status === 'active' ? 1 : 0) ||
+      (status && row.membership_status !== status)) invalid();
+}
+
+export function parseMemberRosterPage(input: unknown, limit: number, offset: number, status = ''): CorePage {
+  const page = parseCorePage(input, 'users', 'canonical_evidence_ledger', limit, offset);
+  page.rows.forEach(row => validateMemberStatus(row, status));
+  return page;
+}
+
 export function parseCorePage(input: unknown, area: CoreArea, expectedModel: FinancialModel, limit: number, offset: number, status = ''): CorePage {
   if (!isObject(input) || !Array.isArray(input.rows) || !isSafeCount(input.total) ||
       !Number.isSafeInteger(limit) || limit < 1 || limit > 100 ||

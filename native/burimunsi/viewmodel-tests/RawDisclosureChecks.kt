@@ -16,7 +16,7 @@ fun main()=runBlocking{
  suspend fun idle(m:BuriViewModel){withTimeout(5000){while(m.state.busy)delay(2)};delay(10)}
  Fixture.rawReads=0;Fixture.rawFailure=false;Fixture.rawApiFailure=null;Fixture.role=Role.ADMIN;Fixture.restoreSignedOut=false;Fixture.pendingFlag=true
  val m=BuriViewModel(Application());idle(m);m.navigate(Route.PAYMENT,"tx-1");idle(m);m.openSheet(Sheet.RAW,"sms-1");idle(m)
- ck("explicit panel open audits one honest application-action purpose",Fixture.rawReads==1&&Fixture.lastRawReason=="Review original SMS from the selected contribution or receipt")
+ ck("explicit panel open audits one honest application-action purpose",Fixture.rawReads==1&&Fixture.lastRawReason=="Review original SMS for the selected payment or receipt")
  ck("original prototype panel displays exact plaintext after authorized response",m.state.raw?.body=="unaltered"&&m.state.rawDisclosure==RawDisclosureState.REVEALED)
  for(reason in listOf("short","        ","valid reason\n","x".repeat(1001),"valid reason\u0085")){
   m.revealRaw(reason);idle(m);ck("invalid programmatic disclosure reason cannot dispatch",Fixture.rawReads==1&&m.state.raw==null&&m.state.rawDisclosure==RawDisclosureState.FAILURE)

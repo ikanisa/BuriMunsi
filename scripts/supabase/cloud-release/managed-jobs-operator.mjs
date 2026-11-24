@@ -1,6 +1,6 @@
 // Explicit, evidenced cloud actions. No action is taken merely by importing.
-// A native probe can process one new SMS and one ledger candidate; imported
-// history remains denied by the independently verified database guard.
+// A native probe can parse one newly captured SMS. The database guard keeps
+// imported history out of the automatic path.
 import {randomUUID} from 'node:crypto';
 import {lstatSync,readFileSync,existsSync} from 'node:fs';
 import {join,resolve} from 'node:path';
@@ -57,6 +57,27 @@ export function expectedSchedulerBodies(sql){
  return {ops:Object.fromEntries(expected),private:{collect_managed_job_claim:sha(claim[1]),collect_managed_job_complete:sha(complete[1])}};
 }
 const fastScheduleFile = '20261122191300_burimunsi_event_driven_jobs.sql';
+const paymentsMigrations={
+  payments_migration:'20261124114500_burimunsi_payments.sql',
+  payment_record_migration:'20261124114501_burimunsi_record_payments.sql',
+};
+export const paymentsMigrationHistorySql=Object.entries(paymentsMigrations).map(([field,file])=>
+  `(SELECT encode(sha256(convert_to(statements[1],'UTF8')),'hex') FROM supabase_migrations.schema_migrations
+    WHERE version='${file.slice(0,14)}') AS ${field}`).join(',\n ');
+export function paymentsRecordingInstalled(row){
+ const entries=Object.entries(paymentsMigrations);
+ if(entries.every(([field])=>row[field]==null))return false;
+ if(entries.some(([field,file])=>row[field]!==sha(readFileSync(new URL('../../../supabase/migrations/'+file,import.meta.url)))))
+  throw Error('scheduler_migration_changed');
+ return true;
+}
+const retiredRecordingRoutines=[
+ 'private.burimunsi_native_sms_post_candidates(integer)',
+ 'private.burimunsi_native_sms_post_snapshot(text)',
+ 'private.burimunsi_native_sms_post_defer(text,integer)',
+ 'private.burimunsi_native_sms_post_facts(text,text,jsonb,jsonb)',
+ 'private.burimunsi_native_sms_post_retry(text,text)',
+];
 export const fastScheduleHistorySql = "(SELECT encode(sha256(convert_to(statements[1],'UTF8')),'hex') FROM supabase_migrations.schema_migrations WHERE version='20261122191300')";
 export function reviewedJobsCadence(fastDigest, previous = '* * * * *') {
  if (fastDigest == null) return previous;
@@ -86,6 +107,7 @@ async function inspect(db){
   c.native_provider_source_sha256,c.native_provider_model_id,c.native_provider_approval_sha256,c.native_provider_expires_at,c.native_provider_limit,c.native_provider_used,
   j.jobname,j.schedule,j.command,j.database,j.username,j.active,
   ${fastScheduleHistorySql} AS fast_migration,
+  ${paymentsMigrationHistorySql},
   (SELECT encode(sha256(convert_to(statements[1],'UTF8')),'hex') FROM supabase_migrations.schema_migrations WHERE version='20261124080612') AS refusal_migration,
   (SELECT encode(sha256(convert_to(statements[1],'UTF8')),'hex') FROM supabase_migrations.schema_migrations WHERE version='20261122180000') AS performance_migration,
   (SELECT encode(sha256(convert_to(statements[1],'UTF8')),'hex') FROM supabase_migrations.schema_migrations WHERE version='20261122191000') AS inbox_migration,
@@ -118,12 +140,21 @@ async function inspect(db){
   FROM unnest($1::text[]) x(signature) LEFT JOIN pg_proc p ON p.oid=to_regprocedure(x.signature)`,[Object.keys(GUARDS),Boolean(row.inbox_migration)])).rows;
  if(guard.length!==Object.keys(GUARDS).length||guard.some(x=>x.owner!=='postgres'||x.prosecdef!==true||x.digest!==expectedGuards[x.signature]))throw Error('scheduler_or_history_guard_changed');
  const expected=expectedSchedulerBodies(scheduler.sql);
+ const recordsPayments=paymentsRecordingInstalled(row);
  if(row.performance_migration)expected.ops.reconcile_jobs='7178d8d2dad63f00f2503c160280d222da80869f156063419f2b3e21d6ae1554';
  if(row.refusal_migration){
   const refusalFile='20261124080612_burimunsi_retry_unclaimed_scheduler_refusals.sql';
   if(!row.performance_migration||!row.fast_migration||row.refusal_migration!==sha(readFileSync(new URL('../../../supabase/migrations/'+refusalFile,import.meta.url))))throw Error('scheduler_migration_changed');
   expected.private.collect_managed_job_claim='c2848c875d9095bc971c7b4a121fe69844c0fc428e152d5c5e18c39d0c60fdd9';
   expected.ops.reconcile_jobs='2ec0bc1e411e0a2f74688fc4fd3a6e029ded1261b43c3e721ba6acb02faffacb';
+ }
+ if(recordsPayments){
+  if(!row.refusal_migration)throw Error('scheduler_migration_changed');
+  expected.ops.reconcile_jobs='05c6641028b2028e7c7cb296a5c4dd4faac0562dca4693ca521600ecc764b349';
+  const retired=(await db.query(`SELECT count(p.oid)::int routines,
+   bool_and(NOT has_function_privilege('collect_runtime',p.oid,'EXECUTE')) withdrawn
+   FROM unnest($1::text[]) x(signature) LEFT JOIN pg_proc p ON p.oid=to_regprocedure(x.signature)`,[retiredRecordingRoutines])).rows[0];
+  if(retired.routines!==retiredRecordingRoutines.length||retired.withdrawn!==true)throw Error('scheduler_source_shape_changed');
  }
  if(scheduleHistory){
   expected.ops.dispatch_jobs='00e49b5d9603cd8564555252cc62b23d667fd9f611c558c46459e4b7580d9f72';
@@ -142,12 +173,16 @@ async function inspect(db){
   if(review.digest!==reviewedSha||sha(readFileSync(new URL('../../../supabase/migrations/'+reviewMigration,import.meta.url)))!==reviewedSha)throw Error('scheduler_migration_changed');
   const reviewedFunctions={
    'private.burimunsi_auto_retry(text,uuid,text,text,text)':'e459ea6c476b0e294692f0cdfff6df84aa547061ffe0ee94e99422eda9c88b23',
-   'private.burimunsi_auto_finish(text,uuid,text,text,uuid,text,jsonb,jsonb)':'696e8861aabee891836369f3c5243efd5403791503a0be9f7e29831d967a22c7',
+   'private.burimunsi_auto_finish(text,uuid,text,text,uuid,text,jsonb,jsonb)':recordsPayments
+    ?'f5fc7fe76ad9c563bb7555715a9816f4a1572610b4d2df5ba864280d30f33e70'
+    :'696e8861aabee891836369f3c5243efd5403791503a0be9f7e29831d967a22c7',
    'private.burimunsi_native_sms_post_facts(text,text,jsonb,jsonb)':'943d9979691711175a2e6bc1ebfa3b0dc96a093e9f280fc55904a67641850a22'};
   const reviewed=(await db.query(`SELECT x.signature,p.proowner::regrole::text owner,p.prosecdef,
    encode(sha256(convert_to(p.prosrc,'UTF8')),'hex') digest,p.proacl::text acl
    FROM unnest($1::text[]) x(signature) LEFT JOIN pg_proc p ON p.oid=to_regprocedure(x.signature)`,[Object.keys(reviewedFunctions)])).rows;
-  if(reviewed.length!==3||reviewed.some(x=>x.owner!=='postgres'||x.prosecdef!==true||x.acl!=='{postgres=X/postgres,collect_runtime=X/postgres}'||x.digest!==reviewedFunctions[x.signature]))throw Error('scheduler_source_shape_changed');
+  if(reviewed.length!==3||reviewed.some(x=>x.owner!=='postgres'||x.prosecdef!==true||
+   x.acl!==(recordsPayments&&retiredRecordingRoutines.includes(x.signature)?'{postgres=X/postgres}':'{postgres=X/postgres,collect_runtime=X/postgres}')||
+   x.digest!==reviewedFunctions[x.signature]))throw Error('scheduler_source_shape_changed');
  }
  const budget=await renderNativeProviderBudget();
  const budgetFile='20261117081411_collect_native_provider_budget.sql';
@@ -215,6 +250,8 @@ export function verifyNativeBudget(pre,r,now=Date.now()){
 }
 function verifyMode(pre,r,native){
  if(r.project_ref!==PROJECT||r.endpoint!==`https://${PROJECT}.supabase.co/functions/v1/collect-jobs`)throw Error('readiness_project_changed');
+ if(paymentsRecordingInstalled(pre.row)&&pre.secrets.get('BURIMUNSI_PAYMENT_SMS_ENABLED')!==sha('false'))
+  throw Error('native_config_not_qualified');
  if(native){verifyNativeBudget(pre,r);const a=r.native_sms_admission;if(a.source_sha256!==pre.source||pre.secrets.get('BURIMUNSI_NATIVE_AUTO_TRANSACTIONS_ENABLED')!==sha('true')||
   pre.secrets.get('MOMO_AI_ENABLED')!==sha('true')||pre.secrets.get('MOMO_AI_MODEL')!==sha(a.model_id)||
   pre.secrets.get('COLLECT_JOB_NATIVE_SMS_APPROVAL_SHA256')!==sha(a.approval_sha256)||!pre.secrets.has('OPENAI_API_KEY'))throw Error('native_config_not_qualified');

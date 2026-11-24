@@ -1,7 +1,7 @@
 // The jobs endpoint returns bounded metadata, never a message, identity or
 // extracted facts. Unknown outcomes cannot be reported as completed work.
 export function nativeAutoProcessingResult(result){
- const allowed=new Set(['completed','security_message','not_claimed','retry','failed']);
+ const allowed=new Set(['completed','security_message','non_payment','not_claimed','retry','failed']);
  if(!result||result.status!=='complete'||!Number.isSafeInteger(result.processed)||result.processed<0||result.processed>1||
   !Array.isArray(result.results)||result.results.length!==result.processed||
   result.results.some(item=>!item||!allowed.has(item.state)||item.state==='completed'&&!['accepted','duplicate','conflict'].includes(item.relation)))

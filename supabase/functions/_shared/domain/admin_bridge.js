@@ -1,4 +1,3 @@
-import {adminPaymentActivity} from './admin_payment_activity.js';
 import {activePhoneOperator} from './admin_email_policy.js';
 import {adminSmsMetadataRead} from './admin_sms_receipts.js';
 import {adminMomoRoute} from './admin_momo.js';
@@ -15,12 +14,16 @@ import {adminOversightRead} from './admin_oversight.js';
 import {clientDiagnosticsRoute} from './client_diagnostics.js';
 import {handleAdminAccounts,validateAdminOrigin,adminAccountSession,adminCanonicalActor,adminInternalRequest,accountDatabase,accountReadDatabase} from './admin_accounts.js';
 import {adminBuriMunsiMemberEnrollment} from './admin_burimunsi_member_enrollment.js';
+import {adminBuriMunsiPayments} from './admin_burimunsi_payments.js';
 import {adminBuriMunsiAccess} from './admin_burimunsi_access.js';
 import {adminBuriMunsiOperators} from './admin_burimunsi_operators.js';
 import {adminBuriMunsiNativeWork} from './admin_burimunsi_native_work.js';
 import {adminBuriMunsiProvisioning} from './admin_burimunsi_provisioning.js';
 import {operatingRead,adminOperationWrite} from './admin_operations.js';
 import {adminReconciliationRoute} from './admin_reconciliation.js';
+import {BURIMUNSI_PRODUCT_MODE} from '../burimunsi-standalone.js';
+
+const retiredStandalonePayments = /^\/api\/admin\/(?:reconciliations|momo\/(?:transactions|sources)|gateway\/receipts|core\/(?:overview|transactions|ledgers|payment-activity)|operations\/(?:transactions|ledgers|payment-activity)|notifications?)(?:\/|$)/;
 
 // The platform-sponsored group fixture compiles these production operations.
 export {genericMutation} from './admin_record_mutations.js';
@@ -44,7 +47,6 @@ async function bridgeRoute(request,env){
  }
  if(section==='core'){
   if(request.method!=='GET')fail(405,'method_not_allowed','This view is read-only.');
-  if(parts.length===1&&parts[0]==='payment-activity')return json(await adminPaymentActivity(env,account,actor,url));
   if(parts.length!==1||parts[0]!=='overview'&&!lists[parts[0]])fail(404,'not_found','This workspace view does not exist.');
   const cap=parts[0]==='overview'?'overview.read':`${permission[parts[0]]}.read`;if(!actor.permissions.has(cap))fail(403,'permission_required','This view is unavailable.');
   const scoped=accountReadDatabase(env,account,cap);
@@ -69,7 +71,15 @@ async function bridgeRoute(request,env){
  * bearer /v1 auth and CORS dispatcher. No ASSETS or second operating DB here. */
 export async function handleAdmin(request,env,ctx){
  const path=new URL(request.url).pathname;if(path!=='/api/admin'&&!path.startsWith('/api/admin/'))return null;
- try{const account=await handleAdminAccounts(request,env,ctx);if(account)return account;return await adminBuriMunsiAccess(request,env)??await adminBuriMunsiOperators(request,env)??await adminBuriMunsiNativeWork(request,env)??await adminBuriMunsiProvisioning(request,env)??await adminBuriMunsiMemberEnrollment(request,env)??await notificationOperatorManagementRoute(request,env)??await notificationOperatorRoute(request,env)??await bridgeRoute(request,env);}
+ try{
+  const account=await handleAdminAccounts(request,env,ctx);if(account)return account;
+  const standalone=env.BURIMUNSI_PRODUCT_MODE===BURIMUNSI_PRODUCT_MODE;
+  if(standalone&&retiredStandalonePayments.test(path))
+   fail(404,'not_found','This Payments action does not exist.');
+  return await adminBuriMunsiPayments(request,env)??await adminBuriMunsiAccess(request,env)??await adminBuriMunsiOperators(request,env)??await adminBuriMunsiMemberEnrollment(request,env)??
+    (standalone?null:await adminBuriMunsiNativeWork(request,env))??await adminBuriMunsiProvisioning(request,env)??
+    (standalone?null:await notificationOperatorManagementRoute(request,env)??await notificationOperatorRoute(request,env))??await bridgeRoute(request,env);
+ }
  catch(error){if(typeof env.INTERNAL_ERROR_OBSERVER==='function')env.INTERNAL_ERROR_OBSERVER(error);const known=error instanceof ApiError,constraint=/admin_bridge_guards|admin_bridge_state|UNIQUE constraint|FOREIGN KEY constraint/.test(String(error));
   return json({error:{code:known?error.code:constraint?'state_conflict':'service_unavailable',message:known?error.message:constraint?'The record or related state changed. Refresh before continuing.':'The request could not be completed.'}},known?error.status:constraint?409:503);}
 }

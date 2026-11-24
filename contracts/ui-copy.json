@@ -12,11 +12,6 @@
       "rw": "Igikorwa cya mbere cyemejwe. Banza uvugurure amakuru mbere yo gukora ikindi; ntukigisubiremo."
     },
     {
-      "key": "ui_00774543a007",
-      "en": "Identification note: 8–500 characters.",
-      "rw": "Ibisobanuro: inyuguti 8–500."
-    },
-    {
       "key": "ui_007b03055640",
       "en": "SMS access required",
       "rw": "Uburenganzira bwa SMS burakenewe"
@@ -53,8 +48,8 @@
     },
     {
       "key": "ui_0319d69b4267",
-      "en": "Use an administrator-issued pairing code for the approved business wallet and receiving phone. Pairing does not credit a member.",
-      "rw": "Koresha kode yatanzwe n’umuyobozi ku ikofi ry’ubucuruzi na telefoni yakira byemejwe. Guhuza ntibishyira amafaranga kuri konti y’umunyamuryango."
+      "en": "Use the administrator-issued pairing code for this receiving phone.",
+      "rw": "Koresha kode yatanzwe n’umuyobozi yo guhuza iyi telefoni yakira."
     },
     {
       "key": "ui_031a8f0f659d",
@@ -65,11 +60,6 @@
       "key": "ui_0328e0c0b25e",
       "en": "Gateway status: %1$s",
       "rw": "Uko telefoni yakira ihagaze: %1$s"
-    },
-    {
-      "key": "ui_034fb44022e8",
-      "en": "Balance range",
-      "rw": "Igipimo cy’amafaranga asigaye"
     },
     {
       "key": "ui_046bf9bffb47",
@@ -122,11 +112,6 @@
       "rw": "Bireba gusa guhinduranya amadirishya. Android ni yo igenzura imigendere ya clavier n’amadirishya y’ibiganiro."
     },
     {
-      "key": "ui_095c685e1eff",
-      "en": "Payment history",
-      "rw": "Amateka y’ubwishyu"
-    },
-    {
       "key": "ui_09e439cc716f",
       "en": "The email code could not be verified.",
       "rw": "Kode yo kuri imeyili ntiyemejwe."
@@ -135,11 +120,6 @@
       "key": "ui_09fd861a8230",
       "en": "Allocate unmatched payments",
       "rw": "Huza ubwishyu butarahuzwa n’abanyamuryango"
-    },
-    {
-      "key": "ui_0a2921332bd5",
-      "en": "Credited",
-      "rw": "Yanditswe ku munyamuryango"
     },
     {
       "key": "ui_0adcdb5d55ec",
@@ -312,11 +292,6 @@
       "rw": "Saba umuyobozi wawe kuvugurura igenamiterere ry’iyi telefoni."
     },
     {
-      "key": "ui_211c5d826836",
-      "en": "No recorded events in this response",
-      "rw": "Nta bikorwa byanditswe muri aya makuru"
-    },
-    {
       "key": "ui_2154c60d4481",
       "en": "Reversed",
       "rw": "Byasubijwe inyuma"
@@ -392,19 +367,9 @@
       "rw": "Nta cyoherejwe. Amakuru yo kwinjira arasibwa."
     },
     {
-      "key": "ui_27cc670c8569",
-      "en": "Full member ledger (CSV)",
-      "rw": "Inyandiko yose y’amafaranga y’umunyamuryango (CSV)"
-    },
-    {
       "key": "ui_2815443a276a",
       "en": "Passcode changed. Sign in again.",
       "rw": "Umubare w’ibanga wahindutse. Ongera winjire."
-    },
-    {
-      "key": "ui_28e2572e2c25",
-      "en": "Receipt rejected; review the source without retrying a financial action.",
-      "rw": "Inyemezabwishyu yanze; genzura aho yaturutse utarongeye igikorwa cy’amafaranga."
     },
     {
       "key": "ui_292e60699dea",
@@ -427,11 +392,6 @@
       "rw": "Hitamo"
     },
     {
-      "key": "ui_2ae92a19decb",
-      "en": "Export member ledger",
-      "rw": "Sohora igitabo cy’umunyamuryango"
-    },
-    {
       "key": "ui_2c14915910b5",
       "en": "Saving changes",
       "rw": "Kubika impinduka"
@@ -445,11 +405,6 @@
       "key": "ui_2c97a6db9e1f",
       "en": "MoMo number",
       "rw": "Nimero ya MoMo"
-    },
-    {
-      "key": "ui_2cacd3e9378e",
-      "en": "This message is unverified and has not been posted to the ledger.",
-      "rw": "Ubu butumwa ntibwemejwe kandi ntibwanditswe mu gitabo cy’ibaruramari."
     },
     {
       "key": "ui_2dd62d9de96e",
@@ -497,11 +452,6 @@
       "rw": "Guhuza kuri iyi telefoni"
     },
     {
-      "key": "ui_2f5d50add626",
-      "en": "Current status",
-      "rw": "Uko bihagaze ubu"
-    },
-    {
       "key": "ui_2fef5907c580",
       "en": "Phone settings",
       "rw": "Igenamiterere rya telefoni"
@@ -517,11 +467,6 @@
       "rw": "Nimero ya telefoni"
     },
     {
-      "key": "ui_315955c2b27a",
-      "en": "Identification note: 8–500 characters. Credits once after confirmation.",
-      "rw": "Ibisobanuro: inyuguti 8–500. Amafaranga ashyirwa kuri konti rimwe nyuma yo kwemezwa."
-    },
-    {
       "key": "ui_31832414b772",
       "en": "Records are hidden while the app is not active.",
       "rw": "Amakuru arahishwa igihe porogaramu idakoreshwa."
@@ -532,11 +477,6 @@
       "rw": "Gena abanyamuryango ba nyir’ubwishyu"
     },
     {
-      "key": "ui_31c8c0b8bbb4",
-      "en": "Balance · high to low",
-      "rw": "Asigaye · menshi mbere"
-    },
-    {
       "key": "ui_31e392d1c037",
       "en": "Apply",
       "rw": "Shyira mu bikorwa"
@@ -545,11 +485,6 @@
       "key": "ui_31fbef162594",
       "en": "Continue",
       "rw": "Komeza"
-    },
-    {
-      "key": "ui_32016763c8c9",
-      "en": "Receipt uploaded; this does not confirm a member credit.",
-      "rw": "Inyemezabwishyu yoherejwe; ntibyemeza ko amafaranga yashyizwe kuri konti y’umunyamuryango."
     },
     {
       "key": "ui_33a68f70758b",
@@ -667,11 +602,6 @@
       "rw": "Hagarika ubunyamuryango"
     },
     {
-      "key": "ui_3d3f54ccf7ef",
-      "en": "Member ledger",
-      "rw": "Igitabo cy’umunyamuryango"
-    },
-    {
       "key": "ui_3d9a9c7e887c",
       "en": "Sync pending",
       "rw": "Gutegereza guhuza amakuru"
@@ -680,11 +610,6 @@
       "key": "ui_3e10c3cd6e0d",
       "en": "Choose a file",
       "rw": "Hitamo dosiye"
-    },
-    {
-      "key": "ui_3e5136fd4b11",
-      "en": "Transactions",
-      "rw": "Ibikorwa"
     },
     {
       "key": "ui_3e62330509bb",
@@ -765,11 +690,6 @@
       "key": "ui_470e7ee2a579",
       "en": "Discard unsaved changes?",
       "rw": "Kureka ibyahinduwe bitarabikwa?"
-    },
-    {
-      "key": "ui_471174cb19d3",
-      "en": "Ledger change (RWF)",
-      "rw": "Impinduka mu gitabo (RWF)"
     },
     {
       "key": "ui_471a6a3c7653",
@@ -942,11 +862,6 @@
       "rw": "Nta banyamuryango bahari"
     },
     {
-      "key": "ui_5562dc1972f4",
-      "en": "%1$d of %2$d recorded events · %3$s",
-      "rw": "Ibikorwa %1$d muri %2$d byanditswe · %3$s"
-    },
-    {
       "key": "ui_5563a9f845a3",
       "en": "MoMo name",
       "rw": "Izina rya MoMo"
@@ -965,16 +880,6 @@
       "key": "ui_56c371251faf",
       "en": "Passcode",
       "rw": "Umubare w’ibanga"
-    },
-    {
-      "key": "ui_57f7fd6c7fc0",
-      "en": "Use an identification note of 8–500 characters without control characters.",
-      "rw": "Koresha ibisobanuro bifite inyuguti 8–500 bidafite ibimenyetso bigenzura inyandiko."
-    },
-    {
-      "key": "ui_589bca876224",
-      "en": "Identification note",
-      "rw": "Ibisobanuro biranga umunyamuryango"
     },
     {
       "key": "ui_590a515d327e",
@@ -1002,11 +907,6 @@
       "rw": "Amakuru ataremezwa"
     },
     {
-      "key": "ui_5c854b3625da",
-      "en": "Member credit",
-      "rw": "Amafaranga yanditswe ku munyamuryango"
-    },
-    {
       "key": "ui_5ca2ec7d92e9",
       "en": "Provider time",
       "rw": "Igihe cyatanzwe n’utanga serivisi"
@@ -1023,8 +923,8 @@
     },
     {
       "key": "ui_5d18c907a05c",
-      "en": "Receipt upload is intentionally held. Local sync can continue if enabled, but queued receipts are not confirmed member credit.",
-      "rw": "Kohereza inyemezabwishyu byahagaritswe ku bushake. Guhuza kuri telefoni bishobora gukomeza iyo bifunguye, ariko inyemezabwishyu zitegereje ntizemeza amafaranga y’umunyamuryango."
+      "en": "Upload is paused. This phone can keep receiving messages.",
+      "rw": "Kohereza byahagaritswe by’agateganyo. Iyi telefoni ishobora gukomeza kwakira ubutumwa."
     },
     {
       "key": "ui_5da22fe4f7ac",
@@ -1083,8 +983,8 @@
     },
     {
       "key": "ui_62f90bcae0be",
-      "en": "Sign-in will stop. Financial history remains.",
-      "rw": "Kwinjira birahagarara. Amateka y’amafaranga aragumaho."
+      "en": "This staff member will no longer be able to sign in.",
+      "rw": "Uyu mukozi ntazongera gushobora kwinjira."
     },
     {
       "key": "ui_6314b811b607",
@@ -1182,11 +1082,6 @@
       "rw": "Kuvugurura birakenewe"
     },
     {
-      "key": "ui_6ca1aa5edf13",
-      "en": "No transactions",
-      "rw": "Nta bikorwa bihari"
-    },
-    {
       "key": "ui_6e2ebdab3c02",
       "en": "Oldest first",
       "rw": "Ibya kera mbere"
@@ -1228,8 +1123,8 @@
     },
     {
       "key": "ui_720516990ea1",
-      "en": "Refresh the receiving-phone status. No sync, upload or member credit has been verified by this status check.",
-      "rw": "Vugurura uko telefoni yakira ihagaze. Iri genzura ntiryemeje guhuza, kohereza cyangwa amafaranga y’umunyamuryango."
+      "en": "Refresh the receiving-phone status.",
+      "rw": "Vugurura imiterere ya telefoni yakira."
     },
     {
       "key": "ui_721d760fb78c",
@@ -1245,11 +1140,6 @@
       "key": "ui_737cc799a9ff",
       "en": "Checking session and records",
       "rw": "Kugenzura uburenganzira n’amakuru"
-    },
-    {
-      "key": "ui_7384fae483c5",
-      "en": "Today · RWF",
-      "rw": "Uyu munsi · RWF"
     },
     {
       "key": "ui_73c1e73fc0a4",
@@ -1290,11 +1180,6 @@
       "key": "ui_75860b315d60",
       "en": "Staff access",
       "rw": "Uburenganzira bw’abakozi"
-    },
-    {
-      "key": "ui_759e6100fb5b",
-      "en": "How was the member confirmed?",
-      "rw": "Ni gute umunyamuryango yamenyekanye?"
     },
     {
       "key": "ui_76900f1bfd16",
@@ -1372,11 +1257,6 @@
       "rw": "Iyemeza rya nyuma ry’uko byoherejwe"
     },
     {
-      "key": "ui_7d4a8270826c",
-      "en": "Balance · low to high",
-      "rw": "Asigaye · make mbere"
-    },
-    {
       "key": "ui_7d55312849d8",
       "en": "M-Money",
       "rw": "M-Money"
@@ -1422,11 +1302,6 @@
       "rw": "Ibyatoranyijwe n’urutonde wahisemo birakurikizwa."
     },
     {
-      "key": "ui_82836b5f5b09",
-      "en": "Download transactions",
-      "rw": "Kuramo dosiye y’ibikorwa"
-    },
-    {
       "key": "ui_8305af71c07b",
       "en": "Outcome not confirmed. Check before retrying.",
       "rw": "Icyavuye mu gikorwa ntikiremezwa. Banza ugenzure mbere yo kongera kugerageza."
@@ -1465,11 +1340,6 @@
       "key": "ui_85fc43ab9dbe",
       "en": "Server sign-out is unconfirmed. Sign in again to check access.",
       "rw": "Gusohoka kuri seriveri ntibyemejwe. Ongera winjire ugenzure uburenganzira."
-    },
-    {
-      "key": "ui_86e5df491b39",
-      "en": "Repeated receipt observation; no additional credit is implied.",
-      "rw": "Inyemezabwishyu yagaragaye inshuro zirenze imwe; ntibivuga ko hari andi mafaranga yiyongereye."
     },
     {
       "key": "ui_8829ab33c1ca",
@@ -1515,11 +1385,6 @@
       "key": "ui_8a163427372e",
       "en": "Staff account unavailable. Go back and refresh the staff list.",
       "rw": "Konti y’umukozi ntibonetse. Subira inyuma uvugurure urutonde rw’abakozi."
-    },
-    {
-      "key": "ui_8ac2dca442e3",
-      "en": "Receipt delivery status is unavailable; no member credit is implied.",
-      "rw": "Uko kohereza inyemezabwishyu bihagaze ntikuboneka; ntibyemeza amafaranga y’umunyamuryango."
     },
     {
       "key": "ui_8b79ff2a120c",
@@ -1612,11 +1477,6 @@
       "rw": "Byisubiyemo"
     },
     {
-      "key": "ui_940e284bd701",
-      "en": "History has not loaded.",
-      "rw": "Amateka ntarabonetse."
-    },
-    {
       "key": "ui_942087cc2d41",
       "en": "Retry",
       "rw": "Ongera ugerageze"
@@ -1625,11 +1485,6 @@
       "key": "ui_94219289a101",
       "en": "Name · A–Z",
       "rw": "Izina · A–Z"
-    },
-    {
-      "key": "ui_94c65d04e7f2",
-      "en": "Amount on original receipt · member credit not confirmed.",
-      "rw": "Amafaranga ari ku nyemezabwishyu ya mbere · ntibyemejwe ko yashyizwe kuri konti y’umunyamuryango."
     },
     {
       "key": "ui_969ccbd3cf63",
@@ -1673,8 +1528,8 @@
     },
     {
       "key": "ui_9841bc80ad0d",
-      "en": "Local sync is enabled. A zero queue or recent upload does not by itself prove a new receipt or a member credit.",
-      "rw": "Guhuza kuri telefoni birakora. Kuba nta bitegereje cyangwa ko hari ibyoherejwe vuba ntibihagije kwemeza inyemezabwishyu nshya cyangwa amafaranga y’umunyamuryango."
+      "en": "This phone is listening for M-Money SMS.",
+      "rw": "Iyi telefoni yakira SMS za M-Money."
     },
     {
       "key": "ui_992d6bf16e11",
@@ -1685,11 +1540,6 @@
       "key": "ui_99d735099559",
       "en": "This export has too many columns.",
       "rw": "Iyi dosiye ifite inkingi nyinshi cyane."
-    },
-    {
-      "key": "ui_9a22b2f0892e",
-      "en": "Receipt delivery is separate from member credit.",
-      "rw": "Kohereza inyemezabwishyu bitandukanye no gushyira amafaranga kuri konti y’umunyamuryango."
     },
     {
       "key": "ui_9ab7e128f247",
@@ -1743,13 +1593,8 @@
     },
     {
       "key": "ui_a04_financial_changed",
-      "en": "The original action committed, but its financial effect changed. Review the current ledger; do not repeat the original action.",
-      "rw": "Igikorwa cya mbere cyanditswe, ariko ingaruka zacyo ku mafaranga zarahindutse. Genzura ibaruramari rigezweho; ntusubiremo igikorwa cya mbere."
-    },
-    {
-      "key": "ui_a04_financial_reversed",
-      "en": "The original action committed, but its financial effect was reversed or corrected. Review the current ledger; do not repeat the original action.",
-      "rw": "Igikorwa cya mbere cyanditswe, ariko ingaruka zacyo ku mafaranga zasubijwe inyuma cyangwa zirakosorwa. Genzura ibaruramari rigezweho; ntusubiremo igikorwa cya mbere."
+      "en": "This payment changed after the original action. Refresh it before continuing.",
+      "rw": "Ubu bwishyu bwahindutse nyuma y’igikorwa cyabanje. Buvugurure mbere yo gukomeza."
     },
     {
       "key": "ui_a06faf2668c2",
@@ -1768,8 +1613,8 @@
     },
     {
       "key": "ui_a163f4052a54",
-      "en": "Receipts remain in the local queue. Upload acknowledgement and canonical member credit are separate outcomes.",
-      "rw": "Inyemezabwishyu ziracyategereje kuri telefoni. Kwemeza kohereza no kwemeza amafaranga y’umunyamuryango ni ibintu bitandukanye."
+      "en": "Messages are waiting to sync.",
+      "rw": "Ubutumwa butegereje koherezwa."
     },
     {
       "key": "ui_a1794783aab7",
@@ -1792,24 +1637,9 @@
       "rw": "Igenamiterere rya telefoni ntiriboneka. Ongera ugerageze cyangwa uvugane n’umuyobozi."
     },
     {
-      "key": "ui_a25f46e090a0",
-      "en": "Ledger entry recorded",
-      "rw": "Byanditswe mu gitabo"
-    },
-    {
-      "key": "ui_a29052bfe072",
-      "en": "Saved history · may be out of date",
-      "rw": "Amateka abitswe · ashobora kuba ashaje"
-    },
-    {
       "key": "ui_a3077040dcb8",
       "en": "Cancel export",
       "rw": "Hagarika gukuramo dosiye"
-    },
-    {
-      "key": "ui_a461c8c51619",
-      "en": "Not credited",
-      "rw": "Ntiyanditswe ku munyamuryango"
     },
     {
       "key": "ui_a4717b6543d6",
@@ -1897,11 +1727,6 @@
       "rw": "Urutonde rw’ibikorwa"
     },
     {
-      "key": "ui_aa1c14e66236",
-      "en": "Awaiting upload; not a confirmed member credit.",
-      "rw": "Bitegereje koherezwa; ntibyemeza amafaranga y’umunyamuryango."
-    },
-    {
       "key": "ui_aa30a2348551",
       "en": "Through date",
       "rw": "Itariki yo kurangiriraho"
@@ -1910,16 +1735,6 @@
       "key": "ui_aa4b08860594",
       "en": "Name or FT Id",
       "rw": "Izina cyangwa FT Id"
-    },
-    {
-      "key": "ui_aae52c61a002",
-      "en": "Messages are unverified and are not posted to the ledger.",
-      "rw": "Ubutumwa ntibwemejwe kandi ntibwanditswe mu gitabo cy’ibaruramari."
-    },
-    {
-      "key": "ui_ac4d60e65639",
-      "en": "Only canonical payment and ledger records confirm member credit. Never add the local queue to displayed savings.",
-      "rw": "Amakuru y’ubwishyu n’igitabo byemejwe na sisitemu nyamukuru ni byo byonyine byemeza amafaranga y’umunyamuryango. Ntukongere amafaranga akiri mu butegereze kuri telefoni ku bwizigame bugaragara."
     },
     {
       "key": "ui_ac63a1fe3199",
@@ -2232,16 +2047,6 @@
       "rw": "Urutonde rw’ibitegereje ntiruboneka"
     },
     {
-      "key": "ui_c5d90430b9b1",
-      "en": "Transaction recorded",
-      "rw": "Igikorwa cyanditswe"
-    },
-    {
-      "key": "ui_c640fca7c701",
-      "en": "Export transactions",
-      "rw": "Sohora urutonde rw’ibikorwa"
-    },
-    {
       "key": "ui_c64fb95cad4d",
       "en": "Background sync",
       "rw": "Guhuza mu gihe porogaramu idafunguye"
@@ -2332,11 +2137,6 @@
       "rw": "Emeza uburenganzira bwo gukoresha inyandiko mbere yo gukomeza."
     },
     {
-      "key": "ui_cf9c203d4f1d",
-      "en": "Contribution history",
-      "rw": "Amateka y’imisanzu"
-    },
-    {
       "key": "ui_d00a6c24b1af",
       "en": "Member MoMo",
       "rw": "MoMo y’umunyamuryango"
@@ -2382,14 +2182,9 @@
       "rw": "Komeza"
     },
     {
-      "key": "ui_d64719450816",
-      "en": "Excel and PDF use the selected transaction filters. CSV includes the full member ledger.",
-      "rw": "Excel na PDF bikoresha ibikorwa watoranyije. CSV irimo inyandiko yose y’amafaranga y’umunyamuryango."
-    },
-    {
       "key": "ui_d682e283d26f",
-      "en": "Open contribution",
-      "rw": "Fungura umusanzu"
+      "en": "Open payment",
+      "rw": "Fungura ubwishyu bumwe"
     },
     {
       "key": "ui_d696a35bdd18",
@@ -2417,11 +2212,6 @@
       "rw": "Ikinyarwanda"
     },
     {
-      "key": "ui_d7e6cf7531b2",
-      "en": "Original SMS access requires current permission and recent email verification.",
-      "rw": "Kureba SMS y’umwimerere bisaba uburenganzira bukiriho no kwemeza imeli vuba."
-    },
-    {
       "key": "ui_d8a2bdc0653a",
       "en": "Access status",
       "rw": "Uko uburenganzira buhagaze"
@@ -2435,11 +2225,6 @@
       "key": "ui_da2cb4d3e314",
       "en": "Offline. Reconnect and refresh.",
       "rw": "Nta interineti. Ongera uhuze interineti uvugurure."
-    },
-    {
-      "key": "ui_da4c1202c423",
-      "en": "This history is too large for the phone. Contact an administrator for a full extract.",
-      "rw": "Aya mateka ni menshi kuri telefoni. Saba umuyobozi urutonde rwose."
     },
     {
       "key": "ui_da72d68b4788",
@@ -2492,11 +2277,6 @@
       "rw": "Umubare urengeje ubushobozi bwa Excel bwo kubika imibare neza. Wukuremo nk’inyandiko cyangwa ukoreshe PDF."
     },
     {
-      "key": "ui_de4a768f2e9c",
-      "en": "Only canonical transaction and ledger records are shown. A transaction record is not confirmation of member credit.",
-      "rw": "Hagaragazwa gusa ibikorwa n’ibyanditswe mu gitabo byemejwe na sisitemu nyamukuru. Kuba igikorwa cyanditswe ntibihamya ko amafaranga yashyizwe kuri konti y’umunyamuryango."
-    },
-    {
       "key": "ui_df28f475d84e",
       "en": "CSV spreadsheet (.csv)",
       "rw": "Imbonerahamwe ya CSV (.csv)"
@@ -2537,11 +2317,6 @@
       "rw": "Kugabanya ikoreshwa rya batiri"
     },
     {
-      "key": "ui_e2ddd1cf853c",
-      "en": "Recorded events",
-      "rw": "Ibikorwa byanditswe"
-    },
-    {
       "key": "ui_e30c2ec3ce01",
       "en": "Sign in again.",
       "rw": "Ongera winjire."
@@ -2555,11 +2330,6 @@
       "key": "ui_e4796f61e082",
       "en": "Saved position could not be fully restored. Refresh when connected.",
       "rw": "Ahantu wari ugeze ntihashoboye gusubizwaho hose. Ongera uvugurure ufite interineti."
-    },
-    {
-      "key": "ui_e4a44e643440",
-      "en": "Loading recorded events",
-      "rw": "Gutegereza ibikorwa byanditswe"
     },
     {
       "key": "ui_e5c4e4220195",
@@ -2700,11 +2470,6 @@
       "key": "ui_f325dd294aa7",
       "en": "No eligible suggestions found.",
       "rw": "Nta banyamuryango basabwa babonetse."
-    },
-    {
-      "key": "ui_f33c2f209d55",
-      "en": "Eligible earlier MoMo payments may be matched and credited automatically after you add this member.",
-      "rw": "Nyuma yo kongeramo uyu munyamuryango, ubwishyu bwa MoMo bwabanje bujuje ibisabwa bushobora guhuzwa na we maze imisanzu ye ikandikwa mu buryo bwikora."
     },
     {
       "key": "ui_f36c88b027e3",
@@ -2877,11 +2642,6 @@
       "rw": "Kugenzura igisubizo byahagaritswe. Igikorwa cya mbere kiracyategereje igisubizo; ubaze umuyobozi."
     },
     {
-      "key": "ui_recovery_check_in_progress",
-      "en": "An outcome check is already running. Do not repeat the financial action.",
-      "rw": "Kugenzura igisubizo biracyakorwa. Tegereza; ntusubiremo igikorwa cya mbere."
-    },
-    {
       "key": "ui_recovery_check_stopped",
       "en": "Outcome checks have stopped. Do not repeat the action or clear app data; contact the administrator.",
       "rw": "Kugenzura ibisubizo byahagaritswe. Ntusubiremo igikorwa cyangwa ngo usibe amakuru ya porogaramu; ubaze umuyobozi."
@@ -2910,11 +2670,6 @@
       "key": "ui_sms_search_partial_account_phone",
       "en": "Search incomplete for this account and phone.",
       "rw": "Ishakisha ry’ubu butumwa kuri iyi konti na telefoni ntirirangiye."
-    },
-    {
-      "key": "ui_transaction_balance_after",
-      "en": "Balance after",
-      "rw": "Amafaranga asigaye"
     },
     {
       "key": "ui_transaction_direction",
@@ -2988,7 +2743,7 @@
     },
     {
       "key": "ui_60bb4e34cee2",
-      "en": "Suggested from transaction payments",
+      "en": "Suggested from payments",
       "rw": "Abasabwa hashingiwe ku bwishyu"
     },
     {
@@ -3050,6 +2805,51 @@
       "key": "ui_install_burimunsi_admin",
       "en": "Install the signed BuriMunsi Admin app provided by your organization, then sign in with your mobile number and passcode.",
       "rw": "Shyiramo porogaramu yemejwe ya BuriMunsi Admin wahawe n’ikigo cyawe, hanyuma winjire ukoresheje nimero ya telefoni n’umubare wawe w’ibanga."
+    },
+    {
+      "key": "ui_account_tab",
+      "en": "Account",
+      "rw": "Konti"
+    },
+    {
+      "key": "ui_account_operations",
+      "en": "Operations",
+      "rw": "Imikorere"
+    },
+    {
+      "key": "ui_home_balance_as_of",
+      "en": "As of %1$s",
+      "rw": "Kugeza ku %1$s"
+    },
+    {
+      "key": "ui_home_no_recent_payments",
+      "en": "No recent payments",
+      "rw": "Nta bwishyu buheruka"
+    },
+    {
+      "key": "ui_member_view_payments",
+      "en": "View payments",
+      "rw": "Reba ubwishyu"
+    },
+    {
+      "key": "ui_member_clear_payments_filter",
+      "en": "Clear member filter",
+      "rw": "Kuraho iyungurura ry’umunyamuryango"
+    },
+    {
+      "key": "ui_payment_recipient",
+      "en": "Recipient",
+      "rw": "Uwakiriye"
+    },
+    {
+      "key": "ui_payment_allocation_unavailable",
+      "en": "This payment is unavailable for allocation.",
+      "rw": "Ubu bwishyu ntibushobora kugenerwa umunyamuryango."
+    },
+    {
+      "key": "ui_payment_action_checking",
+      "en": "The previous action is being checked.",
+      "rw": "Igikorwa cyabanje kirimo kugenzurwa."
     }
   ]
 }
