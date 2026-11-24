@@ -16,7 +16,7 @@ export function markers(profile,kind){
  return [...(configured??[]),...(defaults[kind]??[])];
 }
 
-const AUTH=/(?<![\p{L}\p{N}_])(?:otp|one[ -]?time(?:[ -]?(?:password|passcode|code))?|password|passcode|verification(?:[ -]code)?|activation[ -]code|security[ -]code|login[ -]code|authori[sz]ation[ -]code|(?:your|the|this|enter|use)\s+code|mot\s+de\s+passe|code\s+(?:de\s+)?(?:v[eé]rification|confirmation|s[eé]curit[eé]|activation|connexion|secret)|(?:kode|code)(?:\s+yawe)?\s+y['’]?ibanga|kode\s+(?:yo\s+kwemeza|yemeza)|ijambo\s+ry['’]?ibanga|umubare\s+(?:wawe\s+)?w['’]?ibanga|ijambobanga|pin(?:[ -]code)?)(?![\p{L}\p{N}_])/iu;
+const AUTH=/(?<![\p{L}\p{N}_])(?:otp|one[ -]?time(?:[ -]?(?:password|passcode|code))?|password|passcode|verification[ -]code|activation[ -]code|security[ -]code|login[ -]code|authori[sz]ation[ -]code|(?:your|the|this|enter|use)\s+code|mot\s+de\s+passe|code\s+(?:de\s+)?(?:v[eé]rification|confirmation|s[eé]curit[eé]|activation|connexion|secret)|(?:kode|code)(?:\s+yawe)?\s+y['’]?ibanga|kode\s+(?:yo\s+kwemeza|yemeza)|ijambo\s+ry['’]?ibanga|umubare\s+(?:wawe\s+)?w['’]?ibanga|ijambobanga|pin(?:[ -]code)?)(?![\p{L}\p{N}_])/iu;
 const PIN=/\bpin\b/iu;
 const WARNING=/^(?:for your (?:security|safety)[,:]?\s*)?(?:please\s+)?(?:(?:never|do not|don't)\s+(?:share|disclose|reveal|give|tell)\b.*\bpin\b|keep\b.*\bpin\b.*\b(?:secret|safe|private)\b)[.!?;]?$/iu;
 // Strip only complete, number-free safety advice; any other credential text
@@ -25,7 +25,7 @@ const WARNING=/^(?:for your (?:security|safety)[,:]?\s*)?(?:please\s+)?(?:(?:nev
 const LOCAL_PIN_WARNING=/^(?:ne\s+(?:partagez|communiquez|divulguez|donnez)\s+jamais\s+(?:votre|le)\s+pin(?:\s+(?:[àa]\s+personne|avec\s+quiconque))?|ntugasangize\s+(?:undi(?:\s+muntu)?\s+)?pin\s+yawe|usimpe\s+mtu(?:\s+yeyote)?\s+pin\s+yako)[.!?;]?$/iu;
 const BODY_CONTROL=/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u202a-\u202e\u2066-\u2069]/u;
 
-function warningOnly(segment){return !/[0-9]/u.test(segment)&&(WARNING.test(segment.trim())||LOCAL_PIN_WARNING.test(segment.trim()));}
+function warningOnly(segment){return !/\p{N}/u.test(segment)&&(WARNING.test(segment.trim())||LOCAL_PIN_WARNING.test(segment.trim()));}
 function senderCredentialCode(body,sender){
  // A message saying "your [sender] code" can be an authentication code
  // even without the words PIN or OTP. Do not treat a separately labelled
@@ -33,18 +33,28 @@ function senderCredentialCode(body,sender){
  const aliases=[sender,'M-Money','M Money'].filter(value=>typeof value==='string'&&value.length>0).map(escape).join('|');
  return new RegExp(`(?<![\\p{L}\\p{N}_])(?:(?:your|the|this|votre|le)\\s+(?:${aliases})\\s+code|(?:votre|le)\\s+code\\s+(?:${aliases}))(?![\\p{L}\\p{N}_])`,'iu').test(body);
 }
-function safeBody(body,profile,sender){
+function withoutCredentialText(body,sender){
  if(senderCredentialCode(body,sender))return null;
  if(!AUTH.test(body))return body;
  // Standard advice such as "Never share your PIN" is not a credential. Remove
  // only an entire, number-free warning sentence; all other security language
  // blocks external dispatch, including a PIN or one-time code in the message.
- const parts=body.split(/(?<=[.!?;])\s+/u);
+ const parts=body.split(/(?<=[.!?;])\s+|[\r\n]+/u);
  if(!parts.some(part=>PIN.test(part))||parts.some(part=>AUTH.test(part)&&!warningOnly(part)))return null;
  const redacted=parts.filter(part=>!AUTH.test(part)).join(' ');
  // Do not send a bare numeric message left over from an authentication text.
- if(AUTH.test(redacted)||!/\p{L}/u.test(redacted)||!/[0-9]/u.test(redacted)||!containsAny(redacted,profile.currency_aliases))return null;
+ if(AUTH.test(redacted)||!/\p{L}/u.test(redacted)||!/[0-9]/u.test(redacted))return null;
  return redacted;
+}
+
+// Intake uses the same recognition before retaining anything. A recognized
+// number-free warning can accompany a genuine payment; do not rewrite its bytes.
+export const hasSmsCredential = (body, sender) => withoutCredentialText(body,sender) === null;
+
+function safeBody(body,profile,sender){
+ const sanitized=withoutCredentialText(body,sender);
+ if(sanitized===null||(sanitized!==body&&!containsAny(sanitized,profile.currency_aliases)))return null;
+ return sanitized;
 }
 
 export function readNativeAutoSource(source, account) {

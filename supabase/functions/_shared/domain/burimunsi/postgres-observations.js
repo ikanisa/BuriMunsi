@@ -5,6 +5,7 @@ import { hasPhonePinContext } from './phone-pin-request.js';
 import { encrypt } from '../encryption.js';
 import { digest } from '../core.js';
 import { observationDisplayHints } from './observation-display-hints.js';
+import { hasSmsCredential } from './native-auto-source.js';
 import { storageEntity, verifyRetainedObject } from '../../storage-identity.js';
 import { readObservationListing } from './postgres-observation-listing.js';
 import { committedRawSmsEnvelope, readRawSmsEnvelope, storeRawSmsEnvelope } from './postgres-raw-sms.js';
@@ -275,8 +276,11 @@ export class PostgresNativeObservations {
    autoProcessing:result.sourceId?'held':'unknown',financialEffects:0,retryAllowed:false};
  }
  async #capture(actor, input, heldGeneration, ackOnly) {
-  const value = validateObservationInput(input),
-   bodySha = await sha256(value.rawBody),
+  const value = validateObservationInput(input);
+  // Refuse credentials before even hashing, looking up, or retaining a body.
+  // The response never includes the message or any derived identity.
+  check(!hasSmsCredential(value.rawBody,value.rawSender), 'security_message_not_retained', 422);
+  const bodySha = await sha256(value.rawBody),
    payload = payloadFor(value),
    contentSha = value.sourceKey ? await observationContentFingerprint(value, bodySha) : null;
   // This identity is stable across a short-lease renewal, but cannot move to a

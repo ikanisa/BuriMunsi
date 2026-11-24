@@ -135,6 +135,7 @@ internal class ObservationCoordinator(context:Context,private val repository:Nat
             ?:return fail(Fence.OWNER_CHANGED)
         var unresolved=0;var laterAttempts=0
         var held=false
+        var credentialBlocked=false
         for(entry in entries){
             diagnostic?.phase(Phase.UPLOAD_GUARD)
             if(unresolved>0&&laterAttempts>=2)return fail(Fence.UNRESOLVED_LATER_LIMIT)
@@ -142,6 +143,13 @@ internal class ObservationCoordinator(context:Context,private val repository:Nat
             // Previously queued rows may predate SIM scoping. Confirm those immutable rows
             // still belong to this observation transport before any body leaves the phone.
             val evidence=entry.observation
+            // Existing encrypted entries predate local privacy filtering. Never
+            // transmit or ACK one of these, but later safe entries may still progress.
+            if(ObservationCandidate.hasCredentials(evidence.rawSender,evidence.rawBody)){
+                credentialBlocked=true
+                diagnostic?.reject(Fence.CREDENTIAL_EVIDENCE_HELD)
+                continue
+            }
             val inbox=seen[evidence.requestId]
             val received=evidence.inboxReceivedAt?.let{runCatching{java.time.Instant.parse(it).toEpochMilli()}.getOrNull()}
             if(inbox==null||received==null||ObservationLegacyOwnership.classify(app,current,inbox.inboxRowId,received,
@@ -190,6 +198,6 @@ internal class ObservationCoordinator(context:Context,private val repository:Nat
             if(!removed)return false
             diagnostic?.acknowledged()
         }
-        return (!held&&unresolved==0)||fail(Fence.UNRESOLVED_REMAIN)
+        return (!credentialBlocked&&!held&&unresolved==0)||fail(Fence.UNRESOLVED_REMAIN)
     }
 }

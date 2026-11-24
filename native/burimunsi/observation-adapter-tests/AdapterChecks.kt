@@ -166,6 +166,29 @@ fun main(args:Array<String>) {
   check(!ObservationCoordinator(e.context,e.repository).cycle{false})
   check(pending(adminA).single().observation==original&&e.repository.requests.map{it.sourceKey}==listOf(cloudKey(adminA,27))&&SecureStore.data[name]==held)
  }
+ test("historical credential evidence is retained unchanged without starving later safe queue entries") {
+  val e=setup();val owner=NativeRepository.observationOwner(e.context)!!
+  val fp=ObservationConfigStore(e.context).profile(adminA,time)!!.fingerprint();val at=Instant.ofEpochMilli(time).toString()
+  for(id in listOf(26,27,28))check(ObservationCapture.retain(e.context,owner,fp,"inbox:$id","M-Money",body,"catch_up",false,null,at,3)==ObservationCapture.Result.STORED)
+  // Simulate the encrypted journal decoded exactly as retained by an older client.
+  val current=ObservationStateStore.value
+  val previousBodies=listOf("Never share your PIN.\n987654",body+" OTP 5678")
+  val historical=current.pending.take(2).zip(previousBodies).map{(entry,raw)->
+   entry.copy(observation=entry.observation.copy(rawBody=raw))
+  }
+  val byRequest=historical.associateBy{it.observation.requestId}
+  ObservationStateStore.value=ObservationJournalState(
+   historical + current.pending.last(),
+   current.seen.map{seen->byRequest[seen.requestId]?.let{seen.copy(bodySha256=Values.sha256(it.observation.rawBody))}?:seen},
+  )
+  val seen=ObservationStateStore.value.seen
+  val diagnostic=ObservationSyncDiagnostics.begin(true){System.nanoTime()/1_000_000L}
+  val coordinator=ObservationCoordinator(e.context,e.repository,diagnostic)
+  check(!coordinator.cycle{false}&&e.repository.requests.map{it.sourceKey}==listOf(cloudKey(adminA,28)))
+  check(pending(adminA)==historical&&ObservationStateStore.value.seen==seen)
+  check(diagnostic.snapshot().fence==ObservationSyncDiagnostics.Fence.CREDENTIAL_EVIDENCE_HELD)
+  check(!coordinator.cycle{false}&&e.repository.requests.size==1&&pending(adminA)==historical)
+ }
  fun seedSeen(owner:ObservationOwner,ids:LongRange):List<ObservationSeen> = ids.map{id->
   val received=Instant.ofEpochMilli(time).toString()
   ObservationSeen(owner,ObservationSourceIdentity.inbox(installation,owner,id,received),id,UUID.randomUUID().toString(),Values.sha256(body),received)
@@ -313,13 +336,17 @@ fun main(args:Array<String>) {
   ObservationRecovery(e.context).scan()
   check(pending(adminA).size==1&&e.context.contentResolver.querySelection=="_id > ?")
  }
- test("scanner accepts sender-scoped messages regardless of incoming markers") {
+ test("scanner excludes credentials before the durable journal and keeps unfamiliar financial formats") {
   val e=setup();val outgoing="Transfer completed to another account.\r\nRef:\t5678"
   e.context.contentResolver.rows=listOf(row(9,outgoing),row(10,"Your OTP is 1234"),row(11),
-   row(12,"Other sender message")+("address" to "Other"),row(13,"Invalid\u0000body"))
+   row(12,"Other sender message")+("address" to "Other"),row(13,"Invalid\u0000body"),
+   row(14,"Votre code de vérification : 4321"),row(15,"Kode yawe y’ibanga ni 6789"),
+   row(16,body+" OTP 1234"),row(17,body+" Never share your PIN."),
+   row(18,"Reversal accepted. Transaction code AB-6789."),row(19,"Never share your PIN.\n987654"),
+   row(20,body+" Verification complete."))
   ObservationRecovery(e.context).scan()
   val retained=pending(adminA).map{it.observation}
-  check(retained.map{it.rawBody}==listOf(outgoing,"Your OTP is 1234",body))
+  check(retained.map{it.rawBody}==listOf(outgoing,body,body+" Never share your PIN.","Reversal accepted. Transaction code AB-6789.",body+" Verification complete."))
   check(retained.all{it.sourceMode=="catch_up"&&!it.complete&&it.inboxReceivedAt!=null})
   check(cursor(e.context)!=null)
  }
@@ -1366,6 +1393,18 @@ fun main(args:Array<String>) {
    val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
    check(result.completed&&e.repository.requests.isEmpty()&&e.repository.reconciliationBatches.flatten().any{it.sourceKey==key})
   }finally{app.cool.mobile.BuildConfig.CLOUD_HOLD_EXISTING_INBOX=false}
+ }
+ test("known credential-only newest provider SMS is excluded from capture and financial census") {
+  val e=setup();e.context.contentResolver.rows=listOf(row(1298),row(1299,"Your OTP is 1234")+("date" to (time+100)))
+  val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
+  check(result.completed&&e.repository.requests.size==1&&e.repository.requests.single().rawBody==body)
+  check(e.repository.reconciliationBatches.flatten().none{it.sourceKey==cloudKey(adminA,1299)})
+ }
+ test("mixed credential and financial SMS stays unconfirmed without raw transmission") {
+  val e=setup();e.context.contentResolver.rows=listOf(row(1298),row(1299,body+" OTP 1234")+("date" to (time+100)))
+  val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
+  check(!result.completed&&e.repository.requests.size==1&&e.repository.requests.single().rawBody==body)
+  check(e.repository.reconciliationBatches.flatten().none{it.sourceKey==cloudKey(adminA,1299)})
  }
  test("an unsupported newest approved-provider SMS prevents confirmation") {
   val e=setup();e.context.contentResolver.rows=listOf(row(1300),row(1301,"x".repeat(3001))+("date" to (time+100)))

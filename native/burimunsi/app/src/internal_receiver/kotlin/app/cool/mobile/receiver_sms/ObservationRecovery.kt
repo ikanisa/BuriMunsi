@@ -256,6 +256,7 @@ internal class ObservationRecovery(context:Context) {
                     val sent=if(sentCol<0||it.isNull(sentCol))null else it.getLong(sentCol).takeIf{v->v>0}
                     val sub=if(subCol<0||it.isNull(subCol))null else it.getInt(subCol).takeIf{v->v>=0}
                     if(profile.receipt.senders.none{it.equals(sender,ignoreCase=true)})continue
+                    if(ObservationCandidate.excludeFromFinancialCensus(sender,body,profile.receipt))continue
                     val previous=newestBySubscription[sub]
                     if(previous==null||received>previous.received||received==previous.received&&id>previous.id)
                         newestBySubscription[sub]=PhoneRow(id,received,sender,body,sent,sub)

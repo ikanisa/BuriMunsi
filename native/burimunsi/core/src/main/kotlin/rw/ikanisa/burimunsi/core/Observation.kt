@@ -3,18 +3,66 @@ package rw.ikanisa.burimunsi.core
 import java.time.Instant
 import java.util.Locale
 
-/** Sender-scoped inbox intake. Parsing and transaction classification happen
- * on the backend; incoming-only markers must not suppress other MoMo messages. */
+/** Sender-scoped, credential-filtered inbox intake. Transaction classification
+ * happens on the backend; incoming-only markers must not suppress other MoMo messages. */
 object ObservationCandidate {
     private val senderControls=Regex("[\\u0000-\\u001f\\u007f\\u202a-\\u202e\\u2066-\\u2069]")
     // Preserve ordinary multiline SMS text without accepting hidden controls.
     private val bodyControls=Regex("[\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f\\u202a-\\u202e\\u2066-\\u2069]")
+    // Keep this filter narrow enough to retain unfamiliar financial formats. Generic
+    // transaction/reference codes are not credentials, and a complete number-free
+    // PIN safety warning does not invalidate an otherwise eligible receipt.
+    private val credential = Regex(
+        """(?<![\p{L}\p{N}_])(?:otp|one[ -]?time(?:[ -]?(?:password|passcode|code))?|password|passcode|(?:verification|activation|security|login|authori[sz]ation)[ -]code|(?:your|the|this|enter|use)\s+code\b|mot\s+de\s+passe|code\s+(?:de\s+)?(?:v[eé]rification|confirmation|s[eé]curit[eé]|activation|connexion|secret)|(?:kode|code)(?:\s+yawe)?\s+y['’]?ibanga|kode\s+(?:yo\s+kwemeza|yemeza)|ijambo\s+ry['’]?ibanga|umubare\s+(?:wawe\s+)?w['’]?ibanga|ijambobanga|pin(?:[ -]code)?)(?![\p{L}\p{N}_])""",
+        RegexOption.IGNORE_CASE,
+    )
+    private val numberFreePinWarning = Regex(
+        """^(?:(?:for your (?:security|safety)[,:]?\s*)?(?:please\s+)?(?:(?:never|do not|don't)\s+(?:share|disclose|reveal|give|tell)\b.*\bpin\b|keep\b.*\bpin\b.*\b(?:secret|safe|private)\b)|ne\s+(?:partagez|communiquez|divulguez|donnez)\s+jamais\s+(?:votre|le)\s+pin(?:\s+(?:[àa]\s+personne|avec\s+quiconque))?|ntugasangize\s+(?:undi(?:\s+muntu)?\s+)?pin\s+yawe|usimpe\s+mtu(?:\s+yeyote)?\s+pin\s+yako)[.!?;]?$""",
+        RegexOption.IGNORE_CASE,
+    )
+    private val sentences = Regex("""(?<=[.!?;])\s+|[\r\n]+""")
+    private val letters = Regex("""\p{L}""")
+    private val numbers = Regex("""\p{N}""")
+    fun hasCredentials(sender: String, body: String): Boolean {
+        if (body.contains("code", ignoreCase = true)) {
+            val aliases = setOf(sender, "M-Money", "M Money").joinToString("|") { Regex.escape(it) }
+            val senderCode = Regex(
+                """(?<![\p{L}\p{N}_])(?:(?:your|the|this|votre|le)\s+(?:${aliases})\s+code|(?:votre|le)\s+code\s+(?:${aliases}))(?![\p{L}\p{N}_])""",
+                RegexOption.IGNORE_CASE,
+            )
+            if (senderCode.containsMatchIn(body)) return true
+        }
+        if (!credential.containsMatchIn(body)) return false
+        val clauses = sentences.split(body)
+        if (clauses.any { clause ->
+                credential.containsMatchIn(clause) &&
+                    (numbers.containsMatchIn(clause) || !numberFreePinWarning.matches(clause.trim()))
+            }) return true
+        // A PIN warning alone is not evidence. A bare code after a standalone
+        // warning must not become eligible merely because each line is safe on its own.
+        val remainder = clauses.filterNot(credential::containsMatchIn).joinToString(" ")
+        return !letters.containsMatchIn(remainder) || remainder.none { it in '0'..'9' }
+    }
+
+    private val possibleFinancialLanguage = Regex(
+        """(?<![\p{L}\p{N}_])(?:payment|paid|transfer(?:red)?|transaction|receipt|reversal|reversed|withdrawal|deposit|balance|amount|paiement|retrait|versement|virement|montant|solde|amafaranga|kwishyura|kwakira|yasubijwe)(?![\p{L}\p{N}_])""",
+        RegexOption.IGNORE_CASE,
+    )
+    /** Known credential-only rows are outside the receipt census. A mixed
+     * financial/credential row is withheld and remains unconfirmed. */
+    fun excludeFromFinancialCensus(sender: String, body: String, profile: ReceiptProfile): Boolean =
+        body.toByteArray(Charsets.UTF_8).size in 1..3000 && !bodyControls.containsMatchIn(body) &&
+            hasCredentials(sender, body) && !possibleFinancialLanguage.containsMatchIn(body) &&
+            (profile.currencyAliases + profile.incomingPrefixes + profile.transactionIdPrefixes).none {
+                it.isNotBlank() && body.contains(it, ignoreCase = true)
+            }
+
     fun accepts(sender:String,body:String,profile:ReceiptProfile):Boolean {
         if(profile.version.isBlank()||profile.version=="unverified"||profile.senders.isEmpty()||profile.senders.size>30||
             profile.senders.any{it.length>160||it.trim().isEmpty()||it.any{c->c=='\r'||c=='\n'||c=='\u0000'}})return false
         return sender.length in 1..96&&sender==sender.trim()&&!senderControls.containsMatchIn(sender)&&
             profile.senders.any{it.lowercase(Locale.ROOT)==sender.lowercase(Locale.ROOT)}&&
-            body.toByteArray(Charsets.UTF_8).size in 1..3000&&!bodyControls.containsMatchIn(body)
+            body.toByteArray(Charsets.UTF_8).size in 1..3000&&!bodyControls.containsMatchIn(body)&&!hasCredentials(sender,body)
     }
 }
 

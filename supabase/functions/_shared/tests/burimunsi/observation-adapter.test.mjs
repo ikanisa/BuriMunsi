@@ -195,6 +195,65 @@ function fixture(){
   validateProviderProfile,custody,storageWitnesses:witnesses,clock:()=>now})))};
 }
 
+test('direct authenticated observation intake rejects recognized credentials before any admission or retention', async () => {
+ const f=fixture();
+ await f.run(async observations=>{
+  const unused=()=>assert.fail('unrelated port invoked');
+  const handler=createNativeHandler({
+   auth:{authenticate:async()=>actor,login:unused,logout:unused,changePasscode:unused,manageStaff:unused},
+   records:{home:unused,page:unused,detail:unused,exportLedger:unused,commandStatus:unused},
+   contributions:{allocate:unused},members:{enroll:unused,setActive:unused},gateway:{status:unused,replace:unused},
+   observations,origin:'https://example.invalid',groupId:group,strictContract:true,networkBucket:unused,
+  });
+  const send=input=>handler(new Request('https://example.invalid/v1/burimunsi/sms/observations',{
+   method:'POST',headers:{'x-burimunsi-installation':installation,'x-burimunsi-contract':'burimunsi.native.v1',
+    'x-burimunsi-generation':'1','x-burimunsi-request':input.requestId,authorization:'Bearer '+token,
+    'content-type':'application/json'},body:JSON.stringify(input),
+  }));
+  const messages=[
+   'Your OTP is 987654.',
+   'Votre code de vérification est 987654.',
+   "Kode yawe y’ibanga ni 987654.",
+   'Your Example Money code is 987654.',
+   'Received 250 RWF. Reference: 1234. Your OTP is 987654.',
+   'Never share your PIN ９８７６５４.',
+   'Never share your PIN.\n987654',
+   'Never share your PIN.\r９８７６５４',
+  ];
+  for (const [idx,rawBody] of messages.entries()) {
+   const payload={...incoming,requestId:id(100+idx),rawBody};
+   const res=await send(payload), error=await res.text();
+   assert.equal(res.status,422);
+   assert.match(error,/security_message_not_retained/);
+   assert.doesNotMatch(error,/987654|９８７６５４|rawBody|bodySha256|sourceId/);
+  }
+  const held={...incoming,requestId:id(200),rawBody:messages[0],sourceMode:'catch_up',complete:false,
+   inboxReceivedAt:incoming.capturedAt,sourceKey:'e'.repeat(64),expectedConsentGeneration:1};
+  for (const op of ['recoverHeld','recoverHeldAck']) {
+   await assert.rejects(()=>observations[op](actor,held),{code:'security_message_not_retained'});
+  }
+  assert.equal(f.state.requests.size,0);
+  assert.equal(f.state.media.size,0);
+  assert.equal(f.state.sourceKeys.size,0);
+  assert.equal(f.state.rows.size,0);
+  assert.equal(f.state.puts,0);
+  assert.equal(f.state.commits,0);
+  assert.deepEqual(f.state.audits,[]);
+  const ordinary=[
+   'Received 250 RWF. Reference: 1234. Transaction code 4411.\nNever share your PIN.',
+   'Received 250 RWF. Reference: 1234. Verification complete.',
+  ];
+  for (const [idx,rawBody] of ordinary.entries()) {
+   const accepted=await send({...incoming,requestId:id(301+idx),rawBody});
+   assert.equal(accepted.status,200);
+   const {data}=await accepted.json();
+   assert.equal(data.bodySha256,await sha256(rawBody));
+  }
+  assert.equal(f.state.puts,2);
+  assert.equal(f.state.commits,2);
+ });
+});
+
 test('strict HTTP capture and reconciliation replay one retained observation under the current account', async () => {
  const f=fixture();
  const capture={...incoming,sourceMode:'catch_up',complete:false,inboxReceivedAt:incoming.capturedAt,sourceKey:'c'.repeat(64)};

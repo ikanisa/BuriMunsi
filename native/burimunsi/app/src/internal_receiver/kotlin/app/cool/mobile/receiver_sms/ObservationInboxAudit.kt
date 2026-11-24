@@ -225,6 +225,7 @@ internal class ObservationInboxAudit(
         val candidatesByKey=mutableMapOf<String,AuditRow>()
         for(row in rows){
             if(authority.profile.receipt.senders.none{it.equals(row.sender,ignoreCase=true)})continue
+            if(ObservationCandidate.excludeFromFinancialCensus(row.sender,row.body,authority.profile.receipt))continue
             val decision=ObservationLegacyOwnership.classify(app,owner,row.id,row.received,row.sender,row.body,row.sub)
             if(decision==ObservationLegacyOwnership.Decision.OTHER_SIM)continue
             val key=heldInboxSourceKey(authority.device,owner.collectionId,row.id,row.received)

@@ -44,9 +44,14 @@ object CoreChecks {
             check(facts?.amountRwf==10000L&&facts.reference=="90000000001"&&facts.payerPhone=="*********816")
             check(!observation.toString().contains(raw)&&!facts.toString().contains("EXAMPLE"))
         }
-        ok("sender-scoped capture retains messages without presenting security text as payment facts") {
+        ok("sender-scoped capture rejects security text before storing and retains safe payment formats") {
             val securityMessage=observation.copy(rawBody=raw+" OTP 1234")
-            check(securityMessage.valid(observationProfile,observationNow))
+            check(!securityMessage.valid(observationProfile,observationNow))
+            for(secret in listOf("Your OTP is 1234","Your M-Money code is 1234","Votre code de vérification : 1234","Kode yawe y’ibanga ni 1234",
+                "Never share your PIN.\n987654","Never share your PIN.\r９８７６５４","Never share your PIN.","Never share your PIN ١٢٣٤."))
+                check(!observation.copy(rawBody=secret).valid(observationProfile,observationNow))
+            for(paymentLike in listOf("Arrived via new provider route. Payment reference PX-1.","Reversal accepted. Transaction code AB-6789.",raw+" Never share your PIN.",raw+" Verification complete."))
+                check(observation.copy(rawBody=paymentLike).valid(observationProfile,observationNow))
             check(securityMessage.unverifiedFacts(observationProfile,observationNow)==null)
             check(!observation.copy(rawSender="unapproved").valid(observationProfile,observationNow))
             check(!observation.valid(observationProfile,observationProfile.expiresAt))
