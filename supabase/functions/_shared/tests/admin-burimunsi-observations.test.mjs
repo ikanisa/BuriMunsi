@@ -59,7 +59,13 @@ async function fixture(){
     const [collectionId,limit,offset,financial]=s.args;if(!f.allowed.has(collectionId))throw denied();
     const items=f.rows.slice(offset,offset+limit);
     const result={collectionId,totalCount:f.rows.length,revision:f.revision,items};
-    if(s.sql.includes('burimunsi_admin_observation_outcomes(')){
+    if(s.sql.includes('burimunsi_admin_payment_observation_outcomes(')){
+     assert.equal(s.args.length,3);
+     assert.ok(s.sql.includes('burimunsi_observation_admin_inbox_check('));
+     result.outcomes=items.map(({sourceId},i)=>({sourceId,processing:f.processing?.[i]??'parsed',
+      paymentReference:null,payerStatus:f.legacyPayerStatus??null,payerReason:null}));
+     result.inboxCheck=f.check;
+    }else if(s.sql.includes('burimunsi_admin_observation_outcomes(')){
      assert.ok(s.sql.includes('burimunsi_observation_admin_inbox_check('));
      result.outcomes=items.map(({sourceId})=>({sourceId,processing:'posted',paymentReference:financial?'100000000001':null,
        payerStatus:financial?'delivered':null,payerReason:null}));
@@ -233,4 +239,18 @@ test('receiver list returns the scoped posting, reported payer delivery and full
  assert.equal(page.items[0].payerStatus,'delivered');assert.equal(page.inboxCheck.state,'verified');assert.ok(!JSON.stringify(page).includes(message));
  f.check.headsMatch=false;await assert.rejects(call(f,endpoint),error(503,'observation_unavailable'));
  await assert.rejects(call(f,'observations?collectionId='+other+'&includeProcessing=1'),error(403,'permission_required'));
+});
+
+test('standalone receiver parses the new status and rejects any legacy financial disclosure',async()=>{
+ const f=await fixture();f.env.BURIMUNSI_PRODUCT_MODE='standalone';f.actor.permissions.add('payments.read');
+ f.rows.push({...f.rows[0],sourceId:'99999999-9999-4999-8999-999999999999'});
+ f.processing=['parsed','non_payment'];
+ f.check={state:'verified',checkedAt:Date.now(),candidateCount:2,missingCount:0,pendingCount:0,headsMatch:true};
+ const endpoint='observations?collectionId='+gid+'&includeProcessing=1';
+ const result=await(await call(f,endpoint)).json();
+ assert.deepEqual(result.items.map(x=>[x.processing,x.paymentReference,x.payerStatus,x.payerReason]),
+  [['parsed',null,null,null],['non_payment',null,null,null]]);
+ assert.equal(result.inboxCheck.state,'verified');
+ f.legacyPayerStatus='delivered';
+ await assert.rejects(call(f,endpoint),error(503,'observation_unavailable'));
 });

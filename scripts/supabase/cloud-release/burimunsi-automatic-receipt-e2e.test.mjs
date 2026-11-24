@@ -54,8 +54,8 @@ function providerOutput(body){
   evidence:{incoming_success:'You have received',principal:'You have received '+amount+' RWF',transaction_id:'FT Id: '+reference,
     transaction_datetime:'at '+time,payer:'from '+name+' ('+identifier+')',fee:null,wallet_balance_after:'Balance: '+balance+' RWF'}};
 }
-function receiptFixture(f,a=nativeActor(group),{standalone=false}={}){
- const {run,env,journal,objects}=nativeRuntime(f.client,group),work={assert:async()=>{}};
+function receiptFixture(f,a=nativeActor(group),{standalone=false,runtime=nativeRuntime(f.client,group)}={}){
+ const {run,journal,objects}=runtime,env={...runtime.env},work={assert:async()=>{}};
  const actor={id:a.accountId,sessionId:a.sessionId,principalUserId:a.principalUserId,installationId:a.installationId,
   groupId:group,role:'admin',installationProfile:'internal_receiver',capabilities:['records.read','sms.read','gateway.manage'],
   active:true,revoked:false,expiresAt:Date.now()+1800000};
@@ -140,9 +140,19 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
  await f.client.query(wakeBody);
  await f.client.query(idleBody);
  await f.client.query(review.slice(review.indexOf('CREATE OR REPLACE FUNCTION collect_ops.reconcile_jobs()')));
+ const runtime=nativeRuntime(f.client,group);
+ const archivedFlow=receiptFixture(f,undefined,{runtime});
+ const archivedInput={...masked,requestId:uuid(799),sourceKey:sha('archived original receipt'),
+  rawBody:masked.rawBody.replace('987654321','987654320')};
+ const archived=await archivedFlow.route('',archivedInput);
+ archivedFlow.provider(archivedInput.rawBody);
+ assert.deepEqual(await archivedFlow.parser.process(archived.sourceId),{state:'completed',relation:'accepted'});
+ const [{transaction_id:archivedPayment}]=(await f.client.query('SELECT transaction_id FROM private.burimunsi_auto_sms_jobs WHERE source_id=$1',
+  [archived.sourceId])).rows;
+ await f.client.query("UPDATE private.burimunsi_auto_sms_jobs SET posting_last_error='legacy posting issue' WHERE source_id=$1",[archived.sourceId]);
  await f.client.query(central);
  await f.client.query(record);
- const flow=receiptFixture(f,undefined,{standalone:true});
+ const flow=receiptFixture(f,undefined,{standalone:true,runtime});
  const outgoingClause='Your payment of RWF 250 to Example Shop has been completed';
  const outgoingBody=outgoingClause+'. FT Id: 12345007.';
  const outgoing={...providerOutput(masked.rawBody),schema_version:NATIVE_AUTO_SCHEMA_VERSION,wallet_effect:'debit',
@@ -159,9 +169,10 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
   [outgoingBody+' Thank you.',outgoing,{state:'completed',relation:'duplicate'}],
   ['Our services are available today.',notice,{state:'non_payment'}],
  ];
- const saved=[];
+ const saved=[],captured=[archivedInput];
  for(const [index,[body,output,result]] of samples.entries()){
   const input={...masked,requestId:uuid(800+index),sourceKey:sha('receipt:'+index),rawBody:body};
+  captured.push(input);
   const source=await flow.route('',input);saved.push(source.sourceId);
   assert.deepEqual(await flow.route('',input),source);
   const [row]=(await f.client.query(`SELECT r.object_sha256,encode(sha256(r.ciphertext),'hex') AS encrypted_sha256,
@@ -178,21 +189,58 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
  }
  assert.deepEqual(flow.counts(),{providerCalls:4,externalFetches:0});
  const {rows:payments}=await f.client.query(`SELECT id,direction,amount_rwf::int,provider_reference,allocation_state
-  FROM burimunsi.payments ORDER BY direction`);
+  FROM burimunsi.payments ORDER BY direction,provider_reference`);
  assert.deepEqual(payments,[
+  {id:archivedPayment,direction:'incoming',amount_rwf:1000,provider_reference:'987654320',allocation_state:'unallocated'},
   {id:saved[0],direction:'incoming',amount_rwf:1000,provider_reference:'987654321',allocation_state:'unallocated'},
   {id:saved[1],direction:'outgoing',amount_rwf:250,provider_reference:'12345007',allocation_state:'unallocated'},
  ]);
  const {rows:jobs}=await f.client.query(`SELECT state,payment_id,transaction_id FROM private.burimunsi_auto_sms_jobs
-  ORDER BY array_position($1::text[],source_id)`,[saved]);
+  WHERE source_id=ANY($1::text[]) ORDER BY array_position($1::text[],source_id)`,[saved]);
  assert.deepEqual(jobs,[
   {state:'completed',payment_id:saved[0],transaction_id:null},{state:'completed',payment_id:saved[1],transaction_id:null},
   {state:'completed',payment_id:saved[1],transaction_id:null},{state:'non_payment',payment_id:null,transaction_id:null},
  ]);
- assert.equal((await f.client.query(`SELECT (SELECT count(*) FROM app.ledger_entries)::int ledger,
+ assert.deepEqual((await f.client.query(`SELECT (SELECT count(*) FROM app.ledger_entries)::int ledger,
   (SELECT count(*) FROM app.payments)::int legacy,(SELECT count(*) FROM app.momo_transactions)::int canon,
-  (SELECT count(*) FROM private.burimunsi_payment_sms_obligations)::int notices`)).rows
-  .every(row=>Object.values(row).every(count=>count===0)),true);
+  (SELECT count(*) FROM private.burimunsi_payment_sms_obligations)::int notices`)).rows,
+  [{ledger:0,legacy:0,canon:1,notices:0}]);
+ const ids=[archived.sourceId,...saved],statuses=['parsed','parsed','parsed','duplicate','parsed'];
+ const statusesResponse=await flow.route('/processing-status',{sourceIds:ids});
+ assert.deepEqual(statusesResponse.statuses,ids.map((sourceId,i)=>({sourceId,status:statuses[i],canRetry:false})));
+ await f.client.query("INSERT INTO private.burimunsi_operator_approvals VALUES($1,'principal','admin',true,ARRAY['records.read','sms.read'],NULL,'admin')",[group]);
+ const admin=async (collection=group)=>f.rpc('burimunsi_admin_payment_observation_outcomes',[collection,ids],['text','text[]'],'http_admin');
+ assert.deepEqual(await admin(),ids.map((sourceId,i)=>({sourceId,processing:i===4?'non_payment':statuses[i],
+  paymentReference:null,payerStatus:null,payerReason:null})));
+ await assert.rejects(admin('another-group'),/scope denied/);
+ const proof=captured.map(input=>({sourceKey:input.sourceKey,bodySha256:sha(input.rawBody),rawSender:input.rawSender,
+  serviceCentreAt:input.serviceCentreAt,inboxReceivedAt:input.inboxReceivedAt,subscriptionId:input.subscriptionId}));
+ const runId=randomUUID(),check={runId,expectedConsentGeneration:1,state:'checking',candidateCount:0,missingCount:0,pendingCount:0,
+  phoneLatestKey:null,parsedLatestKey:null,collectionRevision:null};
+ await flow.route('/inbox-check',check);
+ const verified=await flow.route('/reconcile-batch',{runId,items:proof,includeProcessing:true});
+ assert.deepEqual(verified.items,proof.map(({sourceKey},i)=>({sourceKey,state:'matched',sourceId:ids[i],processingStatus:statuses[i]})));
+ const census=await flow.route('/reconcile-verified-status');
+ assert.equal(census.recordedCount,ids.length);
+ const latest=proof.at(-1).sourceKey;
+ await flow.route('/inbox-check',{...check,state:'verified',candidateCount:ids.length,phoneLatestKey:latest,
+  parsedLatestKey:latest,collectionRevision:census.revision});
+ assert.equal((await f.rpc('burimunsi_observation_admin_inbox_check',[group],['text'],'http_admin')).state,'verified');
+ for(const invalidate of [
+  "UPDATE burimunsi.raw_sms SET ciphertext=convert_to('invalid envelope','UTF8') WHERE id=$1",
+  "UPDATE app.momo_parse_attempts SET source_body_sha256=repeat('0',64) WHERE raw_sms_id=$1",
+ ]){
+  await f.client.query('BEGIN');
+  try{
+   await f.client.query(invalidate,[saved[0]]);
+   await f.client.query("SET LOCAL ROLE collect_runtime; SET LOCAL collect.edge_verified='true'; SET LOCAL test.work_kind='http_admin'");
+   const [{result}]=(await f.client.query('SELECT private.burimunsi_admin_payment_observation_outcomes($1,$2::text[]) AS result',
+    [group,[saved[0]]])).rows;
+   assert.equal(result[0].processing,'blocked');
+   const [{health}]=(await f.client.query('SELECT private.burimunsi_observation_admin_inbox_check($1) AS health',[group])).rows;
+   assert.equal(health.state,'incomplete');
+  }finally{await f.client.query('ROLLBACK');}
+ }
  await f.client.query("BEGIN; SET LOCAL ROLE collect_runtime; SET LOCAL burimunsi.collection_id='another-group'");
  assert.equal((await f.client.query('SELECT count(*)::int n FROM burimunsi.raw_sms')).rows[0].n,0);
  await f.client.query('ROLLBACK');

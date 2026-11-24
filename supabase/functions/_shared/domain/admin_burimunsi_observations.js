@@ -62,12 +62,15 @@ async function collections(env,account,url){
 const pageSql='SELECT private.burimunsi_observation_admin_page(?,?,?) AS result';
 // Derive outcomes from the IDs on this exact authorized page. All three views
 // share a snapshot, including while the phone is updating its inbox status.
-const processingPageSql=`WITH page AS MATERIALIZED (${pageSql})
+const processingPageSql=standalone=>`WITH page AS MATERIALIZED (${pageSql})
  SELECT page.result || jsonb_build_object(
-   'outcomes', private.burimunsi_admin_observation_outcomes(page.result->>'collectionId',
-     ARRAY(SELECT item->>'sourceId' FROM jsonb_array_elements(page.result->'items') AS rows(item)), ?::boolean),
+   'outcomes', private.${standalone?'burimunsi_admin_payment_observation_outcomes':'burimunsi_admin_observation_outcomes'}(page.result->>'collectionId',
+     ARRAY(SELECT item->>'sourceId' FROM jsonb_array_elements(page.result->'items') AS rows(item))${standalone?'':', ?::boolean'}),
    'inboxCheck', private.burimunsi_observation_admin_inbox_check(page.result->>'collectionId')
  ) AS result FROM page`;
+const observationStates=new Set(['pending','blocked','held','historical','duplicate','excluded','retrying','non_payment']);
+const legacyObservationStates=new Set([...observationStates,'posted','reversed','unmatched']);
+const paymentObservationStates=new Set([...observationStates,'parsed']);
 
 async function page(env,account,actor,url){
  filters(url,['collectionId','limit','cursor','includeProcessing']);
@@ -76,9 +79,11 @@ async function page(env,account,actor,url){
  const rawLimit=url.searchParams.get('limit')??'25';if(!/^(?:[1-9][0-9]?|100)$/.test(rawLimit))invalid();
  const limit=Number(rawLimit),token=url.searchParams.get('cursor');if(token!==null&&(!token||token.length>2048))invalid();
  const scoped=accountReadDatabase(env,account,'sms.read'),cursor=requestCursorKey(env);
- const wantProcessing=includeProcessing==='1',finances=actor.permissions.has('payments.read');
+ const standalone=env.BURIMUNSI_PRODUCT_MODE==='standalone';
+ const wantProcessing=includeProcessing==='1',finances=!standalone&&actor.permissions.has('payments.read');
+ const allowedStates=standalone?paymentObservationStates:legacyObservationStates;
  const get=(offset,processing)=>processing
-  ?select(scoped,processingPageSql,collectionId,limit,offset,finances)
+  ?select(scoped,processingPageSql(standalone),collectionId,limit,offset,...(standalone?[]:[finances]))
   :select(scoped,pageSql,collectionId,limit,offset);
  const first=await get(0,wantProcessing&&token===null);if(!isObject(first)||first.collectionId!==collectionId||!HASH.test(first.revision??''))bad();
  const filterHash=await digest(canonicalJson({kind:'managed_admin_observation_v1',collectionId,limit,sessionId:actor.sessionId}));
@@ -109,7 +114,7 @@ async function page(env,account,actor,url){
   const indexed=new Map();
   for(const row of outcomes){
    if(!isObject(row)||Object.keys(row).length!==5||!seen.has(row.sourceId)||indexed.has(row.sourceId)||
-    !['pending','blocked','held','historical','duplicate','excluded','retrying','reversed','posted','non_payment','unmatched'].includes(row.processing)||
+    !allowedStates.has(row.processing)||
     !(row.paymentReference===null||finances&&typeof row.paymentReference==='string'&&/^[0-9]{12}$/.test(row.paymentReference))||
     !(row.payerStatus===null||finances&&payerStates.has(row.payerStatus))||
     !(row.payerReason===null||finances&&payerReasons.has(row.payerReason)))bad();

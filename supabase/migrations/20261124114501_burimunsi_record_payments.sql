@@ -316,6 +316,61 @@ EXCEPTION WHEN OTHERS THEN
 END;
 $finish$;
 
+CREATE POLICY burimunsi_payments_inbox_frame ON burimunsi.payments FOR SELECT TO postgres
+  USING (current_setting('role',true)='collect_runtime'
+    AND current_setting('collect.edge_verified',true)='true'
+    AND current_setting('burimunsi.inbox_frame',true)='1'
+    AND collection_id=nullif(current_setting('burimunsi.collection_id',true),''));
+CREATE POLICY burimunsi_raw_sms_inbox_frame ON burimunsi.raw_sms FOR SELECT TO postgres
+  USING (current_setting('role',true)='collect_runtime'
+    AND current_setting('collect.edge_verified',true)='true'
+    AND current_setting('burimunsi.inbox_frame',true)='1'
+    AND collection_id=nullif(current_setting('burimunsi.collection_id',true),''));
+
+-- The inbox can attest a terminal parse only while the same source, parse
+-- attempt, wallet and payment remain bound. A valid notice also completes
+-- inbox capture without creating a payment. Archived originals use the same
+-- immutable Storage journal proof used before the inline table existed.
+CREATE FUNCTION private._burimunsi_payment_inbox_outcome(
+  p_source private.burimunsi_unresolved_observations,
+  p_job private.burimunsi_auto_sms_jobs
+) RETURNS text LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $inbox$
+  SELECT CASE WHEN EXISTS (
+    SELECT 1 FROM private.burimunsi_native_receipt_origins origin
+    JOIN app.sms_receipts receipt ON receipt.id=origin.source_id
+    JOIN app.momo_parse_attempts attempt ON attempt.id=(p_job).attempt_id::text
+      AND attempt.raw_sms_id=origin.source_id AND attempt.source_body_sha256=origin.body_sha256
+      AND attempt.schema_version='momo-native-extraction.v2' AND attempt.parser_version='burimunsi-auto.v2'
+    JOIN private.storage_objects saved ON saved.object_key=receipt.object_key
+    LEFT JOIN burimunsi.raw_sms raw ON raw.id=origin.source_id AND raw.collection_id=origin.collection_id
+    LEFT JOIN burimunsi.payments payment ON payment.id=(p_job).payment_id
+      AND payment.collection_id=origin.collection_id AND payment.receiving_account_id=(p_job).receiving_account_id
+    WHERE origin.source_id=(p_source).source_id AND origin.collection_id=(p_source).collection_id
+      AND origin.collection_id=nullif(current_setting('burimunsi.collection_id',true),'')
+      AND ROW(origin.account_id,origin.principal_user_id,origin.installation_id,origin.grant_id,origin.grant_version,
+        origin.request_id,origin.fingerprint,origin.body_sha256,origin.object_sha256)
+        IS NOT DISTINCT FROM ROW((p_source).account_id,(p_source).principal_user_id,(p_source).installation_id,
+          (p_source).grant_id,(p_source).grant_version,(p_source).request_id,(p_source).fingerprint,(p_source).body_sha256,(p_source).object_sha256)
+      AND ROW(receipt.owner_user_id,receipt.body_sha256,receipt.object_sha256,receipt.object_key,receipt.size_bytes)
+        IS NOT DISTINCT FROM ROW(origin.principal_user_id,origin.body_sha256,origin.object_sha256,
+          (p_source).object_key,(p_source).size_bytes)
+      AND private.burimunsi_observation_storage_matches(receipt.object_key,
+        jsonb_build_object('ownerId',origin.principal_user_id,'purpose','sms_receipt','entityId',origin.source_id),origin.object_sha256)
+      AND (raw.id IS NULL OR (raw.object_sha256=origin.object_sha256 AND octet_length(raw.ciphertext)=saved.size
+        AND encode(sha256(raw.ciphertext),'hex')=saved.sha256))
+      AND (p_job).phase='finished' AND (p_job).facts_sha256 IS NOT NULL
+      AND (
+        ((p_job).state='non_payment' AND (p_job).payment_id IS NULL AND attempt.outcome='non_payment')
+        OR ((p_job).state='completed' AND (p_job).payment_outcome='successful'
+          AND (p_job).relation IN ('accepted','duplicate') AND attempt.outcome=(p_job).relation
+          AND payment.id IS NOT NULL AND ((p_job).relation='duplicate' OR payment.sms_source_id=origin.source_id))
+      )
+  ) THEN CASE WHEN (p_job).relation='duplicate' THEN 'duplicate' ELSE 'parsed' END
+  ELSE 'unknown' END
+$inbox$;
+REVOKE ALL ON FUNCTION private._burimunsi_payment_inbox_outcome(private.burimunsi_unresolved_observations,
+  private.burimunsi_auto_sms_jobs) FROM PUBLIC,anon,authenticated,service_role,collect_runtime;
+
 DO $compatibility$
 DECLARE
   routine record; body text; definition text;
@@ -346,7 +401,15 @@ BEGIN
       '''state'',j.state,''started'',false,'||chr(10)||'    ''transactionId'',coalesce(j.payment_id,j.transaction_id)'),
     ('private.burimunsi_observation_processing_status(jsonb)',
       'ELSIF j.state=''completed'' AND j.posting_last_error IS NOT NULL THEN status:=''needs_review'';',
-      'ELSIF j.state=''non_payment'' THEN status:=''parsed'';'),
+      'ELSIF j.state=''non_payment'' THEN status:=coalesce(private._burimunsi_inbox_outcome(source,a->>''collectionId''),''unknown'');'),
+    ('private._burimunsi_inbox_outcome(text,text)',
+      'WHEN j.state=''security_message'' THEN ''security''',
+      'WHEN j.state=''security_message'' THEN ''security'''||chr(10)||
+      '  WHEN j.payment_id IS NOT NULL OR j.state=''non_payment'' THEN private._burimunsi_payment_inbox_outcome(r,j)'),
+    ('private._burimunsi_inbox_outcome(text,text)',
+      'AND j.posting_last_error IS NULL AND EXISTS(',
+      'AND (j.posting_last_error IS NULL OR EXISTS(SELECT 1 FROM burimunsi.payments p WHERE p.id=j.transaction_id'||
+      ' AND p.collection_id=r.collection_id AND p.receiving_account_id=s.receiving_account_id)) AND EXISTS('),
     ('private._burimunsi_wake_sms_worker()',
       'unnest(ARRAY[NEW.next_attempt_at,NEW.posting_next_attempt_at])',
       'unnest(ARRAY[NEW.next_attempt_at])')
@@ -385,10 +448,68 @@ BEGIN
 END;
 $compatibility$;
 
+CREATE FUNCTION private.burimunsi_admin_payment_observation_outcomes(p_collection text,p_sources text[])
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $outcomes$
+DECLARE
+  result jsonb;
+  previous_scope text:=current_setting('burimunsi.collection_id',true);
+  previous_inbox text:=current_setting('burimunsi.inbox_frame',true);
+  previous_native text:=current_setting('burimunsi.native_receipt_frame',true);
+  previous_pin text:=current_setting('burimunsi.pin_frame',true);
+BEGIN
+  IF p_sources IS NULL OR cardinality(p_sources)>100 OR array_position(p_sources,NULL) IS NOT NULL THEN
+    RAISE EXCEPTION 'invalid_observation_sources' USING ERRCODE='22023';
+  END IF;
+  PERFORM private.burimunsi_observation_admin_scope(p_collection,false);
+  PERFORM set_config('burimunsi.collection_id',p_collection,true),
+    set_config('burimunsi.inbox_frame','1',true),set_config('burimunsi.native_receipt_frame','1',true);
+  WITH outcomes AS MATERIALIZED (
+    SELECT ids.source_id,ids.position,j.state,j.relation,
+      private._burimunsi_inbox_outcome(ids.source_id,p_collection) AS inbox_outcome,
+      EXISTS(SELECT FROM burimunsi.payments p WHERE p.collection_id=p_collection
+        AND p.receiving_account_id=scope.receiving_account_id
+        AND p.id=coalesce(j.payment_id,j.transaction_id)) AS has_payment
+    FROM unnest(p_sources) WITH ORDINALITY ids(source_id,position)
+    JOIN private.burimunsi_scopes scope ON scope.collection_id=p_collection
+    LEFT JOIN private.burimunsi_auto_sms_jobs j ON j.source_id=ids.source_id AND j.collection_id=scope.collection_id
+      AND j.receiving_account_id=scope.receiving_account_id
+  )
+  SELECT coalesce(jsonb_agg(jsonb_build_object('sourceId',source_id,'processing',CASE
+      WHEN inbox_outcome='needs_review' THEN 'held'
+      WHEN state='failed' OR relation='conflict' THEN 'blocked'
+      WHEN inbox_outcome='duplicate' THEN 'duplicate'
+      WHEN inbox_outcome='security' THEN 'excluded'
+      WHEN state='retry' THEN 'retrying'
+      WHEN inbox_outcome='parsed' AND has_payment THEN 'parsed'
+      WHEN inbox_outcome='parsed' THEN 'non_payment'
+      WHEN inbox_outcome='historical' THEN 'historical'
+      WHEN state IN ('completed','non_payment') THEN 'blocked'
+      ELSE 'pending' END,'paymentReference',NULL,'payerStatus',NULL,'payerReason',NULL) ORDER BY position),'[]'::jsonb)
+  INTO result FROM outcomes;
+  PERFORM set_config('burimunsi.collection_id',coalesce(previous_scope,''),true),
+    set_config('burimunsi.inbox_frame',coalesce(previous_inbox,''),true),
+    set_config('burimunsi.native_receipt_frame',coalesce(previous_native,''),true),
+    set_config('burimunsi.pin_frame',coalesce(previous_pin,''),true);
+  RETURN result;
+EXCEPTION WHEN OTHERS THEN
+  PERFORM set_config('burimunsi.collection_id',coalesce(previous_scope,''),true),
+    set_config('burimunsi.inbox_frame',coalesce(previous_inbox,''),true),
+    set_config('burimunsi.native_receipt_frame',coalesce(previous_native,''),true),
+    set_config('burimunsi.pin_frame',coalesce(previous_pin,''),true);
+  RAISE;
+END;
+$outcomes$;
+REVOKE ALL ON FUNCTION private.burimunsi_admin_payment_observation_outcomes(text,text[])
+  FROM PUBLIC,anon,authenticated,service_role,collect_importer,collect_runtime;
+GRANT EXECUTE ON FUNCTION private.burimunsi_admin_payment_observation_outcomes(text,text[]) TO collect_runtime;
+
 REVOKE EXECUTE ON FUNCTION private.burimunsi_native_sms_post_candidates(integer),
   private.burimunsi_native_sms_post_snapshot(text),private.burimunsi_native_sms_post_defer(text,integer),
   private.burimunsi_native_sms_post_facts(text,text,jsonb,jsonb),
   private.burimunsi_native_sms_post_retry(text,text) FROM collect_runtime;
+
+DROP FUNCTION IF EXISTS private.burimunsi_payment_activity_sources(text,boolean,boolean);
+DROP FUNCTION IF EXISTS private.burimunsi_payment_activity_transactions(text);
 
 -- Archived receipts and old notification records remain available for audit.
 -- Fresh observations and parse retries are the only receipt job wake sources.
