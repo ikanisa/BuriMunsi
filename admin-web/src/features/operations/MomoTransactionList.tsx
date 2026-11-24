@@ -1,17 +1,18 @@
 /* eslint-disable no-control-regex -- Reject control characters in operator search input. */
 import {useCallback, useLayoutEffect, useRef, useState, type FormEvent} from 'react';
-import {useSearchParams} from 'react-router';
+import {Link, useSearchParams} from 'react-router';
 import {useSession} from '../../session/SessionProvider';
 import {canDisplaySessionRecords} from '../../session/sessionContext';
 import {AdminRequestError} from '../../api/client';
-import {Button, Card, EmptyState, StatusBadge} from '../../ui';
+import {Button, Card, EmptyState, ErrorState, StatusBadge} from '../../ui';
 import {isValidId} from './contracts';
 import {momoStatuses, parseMomoPage, type MomoFilters, type MomoPage, type MomoStatus} from './momoContracts';
 import {MomoMemberChecks, MomoPaymentDetail} from './MomoPaymentReview';
 import {MomoSourceReview} from './MomoSourceReview';
 import {formatStatus, formatTime} from './OperationsRecords';
-import {formatMomoAmount, MomoPager, MomoResult, MomoTable, momoReadOptions} from './MomoRecordViews';
+import {formatMomoAmount, MomoCell, MomoPager, MomoResult, MomoTable, momoReadOptions} from './MomoRecordViews';
 import {useOperationRead} from './useOperationRead';
+import {paymentViewLocation} from './paymentLocations';
 
 const initialFilters: MomoFilters = {search: '', status: '', account: '', group: '', from: '', to: ''};
 function kigaliDate(value: string, end: boolean): string | null {
@@ -58,6 +59,15 @@ export function WorkspaceMomoTransactionList() {
       setParams(next,{replace: !id});
     },
   };
+  const unavailableScope = (['account','group'] as const).some(key => {
+    const requested = params.getAll(key);
+    return requested.some(Boolean) && (requested.length !== 1 || !isValidId(requested[0]) ||
+      !permissions.includes(key === 'account' ? 'receivers.read' : 'collections.read'));
+  });
+  if (unavailableScope) return <>
+    <ErrorState title="This filter isn’t available" message="Your current account cannot open these transactions with the scope in this link." />
+    <p className="operations-note"><Link to={paymentViewLocation('recorded',{momo:true})}>Open MoMo transactions without the restricted filter</Link></p>
+  </>;
   return <MomoTransactionList key={JSON.stringify([session.epoch,draft])} allowActions={false} allowRecovery workspace={workspace} />;
 }
 
@@ -115,13 +125,21 @@ export function MomoTransactionList({allowActions, allowRecovery, workspace}: {a
     <label className="operations-filter">From · Kigali<input type="date" className="admin-input" value={from} onChange={(event) => setFrom(event.target.value)} /></label><label className="operations-filter">To · Kigali<input type="date" className="admin-input" value={to} onChange={(event) => setTo(event.target.value)} /></label>
     <Button type="submit">Apply filters</Button><Button onClick={retry}>Refresh</Button>{canCheck && <Button onClick={() => setChecking(true)}>Member checks</Button>}</form>{filterError && <p role="alert" className="operations-note">{filterError}</p>}
     <MomoResult result={result} retry={retry} empty={() => false}>{(page: MomoPage) => <><p className="operations-note">Received {formatMomoAmount(page.totals.received_minor)} · Credited {formatMomoAmount(page.totals.credited_minor)} · Unallocated {formatMomoAmount(page.totals.unallocated_minor)}<br />Provider transaction date · As of {formatTime(page.asOf)} Kigali. Provider confirmation and settlement are not asserted.</p>
-      {page.rows.length === 0 ? <EmptyState title="No matching transactions" /> : <MomoTable name="MoMo transactions" headings={['Transaction time · Kigali', 'Type', 'Amount', 'Counterparty', 'MoMo TX ID', 'Beneficiary', 'Group', 'Status', 'Review issue']}>
+      {page.rows.length === 0 ? <EmptyState title="No matching transactions" /> : workspace ? <MomoTable name="MoMo transactions" headings={['MoMo TX ID', 'Amount', 'Status', 'Time · Kigali']} compact>
+        {page.rows.map(row => <tr key={row.id} role="row">
+          <MomoCell label="MoMo TX ID"><button type="button" className="operations-link" onClick={() => workspace.select(row.id)}
+            aria-label={row.provider_transaction_id ?? `View transaction ${row.id}`}>{row.provider_transaction_id ?? 'View details'}</button></MomoCell>
+          <MomoCell label="Amount">{formatMomoAmount(row.amount_minor,row.currency)}</MomoCell>
+          <MomoCell label="Status"><StatusBadge>{formatStatus(row.status)}</StatusBadge>{row.has_conflict ? <div>Evidence conflict</div> : null}</MomoCell>
+          <MomoCell label="Time · Kigali">{row.transaction_at ? formatTime(row.transaction_at) : `Received ${formatTime(row.created_at)}`}</MomoCell>
+        </tr>)}
+      </MomoTable> : <MomoTable name="MoMo transactions" headings={['Transaction time · Kigali', 'Type', 'Amount', 'Counterparty', 'MoMo TX ID', 'Beneficiary', 'Group', 'Status', 'Review issue']}>
         {page.rows.map((row) => <tr key={row.id}>
           <td>{row.transaction_at ? formatTime(row.transaction_at) : `Received ${formatTime(row.created_at)}`}</td>
           <td>{row.event_kind ? formatStatus(row.event_kind) : 'Not recorded'}</td>
           <td>{formatMomoAmount(row.amount_minor, row.currency)}</td>
           <td>{row.payer_name ?? 'Not recorded'}{row.payer_last3 ? ` · …${row.payer_last3}` : ''}</td>
-          <td><button type="button" className="operations-link" onClick={() => workspace ? workspace.select(row.id) : setSelected({id: row.id, epoch: session.epoch})}
+          <td><button type="button" className="operations-link" onClick={() => setSelected({id: row.id, epoch: session.epoch})}
             aria-label={row.provider_transaction_id ?? `View transaction ${row.id}`}>{row.provider_transaction_id ?? 'View details'}</button></td>
           <td>{row.member_name ?? 'Unassigned'}</td><td>{row.group_name ?? 'Unassigned'}</td>
           <td><StatusBadge>{formatStatus(row.status)}</StatusBadge></td><td>{row.has_conflict ? 'Needs review' : '—'}</td>

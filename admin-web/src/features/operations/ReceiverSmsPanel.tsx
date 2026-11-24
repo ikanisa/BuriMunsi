@@ -3,7 +3,7 @@ import {useSession} from '../../session/SessionProvider';
 import {canDisplaySessionRecords} from '../../session/sessionContext';
 import {Button, Card, ErrorState, LoadingState} from '../../ui';
 import {receiptLabels, reasonLabels} from '../overview/smsOversightContract';
-import {MomoTable, momoReadOptions} from './MomoRecordViews';
+import {MomoCell, MomoTable, momoReadOptions} from './MomoRecordViews';
 import {MomoSourceRevealPanel} from './MomoSourceRevealPanel';
 import {formatTime} from './OperationsRecords';
 import {receiverCollections, receiverPage, processingLabels, type ReceiverInboxCheck} from './receiverSmsContract';
@@ -44,10 +44,10 @@ function CollectionReceipts({group}: {group: string}) {
   const headings = ['Received by server · Kigali', 'Processing', ...(financial ? ['Payment reference','Payer SMS'] : []), ...(canReveal ? ['Source'] : [])];
   return <><div className="operations-toolbar"><h2>Receiver SMS</h2><Button icon="refresh" onClick={refresh}>Refresh receiver</Button></div>
     <InboxCompleteness key={JSON.stringify([check.state, check.checkedAt])} check={check} asOf={page.asOf} receivedAt={result.receivedAt} />
-    {page.items.length ? <MomoTable name="Android receiver observations" headings={headings}>{page.items.map(item => <tr key={item.sourceId}>
-      <td>{formatTime(item.admittedAt)}</td><td>{processingLabels[item.processing]}</td>
-      {financial && <><td>{item.paymentReference ?? '—'}</td><td>{item.payerStatus ? receiptLabels[item.payerStatus] : 'No receipt recorded'}{item.payerReason && <div>{reasonLabels[item.payerReason]}</div>}</td></>}
-      {canReveal && <td>{item.retentionState === 'retained' ? <Button onClick={() => setSource(item.sourceId)}>Review source</Button> : 'Unresolved'}</td>}
+    {page.items.length ? <MomoTable name="Android receiver observations" headings={headings} compact>{page.items.map(item => <tr key={item.sourceId} role="row">
+      <MomoCell label="Received by server · Kigali">{formatTime(item.admittedAt)}</MomoCell><MomoCell label="Processing">{processingLabels[item.processing]}</MomoCell>
+      {financial && <><MomoCell label="Payment reference">{item.paymentReference ?? '—'}</MomoCell><MomoCell label="Payer SMS">{item.payerStatus ? receiptLabels[item.payerStatus] : 'No receipt recorded'}{item.payerReason && <div>{reasonLabels[item.payerReason]}</div>}</MomoCell></>}
+      {canReveal && <MomoCell label="Source">{item.retentionState === 'retained' ? <Button onClick={() => setSource(item.sourceId)}>Review source</Button> : 'Unresolved'}</MomoCell>}
     </tr>)}</MomoTable> : <p>No receiver SMS were recorded in this collection.</p>}
     {(cursor || page.nextCursor) && <div className="operations-pagination"><Button disabled={!cursor} onClick={() => {setSource(null); setCursors(values => values.slice(0,-1));}}>Previous</Button>
       <Button disabled={!page.nextCursor} onClick={() => {setSource(null); setCursors(values => [...values,page.nextCursor]);}}>Next</Button></div>}

@@ -115,11 +115,11 @@ export function RecordsPage<T>({title, subtitle, permission, statuses = [], sear
       {smsPagination && result?.status === 'success' && <p className="operations-receipt-load">Loaded {formatTime(result.receivedAt)} Kigali</p>}
       {!result ? <LoadingState label={`Loading ${title.toLowerCase()}`} /> : result.status === 'error' ? <ErrorState message={result.message} onRetry={retry} /> : noRecords ? <><EmptyState title="No records found" description={hasFilters ? undefined : 'Change your filters or check again later.'} action={clearFilters} />{offset > 0 && <div className="operations-pagination"><Button onClick={() => changeParams({offset: Math.max(0, offset - result.value.limit)})}>Previous</Button></div>}</> : <>
         <div className="admin-table-wrap" tabIndex={0} role="region" aria-label={`${title} records`}>
-          <table className={smsPagination ? 'admin-table operations-receipt-table' : 'admin-table'} role="table">
+          <table className={smsPagination || embedded ? 'admin-table operations-receipt-table' : 'admin-table'} role="table">
             <thead role="rowgroup"><tr role="row">{columns.map(({label}) => <th key={label} role="columnheader" scope="col">{label}</th>)}</tr></thead>
             <tbody role="rowgroup">{result.value.rows.map(row => <tr key={rowKey(row)} role="row">
               {columns.map(column => <td key={column.label} role="cell">
-                {smsPagination && <span className="operations-receipt-field" aria-hidden="true">{column.label}</span>}
+                {(smsPagination || embedded) && <span className="operations-receipt-field" aria-hidden="true">{column.label}</span>}
                 {column.render(row)}
               </td>)}
             </tr>)}</tbody>

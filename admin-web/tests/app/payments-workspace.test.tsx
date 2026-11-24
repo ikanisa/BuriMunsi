@@ -1,4 +1,4 @@
-import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {act, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
 import {Suspense} from 'react';
 import {MemoryRouter, useLocation, useNavigate, useRoutes} from 'react-router';
 import {afterEach, describe, expect, it, vi} from 'vitest';
@@ -72,6 +72,10 @@ describe('consolidated Payments routes',()=>{
       {transaction:momo,sources:[],conflicting_attempt_ids:[]} : momoPage);
     visit(path,['payments.read'],'staff');
     const reference=await screen.findByRole('button',{name:momoRef});
+    const records=within(screen.getByRole('region',{name:'MoMo transactions'}));
+    expect(records.getAllByRole('columnheader').map(item => item.textContent)).toEqual(['MoMo TX ID','Amount','Status','Time · Kigali']);
+    expect(records.getByRole('table')).toHaveClass('operations-receipt-table');
+    expect(records.queryByText('Fixture payer')).not.toBeInTheDocument();
     expect(location()).toHaveTextContent('/admin/payments?dataset=momo');
     expect(screen.getByText(/Provider confirmation and settlement are not asserted/)).toBeVisible();
     expect(called('core/transactions')).toHaveLength(0);
@@ -81,11 +85,26 @@ describe('consolidated Payments routes',()=>{
     fireEvent.click(await screen.findByRole('button',{name:reference.getAttribute('aria-label') ?? momoRef}));
     await waitFor(()=>expect(location()).toHaveTextContent('payment='+momoId));
     await waitFor(()=>expect(called('momo/transactions/').some(([target])=>target==='momo/transactions/'+momoId)).toBe(true));
+    expect(await within(screen.getByRole('dialog',{name:'Transaction details'})).findByText('Fixture payer')).toBeVisible();
     fireEvent.click(screen.getByRole('button',{name:'Browser back'}));
     expect(location()).not.toHaveTextContent('payment=');
     expect(screen.getByLabelText('Search MoMo TX ID or counterparty')).toHaveValue(momoRef);
     expect(screen.queryByText(/Incoming SMS/)).not.toBeInTheDocument();
   });
+
+  it.each([['account','receivers.read'],['group','collections.read']])(
+    'does not substitute a broader query for an unavailable %s scope', async (key, permission) => {
+      const view=visit('/admin/payments?dataset=momo&'+key+'='+accountId,['payments.read'],'staff');
+      expect(await screen.findByText('This filter isn’t available')).toBeVisible();
+      expect(mock.request).not.toHaveBeenCalled();
+      view.unmount();
+      mock.request.mockResolvedValue({...momoPage,rows:[],total:0,
+        totals:{received_minor:0,credited_minor:0,unallocated_minor:0}});
+      visit('/admin/payments?dataset=momo&'+key+'='+accountId,['payments.read',permission],'staff');
+      await waitFor(()=>expect(called('momo/transactions?')).toHaveLength(1));
+      const query=new URLSearchParams(called('momo/transactions?')[0][0].split('?')[1]);
+      expect(query.get(key==='account'?'receiving_account_id':'group_id')).toBe(accountId);
+    });
 
   it('preserves separate SMS and payment permissions, including direct URL source selection',async()=>{
     mock.request.mockResolvedValue({contractVersion:1,asOf:time,items:[]});

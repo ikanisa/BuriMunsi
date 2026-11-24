@@ -15,8 +15,16 @@ export function formatMomoAmount(value: number | null, currency: 'RWF' | null = 
 export function MomoPager<T>({page, change}: {page: Page<T>; change: (offset: number) => void}) {
   return <div className="operations-pagination"><span>{page.rows.length ? `Showing ${page.offset + 1}–${page.offset + page.rows.length} of ${page.total}` : `No records on this page · ${page.total} total`}</span><div><Button onClick={() => change(Math.max(0, page.offset - page.limit))} disabled={page.offset === 0}>Previous</Button><Button onClick={() => change(page.offset + page.limit)} disabled={page.offset + page.rows.length >= page.total}>Next</Button></div></div>;
 }
-export function MomoTable({name, headings, children}: {name: string; headings: string[]; children: ReactNode}) {
-  return <div className="admin-table-wrap" role="region" aria-label={name} tabIndex={0}><table className="admin-table"><thead><tr>{headings.map((heading) => <th scope="col" key={heading}>{heading}</th>)}</tr></thead><tbody>{children}</tbody></table></div>;
+export function MomoTable({name, headings, children, compact = false}: {name: string; headings: string[]; children: ReactNode; compact?: boolean}) {
+  return <div className="admin-table-wrap" role="region" aria-label={name} tabIndex={0}>
+    <table className={compact ? 'admin-table operations-receipt-table' : 'admin-table'} role="table">
+      <thead role="rowgroup"><tr role="row">{headings.map((heading) => <th role="columnheader" scope="col" key={heading}>{heading}</th>)}</tr></thead>
+      <tbody role="rowgroup">{children}</tbody>
+    </table>
+  </div>;
+}
+export function MomoCell({label, children}: {label: string; children: ReactNode}) {
+  return <td role="cell"><span className="operations-receipt-field" aria-hidden="true">{label}</span>{children}</td>;
 }
 export function MomoResult<T>({result, retry, empty, children}: {result: OperationReadState<T> | null; retry: () => void; empty: (value: T) => boolean; children: (value: T) => ReactNode}) {
   if (!result) return <LoadingState label="Loading records" />;
