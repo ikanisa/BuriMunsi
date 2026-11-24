@@ -76,6 +76,12 @@ export async function qualifyPhoneTeam({admin, origin, open, legacySessions}) {
     await heading(staffPage, 'Access unavailable').waitFor();
     assert.equal(await button(staffPage, 'Create account').count(), 0);
     checks.push('staff_signs_in_directly_and_cannot_manage_team');
+    const withheld = await staffPage.evaluate(async () => {
+      const requests = ['/api/admin/core/members', '/api/admin/momo/transactions?limit=25&offset=0'];
+      return Promise.all(requests.map(async path => (await fetch(path)).status));
+    });
+    assert.deepEqual(withheld, [403, 403]);
+    checks.push('staff_fixture_cannot_read_demo_members_or_payments');
 
     await staffPage.goto(origin + '/admin/security/verify-email?returnTo=%2Fadmin%2Fsecurity');
     await heading(staffPage, 'Account security').waitFor();

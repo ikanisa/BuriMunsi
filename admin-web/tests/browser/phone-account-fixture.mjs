@@ -97,5 +97,9 @@ export function createPhoneAccountFixture({cookieSignIn, legacySessionResponses,
     revokeSessions(member.id);
     return send(200, {applied: true, id, version: member.version});
   }
-  return {current, handle};
+  function hasPermission(session, permission) {
+    const role = session && members.get(session.accountId)?.role;
+    return !!role && roles[role].includes(permission);
+  }
+  return {current, handle, hasPermission};
 }
