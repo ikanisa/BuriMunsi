@@ -174,12 +174,39 @@ try {
     await stepUp.context.close();
   }
 
+  // The fixture Admin has each view's read grant. Verify actual navigation and
+  // active states; the synthetic backend need not return live datasets here.
+  const nav = page.getByRole('navigation', {name: 'Admin sections'});
+  assert.deepEqual(await nav.getByRole('link').allTextContents(), ['Home', 'Members', 'Payments']);
+  assert.equal(await page.getByRole('searchbox', {name: 'Search admin sections'}).count(), 0);
+  const payments = nav.getByRole('link', {name: 'Payments', exact: true});
+  assert.equal(await payments.getAttribute('href'), '#/admin/payments');
+  await payments.click();
+  await page.getByRole('heading', {name: 'Payments', level: 1, exact: true}).waitFor();
+  const paymentViews = page.getByRole('navigation', {name: 'Payment views'});
+  assert.deepEqual(await paymentViews.getByRole('link').allTextContents(), ['Recorded', 'SMS & receipts', 'Needs attention']);
+  const recorded = paymentViews.getByRole('link', {name: 'Recorded', exact: true});
+  const smsView = paymentViews.getByRole('link', {name: 'SMS & receipts', exact: true});
+  const attention = paymentViews.getByRole('link', {name: 'Needs attention', exact: true});
+  assert.equal(new URL(page.url()).hash, '#/admin/payments');
+  assert.equal(await recorded.getAttribute('aria-current'), 'page');
+  await smsView.click();
+  await page.waitForURL(url => url.hash === '#/admin/payments?view=sms');
+  assert.equal(await smsView.getAttribute('aria-current'), 'page');
+  await page.setViewportSize({width: 390, height: 844});
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  await attention.click();
+  await page.waitForURL(url => url.hash === '#/admin/payments?view=attention');
+  assert.equal(await attention.getAttribute('aria-current'), 'page');
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  await page.setViewportSize({width: 1440, height: 900});
+  await nav.getByRole('link', {name: 'Home', exact: true}).click();
+  await overview.waitFor();
+
   const receipts = requestUrl => requestUrl.origin === origin && requestUrl.pathname === '/api/admin/sms/receipts';
   await page.route(receipts, route => route.fulfill({
     status: 503, contentType: 'application/json', body: JSON.stringify({ error: { code: 'service_unavailable' } }),
   }), { times: 1 });
-  const nav = page.getByRole('navigation', {name: 'Admin sections'});
-  assert.equal(await page.getByRole('searchbox', {name: 'Search admin sections'}).count(), 0);
   assert.equal(await nav.getByRole('link', {name: 'SMS receipts', exact: true}).count(), 0);
   await page.goto(origin + '/#/admin/sms-receipts');
   await page.getByRole('heading', { name: 'SMS receipts', level: 1, exact: true }).waitFor();
@@ -317,7 +344,7 @@ try {
   assert.deepEqual(denied, []);
   assert.deepEqual(unexpectedAuth, []);
   assert.deepEqual(incorrectIdentityHeaders, []);
-  const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'retired_passcode_bookmark_returns_to_overview', 'protected_sms_deep_link_and_no_redundant_sidebar_search', 'sms_read_failure_retry',
+  const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'retired_passcode_bookmark_returns_to_overview', 'three_daily_links_and_no_redundant_sidebar_search', 'canonical_payments_views_and_390px_reflow', 'protected_sms_deep_link', 'sms_read_failure_retry',
       'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
       'retired_authenticator_bookmark_preserves_safe_destination', 'missing_scoped_admin_identity_removes_controls', 'session_failure_and_recovery_require_server_authority', 'expired_request_and_history_return_require_sign_in',
       'mobile_drawer_traps_and_restores_focus_and_reflows', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, 'no_unexpected_auth_request', 'identity_version_only_on_session_exchanges'];
