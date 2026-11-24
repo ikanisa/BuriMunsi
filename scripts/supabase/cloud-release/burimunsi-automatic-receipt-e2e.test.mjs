@@ -11,6 +11,7 @@ import {openFixturePayerWorker} from './fixtures/burimunsi-payer-delivery.mjs';
 import pg from '../node_modules/pg/lib/index.js';
 import {installNativeChain,installHandsetInventory,nativeRuntime,nativeActor,uuid,sha,testProfile} from './fixtures/burimunsi-native-chain.mjs';
 import {assignPayment} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-payments.js';
+import {lockCollectMutation} from '../../../supabase/functions/_shared/postgres-mutation-lock.js';
 import {compileSql} from '../../../supabase/functions/_shared/postgres-compatibility-sql.js';
 import {validateProviderProfile,MOMO_SCHEMA_VERSION} from '../../../supabase/functions/_shared/domain/momo_pipeline.js';
 import {decrypt} from '../../../supabase/functions/_shared/domain/encryption.js';
@@ -67,7 +68,15 @@ function receiptFixture(f,a=nativeActor(group),{standalone=false,runtime=nativeR
  }})};
  env.DB=db;env.BURIMUNSI_PAYMENT_SMS_ENABLED="true";env.BURIMUNSI_PAYMENT_SMS_COLLECTION_ID=group;
  if(standalone)env.BURIMUNSI_PRODUCT_MODE='standalone';
- const authority={db,groupId:group,read:run('http_collect',{readOnly:true}),write:run('http_collect'),session:async()=>actor,assertOwned:work.assert};
+ const routeTest={lock:false,revoked:false,sqlState:null};
+ const authority={db,groupId:group,read:run('http_collect',{readOnly:true}),
+  write:fn=>run('http_collect')(async tx=>{
+   if(routeTest.lock){
+    await tx.unsafe("SET LOCAL lock_timeout='250ms'");
+    try{await lockCollectMutation(tx);}catch(error){routeTest.sqlState=error.code;throw error;}
+   }
+   return fn(tx);
+  }),session:async()=>({...actor,revoked:routeTest.revoked}),assertOwned:work.assert};
  const custody={namespace:env.PRIVATE_MEDIA.namespace,journal,sameJournal:(x,y)=>canonicalJson(x)===canonicalJson(y),decrypt:(sealed,aad)=>decrypt(env,sealed,aad)};
  const pageCustody=new PostgresPostingCustody({db,groupId:group,namespace:custody.namespace,decrypt:custody.decrypt,
   storageWitnesses:new PostgresStorageWitnesses({db,groupId:group,namespace:custody.namespace,media:env.PRIVATE_MEDIA,
@@ -79,7 +88,7 @@ function receiptFixture(f,a=nativeActor(group),{standalone=false,runtime=nativeR
   sealed:async(_binding,key)=>{assert.ok(objects.has(key));return objects.get(key).sealed;},forget(){}};
  const authGate=createPhonePinRequestGate({origin,secrets:{pinPepper:new Uint8Array(32),pinPepperId:'fixture'},networkBucket:async()=>sha('network')});
  const unused=()=>assert.fail('unexpected command');
- const route=async(path,payload)=>{
+ const route=async(path,payload,expected=200)=>{
   const request=new Request(origin+'/v1/burimunsi/sms/observations'+path,{method:payload===undefined?'GET':'POST',headers:{'x-burimunsi-installation':a.installationId,
    'x-burimunsi-auth':'phone_pin','x-burimunsi-device':'d'.repeat(64),'x-burimunsi-profile':'internal_receiver','x-burimunsi-group':group,
    'x-burimunsi-contract':'burimunsi.native.v1','x-burimunsi-generation':'1','x-burimunsi-request':randomUUID(),authorization:'Bearer '+'a'.repeat(64),
@@ -90,7 +99,7 @@ function receiptFixture(f,a=nativeActor(group),{standalone=false,runtime=nativeR
     records:{home:unused,page:unused,detail:unused,exportLedger:unused,commandStatus:unused},contributions:{allocate:unused},
     members:{enroll:unused,setActive:unused},gateway:{status:unused,replace:unused},observations,origin,groupId:group,strictContract:true,
     verifiedObservationStatusEnabled:true,networkBucket:unused});
-   const response=await handler(request),reply=await response.json();assert.equal(response.status,200,JSON.stringify(reply));return reply.data;
+   const response=await handler(request),reply=await response.json();assert.equal(response.status,expected,JSON.stringify(reply));return expected===200?reply.data:reply;
   });
  };
  const jobAuthority={write:run('jobs')};
@@ -105,7 +114,7 @@ function receiptFixture(f,a=nativeActor(group),{standalone=false,runtime=nativeR
   db:{prepare:sql=>({bind:(...values)=>({sql,values})}),statement:async(tx,statement)=>{
    const {text,values}=compileSql(statement.sql,statement.values);return tx.unsafe(text,values);
   }}});
- return {route,parser,ledger,pageCustody,provider:(body)=>{output=typeof body==='string'?providerOutput(body):body;},
+ return {route,routeTest,parser,ledger,pageCustody,provider:(body)=>{output=typeof body==='string'?providerOutput(body):body;},
   counts:()=>({providerCalls,externalFetches})};
 }
 
@@ -233,7 +242,40 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
  const runId=randomUUID(),check={runId,expectedConsentGeneration:1,state:'checking',candidateCount:0,missingCount:0,pendingCount:0,
   phoneLatestKey:null,parsedLatestKey:null,collectionRevision:null};
  await flow.route('/inbox-check',check);
- const verified=await flow.route('/reconcile-batch',{runId,items:proof,includeProcessing:true});
+ const reconcile={runId,items:proof,includeProcessing:true};
+ const totals=async()=>(await f.client.query(`SELECT
+  (SELECT count(*)::int FROM private.burimunsi_inbox_check_items) AS page_rows,
+  (SELECT coalesce(sum(page_items),0)::int FROM private.burimunsi_inbox_checks) AS page_counter,
+  (SELECT count(*)::int FROM burimunsi.payments) AS payments,
+  (SELECT count(*)::int FROM app.ledger_entries) AS credits`)).rows[0];
+ const original=await totals();
+ assert.equal(original.page_rows,0);
+ assert.equal(original.page_counter,0);
+ const blocker=new pg.Client({host:f.cluster.socket,port:f.cluster.port,database:'postgres',user:f.cluster.initialUser});
+ await blocker.connect();
+ flow.routeTest.lock=true;
+ try{
+  await blocker.query('BEGIN');
+  await lockCollectMutation({unsafe:sql=>blocker.query(sql)});
+  const rejected=await flow.route('/reconcile-batch',reconcile,503);
+  assert.equal(flow.routeTest.sqlState,'55P03');
+  assert.equal(rejected.ok,false);
+  assert.equal(rejected.data,undefined);
+  assert.deepEqual(await totals(),original);
+ }finally{await blocker.query('ROLLBACK');await blocker.end();}
+ flow.routeTest.revoked=true;
+ await flow.route('/reconcile-batch',reconcile,403);
+ flow.routeTest.revoked=false;
+ await flow.route('/reconcile-batch',{...reconcile,runId:randomUUID()},409);
+ const changed={...reconcile,items:[{...proof[0],bodySha256:'0'.repeat(64)},...proof.slice(1)]};
+ await flow.route('/reconcile-batch',changed,409);
+ assert.deepEqual(await totals(),original);
+ const verified=await flow.route('/reconcile-batch',reconcile);
+ assert.deepEqual(await totals(),{...original,page_rows:proof.length,page_counter:proof.length});
+ assert.deepEqual(await flow.route('/reconcile-batch',reconcile),verified);
+ assert.deepEqual(await totals(),{...original,page_rows:proof.length,page_counter:proof.length});
+ flow.routeTest.lock=false;
+ t.diagnostic('F02: exact run/page retried after real 55P03; no page/credit on timeout or denied proof; exactly one page after replay.');
  assert.deepEqual(verified.items,proof.map(({sourceKey},i)=>({sourceKey,state:'matched',sourceId:ids[i],processingStatus:statuses[i]})));
  const census=await flow.route('/reconcile-verified-status');
  assert.equal(census.recordedCount,ids.length);
