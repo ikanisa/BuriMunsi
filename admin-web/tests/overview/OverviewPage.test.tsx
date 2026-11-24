@@ -21,7 +21,7 @@ describe('compact Admin home', () => {
     expect(within(summary).getByText('RWF 9,007,199,254,740,993')).toBeVisible();
     expect(within(summary).getByText('Cumulative records, not provider settlement.')).toBeVisible();
     expect(within(summary).getByText(/17 Nov 2026.*01:00 Kigali/)).toHaveAttribute('datetime', '2026-11-16T23:00:00.000Z');
-    expect(within(summary).getByRole('link', {name:'Open payment exceptions'})).toHaveAttribute('href', '/admin/payments?view=attention');
+    expect(within(summary).getByRole('link', {name:'Open reconciliation'})).toHaveAttribute('href', '/admin/payments?view=attention&status=all');
     expect(within(summary).getByRole('link', {name:'Open payments'})).toHaveAttribute('href', '/admin/payments');
     expect(within(summary).getByRole('link', {name:'Open members'})).toHaveAttribute('href', '/admin/members');
     expect(within(summary).queryByText('Retained payment evidence')).not.toBeInTheDocument();
@@ -47,7 +47,7 @@ describe('compact Admin home', () => {
     const request = vi.fn(async () => canonicalFixture(0));
     const view = render(<OverviewPage {...base} request={request} permissions={admin} />, {wrapper});
     expect(await screen.findByText('Unallocated payments')).toBeVisible();
-    expect(screen.queryByRole('link', {name:'Open payment exceptions'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', {name:'Open reconciliation'})).not.toBeInTheDocument();
 
     view.rerender(<OverviewPage {...base} request={request} permissions={['overview.read']} />);
     expect(screen.queryByText(/RWF /)).not.toBeInTheDocument();
@@ -72,7 +72,7 @@ describe('compact Admin home', () => {
     expect(screen.getByRole('alert')).toBeVisible();
     fireEvent.click(screen.getByRole('button', {name:'Try again'}));
     expect(await screen.findByText('Unallocated payments')).toBeVisible();
-    expect(screen.queryByRole('link', {name:'Open payment exceptions'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', {name:'Open reconciliation'})).not.toBeInTheDocument();
     view.rerender(<OverviewPage {...base} request={request} authorityKey="session-b" permissions={[]} />);
     expect(screen.getByRole('alert')).toHaveTextContent('Access unavailable');
     expect(screen.queryByRole('region', {name:'Workspace snapshot'})).not.toBeInTheDocument();

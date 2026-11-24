@@ -129,6 +129,42 @@ describe('Admin navigation for the current session', () => {
   });
 
   it.each([
+    {permissions: ['ledger.read'], route: '/admin/licenses', fallback: true, contextual: false},
+    {permissions: ['ledger.read', 'sms.read'], route: '/admin/payments?view=sms', fallback: true, contextual: false},
+    {permissions: ['ledger.read', 'reconciliations.read'], route: '/admin/payments?view=attention', fallback: true, contextual: false},
+    {permissions: ['ledger.read', 'payments.read'], route: '/admin/payments', fallback: false, contextual: true},
+    {permissions: ['payments.read'], route: '/admin/payments', fallback: false, contextual: false},
+  ])('keeps ledger history discoverable with its own permission ($permissions)', async ({permissions, route, fallback, contextual}) => {
+    const {requests} = openAdmin(route, {session: {user: {...account, permissions}}});
+    await screen.findByRole('heading', {name: route === '/admin/licenses' ? 'Open-source licenses' : 'Payments'});
+    const inRecorded = screen.queryByRole('link', {name: 'Ledger and reversals history'});
+    expect(Boolean(inRecorded)).toBe(contextual);
+    if (inRecorded) expect(inRecorded).toHaveAttribute('href', '#/admin/ledgers');
+
+    fireEvent.click(screen.getByRole('button', {name: /^Account:/}));
+    const advanced = screen.queryByText('Advanced', {selector: 'summary'});
+    if (advanced) fireEvent.click(advanced);
+    const fromMenu = screen.queryByRole('link', {name: 'Ledger history'});
+    expect(Boolean(fromMenu)).toBe(fallback);
+    if (fromMenu) expect(fromMenu).toHaveAttribute('href', '#/admin/ledgers');
+    expect(requests).not.toContain('/api/admin/core/ledgers');
+
+    const link = fromMenu ?? inRecorded;
+    if (link) {
+      fireEvent.click(link);
+      await screen.findByRole('heading', {name: 'Ledgers'});
+      expect(router.state.location.pathname).toBe('/admin/ledgers');
+      await waitFor(() => expect(requests).toContain('/api/admin/core/ledgers'));
+    }
+  });
+
+  it('blocks a direct ledger link without the original ledger permission', async () => {
+    const {requests} = openAdmin('/admin/ledgers', {session: {user: {...account, permissions: ['payments.read']}}});
+    await screen.findByRole('heading', {name: 'Access unavailable'});
+    expect(requests.filter(path => path.startsWith('/api/admin/core/'))).toEqual([]);
+  });
+
+  it.each([
     {description: 'managed staff', role: 'staff', model: 'canonical_evidence_ledger', attested: false, accountAccess: false, smsControls: false, requests: false, buri: false},
     {description: 'unattested managed owner', role: 'owner', model: 'canonical_evidence_ledger', attested: false, accountAccess: true, smsControls: true, requests: true, buri: false},
     {description: 'attested managed owner', role: 'owner', model: 'canonical_evidence_ledger', attested: true, accountAccess: true, smsControls: true, requests: true, buri: true},

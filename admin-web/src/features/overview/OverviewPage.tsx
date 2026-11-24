@@ -63,7 +63,7 @@ export function OverviewPage({request, permissions, financialModel, authorityKey
     ? (canReadReconciliation ? find('unallocated_transactions') : undefined)
     : (canReadSms ? find('receipts_needing_review') : undefined);
   const attentionLink = attention && attention.value !== '0'
-    ? {to: canonical ? '/admin/payments?view=attention' : '/admin/payments?view=sms', label: canonical ? 'Open payment exceptions' : 'Review SMS receipts'}
+    ? {to: canonical ? '/admin/payments?view=attention&status=all' : '/admin/payments?view=sms', label: canonical ? 'Open reconciliation' : 'Review SMS receipts'}
     : undefined;
   return <>
     <PageHeader title="Home" subtitle={`Today in Kigali · ${today}`}
