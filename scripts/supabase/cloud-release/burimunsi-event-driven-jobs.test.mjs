@@ -62,6 +62,19 @@ test('committed SMS wakes the signed worker, rollback cancels the wake, and idle
     .replace('09ecc11aca46af15d7f981b5d5c7c7d3775be6fc245c8ff73f48f61269e37671',manifest));
   await db.query(await load('supabase/migrations/20261117135049_collect_sms_schedule_one_minute.sql'));
   await db.query(await load('supabase/migrations/20261122191300_burimunsi_event_driven_jobs.sql'));
+  const jobPredecessor=await load('scripts/supabase/cloud-release/native-parser-review-preimage.sql');
+  await db.query(jobPredecessor.slice(jobPredecessor.indexOf('CREATE OR REPLACE FUNCTION collect_ops.reconcile_jobs()')));
+  const performanceSql=await load('supabase/migrations/20261122180000_burimunsi_internal_query_performance.sql');
+  await db.query(performanceSql.match(/DO \$scheduler\$[\s\S]*?\$scheduler\$;/)[0]);
+  const budgetSql=await load('supabase/migrations/20261117081411_collect_native_provider_budget.sql');
+  await db.query(budgetSql.match(/ALTER TABLE private\.collect_managed_job_tickets ADD COLUMN native_provider_calls[^;]+;/)[0]);
+  await db.query(await load('supabase/migrations/20261124080612_burimunsi_retry_unclaimed_scheduler_refusals.sql'));
+  assert.deepEqual((await db.query(`SELECT proname,encode(sha256(convert_to(prosrc,'UTF8')),'hex') digest
+    FROM pg_proc WHERE oid IN ('collect_ops.reconcile_jobs()'::regprocedure,
+    'private.collect_managed_job_claim(uuid,text,jsonb,text)'::regprocedure) ORDER BY proname`)).rows,[
+    {proname:'collect_managed_job_claim',digest:'c2848c875d9095bc971c7b4a121fe69844c0fc428e152d5c5e18c39d0c60fdd9'},
+    {proname:'reconcile_jobs',digest:'2ec0bc1e411e0a2f74688fc4fd3a6e029ded1261b43c3e721ba6acb02faffacb'},
+  ]);
   assert.equal((await db.query('SELECT schedule FROM cron.job')).rows[0].schedule,'1 second');
   const digests=(await db.query("SELECT proname,encode(sha256(convert_to(prosrc,'UTF8')),'hex') digest FROM pg_proc WHERE pronamespace='collect_ops'::regnamespace AND proname IN ('dispatch_jobs','activate_jobs','tick_jobs') ORDER BY 1")).rows;
   t.diagnostic('Installed routine digests '+JSON.stringify(digests));
@@ -150,4 +163,6 @@ test('committed SMS wakes the signed worker, rollback cancels the wake, and idle
   const retired=(await independent.query('SELECT state,reason,http_status,response_sha256 FROM collect_ops.jobs_dispatches WHERE id=$1',[never])).rows[0];
   assert.deepEqual(retired,{state:'reviewed_unknown',reason:'transport_lost_ticket_expired_unclaimed',http_status:null,response_sha256:null});
   await assert.rejects(db.query("SELECT collect_ops.dispatch_jobs('signal',$1)",[randomUUID()]),{code:'42501'});
+  const {verifyRefusalRaces}=await import('./fixtures/burimunsi-job-refusal.mjs');
+  await verifyRefusalRaces({db,independent,observer:root,source});
 });

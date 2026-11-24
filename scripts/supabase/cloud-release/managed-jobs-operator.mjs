@@ -86,6 +86,7 @@ async function inspect(db){
   c.native_provider_source_sha256,c.native_provider_model_id,c.native_provider_approval_sha256,c.native_provider_expires_at,c.native_provider_limit,c.native_provider_used,
   j.jobname,j.schedule,j.command,j.database,j.username,j.active,
   ${fastScheduleHistorySql} AS fast_migration,
+  (SELECT encode(sha256(convert_to(statements[1],'UTF8')),'hex') FROM supabase_migrations.schema_migrations WHERE version='20261124080612') AS refusal_migration,
   (SELECT encode(sha256(convert_to(statements[1],'UTF8')),'hex') FROM supabase_migrations.schema_migrations WHERE version='20261122180000') AS performance_migration,
   (SELECT encode(sha256(convert_to(statements[1],'UTF8')),'hex') FROM supabase_migrations.schema_migrations WHERE version='20261122191000') AS inbox_migration,
   (SELECT count(*)::int FROM vault.decrypted_secrets WHERE name='collect_job_signing_key_v1') AS keys,
@@ -118,6 +119,12 @@ async function inspect(db){
  if(guard.length!==Object.keys(GUARDS).length||guard.some(x=>x.owner!=='postgres'||x.prosecdef!==true||x.digest!==expectedGuards[x.signature]))throw Error('scheduler_or_history_guard_changed');
  const expected=expectedSchedulerBodies(scheduler.sql);
  if(row.performance_migration)expected.ops.reconcile_jobs='7178d8d2dad63f00f2503c160280d222da80869f156063419f2b3e21d6ae1554';
+ if(row.refusal_migration){
+  const refusalFile='20261124080612_burimunsi_retry_unclaimed_scheduler_refusals.sql';
+  if(!row.performance_migration||!row.fast_migration||row.refusal_migration!==sha(readFileSync(new URL('../../../supabase/migrations/'+refusalFile,import.meta.url))))throw Error('scheduler_migration_changed');
+  expected.private.collect_managed_job_claim='c2848c875d9095bc971c7b4a121fe69844c0fc428e152d5c5e18c39d0c60fdd9';
+  expected.ops.reconcile_jobs='2ec0bc1e411e0a2f74688fc4fd3a6e029ded1261b43c3e721ba6acb02faffacb';
+ }
  if(scheduleHistory){
   expected.ops.dispatch_jobs='00e49b5d9603cd8564555252cc62b23d667fd9f611c558c46459e4b7580d9f72';
   expected.ops.activate_jobs='18fb407a536fa422aa539a15b161c75af638a295159f020eebc5af1692c188d3';
