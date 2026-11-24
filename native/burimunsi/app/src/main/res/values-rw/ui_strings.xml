@@ -566,6 +566,7 @@
     <string name="ui_home_no_recent_payments">Nta bwishyu buheruka</string>
     <string name="ui_member_view_payments">Reba ubwishyu</string>
     <string name="ui_member_clear_payments_filter">Kuraho iyungurura ry’umunyamuryango</string>
+    <string name="ui_payment_singular">Ubwishyu</string>
     <string name="ui_payment_recipient">Uwakiriye</string>
     <string name="ui_payment_allocation_unavailable">Ubu bwishyu ntibushobora kugenerwa umunyamuryango.</string>
     <string name="ui_payment_action_checking">Igikorwa cyabanje kirimo kugenzurwa.</string>

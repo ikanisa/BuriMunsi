@@ -570,6 +570,7 @@ internal val UiStringIds:Map<String,Int> = mapOf(
     "No recent payments" to R.string.ui_home_no_recent_payments,
     "View payments" to R.string.ui_member_view_payments,
     "Clear member filter" to R.string.ui_member_clear_payments_filter,
+    "Payment" to R.string.ui_payment_singular,
     "Recipient" to R.string.ui_payment_recipient,
     "This payment is unavailable for allocation." to R.string.ui_payment_allocation_unavailable,
     "The previous action is being checked." to R.string.ui_payment_action_checking,

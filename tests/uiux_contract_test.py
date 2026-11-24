@@ -7,8 +7,10 @@ PROTOTYPE=ROOT/'docs/implementation/burimunsi-android/prototype-reference'
 ORIGINAL_MAP=json.loads((PROTOTYPE/'screen-map.json').read_text())
 PANEL_BINDINGS={'profile':'PROFILE','change-passcode':'PIN','help':'HELP','allocate':'ALLOCATE',
     'add-member':'ENROLL','staff-list':'STAFF','staff-edit':'STAFF_EDIT','confirm-remove':'REMOVE_STAFF',
-    'gateway':'GATEWAY','raw':'RAW','member-details':'MEMBER_DETAILS','history-payment':'HISTORY',
+    'gateway':'GATEWAY','raw':'RAW','member-details':'MEMBER_DETAILS',
     'audit':'AUDIT','filters':'FILTERS','replace-device':'REPLACE_DEVICE'}
+# The archived history panel is fulfilled by the current full Payment route.
+PANEL_ROUTE_REPLACEMENTS={'history-payment':'PAYMENT'}
 spec=importlib.util.spec_from_file_location('uicopy',ROOT/'scripts/generate_ui_copy.py');generator=importlib.util.module_from_spec(spec);spec.loader.exec_module(generator)
 def luminance(hex_colour):
     weights = (0.2126, 0.7152, 0.0722)
@@ -55,8 +57,12 @@ class UiUxContract(unittest.TestCase):
         for phrase in re.findall(r'"([A-Z][^"\n]+)"',source):self.assertIn(phrase,COPY)
     def test_controller_error_copy_is_localized(self):
         # Fixed audited API payloads are not user-facing copy and must not be translated.
-        audit_purposes={'Review original SMS from the selected contribution or receipt','Automatic SMS list preview'}
-        self.assertIn('if(sheet==Sheet.RAW)loadRawForCurrentPanel("Review original SMS from the selected contribution or receipt")',self.vm)
+        payment_review_reason='Review original SMS for the selected payment or receipt'
+        audit_purposes={payment_review_reason,'Automatic SMS list preview'}
+        self.assertIn(f'if(sheet==Sheet.RAW)loadRawForCurrentPanel("{payment_review_reason}")',self.vm)
+        disclosure=self.vm.split('private suspend fun loadRawForCurrentPanel(',1)[1].split('override fun selectMember(',1)[0]
+        self.assertIn('smsDisclosure.load(reason',disclosure)
+        self.assertIn('started == generation && foreground && screenGate == ScreenGate.OPEN && hasAccess(Capability.SMS)',disclosure)
         inbox = (UI/'NativeSmsInboxScan.kt').read_text()
         self.assertIn('val reason = "Automatic SMS list preview"', inbox)
         self.assertIn('is SmsSourceRef.Canonical -> repository().raw(source.id, reason)', inbox)
@@ -126,8 +132,21 @@ class UiUxContract(unittest.TestCase):
     def test_all_original_panels_are_rendered(self):
         panel_body=self.sheets.split('key(sheet,s.sheetId){when(sheet)',1)[1].split('@Composable private fun DiscardPrompt',1)[0]
         expected={panel for screen in ORIGINAL_MAP['screens'] for panel in screen['panels']}
-        self.assertEqual(set(PANEL_BINDINGS),expected)
-        self.assertEqual(set(re.findall(r'Sheet\.(\w+)->',panel_body)),{PANEL_BINDINGS[x] for x in expected})
+        self.assertFalse(set(PANEL_BINDINGS) & set(PANEL_ROUTE_REPLACEMENTS))
+        self.assertEqual(set(PANEL_BINDINGS) | set(PANEL_ROUTE_REPLACEMENTS),expected)
+        self.assertEqual(set(re.findall(r'Sheet\.(\w+)->',panel_body)),set(PANEL_BINDINGS.values()))
+        self.assertEqual(PANEL_ROUTE_REPLACEMENTS['history-payment'],'PAYMENT')
+        records=self.app_units['BuriRecordsScreens.kt']
+        self.assertRegex(records,r'itemsIndexed\(payments,key=\{_,p->p\.id\}\).*?m\.navigate\(Route\.PAYMENT,p\.id\)')
+        self.assertIn('Route.PAYMENT->PaymentScreen(s,model)',self.shell)
+        self.assertIn('Route.PAYMENT->Route.PAYMENTS',self.vm)
+        self.assertRegex(self.vm,r'Route\.PAYMENT->\{\s*val id=state\.routeId\?:state\.payment\?\.id\?:return\s*refreshPayment\(id\)')
+        detail=records.split('fun PaymentScreen(',1)[1].split('@Composable',1)[0]
+        self.assertIn('BigValue(p.amountRwf)',detail)
+        self.assertIn('p.paymentReference?.let{add(t("Payment reference") to it)}',detail)
+        self.assertIn('p.sourceId?.takeIf{m.allows(Capability.SMS)}',detail)
+        self.assertIn('PaymentPresentation.canAllocate(p)&&m.allows(Capability.ALLOCATE)',detail)
+        self.assertIn('!s.busy&&!s.offline&&!s.pending',detail)
     def test_reduced_motion_does_not_keep_outgoing_records(self):
         self.assertIn('progress.snapTo(1f)',self.behavior);self.assertIn('tween(160)',self.behavior)
         self.assertNotIn('Crossfade(',self.behavior);self.assertNotIn('AnimatedContent(',self.behavior)
@@ -151,17 +170,28 @@ class UiUxContract(unittest.TestCase):
         self.assertIn('horizontalScroll(scroll)', amount)
         self.assertIn('contentDescription="$full RWF"', amount)
 
-    def test_records_stack_on_narrow_screens_and_at_larger_text_sizes(self):
+    def test_records_fit_narrow_screens_and_larger_text_sizes(self):
         records = self.app_units['BuriRecordsScreens.kt']
-        for row in ('PaymentRow', 'MemberRow', 'LedgerRowView'):
-            with self.subTest(row=row):
-                source = records.split(f'fun {row}(', 1)[1].split('@Composable', 1)[0]
-                self.assertRegex(
-                    source,
-                    r'val stacked\s*=\s*maxWidth\s*<\s*\d+\.dp\s*\|\|\s*'
-                    r'(?:LocalDensity\.current\.)?fontScale\s*>=\s*[\d.]+f',
-                )
-                self.assertIn('if(stacked)', source)
+        payment = records.split('fun PaymentRow(', 1)[1].split('@Composable', 1)[0]
+        self.assertRegex(
+            payment,
+            r'val stacked\s*=\s*maxWidth\s*<\s*\d+\.dp\s*\|\|\s*'
+            r'(?:LocalDensity\.current\.)?fontScale\s*>=\s*[\d.]+f',
+        )
+        self.assertRegex(payment,r'if\(stacked\)\{\s*Spacer[^\n]+\s*MoneyText\(p\.amountRwf,Modifier\.fillMaxWidth\(\),20,showHint=true\)')
+        # Compact member rows no longer have a trailing amount; give the name
+        # and wrapping phone line the available width instead of clipping it.
+        member = records.split('fun MemberRow(', 1)[1].split('@Composable', 1)[0]
+        self.assertIn('Row(Modifier.fillMaxWidth()',member)
+        self.assertIn('Column(Modifier.weight(1f))',member)
+        self.assertIn('SingleLineName(member.name',member)
+        self.assertRegex(member,r'Text\(if\(member\.active\)member\.phone')
+        self.assertNotRegex(member,r'maxLines\s*=|softWrap\s*=\s*false')
+        self.assertIn('semantics(mergeDescendants=true)',member)
+        # The replaced ledger sheet no longer has an inline financial row.
+        # The current detail's BigValue still retains adaptive MoneyText.
+        big_value = self.app_units['BuriComponents.kt'].split('fun BigValue(', 1)[1].split('@Composable', 1)[0]
+        self.assertIn('MoneyText(amount',big_value)
 
     def test_utility_text_contrast_remains_at_least_45(self):
         theme = (UI / 'Theme.kt').read_text()

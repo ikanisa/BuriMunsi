@@ -566,6 +566,7 @@
     <string name="ui_home_no_recent_payments">No recent payments</string>
     <string name="ui_member_view_payments">View payments</string>
     <string name="ui_member_clear_payments_filter">Clear member filter</string>
+    <string name="ui_payment_singular">Payment</string>
     <string name="ui_payment_recipient">Recipient</string>
     <string name="ui_payment_allocation_unavailable">This payment is unavailable for allocation.</string>
     <string name="ui_payment_action_checking">The previous action is being checked.</string>

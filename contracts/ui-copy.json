@@ -2837,6 +2837,11 @@
       "rw": "Kuraho iyungurura ry’umunyamuryango"
     },
     {
+      "key": "ui_payment_singular",
+      "en": "Payment",
+      "rw": "Ubwishyu"
+    },
+    {
       "key": "ui_payment_recipient",
       "en": "Recipient",
       "rw": "Uwakiriye"
