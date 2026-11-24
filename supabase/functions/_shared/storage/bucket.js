@@ -31,6 +31,16 @@ async function runGuardStatements(client, statements) {
   }
 }
 
+async function readBoundObject(bucket, key, {intent, meta}) {
+  if (!meta) {
+    const probe = await bucket.transport.probe(key);
+    if (bucket.protocol.provesAbsent(probe) && (!intent || intent.state === 'erased')) return null;
+    throw unavailable('storage_untracked');
+  }
+  if (!intent || intent.state !== 'committed') throw unavailable('storage_metadata');
+  return {meta, observed: await bucket.protocol.readAndVerify(intent)};
+}
+
 export class SupabaseObjectBucket {
   constructor(env) {
     this.env = env;
@@ -108,14 +118,23 @@ export class SupabaseObjectBucket {
     return this.checked(async () => {
       const intent = await this.journal.getPutByKey(key);
       const meta = await this.journal.getObject(key);
-      if (!meta) {
-        const probe = await this.transport.probe(key);
-        if (this.protocol.provesAbsent(probe) && (!intent || intent.state === 'erased')) return null;
-        throw unavailable('storage_untracked');
-      }
-      if (!intent || intent.state !== 'committed') throw unavailable('storage_metadata');
-      return {meta, observed: await this.protocol.readAndVerify(intent)};
+      return readBoundObject(this, key, {intent, meta});
     });
+  }
+
+  async withRetainedSmsReads(keys, visit) {
+    if (!this.journal.getReceiptReadBindings) return visit();
+    const bindings = await this.checked(() => this.journal.getReceiptReadBindings(keys));
+    // Each object still goes through the original private bucket, HEAD, GET
+    // and ciphertext verification. No SQL lock spans a provider request.
+    const read = async key => {
+      const binding = bindings.get(key);
+      if (!binding) throw unavailable('storage_metadata');
+      const result = await this.checked(() => readBoundObject(this, key, binding));
+      if (bindings.get(key) !== binding) throw unavailable('storage_metadata');
+      return result ? this.describeContent(result) : null;
+    };
+    try { return await visit(read); } finally { bindings.clear(); }
   }
 
   describe({meta, observed}) {

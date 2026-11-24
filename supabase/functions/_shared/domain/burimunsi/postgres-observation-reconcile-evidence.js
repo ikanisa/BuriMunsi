@@ -82,6 +82,16 @@ export class PostgresObservationReconcileEvidence {
     return journal;
   }
 
+  async verifyKeyedJournals(tx, records) {
+    if (records.length < 2 || !this.custody.keyedObservationJournals) {
+      for (const record of records) await this.verifyJournal(tx, record, true);
+      return;
+    }
+    const targets = records.map(r => ({key: r.object_key, expect: target(r)}));
+    const journals = await this.custody.keyedObservationJournals(tx, targets);
+    for (const [i, record] of records.entries()) await verifyObservationJournal(record, journals[i]);
+  }
+
   matchesJournal(journal, expected) {
     return this.custody.sameJournal(journal, expected);
   }
@@ -90,11 +100,20 @@ export class PostgresObservationReconcileEvidence {
     this.storageWitnesses.forget(binding);
   }
 
-  async verifyKeyedObject(contentSha, bodySha, prior,witness) {
+  async withKeyedObjectReader(records, visit) {
+    const media = this.env?.PRIVATE_MEDIA;
+    if (records.length < 2 || !media?.withRetainedSmsReads || records.some(r => !r)) return visit();
+    const keys = records.map(r => r.object_key);
+    if (new Set(keys).size !== keys.length || keys.some(key => !/^sms\/[a-zA-Z0-9_-]{1,200}$/.test(key))) return visit();
+    await this.authority.assertOwned();
+    return media.withRetainedSmsReads(keys, visit);
+  }
+
+  async verifyKeyedObject(contentSha, bodySha, prior,witness,readObject) {
     let bytes;
     try {
       await this.authority.assertOwned();
-      bytes = await verifyRetainedObject(this.env, prior);
+      bytes = await verifyRetainedObject(this.env, prior, 'sms', readObject);
       await this.authority.assertOwned();
       const p = decodeObservationPayload(bytes);
       if(prior.gatewayEnvelopeId){

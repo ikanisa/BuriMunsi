@@ -819,7 +819,33 @@ test('a ten-message inbox page reads source metadata once per snapshot and still
  });
 });
 
-test('a full batch serializes retained storage reads',async()=>{
+test('a keyed page opens one protected journal read and verifies every encrypted object with bounded concurrency',async()=>{
+ const f=fixture(),witnesses=await Promise.all(Array.from({length:10},(_,i)=>batchWitness(101+i)));
+ await f.run(async adapter=>{
+  const ids=[];
+  for(const w of witnesses)ids.push((await adapter.observe(actor,w.item)).sourceId);
+  const reads=[],keys=ids.map(id=>'sms/'+id),media=f.env.PRIVATE_MEDIA;
+  let pages=0,active=0,maximum=0;
+  media.withRetainedSmsReads=async (requested,visit)=>{
+   pages++;assert.deepEqual(requested,keys);
+   return visit(async key=>{
+    assert.ok(keys.includes(key));reads.push(key);active++;maximum=Math.max(active,maximum);
+    try{await new Promise(resolve=>setTimeout(resolve,4));return await media.get(key);}finally{active--;}
+   });
+  };
+  const payload={items:witnesses.map(w=>w.proof)};
+  const reply=await adapter.reconcileBatch(actor,payload);
+  assert.deepEqual(reply.items.map(x=>x.sourceId),ids);
+  assert.equal(pages,1);assert.deepEqual([...reads].sort(),[...keys].sort());
+  assert.equal(maximum,3);assert.equal(active,0);
+  const last=f.state.media.get(keys.at(-1));
+  f.state.media.set(keys.at(-1),{...last,sealed:'damaged ciphertext'});
+  await assert.rejects(adapter.reconcileBatch(actor,payload),e=>e.status===503);
+  assert.equal(active,0);assert.equal(f.state.puts,10);assert.equal(f.state.commits,10);
+ });
+});
+
+test('a full batch serializes retained storage reads without a grouped journal reader',async()=>{
  const f=fixture(),witnesses=await Promise.all(Array.from({length:20},(_,i)=>batchWitness(20+i)));
  await f.run(async adapter=>{
   for(const witness of witnesses)await adapter.observe(actor,witness.item);
