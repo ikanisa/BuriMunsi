@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {handleAdmin} from '../domain/admin_bridge.js';
+import {standaloneAdminRoute} from '../burimunsi-standalone.js';
 import {accountReadDatabase} from '../domain/admin_accounts.js';
 import {adminAccountSession, adminCanonicalActor} from '../domain/admin_session.js';
 import {digest} from '../domain/core.js';
@@ -263,4 +264,59 @@ test('a phone Admin needs both current grants to read full payment source histor
   const redacted=await handleAdmin(routeRequest('burimunsi/payments',{cookie}),env);
   assert.equal(redacted.status,200);assert.equal((await redacted.json()).items[0].sourceId,null);
   assert.equal((await handleAdmin(routeRequest('gateway/receipts',{cookie}),env)).status,404);
+});
+
+
+test('browser allocation receipt is a read-only exact current-session result, not a payment status guess',async()=>{
+  const {env,setGrants}=await fixture({role:'staff'});
+  const login=()=>handleAdmin(request('phone-passcode',{body:{phone:staffPhone,pin}}),env);
+  const cookieFor=reply=>reply.headers.get('set-cookie').split(';')[0];
+  const cookie=cookieFor(await login());
+  setGrants(['payments.read']);
+  const paymentId='synthetic-payment',memberId='synthetic-member',requestId=crypto.randomUUID();
+  const path='/api/admin/burimunsi/payments/'+paymentId+'/allocation-receipt';
+  const lookup=(c=cookie,key=requestId,p=path)=>handleAdmin(new Request(origin+p,
+    {headers:{Origin:origin,Cookie:c,...(key===null?{}:{'Idempotency-Key':key})}}),env);
+  const original=await adminAccountSession(request('session',{cookie}),env);
+  let owner=null,canAllocate=true,lookupCount=0,responseState='allocated',paymentVersion='4';
+  const noWrite=()=>assert.fail('Allocation receipt read reached mutation');
+  Object.assign(env.DB,{transaction:noWrite,context:noWrite,readContext:noWrite,
+    applicationWork:{assert:async()=>{}},
+    withLockedReadSnapshot:fn=>fn({unsafe:async(sql,args)=>{
+      if(sql.startsWith('SELECT set_config')){assert.deepEqual(args,[group]);return [];}
+      if(sql.includes('burimunsi_browser_pin_session'))return [{role:'staff',can_allocate:canAllocate}];
+      assert.match(sql,/FROM private\.burimunsi_command_receipts/);
+      assert.match(sql,/r\.collection_id=\$1 AND r\.actor_id=\$2::uuid AND r\.request_id=\$3::uuid/);
+      assert.match(sql,/AND r\.session_id=\$4::uuid AND r\.operation=\$5 AND r\.response->>'paymentId'=\$6/);
+      assert.equal(args[0],group);
+      assert.match(args[1],/^[0-9a-f-]{36}$/);
+      lookupCount++;
+      if(!owner||args[2]!==requestId||args[3]!==owner||args[4]!=='burimunsi.allocate'||args[5]!==paymentId)return [];
+      return [{response:{paymentId,memberId,version:4,state:responseState},member_id:memberId,payment_version:paymentVersion}];
+    }})});
+  const missing=await lookup();
+  assert.equal(missing.status,200);
+  assert.deepEqual(await missing.json(),{state:'unconfirmed',requestId});
+  assert.match(missing.headers.get('cache-control'),/no-store/);
+  owner=original.auth_session_id;
+  const committed=await lookup();
+  assert.deepEqual(await committed.json(),{state:'committed',requestId,receipt:{paymentId,memberId,version:4}});
+  const another=cookieFor(await login());setGrants(['payments.read']);
+  assert.deepEqual(await (await lookup(another)).json(),{state:'unconfirmed',requestId});
+  assert.deepEqual(await (await lookup(cookie,requestId,path.replace(paymentId,'other-payment'))).json(),{state:'unconfirmed',requestId});
+  canAllocate=false;
+  const reads=lookupCount;
+  assert.equal((await lookup()).status,403);
+  assert.equal(lookupCount,reads);
+  canAllocate=true;
+  assert.equal((await lookup(cookie,null)).status,400);
+  assert.equal((await lookup(cookie,requestId,path+'?requestId='+requestId)).status,400);
+  assert.equal(lookupCount,reads);
+  paymentVersion='5';
+  assert.equal((await lookup()).status,503);
+  paymentVersion='4';responseState='unallocated';
+  assert.equal((await lookup()).status,503);
+  assert.equal(standaloneAdminRoute('GET',path),true);
+  for (const method of ['HEAD','POST','PATCH','DELETE']) assert.equal(standaloneAdminRoute(method,path),false);
+  assert.equal(standaloneAdminRoute('GET',path+'/subpath'),false);
 });

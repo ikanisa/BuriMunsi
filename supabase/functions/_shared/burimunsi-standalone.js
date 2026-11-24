@@ -46,6 +46,9 @@ export function standalonePrivacyRoute(method, path) {
 
 export function standaloneAdminRoute(method, path) {
   if (!path.startsWith('/api/admin/')) return false;
+  if (/^\/api\/admin\/burimunsi\/payments\/[A-Za-z0-9_-]+\/allocation-receipt(?:\/|$)/.test(path)) {
+    return method === 'GET' && /^\/api\/admin\/burimunsi\/payments\/[A-Za-z0-9_-]+\/allocation-receipt$/.test(path);
+  }
   if (path === '/api/admin/oversight/sms-health') return method === 'GET';
   if (path === '/api/admin/auth' || path.startsWith('/api/admin/auth/')) {
     return adminAuthMethods.has(path) && adminAuthMethods.get(path) === method;

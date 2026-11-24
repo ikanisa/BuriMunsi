@@ -61,6 +61,7 @@ export async function adminBuriMunsiPayments(request,env) {
       canAllocate:actor.can_allocate===true};
   };
   const relative=path.slice(base.length),match=/^payments\/([A-Za-z0-9_-]+)(\/allocate)?$/.exec(relative);
+  const statusMatch=/^payments\/([A-Za-z0-9_-]+)\/allocation-receipt$/.exec(relative);
   try{
     let result;
     if(request.method==='GET'&&relative==='home'){
@@ -81,6 +82,29 @@ export async function adminBuriMunsiPayments(request,env) {
           WHERE m.collection_id=$1 AND m.active=1 AND u.access_status='active' AND u.member_type<>'operator'
             AND strpos(lower(u.full_name),lower($2))>0 ORDER BY u.full_name,u.id LIMIT $3`,[groupId,q,limit]);
         return {items};
+      });
+    }else if(request.method==='GET'&&statusMatch){
+      query(url,[]);
+      const paymentId=requireId(statusMatch[1]),requestId=requireRequestId(request.headers.get('Idempotency-Key'));
+      result=await db.withLockedReadSnapshot(async sql=>{
+        requireThat((await scoped(sql)).canAllocate,'access_denied',403);
+        // Absence is not proof of rejection: an original write may still be in
+        // flight. Historied receipts from other sessions are indistinguishable.
+        const rows=await sql.unsafe(`SELECT r.response,p.member_id,p.version::text AS payment_version
+          FROM private.burimunsi_command_receipts r
+          LEFT JOIN burimunsi.payments p ON p.collection_id=r.collection_id AND p.id=$6
+          WHERE r.collection_id=$1 AND r.actor_id=$2::uuid AND r.request_id=$3::uuid
+            AND r.session_id=$4::uuid AND r.operation=$5 AND r.response->>'paymentId'=$6`,
+          [groupId,proof.accountId,requestId,account.auth_session_id,operation,paymentId]);
+        requireThat(rows.length<=1,'allocation_receipt_inconsistent',503);
+        await authority.assertOwned();
+        if(!rows.length)return {state:'unconfirmed',requestId};
+        const {response,member_id,payment_version}=rows[0];
+        requireThat(response&&response.paymentId===paymentId&&response.state==='allocated'&&
+          typeof response.memberId==='string'&&/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(response.memberId)&&
+          response.memberId===member_id&&Number.isSafeInteger(response.version)&&response.version>=2&&
+          String(response.version)===payment_version,'allocation_receipt_inconsistent',503);
+        return {state:'committed',requestId,receipt:{paymentId,memberId:response.memberId,version:response.version}};
       });
     }else if(request.method==='GET'&&match&&!match[2]){
       query(url,[]);

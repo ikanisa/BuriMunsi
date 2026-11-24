@@ -11,7 +11,7 @@ import coreFixture from '../core/canonical-core-fixtures.json';
 import reconciliationFixture from '../core/canonical-reconciliation-fixture.json';
 
 const mock = vi.hoisted(() => ({request:vi.fn(), permissions:[] as string[], status:'authenticated', role:'admin',
-  authMethod:undefined as AdminUser['authMethod'], scoped:false}));
+  authMethod:undefined as AdminUser['authMethod'], scoped:false, sessionId:'fixture-session'}));
 const currentActor = reconciliationFixture.detail.current_actor_id;
 const currentPrincipal = reconciliationFixture.detail.current_principal_id;
 const momoId = '11111111-1111-4111-8111-111111111111';
@@ -32,7 +32,7 @@ const momoPage = {contract_version:1,currency:'RWF',date_basis:'provider_transac
   totals:{received_minor:5000,credited_minor:0,unallocated_minor:5000},as_of:time};
 const emptyOperations = {rows:[],total:0};
 const emptyReconciliation = {...reconciliationFixture.queue, rows:[], total:0, next_offset:null};
-const sessionUser = () => ({id:currentActor,sessionId:'fixture-session',email:'fixture@example.test',role:mock.role as AdminUser['role'],
+const sessionUser = () => ({id:currentActor,sessionId:mock.sessionId,email:'fixture@example.test',role:mock.role as AdminUser['role'],
   permissions:mock.permissions,principalId:currentPrincipal,assuranceLevel:1,mfaAt:null,emailVerifiedAt:null,
   expiresAt:'2030-01-01T00:00:00Z',financialModel:'canonical_evidence_ledger',authMethod:mock.authMethod,
   ...(mock.scoped ? {accountId,adminIdentity:{schemaVersion:1,role:'admin',accountId,adminId:currentActor,principalId:currentPrincipal,
@@ -56,7 +56,7 @@ const visit = (path: string, permissions: string[], role = 'admin') => {
 };
 const location = () => screen.getByLabelText('Current location');
 const called = (prefix: string) => mock.request.mock.calls.filter(([path]) => path.startsWith(prefix));
-afterEach(() => {mock.request.mockReset();mock.status='authenticated';mock.role='admin';mock.authMethod=undefined;mock.scoped=false;});
+afterEach(() => {mock.request.mockReset();mock.status='authenticated';mock.role='admin';mock.authMethod=undefined;mock.scoped=false;mock.sessionId='fixture-session';sessionStorage.clear();});
 
 describe('consolidated Payments routes',()=>{
   it('makes the old payment list a guarded alias and returns through the new list with search preserved',async()=>{
@@ -370,8 +370,9 @@ describe('BuriMunsi phone Payments', () => {
     mock.authMethod = 'phone_passcode';
     const changed = {...buriPayment,version:2,memberId:accountId,memberName:'Group member',state:'allocated'};
     let applied = false, attempts = 0;
-    mock.request.mockImplementation(async (path: string) => {
+    mock.request.mockImplementation(async (path: string, options?: {idempotencyKey:string}) => {
       if (path.startsWith('burimunsi/payments/members?')) return {items:[{id:accountId,name:'Group member'}]};
+      if (path.endsWith('/allocation-receipt')) return {state:'unconfirmed',requestId:options!.idempotencyKey};
       if (path.endsWith('/allocate')) {
         attempts++;
         if (attempts === 1) throw new AdminTransportError('Response unavailable');
@@ -385,6 +386,9 @@ describe('BuriMunsi phone Payments', () => {
     const dialog = within(await screen.findByRole('region',{name:'Payment details'}));
     fireEvent.change(await dialog.findByLabelText('Member'),{target:{value:accountId}});
     fireEvent.click(dialog.getByRole('button',{name:'Allocate'}));
+    expect(await dialog.findByText(/Allocation was not confirmed/)).toBeVisible();
+    expect(dialog.queryByRole('button',{name:'Retry allocation'})).not.toBeInTheDocument();
+    fireEvent.click(dialog.getByRole('button',{name:'Check request'}));
     fireEvent.click(await dialog.findByRole('button',{name:'Retry allocation'}));
     await waitFor(() => expect(within(screen.getByRole('region',{name:'Payment details'})).getByText('Allocated')).toBeVisible());
     const writes = mock.request.mock.calls.filter(([path]) => path.endsWith('/allocate'));
@@ -392,4 +396,49 @@ describe('BuriMunsi phone Payments', () => {
     expect(writes[0]).toEqual(writes[1]);
     expect(writes[0][1]).toMatchObject({method:'POST',body:{memberId:accountId,expectedVersion:1},idempotencyKey:expect.any(String)});
   });
+  it('retains the original across reload, checks its exact committed receipt even when allocated, and never replays', async () => {
+    mock.authMethod = 'phone_passcode';
+    const detailPath = 'burimunsi/payments/'+momoId;
+    const changed = {...buriPayment,version:2,memberId:accountId,memberName:'Group member',state:'allocated'};
+    let applied = false, receiptSupported = false;
+    mock.request.mockImplementation(async (path: string, options?: {idempotencyKey:string}) => {
+      if (path.startsWith('burimunsi/payments/members?')) return {items:[{id:accountId,name:'Group member'}]};
+      if (path === detailPath+'/allocate') {applied = true; throw new AdminTransportError('Lost acknowledgement');}
+      if (path === detailPath+'/allocation-receipt') {
+        if (!receiptSupported) throw new Error('Endpoint unavailable');
+        return {state:'committed',requestId:options!.idempotencyKey,receipt:{paymentId:momoId,memberId:accountId,version:2}};
+      }
+      return path === detailPath ? {...(applied ? changed : buriPayment),canAllocate:true} : buriPage([applied ? changed : buriPayment]);
+    });
+    const path = '/admin/payments?payment='+momoId;
+    const initial = visit(path,['payments.read'],'staff');
+    fireEvent.change(await screen.findByRole('combobox',{name:'Member'}),{target:{value:accountId}});
+    fireEvent.click(screen.getByRole('button',{name:'Allocate'}));
+    expect(await screen.findByText(/Allocation was not confirmed/)).toBeVisible();
+    const ref = mock.request.mock.calls.find(([target]) => target === detailPath+'/allocate')![1].idempotencyKey;
+    initial.unmount();
+    const reloaded = visit(path,['payments.read'],'staff');
+    expect(await screen.findByText(ref)).toBeVisible();
+    expect(screen.queryByRole('button',{name:'Allocate'})).not.toBeInTheDocument();
+    expect(called(detailPath+'/allocate')).toHaveLength(1);
+    expect(called(detailPath+'/allocation-receipt')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button',{name:'Check request'}));
+    expect(await screen.findByText(/original request could not be checked/)).toBeVisible();
+    expect(screen.getByText(ref)).toBeVisible();
+    expect(screen.queryByRole('button',{name:'Retry allocation'})).not.toBeInTheDocument();
+    reloaded.unmount();
+    mock.sessionId='different-session';
+    const differentSession=visit(path,['payments.read'],'admin');
+    expect(await screen.findByText(/original allocation reference could not be checked/)).toBeVisible();
+    expect(screen.queryByText(ref)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button',{name:'Check request'})).not.toBeInTheDocument();
+    differentSession.unmount();
+    mock.sessionId='fixture-session'; receiptSupported = true;
+    visit(path,['payments.read'],'staff');
+    fireEvent.click(await screen.findByRole('button',{name:'Check request'}));
+    await waitFor(() => expect(screen.queryByText(ref)).not.toBeInTheDocument());
+    expect(called(detailPath+'/allocation-receipt').at(-1)![1]).toEqual({idempotencyKey:ref});
+    expect(called(detailPath+'/allocate')).toHaveLength(1);
+  });
+
 });

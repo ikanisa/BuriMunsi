@@ -199,10 +199,12 @@ export async function listPending(identity: PendingIdentity, family: string, per
   return decode(storage, authority, now, identity).entries.filter(entry => entry.family === family && entry.permission === permission);
 }
 
-export async function retainPending(identity: PendingIdentity, family: string, resourceId: string, requestKey: string, permission: string, intent: Record<string, unknown>, storage: Storage = sessionStorage, now = Date.now()): Promise<PendingAttempt> {
+export async function retainPending(identity: PendingIdentity, family: string, resourceId: string, requestKey: string, permission: string, intent: Record<string, unknown>, storage: Storage = sessionStorage, now = Date.now(), isCurrent: () => boolean = () => true): Promise<PendingAttempt> {
   if (!/^[a-z][a-z0-9_.-]{1,63}$/.test(family) || !/^[A-Za-z0-9._:-]{1,200}$/.test(resourceId) ||
       !/^[A-Za-z0-9_.-]{8,200}$/.test(requestKey) || !identity.permissions.includes(permission) || !Number.isFinite(Date.parse(identity.expiresAt)) || Date.parse(identity.expiresAt) <= now) fail();
-  const authority = await pendingAuthority(identity), envelope = decode(storage, authority, now, identity);
+  const authority = await pendingAuthority(identity);
+  if (!isCurrent()) fail();
+  const envelope = decode(storage, authority, now, identity);
   const normalized = canonical(intent);
   if (!object(normalized) || bytes(JSON.stringify(normalized)) > MAX_INTENT_BYTES) fail();
   const previous = envelope.entries.find(entry => entry.family === family && entry.resource_id === resourceId);
