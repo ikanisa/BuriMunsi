@@ -1,0 +1,38 @@
+[
+  {
+    "materialized": false,
+    "expression": "jsonb_set(base,'{private_classes}',(base->'private_classes')||'[{\"name\": \"private:burimunsi_observation_retry_commands\", \"scope\": \"unmapped_private\", \"blocked\": true, \"purpose\": \"Immutable observation retry request and account references; inspection only, effects blocked\", \"relation\": \"private.burimunsi_observation_retry_commands\", \"known_links\": \"account_id identifies the operator; source_id identifies the retained observation\"}]'::jsonb)"
+  },
+  {
+    "materialized": true,
+    "expression": "jsonb_set(base,'{private_classes}',(base->'private_classes')||'[{\"name\": \"private:burimunsi_payment_sms_deliveries\", \"scope\": \"unmapped_private\", \"blocked\": true, \"purpose\": \"Retained payment SMS dispatch identity and uncertain gateway outcomes\", \"relation\": \"private.burimunsi_payment_sms_deliveries\", \"known_links\": \"recipient_user_id, collection_id and payment_id identify authorized receipt scope\"}]'::jsonb)"
+  },
+  {
+    "materialized": false,
+    "expression": "jsonb_set(base,'{private_classes}',(base->'private_classes')||'[{\"name\": \"private:burimunsi_browser_pin_sessions\", \"scope\": \"unmapped_private\", \"blocked\": true, \"purpose\": \"Browser passcode session and retained verification provenance; inspection only, effects blocked\", \"relation\": \"private.burimunsi_browser_pin_sessions\", \"known_links\": \"principal_id names the canonical administrator; session_id links the retained domain auth projection\"}]'::jsonb)"
+  },
+  {
+    "materialized": false,
+    "expression": "jsonb_set(base,'{private_classes}',(base->'private_classes')||'[{\"name\": \"private:burimunsi_held_observation_sources\", \"scope\": \"unmapped_private\", \"blocked\": true, \"purpose\": \"Prevent automatic processing of an admitted held receipt\", \"relation\": \"private.burimunsi_held_observation_sources\", \"known_links\": \"source_id links the immutable observation request\"}, {\"name\": \"private:burimunsi_inbox_check_items\", \"scope\": \"unmapped_private\", \"blocked\": true, \"purpose\": \"Current sweep page evidence, replaced at the next scan\", \"relation\": \"private.burimunsi_inbox_check_items\", \"known_links\": \"collection_id, installation_id and source_id link the checked receipt\"}, {\"name\": \"private:burimunsi_inbox_checks\", \"scope\": \"unmapped_private\", \"blocked\": true, \"purpose\": \"Last scoped handset reconciliation and timestamp\", \"relation\": \"private.burimunsi_inbox_checks\", \"known_links\": \"collection_id, account_id and installation_id identify the receiver\"}]'::jsonb)"
+  },
+  {
+    "materialized": false,
+    "expression": "jsonb_set(base,'{private_classes}',(base->'private_classes')||'[{\"name\": \"private:burimunsi_payment_sms_obligations\", \"scope\": \"unmapped_private\", \"blocked\": true, \"purpose\": \"Canonical payment-to-receipt obligation and original authority commitment\", \"relation\": \"private.burimunsi_payment_sms_obligations\", \"known_links\": \"Payment and ledger entry identify the same scoped contribution; no recipient address is stored\"}]'::jsonb)"
+  },
+  {
+    "materialized": false,
+    "expression": "jsonb_set(base,'{private_classes}',(base->'private_classes')||'[{\"name\": \"private:burimunsi_sms_wakes\", \"scope\": \"unmapped_private\", \"blocked\": true, \"purpose\": \"Transient work notification cleared after signed dispatch\", \"relation\": \"private.burimunsi_sms_wakes\", \"known_links\": \"Transaction ID and due time only\"}]'::jsonb)"
+  },
+  {
+    "materialized": false,
+    "expression": "jsonb_set(base,'{private_classes}',(base->'private_classes')||'[{\"name\": \"private:burimunsi_admin_live_channels\", \"scope\": \"unmapped_private\", \"blocked\": true, \"purpose\": \"Short-lived Admin change subscription\", \"relation\": \"private.burimunsi_admin_live_channels\", \"known_links\": \"principal_id and session_id of the authorized subscriber\"}]'::jsonb)"
+  },
+  {
+    "materialized": false,
+    "expression": "jsonb_set(base,'{private_classes}',(base->'private_classes')||'[{\"name\": \"private:burimunsi_gateway_wake_channels\", \"scope\": \"unmapped_private\", \"blocked\": true, \"purpose\": \"Short-lived OpenSMS device wake subscription\", \"relation\": \"private.burimunsi_gateway_wake_channels\", \"known_links\": \"authorized gateway installation and application\"}]'::jsonb)"
+  },
+  {
+    "materialized": false,
+    "expression": "jsonb_set(base,'{private_classes}',(base->'private_classes')||'[{\"name\": \"private:burimunsi_handset_legacy_matches\", \"scope\": \"unmapped_private\", \"blocked\": true, \"purpose\": \"Exact same-account legacy receipt witnessed in this handset inbox\", \"relation\": \"private.burimunsi_handset_legacy_matches\", \"known_links\": \"collection, account, installation and original source\"}]'::jsonb)"
+  }
+]
