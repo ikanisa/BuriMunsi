@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import {test} from 'node:test';
 import pg from '../node_modules/pg/lib/index.js';
 import {startOwnedPg17} from '../current-pg-transfer/test-support/owned-pg17.mjs';
+import {appendContributionCollision,appendContributionEntry} from '../../../supabase/functions/_shared/domain/contribution-posting.mjs';
 import {mutation} from '../../../supabase/functions/_shared/domain/mutations.js';
 import {list} from '../../../supabase/functions/_shared/domain/admin_records.js';
 import {PostgresRecordsStore} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-records-store.js';
@@ -24,7 +25,7 @@ const reference=async(db,id)=>(await db.query('SELECT payment_reference FROM app
 const descriptor=async db=>(await db.query('SELECT private._retention_manifest_catalog_v2() AS c')).rows[0].c;
 const exactColumns=async db=>(await db.query("SELECT attname FROM pg_attribute WHERE attrelid='app.payments'::regclass AND attnum>0 AND NOT attisdropped ORDER BY attnum")).rows.map(r=>r.attname);
 
-async function setup(t) {
+async function setup(t,{additionalTables=[]}={}) {
   const owned=await startOwnedPg17({prefix:'collect-pg-transfer-',initialUser:'collect_fixture'});
   const clients=[];
   const connect=async(database='postgres')=>{
@@ -34,7 +35,7 @@ async function setup(t) {
   t.after(async()=>{try{await Promise.all(clients.map(db=>db.end()));}finally{assert.equal((await owned.close()).removed,true);}});
   const db=await connect();
   await db.query('CREATE ROLE postgres SUPERUSER; CREATE ROLE collect_runtime; CREATE ROLE collect_importer; CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role; SET ROLE postgres');
-  const tables=['payments','request_receipts','mutation_guards','audit_log'].map(name=>{
+  const tables=['payments','request_receipts','mutation_guards','audit_log',...additionalTables].map(name=>{
     const found=baseline.split('\n').filter(line=>line.startsWith('CREATE TABLE '+name+' '));assert.equal(found.length,1);return found[0];
   });
   await db.query(`CREATE SCHEMA private;CREATE SCHEMA app;SET search_path=app,public,pg_catalog;
@@ -59,7 +60,7 @@ async function setup(t) {
   return {db,owned,connect};
 }
 
-function fixtureDatabase(client,{readOnly=false,onFirstLookup=async()=>{}}={}) {
+function fixtureDatabase(client,{readOnly=false,onFirstLookup=async()=>{},afterCommit=async()=>{}}={}) {
   let firstLookup=true;
   return {prepare(statement){
     const bind=(...values)=>{
@@ -73,11 +74,13 @@ function fixtureDatabase(client,{readOnly=false,onFirstLookup=async()=>{}}={}) {
     return {bind};
   },async batch(statements){
     await client.query(readOnly?'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;SET LOCAL ROLE collect_runtime;SET LOCAL search_path=app,pg_catalog':'BEGIN');
+    const result=[];
     try {
       if(!readOnly)await client.query('SELECT pg_advisory_xact_lock(734636924058501::bigint)');
-      const result=[];for(const s of statements)result.push({results:(await client.query(s.text,s.values)).rows});
-      await client.query('COMMIT');return result;
+      for(const s of statements)result.push({results:(await client.query(s.text,s.values)).rows});
+      await client.query('COMMIT');
     } catch(error){await client.query('ROLLBACK');throw error;}
+    await afterCommit();return result;
   }};
 }
 
@@ -244,4 +247,61 @@ test('an empty identity keeps its initial value, and a spent or exhausted refere
   await db.query("DELETE FROM app.payments WHERE id='last'");
   await assert.rejects(add(runtime,'exhausted'),e=>e.code==='2200H');
   assert.equal(await reference(db,'exhausted'),undefined);
+});
+
+// Shared ledger builder and original-request storage on PostgreSQL; does not
+// exercise the native route, custody/provider, snapshot or hosted release.
+test('shared ledger contribution retains one command after a discarded committed result and keeps equal-value distinct receipts',async t=>{
+  const {db,connect}=await setup(t,{additionalTables:['ledger_entries','payment_evidence','admin_bridge_guards','momo_transactions','momo_receiving_accounts']});
+  await db.query(identity);
+  await db.query(authority);
+  const first=await connect(),fresh=await connect();
+  for(const c of [first,fresh])await c.query('SET ROLE collect_runtime; SET search_path=app,pg_catalog');
+  const actor={userId:'fixture-principal',sessionId:'fixture-session'};
+  const member='fixture-beneficiary',group='fixture-group',wallet='+250780000001';
+  const A={payment:'fixture-pay-a',evidence:'fixture-evidence-a',ref:'FIXTURE-A',request:'fixture-request-a'};
+  const B={payment:'fixture-pay-b',evidence:'fixture-evidence-b',ref:'FIXTURE-B',request:'fixture-request-b'};
+  await db.query(`INSERT INTO app.momo_receiving_accounts(id,provider,public_code,recipient_name,receiver_hash,timezone,created_at)
+    VALUES('fixture-wallet','mtn_momo',$1,'Fixture Receiver',repeat('b',64),'Africa/Kigali',$2)`,[wallet,stamp]);
+  for(const x of [A,B]){
+    await db.query(`INSERT INTO app.momo_transactions(id,receiving_account_id,provider,provider_transaction_id,event_kind,amount_minor,
+      currency,currency_scale,transaction_at,transaction_timezone,transaction_time_source,parse_attempt_id,mode,created_at,updated_at)
+      VALUES($1,'fixture-wallet','mtn_momo',$1,'incoming_receipt',1250,'RWF',0,$2,'Africa/Kigali','fixture',$1,'historical',$2,$2)`,[x.ref,stamp]);
+    await db.query(`INSERT INTO app.payment_evidence(id,collection_id,owner_user_id,object_key,object_sha256,size_bytes,
+      content_type,authenticity,external_reference,receiver_momo_number,amount_minor,currency,observed_at,created_at,receiver_network)
+      VALUES($1,$2,$3,$4,repeat('a',64),1,'text/plain','operator_recorded',$5,$6,1250,'RWF',$7,$7,'mtn_momo')`,
+      [x.evidence,group,actor.userId,'synthetic/'+x.evidence,x.ref,wallet,stamp]);
+    await db.query(insert,[x.payment,group,x.evidence,stamp]);
+  }
+  const post=(connection,x,afterCommit,override={})=>{
+    const env={DB:fixtureDatabase(connection,{afterCommit})}, writes=[];
+    const p={id:x.payment,collection_id:group,evidence_id:x.evidence,revision:1,amount_minor:1250};
+    appendContributionCollision(writes,{env,p,checkId:crypto.randomUUID()});
+    appendContributionEntry(writes,{env,p,reconciliation:{proposed_member_id:member},actor,
+      requestId:x.request,id:()=>crypto.randomUUID(),now:()=>stamp});
+    return mutation(env,actor,'fixture.shared-ledger-contribution',x.request,
+      {source_id:x.evidence,reference:x.ref,...override},{payment_id:x.payment,source_id:x.evidence},writes);
+  };
+  let discarded=0;
+  const result=await post(first,A,async()=>{
+    if(discarded!==0)return;
+    discarded++;
+    // The pg client already saw COMMIT; intentionally hide the successful
+    // result from the application. This is not a socket-level fault.
+    throw Error('fixture_application_commit_result_discarded');
+  });
+  assert.equal(discarded,1);
+  assert.deepEqual(result,{payment_id:A.payment,source_id:A.evidence});
+  assert.deepEqual(await post(fresh,A),result);
+  await assert.rejects(post(fresh,A,undefined,{reference:B.ref}),e=>e.code==='request_conflict');
+  assert.deepEqual(await post(fresh,B),{payment_id:B.payment,source_id:B.evidence});
+  const {rows}=await db.query(`SELECT l.request_id,l.amount_minor::int AS amount,p.id AS payment,p.status,e.external_reference
+    FROM app.ledger_entries l JOIN app.payments p ON p.id=l.payment_id
+    JOIN app.payment_evidence e ON e.id=l.evidence_id AND e.id=p.evidence_id
+    JOIN app.momo_transactions mt ON mt.receiving_account_id='fixture-wallet' AND mt.provider_transaction_id=e.external_reference
+      AND mt.amount_minor=l.amount_minor
+    WHERE l.collection_id=$1 AND l.member_id=$2 AND l.kind='contribution' ORDER BY l.request_id`,[group,member]);
+  assert.deepEqual(rows,[A,B].map(x=>({request_id:x.request,amount:1250,payment:x.payment,status:'reconciled',external_reference:x.ref})));
+  assert.equal(rows.reduce((total,row)=>total+row.amount,0),2500);
+  assert.equal((await db.query("SELECT count(*)::int AS n FROM app.request_receipts WHERE user_id=$1",[actor.userId])).rows[0].n,2);
 });

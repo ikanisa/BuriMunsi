@@ -1,15 +1,17 @@
 import {ApiError} from './core.js';
 
 // All identifiers originate here; user input only becomes bound SQL values.
+const personSorts={created_at:'created_at',status:'status',public_id:'public_id',full_name:'full_name',email:'email',member_type:'member_type',phone:'phone',momo_number:'momo_number',momo_pay_code:'momo_pay_code',active_groups:'active_groups',net_contributed_rwf:'net_contributed_rwf'};
 export const coreSorts = Object.freeze({
  groups:{created_at:'created_at',status:'status',title:'title',slug:'slug',collection_type:'collection_type',visibility_status:'visibility_status',active_members:'active_members'},
- users:{created_at:'created_at',status:'status',public_id:'public_id',full_name:'full_name',email:'email',member_type:'member_type',phone:'phone',momo_number:'momo_number',momo_pay_code:'momo_pay_code',active_groups:'active_groups',net_contributed_rwf:'net_contributed_rwf'},
- members:{created_at:'created_at',status:'status',public_id:'public_id',full_name:'full_name',email:'email',member_type:'member_type',phone:'phone',momo_number:'momo_number',momo_pay_code:'momo_pay_code',active_groups:'active_groups',net_contributed_rwf:'net_contributed_rwf'},
+ users:personSorts,
+ members:personSorts,
+ roster:{...personSorts,status:'membership_status'},
  payees:{created_at:'created_at',status:'status',label:'label',group_title:'group_title',momo_number_or_code:'momo_number_or_code'},
  transactions:{created_at:'created_at',status:'status',amount_minor:'amount_minor',net_amount:'net_amount',payer_display_name:'payer_display_name',receiver_momo_number:'receiver_momo_number',external_reference:'external_reference',group_title:'group_title',observed_at:'observed_at'},
  ledgers:{created_at:'posted_at',status:'status',amount_minor:'amount_minor',group_title:'group_title',payment_id:'payment_id',evidence_id:'evidence_id'},
 });
-export const coreStatuses=Object.freeze({groups:['active','suspended','archived'],users:['active','suspended','deleted'],members:['active','suspended','deleted'],payees:['active','inactive'],transactions:['recorded','reconciled','confirmed','ambiguous','corrected','reversed'],ledgers:['contribution','reversal','correction']});
+export const coreStatuses=Object.freeze({groups:['active','suspended','archived'],users:['active','suspended','deleted'],members:['active','suspended','deleted'],roster:['active','inactive'],payees:['active','inactive'],transactions:['recorded','reconciled','confirmed','ambiguous','corrected','reversed'],ledgers:['contribution','reversal','correction']});
 const invalid=message=>{throw new ApiError(400,'invalid_filter',message);};
 export function coreOrdering(type,sort){
  const match=/^([a-z_]+)_(asc|desc)$/.exec(sort),column=match&&coreSorts[type]?.[match[1]];
@@ -18,7 +20,7 @@ export function coreOrdering(type,sort){
 }
 
 export function coreSearch(type,input,fields){
- const predicates=[],args=[],person=type==='users'||type==='members';
+ const predicates=[],args=[],person=type==='users'||type==='members'||type==='roster';
  let query=input.trim();
  const add=(condition,...values)=>{predicates.push(condition);args.push(...values);};
  if(person){
@@ -32,7 +34,7 @@ export function coreSearch(type,input,fields){
   const term=(match[1]??match[2]).toLowerCase();
   if(match[1]===undefined){
    const status=term.startsWith('status:')?term.slice(7):term;
-   if(coreStatuses[type]?.includes(status)){add('status=?',status);continue;}
+   if(coreStatuses[type]?.includes(status)){add(type==='roster'?'membership_status=?':'status=?',status);continue;}
    if(type==='groups'&&['private','public','public_pending','public_approved'].includes(term)){
     add('visibility_status=?',term==='public'?'public_approved':term);continue;
    }

@@ -20,6 +20,8 @@ SELECT private.collect_fence_release_v3(gen_random_uuid(), epoch, source_sha256)
 FROM private.collect_fence_control WHERE singleton;
 
 UPDATE auth.users SET email_confirmed_at = now() WHERE email = 'synthetic@example.invalid';
+-- The archive seed uses a placeholder. Canonical person allocation expects six digits.
+UPDATE app.users SET public_id='989999' WHERE id='synthetic-primary' AND public_id='synthetic-public';
 INSERT INTO private.collect_owner_identity(operation_id,admin_user_id,principal_user_id,owner_email,approval_reference)
 VALUES(gen_random_uuid(),'browser-fixture-owner','synthetic-primary','synthetic@example.invalid','synthetic-browser-owner');
 INSERT INTO app.admin_users(id,email,role,status,display_name,password_hash,created_at,updated_at)
@@ -39,11 +41,11 @@ INSERT INTO private.burimunsi_scopes(collection_id,receiving_account_id,created_
 VALUES('browser-fixture-group','browser-fixture-wallet',1);
 INSERT INTO private.burimunsi_operator_approvals(collection_id,principal_user_id,admin_user_id,phone,role,capabilities,active,version,approved_by,created_at,updated_at)
 VALUES('browser-fixture-group','synthetic-primary','browser-fixture-owner','+250780000031','admin',
-  ARRAY['records.read','sms.read','gateway.manage','staff.manage'],TRUE,1,'synthetic-primary',1,1);
+  ARRAY['records.read','members.enroll','sms.read','gateway.manage','staff.manage'],TRUE,1,'synthetic-primary',1,1);
 INSERT INTO private.burimunsi_accounts(id,collection_id,principal_user_id,phone,name,role,capabilities,pin_hash,active,created_at,updated_at)
 VALUES
   ('20000000-0000-4000-8000-000000000001','browser-fixture-group','synthetic-primary','+250780000031','Synthetic Administrator',
-   'admin',ARRAY['records.read','sms.read','gateway.manage','staff.manage'],'{"algorithm":"synthetic-credential-record"}',true,1,1),
+   'admin',ARRAY['records.read','members.enroll','sms.read','gateway.manage','staff.manage'],'{"algorithm":"synthetic-credential-record"}',true,1,1),
   ('20000000-0000-4000-8000-000000000002','browser-fixture-group','browser-fixture-staff','+250780000032','Synthetic Staff',
    'staff',ARRAY['records.read'],'{"algorithm":"synthetic-staff-record"}',false,1,1);
 INSERT INTO private.burimunsi_native_staff_delegations(collection_id,principal_user_id,parent_account_id,capability_ceiling,
