@@ -58,3 +58,15 @@ Set `includeProcessing` to `true` on a reconciliation page to receive `processin
 ### Admin live updates
 
 `POST /api/admin/sync/live` uses the current Admin cookie, CSRF token and `sms.read` permission. Send `{"collectionId":"…"}`, or `{}` when the session has one available collection. The response contains an opaque `topic` and an ISO UTC `expiresAt`. Its private Broadcast subscription expires within five minutes. A receipt, ledger, delivery or inbox-check transition sends `operations_changed` with `{"changed":true}`. Supabase may add its independently generated transport UUID in `id`. The browser refetches the current outcome through the authenticated Admin API. PostgreSQL rechecks the session, credential and collection permissions before publishing each change.
+
+### Payer confirmation after allocation
+
+The first member allocation of an incoming standalone payment records a single
+SMS obligation in the same PostgreSQL transaction. The authenticated M-Money
+SMS view exposes `payerStatus` and `payerReason` for operators with SMS and
+payment access. These fields are null when there is no applicable obligation.
+A missing verified payer number, an opt-out or a change of authority produces
+a recorded reason. The recipient is the payer evidenced by the original
+receipt. Once a send has an uncertain outcome, the worker looks up its original
+gateway message. The gateway can report delivery once all parts have carrier
+acknowledgements.

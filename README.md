@@ -51,7 +51,11 @@ payments in `burimunsi.payments`. The Payments area shows both directions in
 one list. Each payment starts **Unallocated** and becomes **Allocated** when
 assigned to a member of the same group. Allocation uses the current payment
 version and an idempotency key. A duplicate SMS or allocation retry preserves
-the original payment.
+the original payment. The first allocation of an incoming payment creates one
+payer SMS request. The SMS goes to the full payer number evidenced by the
+original receipt. A missing number or an opt-out is recorded in M-Money SMS.
+The gateway reports delivery after the carrier acknowledges every message part.
+Outgoing payments and earlier allocations produce no confirmation.
 
 Release verification checks the profile-based SMS consent and access model,
 raw SMS retention, parsing, the single Payments list and member allocation.
