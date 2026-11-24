@@ -46,6 +46,8 @@ WITH scope AS (
   WHERE ready = 1 AND revoked_at IS NULL AND allowed_kinds::jsonb ? 'receipt'
 )
 SELECT f.project_ref AS project, statement_timestamp() AS observed_at, f.epoch,
+  to_regclass('burimunsi.payments') IS NOT NULL AS canonical_installed,
+  to_regclass('private.burimunsi_allocation_receipts') IS NOT NULL AS allocation_sms_installed,
   f.mode AS release_state, c.enabled AND j.active AS scheduler_active, j.schedule,
   (SELECT max(d.observed_at) FROM collect_ops.jobs_dispatches d
    JOIN private.collect_managed_job_tickets t ON t.dispatch_id = d.id
@@ -82,14 +84,52 @@ FROM private.collect_fence_control f JOIN collect_ops.jobs_config c USING (singl
 JOIN cron.job j ON j.jobid = c.cron_job_id CROSS JOIN scope s
 CROSS JOIN receipt_senders senders WHERE f.singleton`;
 
-const response = await management('database/query', {
-  method: 'POST',
-  headers: {'Content-Type': 'application/json'},
-  // The Management API's read_only role cannot see the private journals.
-  // Use the operator's identity with an explicit read-only database transaction.
-  body: JSON.stringify({query: "BEGIN READ ONLY; SET LOCAL statement_timeout='5s'; " + query + '; ROLLBACK;', read_only: false}),
-});
-const rows = response.json();
-if (rows.length !== 1 || rows[0].project !== PROJECT) throw Error('expected_one_burimunsi_collection');
-record('sms-chain-' + Date.now() + '.json', rows[0]);
-console.log(JSON.stringify(rows[0], null, 2));
+async function inspect(statement) {
+  const response = await management('database/query', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({query:"BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET LOCAL statement_timeout='5s'; "+statement+'; ROLLBACK;',read_only:false}),
+  });
+  const result=response.json();
+  if(result.length!==1 || result[0].project!==PROJECT) throw Error('expected_one_burimunsi_project');
+  return result[0];
+}
+const summary=await inspect(query);
+if(summary.canonical_installed) {
+  const delivery=summary.allocation_sms_installed ? `,
+    'allocationNotices',(SELECT coalesce(jsonb_object_agg(status,n),'{}'::jsonb) FROM
+      (SELECT status,count(*)::int n FROM private.burimunsi_allocation_receipts WHERE collection_id=s.id GROUP BY status) states),
+    'noticesWithoutIncomingAllocation',(SELECT count(*)::int FROM private.burimunsi_allocation_receipts r
+      LEFT JOIN burimunsi.payments p ON p.id=r.payment_id AND p.collection_id=r.collection_id
+        AND p.direction='incoming' AND p.member_id IS NOT NULL
+      WHERE r.collection_id=s.id AND p.id IS NULL),
+    'paymentsWithMultipleGatewayMessages',(SELECT count(*)::int FROM (
+      SELECT r.payment_id FROM private.burimunsi_allocation_receipts r JOIN collect_sms.messages m
+        ON m.application_id=r.application_id AND m.idempotency_key='allocation:'||r.attempt_id::text
+      WHERE r.collection_id=s.id GROUP BY r.payment_id HAVING count(*)>1) repeated),
+    'carrierConfirmedPayments',(SELECT count(*)::int FROM private.burimunsi_allocation_receipts r
+      JOIN burimunsi.payments p ON p.id=r.payment_id AND p.collection_id=r.collection_id AND p.direction='incoming' AND p.member_id IS NOT NULL
+      JOIN collect_sms.messages m ON m.message_id=r.application_id||':allocation:'||r.attempt_id::text
+        AND m.application_id=r.application_id AND m.idempotency_key='allocation:'||r.attempt_id::text AND m.kind='receipt'
+      WHERE r.collection_id=s.id AND r.status='delivered' AND r.provider_state='delivered' AND m.state='delivered'
+        AND encode(sha256(convert_to(m.to_number,'UTF8')),'hex')=r.destination_sha256
+        AND encode(sha256(convert_to(m.text,'UTF8')),'hex')=r.body_sha256
+        AND EXISTS(SELECT FROM collect_sms.attempt_evidence a WHERE a.message_id=m.message_id
+          AND a.parts_total>0 AND a.delivered_count=a.parts_total))` : '';
+  const canonical = await inspect(`WITH scope AS
+    (SELECT min(collection_id) AS id FROM private.burimunsi_scopes HAVING count(*)=1)
+    SELECT f.project_ref AS project,f.epoch,jsonb_build_object(
+      'payments',(SELECT count(*)::int FROM burimunsi.payments WHERE collection_id=s.id),
+      'byDirectionAndAllocation',(SELECT coalesce(jsonb_object_agg(direction||'_'||allocation_state,n),'{}'::jsonb)
+        FROM (SELECT direction,allocation_state,count(*)::int n FROM burimunsi.payments WHERE collection_id=s.id GROUP BY 1,2) totals),
+      'repeatedTransferReferences',(SELECT count(*)::int FROM
+        (SELECT 1 FROM burimunsi.payments WHERE collection_id=s.id AND provider_reference IS NOT NULL
+          GROUP BY collection_id,receiving_account_id,provider,provider_reference HAVING count(*)>1) repeated),
+      'storedRawEnvelopes',(SELECT count(*)::int FROM burimunsi.raw_sms WHERE collection_id=s.id),
+      'durableHistoricalHolds',(SELECT count(*)::int FROM private.burimunsi_held_observation_sources h
+        JOIN private.burimunsi_unresolved_observations o USING(source_id) WHERE o.collection_id=s.id)
+      ${delivery}) AS payments FROM private.collect_fence_control f CROSS JOIN scope s WHERE f.singleton`);
+  if(canonical.epoch!==summary.epoch)throw Error('release_changed_during_readback');
+  summary.canonical=canonical.payments;
+}
+record('sms-chain-' + Date.now() + '.json', summary);
+console.log(JSON.stringify(summary, null, 2));
