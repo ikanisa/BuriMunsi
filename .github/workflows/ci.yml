@@ -59,7 +59,6 @@ jobs:
         run: |
           make check-source
           make revolut-design-authority
-          bash scripts/release_secret_scan.sh
       - name: Install frozen Supabase tooling
         run: npm ci --prefix scripts/supabase --ignore-scripts --no-audit --no-fund
       - name: Start the isolated Edge PostgreSQL fixture
@@ -123,10 +122,27 @@ jobs:
           CI_OWNED_PG: ${{ steps.owned_pg.outcome }}
         run: |
           bash scripts/qa/report_ci_coverage.sh "Source, Edge and operations qualification" \
-            "Source, design authority and secret scan" "$CI_SOURCE" \
+            "Source and design authority" "$CI_SOURCE" \
             "Frozen Edge checks and original tests" "$CI_EDGE" \
             "Gateway, scheduler and recovery inventory" "$CI_OPERATIONS" \
             "Owned PostgreSQL receipt and custody" "$CI_OWNED_PG"
+
+  secret-history:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Scan Git HEAD and all acquired refs for secrets
+        id: history_secrets
+        run: bash scripts/release_secret_scan.sh --history
+      - name: Report history scanning coverage
+        if: always()
+        env:
+          CI_HISTORY_SECRETS: ${{ steps.history_secrets.outcome }}
+        run: bash scripts/qa/report_ci_coverage.sh "Git secret scanning" "Git HEAD and all acquired refs" "$CI_HISTORY_SECRETS"
 
   admin:
     runs-on: ubuntu-24.04
@@ -166,14 +182,19 @@ jobs:
           make admin-web-build
           python3 scripts/build_burimunsi_admin.py verify-ci
           bash scripts/admin_pwa_hosting_gate.sh --json
+      - name: Scan the Admin release package and build receipt for secrets
+        id: artifact_secrets
+        run: bash scripts/release_secret_scan.sh --artifacts build/admin-web build/admin-web.json
       - name: Report Admin gate coverage
         if: always()
         env:
           CI_REACT: ${{ steps.react.outcome }}
           CI_BROWSER: ${{ steps.browser.outcome }}
           CI_PACKAGE: ${{ steps.package.outcome }}
+          CI_ARTIFACT_SECRETS: ${{ steps.artifact_secrets.outcome }}
         run: |
           bash scripts/qa/report_ci_coverage.sh "Admin fixture qualification" \
             "React, Worker and package tests" "$CI_REACT" \
             "Browser fixture (negotiated and legacy sessions)" "$CI_BROWSER" \
-            "Dedicated host package using public fixture inputs" "$CI_PACKAGE"
+            "Dedicated host package using public fixture inputs" "$CI_PACKAGE" \
+            "Admin package and receipt secret scan" "$CI_ARTIFACT_SECRETS"

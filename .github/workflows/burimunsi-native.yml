@@ -165,6 +165,15 @@ jobs:
           sudo setfacl -m "u:$(id -un):rw" /dev/kvm
           bash native/burimunsi/scripts/run_emulator_matrix.sh \
             "$RUNNER_TEMP/burimunsi/build" "$RUNNER_TEMP/burimunsi/devices"
+      - name: Scan APKs and exactly the evidence selected for upload
+        id: artifact_secrets
+        shell: bash
+        run: |
+          bash scripts/release_secret_scan.sh --artifacts \
+            "$RUNNER_TEMP/burimunsi/build" \
+            "$RUNNER_TEMP/burimunsi/devices/api26" \
+            "$RUNNER_TEMP/burimunsi/devices/api36" \
+            "$RUNNER_TEMP/burimunsi/sdk-signing.log"
       - name: Report native gate coverage
         if: always()
         env:
@@ -173,6 +182,7 @@ jobs:
           NATIVE_SIGNING: ${{ steps.sdk_signing.outcome }}
           NATIVE_BUILD: ${{ steps.build.outcome }}
           NATIVE_INSTRUMENTATION: ${{ steps.instrumentation.outcome }}
+          NATIVE_ARTIFACT_SECRETS: ${{ steps.artifact_secrets.outcome }}
         shell: bash
         run: |
           bash scripts/qa/report_ci_coverage.sh "Android synthetic qualification" \
@@ -180,19 +190,19 @@ jobs:
             "Pinned SDK setup and licence prerequisite" "$NATIVE_SDK" \
             "Disposable real SDK signing regression" "$NATIVE_SIGNING" \
             "Native build" "$NATIVE_BUILD" \
-            "API 26 and 36 instrumentation" "$NATIVE_INSTRUMENTATION"
+            "API 26 and 36 instrumentation" "$NATIVE_INSTRUMENTATION" \
+            "APK and evidence secret scan" "$NATIVE_ARTIFACT_SECRETS"
           printf '\nNo carrier, physical handset, operator UAT or production signing evidence is supplied by this workflow.\n' >> "$GITHUB_STEP_SUMMARY"
-      - name: Preserve build, APK, installation and instrumentation evidence
-        if: always()
+      - name: Preserve scanned build, APK, installation and instrumentation evidence
+        if: ${{ steps.artifact_secrets.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: burimunsi-native-build-and-instrumentation
           path: |
-            ${{ runner.temp }}/burimunsi/
-            !${{ runner.temp }}/burimunsi/devices/avds/**
-            !${{ runner.temp }}/burimunsi/devices/emulator-home/**
-            native/burimunsi/app/build/reports/
-            native/burimunsi/core/build/test-results/
+            ${{ runner.temp }}/burimunsi/build/
+            ${{ runner.temp }}/burimunsi/devices/api26/
+            ${{ runner.temp }}/burimunsi/devices/api36/
+            ${{ runner.temp }}/burimunsi/sdk-signing.log
           if-no-files-found: error
           retention-days: 14
 # No production keys, SDK licence auto-acceptance, backend deployment or live SMS activation.

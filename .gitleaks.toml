@@ -1,11 +1,3 @@
-title = "Collect repository gitleaks policy"
-
-[allowlist]
-description = "Allow placeholder-only examples and generated local build outputs."
-paths = [
-  '''(^|/)\.env\.example$''',
-  '''(^|/)build/''',
-  '''(^|/)coverage/''',
-  '''(^|/)node_modules/''',
-  '''(^|/)\.dart_tool/''',
-]
+title = "BuriMunsi Gitleaks policy"
+[extend]
+useDefault = true

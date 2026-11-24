@@ -3,8 +3,10 @@
 These standalone probes preserve the engineering evidence for the open native
 roster decoder task. They execute real WASM engines in the exact Supabase Edge
 Runtime `v1.77.4` binary, whose SHA-256 the runner verifies. **They do not
-implement or qualify the production signed roster decoder contract.** The
-application's optional AI decoder remains disabled.
+implement or qualify the production signed roster decoder contract.** This
+historical probe does not establish whether the maintained, policy-gated
+[native static JPEG path](../README.md#maintained-edge-paths-and-tests) is
+enabled in any hosted environment.
 
 The original request/response contract pins Python/Pillow/pypdf/PDFium/openpyxl
 and Linux isolation. A replacement needs a distinct truthful versioned contract,

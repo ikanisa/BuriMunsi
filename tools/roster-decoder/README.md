@@ -1,10 +1,9 @@
 # Collect roster decoder
 
-Standalone codec/workbook validation source retained for Collect roster imports.
-The current application routes live in
-`supabase/functions/_shared/domain/roster.js`. This Python helper is not a
-Supabase Edge Function and does not satisfy the native Supabase parser gate by
-itself; see `docs/architecture/roster-ai-dispatch-policy.md`.
+Historical standalone codec/workbook validation source for Collect roster
+imports. This Python helper is not a Supabase Edge Function or the maintained
+BuriMunsi decoder. See [maintained Edge paths and tests](#maintained-edge-paths-and-tests)
+below.
 
 ## Decoder controls
 
@@ -32,10 +31,11 @@ nonce and policy identities. It stores nonce claims in SQLite and signs the exac
 response payload, including source and build hashes. Provision a strong
 `ROSTER_DECODER_SECRET` separately from source and persist the nonce state volume.
 
-## Locked build inputs
+## Historical locked build inputs
 
-Build with the pinned base image and the hash-locked Python 3.12/Linux ARM64
-wheels in `requirements.lock`. A different architecture requires its own reviewed
+The following documents the retained Linux image build, not a BuriMunsi release
+or deployment step. It uses the pinned base image and the hash-locked Python
+3.12/Linux ARM64 wheels in `requirements.lock`. A different architecture requires its own reviewed
 wheel hashes and verification. The acquisition helper captures official package
 metadata and exact lock-selected wheel bytes into a fresh directory:
 
@@ -53,26 +53,37 @@ a private build context. Build that prepared directory with
 wheelhouse and is not a complete image build context. Preserve the acquired
 metadata, source hashes and publisher receipt outside this repository.
 
-## Supabase integration status
+## Maintained Edge paths and tests
 
-The current Supabase application requires a `ROSTER_DECODER` adapter and an
-approved processing policy. The signed protocol adapter is implemented in
-`supabase/functions/_shared/roster_decoder_bridge.mjs`, with application and
-protocol tests in `deploy/platform-api/test/supabase_roster_decoder_*`. The
-adapter verifies exact source/build/request/reservation/nonce lineage and signed
-outcomes. Those tests use transport doubles; they do not establish a deployed
-Linux parser or exact runtime/container qualification.
+- [BuriMunsi Smart Onboarding](../../supabase/functions/_shared/domain/burimunsi/smart-onboarding-import.js)
+  uses a [policy-gated native static JPEG preview](../../supabase/functions/_shared/domain/burimunsi/smart-onboarding-policy.js)
+  through the [Edge adapter](../../supabase/functions/_shared/roster_native_jpeg_decoder.mjs).
+  This source path requires explicit authorization, collection and build
+  binding, and request consent. It does not establish hosted enablement,
+  production OCR qualification, or native PDF/workbook support.
+- The shared [Collect roster route](../../supabase/functions/_shared/domain/roster.js)
+  and [signed decoder bridge](../../supabase/functions/_shared/roster_decoder_bridge.mjs)
+  are compatibility source. Bridge tests use transport doubles; the Python
+  supervisor's separate SQLite replay state is not part of the maintained
+  BuriMunsi Edge run path.
+- The [native probe](native-probe/README.md) preserves dependency experiments,
+  not a qualified production decoder. Neither the probe nor the Python
+  container is needed to run the following checks.
 
-The supervisor's persistent SQLite replay state is a separate backend. It must
-not be silently enabled in the Supabase-only production deployment. A faithful
-native parser and private Supabase replay journal remain a release gate; an
-Edge Function proxy or file-header-only parser does not close it. Roster AI stays
-disabled in that deployment until those capabilities and the processor policy
-are qualified.
+From the repository root, run the current checked-in synthetic tests with Node 24:
 
-Run the existing canonical roster tests from `deploy/platform-api` with
-`node --test test/ingestion.test.mjs`. Those tests do not establish a deployed
-Linux decoder, production credentials, provider accuracy or device acceptance.
+```sh
+node --test \
+  supabase/functions/_shared/tests/roster-image-policy.test.mjs \
+  supabase/functions/_shared/tests/roster-static-admission.test.mjs \
+  supabase/functions/_shared/tests/roster-native-jpeg-decoder.test.mjs \
+  supabase/functions/_shared/tests/burimunsi/smart-onboarding-native-jpeg.test.mjs \
+  supabase/functions/_shared/tests/burimunsi/smart-onboarding-policy.test.mjs \
+  supabase/functions/_shared/tests/burimunsi/smart-onboarding-signed-bridge.test.mjs
+```
+
+These checks use synthetic fixtures. They do not need production credentials or
+establish live processing, provider accuracy or release acceptance.
 
 Primary references: [Pillow image safety](https://pillow.readthedocs.io/en/stable/reference/Image.html),
 [PDFium wrapper](https://github.com/pypdfium2-team/pypdfium2),
