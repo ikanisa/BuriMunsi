@@ -4,6 +4,7 @@ import {requireId,requireRequestId,requireAmount,canonicalJson,normalizePhone} f
 import {authorize,matchExistingMember} from './policy.js';
 import {pgInteger} from './postgres-values.js';
 import {findOnboardingCandidate} from './smart-onboarding-suggestions.js';
+import {assignPayment} from './postgres-payments.js';
 
 const OPS=new Set(['burimunsi.allocate','burimunsi.enroll','burimunsi.membership','burimunsi.members_import']);
 const HASH=/^[a-f0-9]{64}$/;
@@ -166,6 +167,11 @@ export class PostgresCanonicalStore {
       };
       const ops={
         reloadActor,lockReceipt:loadReceipt,lockMember:loadMember,readCanonicalResult,
+        assignPayment:async cmd=>{
+          ensure();scope(cmd.groupId);
+          await checkActor(cmd,'payments.allocate');
+          return assignPayment(sql,cmd);
+        },
         retainedCommand:async(g,actorId,requestId)=>{
           ensure();scope(g);requireRequestId(actorId);requireRequestId(requestId);
           requireThat(actors.has(actorId),'session_unavailable',401);

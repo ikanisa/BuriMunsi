@@ -5,7 +5,6 @@ import {readFile} from 'node:fs/promises';
 import '../../../supabase/functions/_shared/tests/helpers/node-postgres-import.mjs';
 import {ownedFixturePool} from '../../../supabase/tests/burimunsi/postgres-fixture-pool.mjs';
 import {primeJournalSchema} from './writer-journal-source.mjs';
-import {verifyBrowserPaymentActivity} from './phone-payment-activity.fixture.mjs';
 import {verifyBrowserMemberEnrollment} from './phone-member-enrollment.fixture.mjs';
 import {canonicalProfile,MANAGED_SUPABASE_ORIGIN} from '../../../supabase/functions/_shared/deployment-profile.js';
 
@@ -69,7 +68,7 @@ async function qualifyBrowserReads(pool,source,originalCookie,enrollmentFixture,
     try {
       const db=new PostgresDatabase(pool,{},work);
       const errors=[];
-      if (installSmsScopeRepair && (path.startsWith('oversight/') || path.startsWith('core/payment-activity'))) {
+      if (installSmsScopeRepair && path.startsWith('oversight/')) {
         const execute = db.statement.bind(db);
         db.statement=async (...args)=>{
           try { return await execute(...args); }
@@ -85,7 +84,6 @@ async function qualifyBrowserReads(pool,source,originalCookie,enrollmentFixture,
       const res=await handleAdmin(request,{DB:db,COLLECT_FENCE_WORK:work,BUILD_SOURCE_ID:source,APP_ENVIRONMENT:'production',
         ADMIN_ORIGIN:MANAGED_SUPABASE_ORIGIN,SUPABASE_URL:MANAGED_SUPABASE_ORIGIN,COLLECT_DEPLOYMENT_PROFILE:profile,COLLECT_DEPLOYMENT_PROFILE_SHA256:hash(profile),
         BURIMUNSI_COLLECTION_ID:group,BURIMUNSI_PRODUCT_MODE:'standalone',ADMIN_ORIGINS:origin,
-        ...(path.startsWith('core/payment-activity') ? {BURIMUNSI_NATIVE_AUTO_TRANSACTIONS_ENABLED:'true',BURIMUNSI_ADMIN_SMS_OBSERVATIONS_ENABLED:'true'} : {}),
         BURIMUNSI_DEFAULT_STAFF_PIN:initial,BURIMUNSI_PIN_PEPPER_ID:'fixture',BURIMUNSI_PIN_PEPPER_BASE64:Buffer.alloc(32,29).toString('base64')});
       const parsed=await res.json();
       failed=false;
@@ -150,7 +148,6 @@ async function qualifyBrowserReads(pool,source,originalCookie,enrollmentFixture,
     assert.equal((await call(path)).status,401);
   }
   await installSmsScopeRepair();
-  await verifyBrowserPaymentActivity({call,group,admin:viewers.admin,staff:viewers.staff});
   for(const path of routes){
     const after=await call(path,viewers.admin);
     assert.equal(after.status,200,JSON.stringify({path,data:after.data,errors:after.errors}));
@@ -243,7 +240,6 @@ export async function verifyPhoneOperatorAccounts({owner,database,fixtureRoot,ph
     await owner.query('SELECT private.collect_fence_begin_quiesce($1,$2,$3)',args);
     await owner.query('SELECT private.collect_fence_drain($1,$2,$3)',args);
     await owner.query(await migration('20261122203000_burimunsi_phone_admin_sms_read_scope.sql'));
-    await owner.query(await migration('20261124100000_burimunsi_payment_activity_source_metadata.sql'));
     await owner.query('SELECT private.collect_fence_release_v3($1,$2,$3)',[randomUUID(),current.epoch,current.source_sha256]);
   }
   async function inspectEnrollment() {

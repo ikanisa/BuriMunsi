@@ -10,8 +10,9 @@ import {canonicalJson,requireId,requireRequestId,sha256} from './values.js';
 import {PostgresNativeAuthority} from './postgres-authority.js';
 import {PostgresPostingCustody} from './postgres-posting-custody.js';
 import {PostgresStorageWitnesses} from './postgres-storage-witnesses.js';
-import {prepareNativeAutoExtraction,validateNativeAutoExtraction} from './native-auto-parser.js';
+import {NATIVE_AUTO_SCHEMA_VERSION,prepareNativeAutoExtraction,validateNativeAutoExtraction} from './native-auto-parser.js';
 import {nativeSmsEventAliases} from './native-sms-event-identity.js';
+import {readRawSmsEnvelope} from './postgres-raw-sms.js';
 
 const HASH=/^[a-f0-9]{64}$/;
 const MODEL=/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/;
@@ -73,7 +74,9 @@ export class PostgresNativeAutoWorker {
   const current=await this.plan(tx,sourceId);
   check(same(current.snapshot,initial.snapshot)&&this.custody.sameJournal(current.journal,initial.journal),
    'native_auto_source_changed',409);
-  await this.witnesses.sealed(binding,current.snapshot.proof.object_key,current.journal);
+  if(initial.inline==null)await this.witnesses.sealed(binding,current.snapshot.proof.object_key,current.journal);
+  else check(await readRawSmsEnvelope(tx,this.groupId,current.snapshot.proof,current.journal)===initial.inline,
+   'native_auto_source_changed',409);
  }
 
  async process(sourceId){
@@ -83,12 +86,15 @@ export class PostgresNativeAutoWorker {
     const current=await this.plan(tx,sourceId);
     binding={kind:'native_auto_processing',groupId:this.groupId,requestId:crypto.randomUUID(),
      source:current.snapshot.proof,actor:current.snapshot.actor,profileSha256:current.snapshot.profile.profileSha256};
-    const fetchPlan=await this.witnesses.stage(binding,[{key:current.snapshot.proof.object_key,journal:current.journal}]);
-    return {...current,fetchPlan};
+    const inline=this.env.BURIMUNSI_PRODUCT_MODE==='standalone'
+     ?await readRawSmsEnvelope(tx,this.groupId,current.snapshot.proof,current.journal):null;
+    const fetchPlan=inline===null?await this.witnesses.stage(binding,[{key:current.snapshot.proof.object_key,journal:current.journal}]):null;
+    return {...current,inline,fetchPlan};
    });
-   await this.witnesses.prefetch(initial.fetchPlan);
+   if(initial.fetchPlan!==null)await this.witnesses.prefetch(initial.fetchPlan);
    const record=initial.snapshot.proof,profile=initial.snapshot.profile,account=profile.profile;
-   bytes=await this.custody.decrypt(await this.witnesses.sealed(binding,record.object_key,initial.journal),target(record).aad);
+   const sealed=initial.inline??await this.witnesses.sealed(binding,record.object_key,initial.journal);
+   bytes=await this.custody.decrypt(sealed,target(record).aad);
    check(bytes instanceof Uint8Array&&bytes.length===Number(record.size_bytes)&&await digest(bytes)===record.object_sha256,
     'native_auto_source_changed',409);
    const source=JSON.parse(decoder.decode(bytes));checkPayload(source,record);
@@ -103,7 +109,11 @@ export class PostgresNativeAutoWorker {
     return rows[0].result;
    });
    if(!begun.started){
-    check(['processing','completed','security_message','failed'].includes(begun.state));
+    check(['processing','completed','security_message','failed','retry','non_payment'].includes(begun.state));
+    if(this.env.BURIMUNSI_PRODUCT_MODE==='standalone'&&begun.state==='completed'){
+     check(['accepted','duplicate','conflict'].includes(begun.relation));
+     return {state:'completed',relation:begun.relation};
+    }
     return {state:begun.state==='processing'?'not_claimed':begun.state};
    }
    if(planned.kind==='security_message'){
@@ -136,6 +146,8 @@ export class PostgresNativeAutoWorker {
     const result=await this.env.AI.run(MOMO_MODEL,{...planned.request,provider_timeout_ms:8000});
     output=typeof result?.response==='string'?JSON.parse(result.response):result?.response;
    }catch{return await retry('provider_unavailable');}
+   if(this.env.BURIMUNSI_PRODUCT_MODE==='standalone'&&output?.schema_version!==NATIVE_AUTO_SCHEMA_VERSION)
+    return await retry('invalid_output');
    const extracted=validateNativeAutoExtraction(source,account,output);
    if(extracted.kind!=='parsed')return await retry('invalid_output');
    const eventIdentity=await nativeSmsEventAliases(source,record.bodySha256);
@@ -147,10 +159,12 @@ export class PostgresNativeAutoWorker {
     check(identity.length===1&&identity[0].result===true,'native_auto_source_changed',409);
     const rows=await tx.unsafe('SELECT private.burimunsi_auto_finish($1,$2::uuid,$3,$4,$5::uuid,$6,$7::jsonb,$8::jsonb) AS result',
      [...values,attempt,this.env.MOMO_AI_MODEL,extracted.normalizedOutput??output,extracted.facts]);
-    check(rows.length===1&&rows[0].result?.sourceId===sourceId&&rows[0].result.state==='completed'&&
-     ['accepted','duplicate','conflict'].includes(rows[0].result.relation));return rows[0].result;
+    const result=rows[0]?.result;
+    check(rows.length===1&&result?.sourceId===sourceId&&
+     (result.state==='non_payment'||result.state==='completed'&&['accepted','duplicate','conflict'].includes(result.relation)));
+    return result;
    });
-   return {state:'completed',relation:done.relation};
+   return done.state==='non_payment'?{state:done.state}:{state:'completed',relation:done.relation};
   }catch(error){
    if(error instanceof BuriError)throw error;
    if(['40001','23505'].includes(error?.code))throw new BuriError('native_auto_source_changed',409);

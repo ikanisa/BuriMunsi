@@ -12,7 +12,7 @@ import type { CoreArea, FeatureAccess } from './types';
 import { AREA_TITLES, CORE_PERMISSIONS } from './types';
 import './core.css';
 
-type RecordProps = FeatureAccess & { area: CoreArea; id: string; returnTo?: string | null; allowMutations?: boolean; identity?: PendingIdentity; isCurrent?: () => boolean };
+type RecordProps = FeatureAccess & { area: CoreArea; id: string; returnTo?: string | null; allowMutations?: boolean; identity?: PendingIdentity; isCurrent?: () => boolean; simplePayments?: boolean };
 
 const fields: Record<CoreArea, readonly [string, string][]> = {
   groups: [['title', 'Group'], ['slug', 'Slug'], ['collection_type', 'Type'], ['purpose_label', 'Purpose'], ['visibility', 'Visibility'], ['active_members', 'Members'], ['status', 'Status'], ['created_at', 'Created']],
@@ -34,7 +34,7 @@ function safeReturn(area: CoreArea, raw?: string | null): string {
   } catch { return `/admin/${area}`; }
 }
 
-export function CoreRecordPage({ area, id, request, permissions, actorId, principalId, role, authorityKey, financialModel, navigate, returnTo, allowMutations = false, identity, isCurrent }: RecordProps) {
+export function CoreRecordPage({ area, id, request, permissions, actorId, principalId, role, authorityKey, financialModel, navigate, returnTo, allowMutations = false, identity, isCurrent, simplePayments = false }: RecordProps) {
   const allowed = permissions.includes(CORE_PERMISSIONS[area]);
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
   const [detailScope, setDetailScope] = useState('');
@@ -60,7 +60,8 @@ export function CoreRecordPage({ area, id, request, permissions, actorId, princi
   const paymentsReturn = area === 'transactions' ? safePaymentListReturn(returnTo, 'recorded') : null;
   const back = paymentsReturn ?? safeReturn(area, returnTo);
   const {actions, membershipRecovery, membershipWrite, journalRecovery, journalWrite} = coreRecordActions({
-    area, role, permissions, financialModel, allowMutations, actorId, id, resource,
+    area, role, permissions: simplePayments ? permissions.filter(value => !['receivers.manage', 'ledger.read', 'ledger.manage', 'payments.manage', 'payments.reconcile'].includes(value)) : permissions,
+    financialModel, allowMutations, actorId, id, resource,
     current: detailScope === currentScope && state === 'ready', detail, identity,
   });
   const reload = () => {setState('loading'); setRetry(value => value + 1);};
@@ -73,7 +74,8 @@ export function CoreRecordPage({ area, id, request, permissions, actorId, princi
       !isId(id) ? <ErrorState message="Select a valid record." /> :
       state === 'loading' || detailScope !== currentScope ? <LoadingState label="Loading record" /> :
       state === 'error' || !detail ? <ErrorState message="The record could not be verified or the service is unavailable." onRetry={reload} /> : <>
-        <Card><div className="core-detail"><h2>Record details</h2><dl>{fields[area].filter(([key]) => (detail.resource as Record<string, unknown>)[key] !== undefined).map(([key, title]) => <div key={key}><dt>{title}</dt><dd>{area === 'transactions' && financialModel === 'canonical_evidence_ledger' && key === 'title' ? paymentReference(detail.resource as Record<string, unknown>) : formatField(key, (detail.resource as Record<string, unknown>)[key])}</dd></div>)}</dl></div></Card>
+        <Card><div className="core-detail"><h2>Record details</h2><dl>{fields[area].filter(([key]) => (!simplePayments || key !== 'total_contributed_rwf') &&
+          (detail.resource as Record<string, unknown>)[key] !== undefined).map(([key, title]) => <div key={key}><dt>{title}</dt><dd>{area === 'transactions' && financialModel === 'canonical_evidence_ledger' && key === 'title' ? paymentReference(detail.resource as Record<string, unknown>) : formatField(key, (detail.resource as Record<string, unknown>)[key])}</dd></div>)}</dl></div></Card>
         {area === 'transactions' && <p className="core-note">Recorded evidence does not establish provider settlement.</p>}
         {area === 'transactions' && financialModel === 'transaction_journals' && identity && identity.id === actorId && identity.role === role && isCurrent &&
           (['add', 'review'] as const).map(mode => <LegacyTransactionActions key={`${currentScope}:${mode}`} id={id} mode={mode} request={request} identity={identity}
@@ -83,7 +85,8 @@ export function CoreRecordPage({ area, id, request, permissions, actorId, princi
         {financialModel === 'canonical_evidence_ledger' && identity && identity.role === role && (resource === 'groups' || resource === 'users') &&
           <OperatorNotes key={`${currentScope}:notes`} request={request} permissions={permissions} authorityKey={authorityKey} area={resource}
             id={id} identity={identity} actorId={actorId} principalId={principalId} allowMutations={allowMutations} />}
-        {Object.entries(detail.related as Record<string, unknown>).map(([name, values]) => <CoreRelatedSection key={`${currentScope}:${name}`} name={name} initial={values as Record<string, unknown>[]} page={relatedPage(detail, name, values as unknown[])} resource={resource} id={id} actorId={actorId} financialModel={financialModel} request={request} version={(detail.resource as Record<string, unknown>).version} membershipRecovery={membershipRecovery} membershipWrite={membershipWrite} accountRead={permissions.includes('ledger.read')} journalRecovery={journalRecovery} journalWrite={journalWrite} navigate={navigate} />)}
+        {Object.entries(detail.related as Record<string, unknown>).filter(([name]) => !simplePayments || name === 'memberships')
+          .map(([name, values]) => <CoreRelatedSection key={`${currentScope}:${name}`} name={name} initial={values as Record<string, unknown>[]} page={relatedPage(detail, name, values as unknown[])} resource={resource} id={id} actorId={actorId} financialModel={financialModel} request={request} version={(detail.resource as Record<string, unknown>).version} membershipRecovery={membershipRecovery} membershipWrite={membershipWrite} accountRead={!simplePayments && permissions.includes('ledger.read')} journalRecovery={journalRecovery} journalWrite={journalWrite} navigate={navigate} />)}
       </>}
   </>;
 }

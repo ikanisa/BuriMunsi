@@ -64,3 +64,22 @@ export async function readCommandOutcome(sql,{groupId,actorId,requestId,principa
     'command_outcome_inconsistent',503);
   return {groupId,actorId,requestId,operation:r.operation,state:'committed',financialState:r.financial_state};
 }
+
+export async function readPaymentCommandOutcome(sql,{groupId,actorId,requestId,principalUserId}) {
+  requireId(groupId);requireRequestId(actorId);requireRequestId(requestId);requireId(principalUserId);
+  const rows=await sql.unsafe(`SELECT r.operation,r.response,p.member_id,p.allocation_state
+    FROM private.burimunsi_command_receipts r
+    JOIN private.burimunsi_sessions origin ON origin.id=r.session_id AND origin.account_id=r.actor_id
+      AND origin.collection_id=r.collection_id AND origin.principal_user_id=$4
+    LEFT JOIN burimunsi.payments p ON p.collection_id=r.collection_id AND
+      p.id=coalesce(r.response->>'paymentId',r.response->>'transactionId')
+    WHERE r.collection_id=$1 AND r.actor_id=$2::uuid AND r.request_id=$3::uuid LIMIT 2`,
+    [groupId,actorId,requestId,principalUserId]);
+  requireThat(rows.length<=1,'command_outcome_inconsistent',503);
+  const [row]=rows;if(!row)return null;
+  requireThat(COMMAND_OPERATIONS.includes(row.operation),'command_outcome_inconsistent',503);
+  const allocated=row.operation==='burimunsi.allocate';
+  if(allocated)requireThat(row.allocation_state==='allocated'&&row.member_id===row.response?.memberId,
+    'command_outcome_inconsistent',503);
+  return {groupId,actorId,requestId,operation:row.operation,state:'committed',...(allocated?{allocationState:'allocated'}:{})};
+}

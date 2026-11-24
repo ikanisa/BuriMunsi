@@ -27,8 +27,6 @@ function timezoneCatalogLoops(plan){
     +(plan.Plans??[]).reduce((total,child)=>total+timezoneCatalogLoops(child),0);
 }
 const digest=rows=>createHash('sha256').update(JSON.stringify(rows)).digest('hex');
-const financialSummary=({balance,today,members,unallocated,unallocated_amount})=>
-  ({balance,today,members,unallocated,unallocated_amount});
 
 async function queryPair(auto){
  async function capture(read){
@@ -119,7 +117,7 @@ try {
     const seq=(await db.query('SELECT last_value,is_called FROM private.projection_calls')).rows[0];
     return {rows,elapsedMs,calls:seq.is_called?Number(seq.last_value):0};
   }
-  async function compareTimezonePlans(role,auto,{fallback,predecessorScans=true,compareRecent=true,expected}){
+  async function compareTimezonePlans(role,auto,{fallback,predecessorScans=true,expected}){
     const pair=await queryPair(auto);
     await db.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
     try{
@@ -127,8 +125,7 @@ try {
       await db.query("SELECT set_config('fixture.role',$1,true)",[role]);
       const previousRows=(await db.query(pair.original.query,pair.original.args)).rows;
       const rawRows=(await db.query(pair.candidate.query,pair.candidate.args)).rows;
-      if(compareRecent)assert.deepEqual(rawRows,previousRows);
-      else assert.deepEqual(financialSummary(rawRows[0]),financialSummary(previousRows[0]));
+      assert.deepEqual(rawRows,previousRows);
       const explain=async input=>(await db.query('EXPLAIN (ANALYZE, FORMAT JSON) '+input.query,input.args)).rows[0]['QUERY PLAN'][0];
       const originalPlan=await explain(pair.original),optimizedPlan=await explain(pair.candidate);
       const originalCatalogScans=timezoneCatalogLoops(originalPlan.Plan),optimizedCatalogScans=timezoneCatalogLoops(optimizedPlan.Plan);
@@ -159,31 +156,6 @@ try {
   }
   timezone.push(await compareTimezonePlans('staff',false,{fallback:false}));
 
-  // Recently recorded transfers belong in the activity preview before a
-  // ledger credit exists. Membership, timestamps and the three-row limit hold.
-  await db.query(`
-   UPDATE app.momo_transactions SET transaction_at='2026-11-17T23:59:30Z',event_kind='outgoing' WHERE id='transaction-12';
-   UPDATE app.momo_transactions SET transaction_at='2026-11-18T00:00:00Z' WHERE id='transaction-13';
-   UPDATE private.burimunsi_transaction_scopes SET native_source_id=NULL WHERE transaction_id='transaction-13';
-   INSERT INTO app.momo_transactions VALUES('foreign-new','wallet','Synthetic','masked',500,'2026-11-18T00:00:00Z',
-    'Africa/Kigali','synthetic','foreign-ref','unallocated',0,1,'synthetic','incoming_receipt',0,NULL);
-   INSERT INTO private.burimunsi_transaction_scopes VALUES('different-group','foreign-new','wallet',NULL);`);
-  for(const role of ['staff','admin']){
-    const before=await run(original,role),after=await run(candidate,role);
-    assert.deepEqual(financialSummary(after.rows[0]),financialSummary(before.rows[0]));
-    assert.ok(after.calls<=3);
-    const home=await readCanonicalHome({unsafe:async()=>after.rows},group,at,true);
-    assert.deepEqual(home.recentPayments.map(row=>row.id),['transaction-3','transaction-13','transaction-12']);
-    assert.deepEqual(home.recentPayments.map(row=>row.state),['posted','unallocated','recorded']);
-    assert.equal(home.recentPayments[2].direction,'outgoing');
-    assert.equal(home.recentPayments[2].amountRwf,112);
-    assert.equal(home.recentPayments[2].sourceId,role==='admin'?'source-12':null);
-  }
-  await db.query(`
-   UPDATE app.momo_transactions SET transaction_at='2026-11-17T08:00:00Z',event_kind='incoming_receipt'
-    WHERE id IN('transaction-12','transaction-13');
-   UPDATE private.burimunsi_transaction_scopes SET native_source_id='source-13' WHERE transaction_id='transaction-13';`);
-
   // Exercise historical aliases, exact-name rejection, malformed and absent
   // timestamps, time boundaries, conflicting credits, and source visibility.
   await db.query(`CREATE TEMP TABLE default_home_transactions AS SELECT * FROM app.momo_transactions;
@@ -199,13 +171,12 @@ try {
    UPDATE app.ledger_entries SET amount_minor=999 WHERE payment_id='payment-4';
    UPDATE app.payments SET status='reversed' WHERE id='payment-10';`);
   for(const role of ['staff','admin']){
-    timezone.push(await compareTimezonePlans(role,true,{fallback:true,compareRecent:false,expected:home=>{
-      assert.deepEqual(home.recentPayments.map(row=>row.id),['transaction-3','transaction-5','transaction-2']);
-      assert.equal(home.recentPayments[0].state,'recorded');
-      assert.equal(home.recentPayments[1].sourceId,role==='admin'?'source-5-historical':null);
+    timezone.push(await compareTimezonePlans(role,true,{fallback:true,expected:home=>{
+      assert.deepEqual(home.recentPayments.map(row=>row.id),['transaction-5','transaction-2','transaction-1']);
+      assert.equal(home.recentPayments[0].sourceId,role==='admin'?'source-5-historical':null);
     }}));
   }
-  timezone.push(await compareTimezonePlans('staff',false,{fallback:true,compareRecent:false}));
+  timezone.push(await compareTimezonePlans('staff',false,{fallback:true}));
   await db.query(`UPDATE app.momo_transactions t
     SET (transaction_timezone,transaction_at,has_conflict)=(base.transaction_timezone,base.transaction_at,base.has_conflict)
     FROM default_home_transactions base WHERE t.id=base.id;
@@ -229,11 +200,11 @@ try {
    INSERT INTO private.burimunsi_transaction_scopes VALUES('different-group','foreign','wallet','foreign-source');`);
   for(const role of ['staff','admin']){
     const before=await run(original,role),after=await run(candidate,role);
-    assert.deepEqual(financialSummary(after.rows[0]),financialSummary(before.rows[0]));
+    assert.deepEqual(after.rows,before.rows);
     assert.equal(before.rows[0].id,'transaction-1');
-    const home=await readCanonicalHome({unsafe:async()=>after.rows},group,at,true);
-    assert.deepEqual(home.recentPayments.map(row=>row.id),['transaction-3','transaction-2','transaction-1']);
-    assert.deepEqual(home.recentPayments.map(row=>row.state),['recorded','recorded','posted']);
+    assert.ok(after.rows.some(row=>row.id==='transaction-9'&&row.native_source_id===null));
+    assert.ok(after.rows.every(row=>!['transaction-2','transaction-3','transaction-4','transaction-5',
+      'transaction-6','transaction-7','transaction-8'].includes(row.id)));
     result.push({role:role+'-credit-negative-cases',rows:after.rows.length,originalProjectionCalls:before.calls,
       candidateProjectionCalls:after.calls,originalMs:before.elapsedMs,candidateMs:after.elapsedMs});
   }
@@ -246,23 +217,20 @@ try {
       await assert.rejects(()=>db.query(input.query,input.args),e=>e.code==='42501');
     }finally{await db.query('ROLLBACK');}
   }
-  // The non-native mode retains the same financial totals.
+  // The non-native mode retains exactly the same credit rows as well.
   const managed=await queryPair(false);
   const managedBefore=await run(managed.original,'staff'),managedAfter=await run(managed.candidate,'staff');
-  assert.deepEqual(financialSummary(managedAfter.rows[0]),financialSummary(managedBefore.rows[0]));
-  assert.equal(managedAfter.calls,0);
+  assert.deepEqual(managedAfter.rows,managedBefore.rows);assert.equal(managedAfter.calls,0);
   result.push({role:'managed-without-native-projection',rows:managedAfter.rows.length,originalProjectionCalls:managedBefore.calls,candidateProjectionCalls:managedAfter.calls});
-  // No credited records: financial totals stay honest and activity remains visible.
+  // No credited records: previously projected native rows must not become credits.
   await db.query("UPDATE app.payments SET status='reversed'");
   const before=await run(original,'staff'),after=await run(candidate,'staff');
-  assert.deepEqual(financialSummary(after.rows[0]),financialSummary(before.rows[0]));
-  assert.equal(before.rows[0].id,null);
-  result.push({role:'staff-no-credits',rows:after.rows.length,originalProjectionCalls:before.calls,candidateProjectionCalls:after.calls,
+  assert.deepEqual(after.rows,before.rows);assert.equal(after.rows.length,1);assert.equal(after.rows[0].id,null);
+  result.push({role:'staff-no-credits',rows:0,originalProjectionCalls:before.calls,candidateProjectionCalls:after.calls,
     originalMs:before.elapsedMs,candidateMs:after.elapsedMs});
-  timezone.push(await compareTimezonePlans('staff',true,{fallback:true,predecessorScans:false,compareRecent:false,expected:home=>{
+  timezone.push(await compareTimezonePlans('staff',true,{fallback:false,predecessorScans:false,expected:home=>{
     assert.equal(home.todayRwf,0);
-    assert.deepEqual(home.recentPayments.map(row=>row.id),['transaction-3','transaction-2','transaction-1']);
-    assert.ok(home.recentPayments.every(row=>row.state==='reversed'));
+    assert.deepEqual(home.recentPayments,[]);
   }}));
   // The second dataset exercises set-based source and actual ledger joins.
   await db.query(`

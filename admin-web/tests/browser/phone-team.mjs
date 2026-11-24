@@ -78,7 +78,7 @@ export async function qualifyPhoneTeam({admin, origin, open, legacySessions}) {
     assert.equal(await button(staffPage, 'Create account').count(), 0);
     checks.push('staff_signs_in_directly_and_cannot_manage_team');
     const withheld = await staffPage.evaluate(async () => {
-      const requests = ['/api/admin/core/members', '/api/admin/momo/transactions?limit=25&offset=0'];
+      const requests = ['/api/admin/core/members', '/api/admin/burimunsi/payments?limit=25&offset=0'];
       return Promise.all(requests.map(async path => (await fetch(path)).status));
     });
     assert.deepEqual(withheld, [403, 403]);

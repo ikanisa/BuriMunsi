@@ -1,5 +1,5 @@
 import {readRecoveryProof} from './postgres-operation-recovery.js';
-import {readCommandOutcome} from './postgres-command-outcome.js';
+import {readCommandOutcome,readPaymentCommandOutcome} from './postgres-command-outcome.js';
 import {requireThat,requirePort} from './errors.js';
 import {pgInteger} from './postgres-values.js';
 import {sha256,canonicalJson} from './values.js';
@@ -9,9 +9,10 @@ import {readMemberListing} from './postgres-member-listing.js';
 import {nativePaymentListingScope,paymentAllocationFilterSql,paymentReferenceSql,paymentsSql,readCanonicalHome} from './postgres-payment-reads.js';
 import {projectLedger,projectMember,projectPayment} from './postgres-record-projections.js';
 import {claimPhonePinReadSnapshot} from './phone-pin-request.js';
+import {paymentListingRows,paymentRecord,readPayment as readPaymentRecord,readPayments,readPaymentsHome} from './postgres-payments.js';
 
-const MEMBERS=`SELECT u.id,m.collection_id,u.full_name,u.momo_number,m.active,m.revision,u.revision AS person_revision,m.joined_at,
- coalesce((SELECT sum(l.amount_minor) FROM app.ledger_entries l WHERE l.collection_id=m.collection_id AND l.member_id=m.user_id),0) AS balance
+const membersSql=includeBalance=>`SELECT u.id,m.collection_id,u.full_name,u.momo_number,m.active,m.revision,u.revision AS person_revision,m.joined_at
+ ${includeBalance?',coalesce((SELECT sum(l.amount_minor) FROM app.ledger_entries l WHERE l.collection_id=m.collection_id AND l.member_id=m.user_id),0) AS balance':''}
  FROM app.memberships m JOIN app.users u ON u.id=m.user_id WHERE m.collection_id=$1`;
 const LEDGER=`SELECT l.id,l.collection_id,l.member_id,l.amount_minor,l.posted_at,t.id AS transaction_id,
  coalesce(t.provider_transaction_id,e.external_reference) AS ft_id,
@@ -38,10 +39,10 @@ async function countedPage(sql,count,page,order,values){
  * replaced with an independent raw-body table or a broad storage credential.
  */
 export class PostgresRecordsStore {
-  constructor({authority,sourceReader,clock=()=>Date.now(),nativeAutoRecordsEnabled=false}){
+  constructor({authority,sourceReader,clock=()=>Date.now(),nativeAutoRecordsEnabled=false,paymentsOnly=false}){
     requirePort(authority,['read','session']);requirePort(sourceReader,['revision','page','detail']);
     requireThat(typeof nativeAutoRecordsEnabled==='boolean','invalid_worker_config',503);
-    Object.assign(this,{authority,sourceReader,clock,nativeAutoRecordsEnabled});this.groupId=authority.groupId;
+    Object.assign(this,{authority,sourceReader,clock,nativeAutoRecordsEnabled,paymentsOnly});this.groupId=authority.groupId;
   }
   withCommandSnapshot(fn){return this.withReadSnapshot(fn,{primary:true});}
   async revealSms(actor,request){
@@ -59,6 +60,7 @@ export class PostgresRecordsStore {
         PAYMENTS=paymentsSql(auto);
       let snapshotActor=null;
       const scope=g=>requireThat(g===group,'access_denied',403);
+      const projection=()=>({showSms:snapshotActor?.role==='admin'&&snapshotActor.capabilities?.includes('sms.read')});
       const ops={
         reloadActor:async id=>{snapshotActor=await this.authority.session(sql,{id});return snapshotActor;},
         onboardingSuggestions:async query=>{
@@ -72,7 +74,7 @@ export class PostgresRecordsStore {
           return r?{id:r.id,groupId:g,installationId:r.installation_id,active:r.enabled&&r.status==='active'&&!r.revoked_at&&pgInteger(r.version)===pgInteger(r.binding_version)}:null;
         },
         canonicalHome:async g=>{
-          scope(g);return readCanonicalHome(sql,g,at,auto);
+          scope(g);return this.paymentsOnly?readPaymentsHome(sql,g,at,projection()):readCanonicalHome(sql,g,at,auto);
         },
         memberListingRevision:async g=>{
           scope(g);
@@ -82,12 +84,14 @@ export class PostgresRecordsStore {
         },
         readMemberPage:async query=>{
           scope(query.groupId);
-          const {rows,totalCount,after}=await readMemberListing(sql,query);
-          return {items:rows.map(projectMember),totalCount,after,asOf:at};
+          const includeBalance=!this.paymentsOnly;
+          const {rows,totalCount,after}=await readMemberListing(sql,{...query,includeBalance});
+          return {items:rows.map(row=>projectMember(row,{includeBalance})),totalCount,after,asOf:at};
         },
         listRevision:async(g,kind,memberId,paymentReference=null)=>{
           scope(g);let rows;
-          if(kind==='payments')rows=await sql.unsafe(`${auto?nativePaymentListingScope:''}SELECT t.id,t.version,t.has_conflict,p.revision AS payment_revision,p.status,p.member_id,
+          if(kind==='payments'&&this.paymentsOnly)rows=await paymentListingRows(sql,g,memberId);
+          else if(kind==='payments')rows=await sql.unsafe(`${auto?nativePaymentListingScope:''}SELECT t.id,t.version,t.has_conflict,p.revision AS payment_revision,p.status,p.member_id,
             f.beneficiary_member_id,pm.revision AS membership_revision,u.revision AS member_revision,${paymentReference?`(${paymentReferenceSql}=$2) AS reference_match,`:''}
             ${auto?'coalesce(src.conflict_count,0)':`(SELECT count(*) FROM app.momo_transaction_sources bad WHERE bad.transaction_id=t.id AND bad.relation='conflict')`} AS conflict_count,
             ${auto?'coalesce(credit.ledger_count,0)':`(SELECT count(*) FROM app.ledger_entries l WHERE l.payment_id=p.id AND l.collection_id=x.collection_id)`} AS ledger_count${auto?',x.native_source_id,native.value AS native_meta':''}
@@ -105,7 +109,16 @@ export class PostgresRecordsStore {
         },
         readListingSnapshot:async({groupId:g,kind,memberId,paymentReference=null})=>{
           scope(g);let rows,entries;
-          if(kind==='payments'){
+          if(kind==='payments'&&this.paymentsOnly){
+            rows=await paymentListingRows(sql,g,memberId);
+            entries=rows.map(row=>{
+              const item=paymentRecord(row,projection());
+              return {item,at:canonicalListingInstant(row.page_at instanceof Date?row.page_at.toISOString():row.page_at),
+                amount:item.amountRwf,direction:item.direction,filters:[item.state],
+                search:listingText([item.id,item.payerNameRaw,item.payerPhoneRaw,item.ftId,item.amountRwf,
+                  item.atRaw,item.memberName,item.memberPhone,localPhone(item.memberPhone)].join(' '))};
+            });
+          }else if(kind==='payments'){
             const args=[g];let extra='';
             if(memberId!==null){await this.memberExists(sql,g,memberId);args.push(memberId);extra=' AND u.id=$2';}
             const batch=auto&&memberId===null;
@@ -151,7 +164,10 @@ export class PostgresRecordsStore {
           // Cursor contains only an integer offset authenticated against the full revision.
           const offset=after?.offset??0;requireThat(Number.isSafeInteger(offset)&&offset>=0&&offset<=100000,'invalid_cursor');
           let rows,total,read;
-          if(kind==='payments'){
+          if(kind==='payments'&&this.paymentsOnly){
+            const page=await readPayments(sql,g,{q,status:filter,memberId,limit,offset,...projection()});
+            return {items:page.items,totalCount:page.totalCount,after:page.nextOffset===null?null:{offset:page.nextOffset},asOf:at};
+          }else if(kind==='payments'){
             const fields=['t.payer_name','t.payer_identifier','t.provider_transaction_id','t.amount_minor::text',
               't.transaction_datetime_raw','u.full_name','u.momo_number','member_phone.normalized'];
             const args=[g,safeLike(q)];
@@ -190,10 +206,15 @@ export class PostgresRecordsStore {
         readDetail:async({groupId:g,kind,id,includePaymentReference=false})=>{
           scope(g);if(kind==='sms')return this.sourceReader.detail(sql,g,id);
           const readPayment=kind==='payment';
-          const query=readPayment?(includePaymentReference?paymentsSql(auto,{includeReference:true}):PAYMENTS):MEMBERS;
+          if(readPayment&&this.paymentsOnly){
+            const payment=await readPaymentRecord(sql,g,id,projection());
+            if(!payment||!includePaymentReference)return payment;
+            return {...payment,paymentReference:null};
+          }
+          const query=readPayment?(includePaymentReference?paymentsSql(auto,{includeReference:true}):PAYMENTS):membersSql(!this.paymentsOnly);
           const [row]=await sql.unsafe(query+(readPayment?' AND t.id=$2':' AND u.id=$2'),[g,id]);
           if(!row)return null;
-          if(!readPayment)return projectMember(row);
+          if(!readPayment)return projectMember(row,{includeBalance:!this.paymentsOnly});
           const record=projectPayment(row);
           return includePaymentReference?{...record,paymentReference:row.display_reference??null}:record;
         },
@@ -227,7 +248,7 @@ export class PostgresRecordsStore {
         },
         readRecoveryOutcome:async query=>{scope(query.groupId);return readRecoveryProof(sql,query);},
         readCommandOutcome:async query=>{
-          scope(query.groupId);return readCommandOutcome(sql,query);
+          scope(query.groupId);return (this.paymentsOnly?readPaymentCommandOutcome:readCommandOutcome)(sql,query);
         }
       };
       return fn(ops);

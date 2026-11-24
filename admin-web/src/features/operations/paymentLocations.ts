@@ -16,14 +16,13 @@ export const receiptSources = [
 type PaymentAccess = Pick<AdminUser, 'role' | 'permissions' | 'authMethod'>;
 
 export function canReadMemberReceipts(access: PaymentAccess): boolean {
-  return access.permissions.includes('payments.read') &&
-    (access.authMethod !== 'phone_passcode' || canReadSmsEvidence(access));
+  return access.authMethod !== 'phone_passcode' && access.permissions.includes('payments.read');
 }
 
 export function canOpenPaymentView(view: PaymentView, access: PaymentAccess) {
   const {permissions} = access;
   if (view === 'recorded') return permissions.includes('payments.read');
-  if (view === 'attention') return permissions.includes('reconciliations.read');
+  if (view === 'attention') return access.authMethod !== 'phone_passcode' && permissions.includes('reconciliations.read');
   return canOpenReceiptSource('member', access) || canReadSmsEvidence(access);
 }
 

@@ -8,7 +8,7 @@ import {useSession} from '../../session/SessionProvider';
 import {canReadSmsEvidence} from '../../session/sessionContext';
 import {verificationPath} from '../../session/returnLocation';
 import {useAccess, useSensitiveAccess} from './access';
-import {requiresAdminRole, requiresPermissions, workspaceRoute} from './routePolicy';
+import {collectWorkspaceOnly, requiresAdminRole, requiresPermissions, workspaceRoute} from './routePolicy';
 import {canOpenOperatorProfile, canOpenTeam} from './team-access';
 
 const RequestHistoryPage = lazy(() => import('../../features/requests/RequestHistoryPage').then(m => ({default: m.RequestHistoryPage})));
@@ -25,15 +25,25 @@ const EmailEventsPage = lazy(() => import('../../features/operations/EmailEvents
 const AssistedSmsPage = lazy(() => import('../../features/assisted/AssistedSmsPage').then(m => ({default: m.AssistedSmsPage})));
 const SmsControlsPage = lazy(() => import('../../features/assisted/SmsControlsPage').then(m => ({default: m.SmsControlsPage})));
 const BuriMunsiPage = lazy(() => import('../../features/burimunsi').then(m => ({default: m.BuriMunsiPage})));
+const BuriMunsiHome = lazy(() => import('../../features/overview/BuriMunsiHome').then(m => ({default: m.BuriMunsiHome})));
 
 function LegacyMomoReceiptsRoute() {
   const {user} = useSession();
+  if (user?.authMethod === 'phone_passcode') return <Navigate replace
+    to={canReadSmsEvidence(user) ? paymentViewLocation('sms') : paymentViewLocation('recorded')} />;
   return <Navigate replace to={canReadSmsEvidence(user) ? paymentViewLocation('sms') : paymentViewLocation('recorded', {momo: true})} />;
+}
+
+function SmsReceiptRoute({detail = false}: {detail?: boolean}) {
+  const {user} = useSession();
+  if (user?.authMethod === 'phone_passcode') return <Navigate replace to={paymentViewLocation('sms')} />;
+  return detail ? <SmsReceiptDetailPage /> : <SmsReceiptsPage />;
 }
 
 export function OverviewRoute() {
   const access = useAccess();
-  const {verificationMode} = useSession();
+  const {verificationMode, user} = useSession();
+  if (user?.authMethod === 'phone_passcode') return <BuriMunsiHome key={access.authorityKey} />;
   return <OverviewPage key={access.authorityKey} request={access.request} permissions={access.permissions} role={access.role}
     financialModel={access.financialModel} authorityKey={access.authorityKey} preferSmsHealth={verificationMode === 'passcode'} />;
 }
@@ -60,25 +70,25 @@ function BuriMunsiRoute() {
     onBack={session.user && canOpenTeam(session.user) ? () => go('/admin/admin-users') : undefined} onVerify={() => go(verificationPath(session.verificationMode, '/admin/burimunsi'))} />;
 }
 
-const canReadGateway = requiresAdminRole('gateway.read');
+const canReadGateway = collectWorkspaceOnly(requiresAdminRole('gateway.read'));
 const canReadPayments = requiresPermissions('payments.read');
 
 export const requestHistoryRoute = workspaceRoute('requests', <RequestHistoryRoute />,
   user => canReadRequestHistory(user.financialModel, user.permissions));
 
 export const operatorRoutes = [
-  workspaceRoute('sms-receipts', <SmsReceiptsPage />, canReadSmsEvidence),
-  workspaceRoute('sms-receipts/:kind/:id', <SmsReceiptDetailPage />, canReadSmsEvidence),
+  workspaceRoute('sms-receipts', <SmsReceiptRoute />, canReadSmsEvidence),
+  workspaceRoute('sms-receipts/:kind/:id', <SmsReceiptRoute detail />, canReadSmsEvidence),
   workspaceRoute('gateway', <GatewayDevicesPage />, canReadGateway),
-  workspaceRoute('gateway/new', <GatewayEnrollmentPage />, requiresAdminRole('gateway.read', 'gateway.manage')),
+  workspaceRoute('gateway/new', <GatewayEnrollmentPage />, collectWorkspaceOnly(requiresAdminRole('gateway.read', 'gateway.manage'))),
   workspaceRoute('gateway/receiver-grants', <ReceiverGrantsPage />, canReadGateway),
   workspaceRoute('gateway/receiver-grants/:id', <ReceiverGrantDetailPage />, canReadGateway),
   workspaceRoute('gateway/:id', <GatewayDeviceDetailPage />, canReadGateway),
   workspaceRoute('member-receipts', <MemberReceiptsPage />, canReadMemberReceipts),
   workspaceRoute('member-receipts/:id', <MemberReceiptDetailPage />, canReadMemberReceipts),
-  workspaceRoute('email', <EmailEventsPage />, requiresPermissions('email.read')),
+  workspaceRoute('email', <EmailEventsPage />, collectWorkspaceOnly(requiresPermissions('email.read'))),
   workspaceRoute('momo-receipts', <LegacyMomoReceiptsRoute />, user => canReadSmsEvidence(user) || canReadPayments(user)),
-  workspaceRoute('notification-operator', <AssistedSmsRoute />, requiresAdminRole('assisted_sms.read')),
-  workspaceRoute('notification-settings', <SmsControlsRoute />, user => (user.accountId ? hasScopedAdminAuthority(user) : user.role === 'owner') && user.permissions.includes('admin_users.manage')),
+  workspaceRoute('notification-operator', <AssistedSmsRoute />, collectWorkspaceOnly(requiresAdminRole('assisted_sms.read'))),
+  workspaceRoute('notification-settings', <SmsControlsRoute />, collectWorkspaceOnly(user => (user.accountId ? hasScopedAdminAuthority(user) : user.role === 'owner') && user.permissions.includes('admin_users.manage'))),
   workspaceRoute('burimunsi', <BuriMunsiRoute />, canOpenOperatorProfile),
 ];

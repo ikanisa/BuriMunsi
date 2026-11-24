@@ -9,7 +9,7 @@ import type { CoreArea, CorePage, DataRow, FeatureAccess, FinancialModel } from 
 import { AREA_TITLES, CORE_PERMISSIONS } from './types';
 import './core.css';
 
-type ListProps = FeatureAccess & { area: CoreArea; locationSearch?: string; allowMutations?: boolean; paymentsWorkspace?: boolean };
+type ListProps = FeatureAccess & { area: CoreArea; locationSearch?: string; allowMutations?: boolean; paymentsWorkspace?: boolean; simplePayments?: boolean };
 
 const PAGE_SIZE = 25;
 const descriptions: Record<CoreArea, string> = {
@@ -96,7 +96,7 @@ function columns(area: CoreArea, model: FinancialModel): { label: string; value:
   }
 }
 
-export function CoreListPage({ area, request, permissions, actorId, role, authorityKey, financialModel, navigate, locationSearch = '', allowMutations = false, paymentsWorkspace = false }: ListProps) {
+export function CoreListPage({ area, request, permissions, actorId, role, authorityKey, financialModel, navigate, locationSearch = '', allowMutations = false, paymentsWorkspace = false, simplePayments = false }: ListProps) {
   const allowed = permissions.includes(CORE_PERMISSIONS[area]);
   const filter = useMemo(() => readFilters(locationSearch, area, financialModel), [locationSearch, area, financialModel]);
   const [draftState, setDraftState] = useState({ base: filter.search, value: filter.search });
@@ -120,7 +120,7 @@ export function CoreListPage({ area, request, permissions, actorId, role, author
   }, [allowed, area, request, actorId, authorityKey, financialModel, filter.search, filter.status, filter.sort, filter.page, currentScope, retry]);
 
   const update = (changes: Partial<Filters>) => navigate(listLocation(area, { ...filter, ...changes }, paymentsWorkspace));
-  const tableColumns = columns(area, financialModel);
+  const tableColumns = columns(area, financialModel).filter(column => !simplePayments || column.label !== 'Contributed');
   const memberDirectory = area === 'members' || area === 'users';
   const title = memberDirectory ? 'Members' : AREA_TITLES[area];
   const action = coreListAction({area, role, permissions, financialModel, allowed, allowMutations});

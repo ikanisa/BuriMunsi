@@ -68,3 +68,22 @@ export function readMomoList(params) {
     rows: matches && offset === 0 ? [fixtureMomoRecord] : [], total: matches ? 1 : 0, offset, limit: 25,
     totals: {received_minor: matches ? 5000 : 0, credited_minor: 0, unallocated_minor: matches ? 5000 : 0}};
 }
+
+export const fixturePayment = {
+  id: transactionId, version: 1, direction: 'incoming', amountRwf: providerFacts.amount_minor, atRaw: time,
+  ftId: providerFacts.provider_transaction_id, payerNameRaw: fixtureMember.display_name,
+  memberId: null, memberName: null, state: 'unallocated', sourceId: fixtureSmsEvidenceId, canAllocate: false,
+};
+export const fixtureOutgoingPayment = {
+  ...fixturePayment, id: '94949494-9494-4494-8494-949494949494', direction: 'outgoing', ftId: 'MOMO-SYNTHETIC-OUT', sourceId: null,
+};
+export function readBuriMunsiPayments(params, sms) {
+  const q = (params.get('q') ?? '').toLowerCase(), status = params.get('status'), direction = params.get('direction');
+  const limit = Number(params.get('limit')), offset = Number(params.get('offset') ?? 0);
+  if (limit !== 25 || !Number.isSafeInteger(offset) || offset < 0) return null;
+  const matching = [fixturePayment, fixtureOutgoingPayment].filter(item =>
+    (!status || item.state === status) && (!direction || item.direction === direction) &&
+    (!q || `${item.ftId} ${item.payerNameRaw}`.toLowerCase().includes(q)));
+  const items = matching.slice(offset, offset + limit).map(item => ({...item, sourceId:sms ? item.sourceId : null}));
+  return {items,totalCount:matching.length,offset,limit,nextOffset:offset+items.length < matching.length ? offset+items.length : null,asOf:time};
+}

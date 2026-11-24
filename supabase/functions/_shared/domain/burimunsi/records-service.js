@@ -11,10 +11,10 @@ import {normalizeListingQuery,selectListing,canonicalListingInstant,listingText,
  * Session, membership scope, total and page use the same read snapshot.
  */
 export class RecordsService {
-  constructor({store,groupId,cursor,clock=()=>Date.now(),smartOnboardingImport=null}) {
+  constructor({store,groupId,cursor,clock=()=>Date.now(),smartOnboardingImport=null,paymentsOnly=false}) {
     requirePort(store,['withReadSnapshot']);requirePort(cursor,['create','read']);
     if(smartOnboardingImport!==null)requirePort(smartOnboardingImport,['preview']);
-    Object.assign(this,{store,groupId,cursor,clock,smartOnboardingImport});
+    Object.assign(this,{store,groupId,cursor,clock,smartOnboardingImport,paymentsOnly});
   }
   async within(actor,capability,fn,command=false) {
     requireThat(actor?.groupId===this.groupId,'access_denied',403);
@@ -45,6 +45,13 @@ export class RecordsService {
       requirePort(tx,['readCommandOutcome']);
       const value=await tx.readCommandOutcome({groupId:this.groupId,actorId:current.id,requestId,principalUserId:current.principalUserId});
       const envelope={contractVersion:2,requestId,groupId:this.groupId,actorId:current.id};
+      if(this.paymentsOnly){
+        if(!value)return {...envelope,state:'pending'};
+        requireThat(value.groupId===this.groupId&&value.actorId===current.id&&value.requestId===requestId&&
+          value.state==='committed'&&COMMAND_OPERATIONS.includes(value.operation)&&
+          (value.operation==='burimunsi.allocate')===(value.allocationState==='allocated'),'command_scope_violation',503);
+        return {...envelope,state:'committed',operation:value.operation,...(value.allocationState?{allocationState:value.allocationState}:{})};
+      }
       if(!value)return {...envelope,state:'pending',financialState:'unresolved'};
       // The existing receipt store records commits only. Do not manufacture a
       // durable rejection from a missing row, HTTP failure or in-memory error.
@@ -66,6 +73,12 @@ export class RecordsService {
   async #home(tx) {
     requirePort(tx,['canonicalHome']);
     const value=await tx.canonicalHome(this.groupId);
+    if(this.paymentsOnly){
+      requireThat(value&&[value.paymentCount,value.memberCount,value.unallocatedCount].every(n=>Number.isSafeInteger(n)&&n>=0)&&
+        typeof value.asOf==='string','invalid_snapshot',503);
+      return {paymentCount:value.paymentCount,memberCount:value.memberCount,unallocatedCount:value.unallocatedCount,
+        asOf:value.asOf,recentPayments:this.projectRows(value.recentPayments,'payments')};
+    }
     requireThat(value && Number.isSafeInteger(value.groupBalanceRwf)&&Number.isSafeInteger(value.todayRwf)&&Number.isSafeInteger(value.memberCount)&&Number.isSafeInteger(value.unallocatedCount)&&typeof value.asOf==='string','invalid_snapshot',503);
     if(value.unallocatedAmountRwf!==undefined)requireThat(Number.isSafeInteger(value.unallocatedAmountRwf),'invalid_snapshot',503);
     return {groupBalanceRwf:value.groupBalanceRwf,todayRwf:value.todayRwf,memberCount:value.memberCount,unallocatedCount:value.unallocatedCount,
@@ -104,6 +117,9 @@ export class RecordsService {
     requireThat(['payments','members','ledger','sms','staff','audit'].includes(kind),'invalid_list');
     const capability=kind==='sms'?'sms.read':['staff','audit'].includes(kind)?'staff.manage':'records.read';
     const listing=normalizeListingQuery(kind,query),{q,filter,limit}=listing,memberId=query.memberId??null;
+    if(this.paymentsOnly&&kind==='payments')
+      requireThat(['all','allocated','unallocated'].includes(filter)&&['all','incoming','outgoing'].includes(listing.direction)&&
+        listing.credit==='all'&&listing.outcome==='all','invalid_query');
     const anchorId=query.anchorId===undefined?null:requireId(query.anchorId);
     if(memberId!==null)requireId(memberId);
     const filterHash=await sha256(canonicalJson(listing.advanced?{...listingFilterIdentity(listing),memberId,kind}:{q,filter,memberId,kind}));
@@ -238,7 +254,12 @@ export class RecordsService {
     requireThat(Array.isArray(rows),'invalid_snapshot',503);
     for(const row of rows){
       requireThat(row && row.groupId===this.groupId,'reader_scope_violation',503);
-      if(['payments','ledger'].includes(kind)){
+      if(this.paymentsOnly&&kind==='payments'){
+        requireThat(['incoming','outgoing'].includes(row.direction)&&['allocated','unallocated'].includes(row.state)&&
+          (row.state==='allocated'?typeof row.memberId==='string':row.memberId===null)&&
+          Number.isSafeInteger(row.amountRwf)&&row.amountRwf>0&&typeof row.atRaw==='string',
+          'invalid_payment_projection',503);
+      }else if(['payments','ledger'].includes(kind)){
         const native=kind==='payments'&&row.sourceKind==='observation';
         const amount=native&&row.amountRwf===null||Number.isSafeInteger(row.amountRwf)&&row.amountRwf!==0;
         const reference=native&&row.ftId===null||typeof row.ftId==='string'&&row.ftId.length>0;
@@ -258,7 +279,7 @@ export class RecordsService {
             'invalid_transaction_projection',503);
         }
       }
-      if(kind==='members')requireThat(normalizePhone(row.phone)===row.phone&&Number.isSafeInteger(row.balanceRwf),'invalid_member_projection',503);
+      if(kind==='members')requireThat(normalizePhone(row.phone)===row.phone&&(this.paymentsOnly||Number.isSafeInteger(row.balanceRwf)),'invalid_member_projection',503);
       // Staff/ordinary readers may never carry retained raw body or secret credential material.
       if(!['sms','rawSms'].includes(kind))requireThat(!['rawBody','raw_body','pinHash','tokenHash','gateway_token'].some(k=>Object.hasOwn(row,k)),'sensitive_projection_violation',503);
     }

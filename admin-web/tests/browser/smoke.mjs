@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { installLocalNetworkFence } from './local-network-fence.cjs';
 import { qualifyPhoneTeam } from './phone-team.mjs';
-import { fixtureMember, fixtureMomoPaymentsOnlyDetail, fixtureMomoRecord, fixtureSmsEvidenceId } from './operator-read-fixture.mjs';
+import { fixtureMember, fixtureOutgoingPayment, fixturePayment, fixtureSmsEvidenceId } from './operator-read-fixture.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const artifact = resolve(root, process.argv[2] ?? process.env.ADMIN_PWA_BUILD_DIR ?? 'build/admin-web-fixture');
@@ -122,7 +122,7 @@ try {
     if (pathname.startsWith('/api/admin/auth/')) loginRequests.push(pathname);
   };
   page.on('request', recordLogin);
-  const firstOverview = page.waitForResponse(response => new URL(response.url()).pathname === '/api/admin/core/overview' && response.ok());
+  const firstOverview = page.waitForResponse(response => new URL(response.url()).pathname === '/api/admin/burimunsi/home' && response.ok());
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   const overview = page.getByRole('heading', { name: 'Home' });
   await overview.waitFor();
@@ -185,20 +185,21 @@ try {
   await payments.click();
   await page.getByRole('heading', {name: 'Payments', level: 1, exact: true}).waitFor();
   const paymentViews = page.getByRole('navigation', {name: 'Payment views'});
-  assert.deepEqual(await paymentViews.getByRole('link').allTextContents(), ['Recorded', 'SMS & receipts', 'Needs attention']);
-  const recorded = paymentViews.getByRole('link', {name: 'Recorded', exact: true});
-  const smsView = paymentViews.getByRole('link', {name: 'SMS & receipts', exact: true});
-  const attention = paymentViews.getByRole('link', {name: 'Needs attention', exact: true});
+  assert.deepEqual(await paymentViews.getByRole('link').allTextContents(), ['Records', 'M-Money SMS']);
+  const recorded = paymentViews.getByRole('link', {name: 'Records', exact: true});
+  const smsView = paymentViews.getByRole('link', {name: 'M-Money SMS', exact: true});
   assert.equal(new URL(page.url()).hash, '#/admin/payments');
   await recorded.and(page.locator('[aria-current=page]')).waitFor();
+  await page.getByRole('button', {name: fixtureOutgoingPayment.ftId, exact: true}).waitFor();
+  assert.deepEqual(await page.getByRole('combobox', {name: 'Status', exact: true}).getByRole('option').allTextContents(),
+    ['All statuses', 'Allocated', 'Unallocated']);
   await smsView.click();
   await page.waitForURL(url => url.hash === '#/admin/payments?view=sms');
   await smsView.and(page.locator('[aria-current=page]')).waitFor();
   await page.setViewportSize({width: 390, height: 844});
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-  await attention.click();
-  await page.waitForURL(url => url.hash === '#/admin/payments?view=attention');
-  await attention.and(page.locator('[aria-current=page]')).waitFor();
+  await recorded.click();
+  await recorded.and(page.locator('[aria-current=page]')).waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.setViewportSize({width: 1440, height: 900});
   await nav.getByRole('link', {name: 'Home', exact: true}).click();
@@ -221,33 +222,28 @@ try {
   assert.equal(await memberSearch.inputValue(), fixtureMember.display_name);
 
   await nav.getByRole('link', {name: 'Payments', exact: true}).click();
-  await page.getByRole('link', {name: 'MoMo transactions', exact: true}).click();
-  const paymentSearch = page.getByLabel('Search MoMo TX ID or counterparty', {exact: true});
-  await paymentSearch.fill(fixtureMomoRecord.provider_transaction_id);
+  const paymentSearch = page.getByLabel('Search payments', {exact: true});
+  await paymentSearch.fill(fixturePayment.ftId);
   const filteredMomoResult = page.waitForResponse(response => {
     const url = new URL(response.url());
-    return url.origin === origin && url.pathname === '/api/admin/momo/transactions' &&
-      url.searchParams.get('search') === fixtureMomoRecord.provider_transaction_id && response.ok();
+    return url.origin === origin && url.pathname === '/api/admin/burimunsi/payments' &&
+      url.searchParams.get('q') === fixturePayment.ftId && response.ok();
   });
-  await page.getByRole('button', {name: 'Apply filters', exact: true}).click();
+  await page.getByRole('button', {name: 'Search', exact: true}).click();
   await filteredMomoResult;
-  const chosenPayment = page.getByRole('button', {name: fixtureMomoRecord.provider_transaction_id, exact: true});
+  const chosenPayment = page.getByRole('button', {name: fixturePayment.ftId, exact: true});
   await chosenPayment.click();
-  const paymentDetail = page.getByRole('dialog', {name: 'Transaction details', exact: true});
-  const sourceHistory = paymentDetail.getByRole('region', {name: 'Payment source and processing history'});
-  const source = sourceHistory.getByRole('row').filter({hasText: fixtureSmsEvidenceId});
-  await source.waitFor();
-  assert.deepEqual((await source.getByRole('cell').allTextContents()).slice(0, 4),
-    [fixtureSmsEvidenceId, 'Accepted', 'Accepted', fixtureMomoRecord.receipt_facts.parser_version]);
-  await paymentDetail.getByText('Parsing does not confirm provider API settlement.', {exact: true}).waitFor();
+  const paymentDetail = page.getByRole('dialog', {name: 'Payment details', exact: true});
+  await paymentDetail.getByRole('link', {name: 'Open M-Money SMS', exact: true}).waitFor();
+  await paymentDetail.getByText('Unallocated', {exact: true}).waitFor();
   await paymentDetail.getByRole('button', {name: 'Close', exact: true}).click();
   await paymentDetail.waitFor({state: 'hidden'});
-  const selectedMomo = requestUrl => requestUrl.origin === origin && requestUrl.pathname === '/api/admin/momo/transactions/' + fixtureMomoRecord.id;
-  await page.route(selectedMomo, route => route.fulfill({json: fixtureMomoPaymentsOnlyDetail}), {times: 1});
+  const selectedPayment = requestUrl => requestUrl.origin === origin && requestUrl.pathname === '/api/admin/burimunsi/payments/' + fixturePayment.id;
+  await page.route(selectedPayment, route => route.fulfill({json: {...fixturePayment, sourceId: null}}), {times: 1});
   await chosenPayment.click();
-  await paymentDetail.getByText(fixtureMomoRecord.provider_transaction_id, {exact: true}).waitFor();
+  await paymentDetail.getByText(fixturePayment.ftId, {exact: true}).waitFor();
   await paymentDetail.getByText('RWF 5,000', {exact: true}).waitFor();
-  assert.equal(await sourceHistory.count(), 0);
+  assert.equal(await paymentDetail.getByRole('link', {name: 'Open M-Money SMS', exact: true}).count(), 0);
   assert.equal(await paymentDetail.getByText(fixtureSmsEvidenceId, {exact: true}).count(), 0);
   await page.setViewportSize({width: 320, height: 640});
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
@@ -256,13 +252,13 @@ try {
   await nav.getByRole('link', {name: 'Home', exact: true}).click();
   await overview.waitFor();
 
-  const receipts = requestUrl => requestUrl.origin === origin && requestUrl.pathname === '/api/admin/sms/receipts';
+  const receipts = requestUrl => requestUrl.origin === origin && requestUrl.pathname === '/api/admin/momo/observations';
   await page.route(receipts, route => route.fulfill({
     status: 503, contentType: 'application/json', body: JSON.stringify({ error: { code: 'service_unavailable' } }),
   }), { times: 1 });
   assert.equal(await nav.getByRole('link', {name: 'SMS receipts', exact: true}).count(), 0);
   await page.goto(origin + '/#/admin/sms-receipts');
-  await page.getByRole('heading', { name: 'SMS receipts', level: 1, exact: true }).waitFor();
+  await page.getByRole('heading', { name: 'Payments', level: 1, exact: true }).waitFor();
   await page.getByRole('button', { name: /retry|try again/i }).click();
   const receiptRow = page.getByRole('table').getByRole('row').nth(1);
   await receiptRow.waitFor();
@@ -338,7 +334,7 @@ try {
 
   await mobile.context.addCookies(cookies);
   await mobile.page.goto(origin + '/admin/sms-receipts');
-  await mobile.page.getByRole('heading', { name: 'SMS receipts', level: 1, exact: true }).waitFor();
+  await mobile.page.getByRole('heading', { name: 'M-Money SMS', level: 2, exact: true }).waitFor();
   const openNavigation = mobile.page.getByRole('button', { name: 'Open navigation' });
   const closeNavigation = mobile.page.getByRole('button', { name: 'Close navigation' });
   await openNavigation.click();
@@ -397,7 +393,7 @@ try {
   assert.deepEqual(denied, []);
   assert.deepEqual(unexpectedAuth, []);
   assert.deepEqual(incorrectIdentityHeaders, []);
-  const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'retired_passcode_bookmark_returns_to_overview', 'three_daily_links_and_no_redundant_sidebar_search', 'canonical_payments_views_and_390px_reflow', 'protected_sms_deep_link', 'filtered_member_detail_and_return', 'recorded_momo_sms_source_history_without_settlement', 'momo_payments_only_detail_and_320px_reflow', 'sms_read_failure_retry',
+  const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'retired_passcode_bookmark_returns_to_overview', 'three_daily_links_and_no_redundant_sidebar_search', 'both_payment_directions_and_390px_reflow', 'protected_sms_deep_link', 'filtered_member_detail_and_return', 'payment_details_link_to_authorized_sms_evidence', 'payment_without_source_and_320px_reflow', 'sms_read_failure_retry',
       'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
       'retired_authenticator_bookmark_preserves_safe_destination', 'missing_scoped_admin_identity_removes_controls', 'session_failure_and_recovery_require_server_authority', 'expired_request_and_history_return_require_sign_in',
       'mobile_drawer_traps_and_restores_focus_and_reflows', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, 'no_unexpected_auth_request', 'identity_version_only_on_session_exchanges'];

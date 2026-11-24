@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
 import {PROJECT, ROOT, management, record, sha} from './access.mjs';
-import {parseManagedReadiness} from './managed-jobs-operator.mjs';
+import {parseManagedReadiness,paymentsMigrationHistorySql,paymentsRecordingInstalled} from './managed-jobs-operator.mjs';
 
 const digest = /^[0-9a-f]{64}$/;
 const slug = /^[a-z0-9][a-z0-9-]{0,50}$/;
@@ -31,6 +31,7 @@ async function sql(query, parameters = []) {
 const stateQuery = `SELECT current_user AS actor,f.project_ref,f.mode,f.epoch,f.source_sha256,
  c.enabled,j.active,j.jobname,j.schedule,j.command,j.username,j.database,
  (SELECT encode(sha256(convert_to(statements[1],'UTF8')),'hex') FROM supabase_migrations.schema_migrations WHERE version='20261122191300') AS fast_migration,
+ ${paymentsMigrationHistorySql},
  c.native_provider_source_sha256 AS old_source,c.native_provider_model_id AS model,
  c.native_provider_approval_sha256 AS approval,c.native_provider_used AS used,c.native_provider_limit AS cap,
  c.native_provider_expires_at AS deadline,c.readiness->>'copy_inventory_evidence_sha256' AS previous_copy,
@@ -61,6 +62,7 @@ async function live() {
 }
 function checkIdle(s) {
   must(!s.fast_migration || s.fast_migration===sha(readFileSync(fastMigration)),'unqualified_fast_scheduler_migration');
+  paymentsRecordingInstalled(s);
   must(s.actor==='postgres' && s.project_ref===PROJECT && s.mode==='open' && !s.enabled && !s.active &&
     s.schedule===(s.fast_migration?'1 second':'* * * * *') && s.jobname==='collect-jobs-maintenance-v1' && s.command==='SELECT collect_ops.tick_jobs();' &&
     s.username==='postgres' && s.database==='postgres' && s.guard.coverageVerified && !s.guard.blocking &&
@@ -69,13 +71,15 @@ function checkIdle(s) {
 }
 function checkSettings(x) {
   const s=x.state;
+  const recordsPayments=paymentsRecordingInstalled(s);
   const expected={BUILD_SOURCE_ID:s.source_sha256,COLLECT_SMS_CORE_SOURCE_SHA256:s.source_sha256,
     COLLECT_JOB_AUTH_MODE:'supabase_dispatch_hmac_v1',BURIMUNSI_PRODUCT_MODE:'standalone',
     BURIMUNSI_NATIVE_AUTO_TRANSACTIONS_ENABLED:'true',MOMO_AI_ENABLED:'true',MOMO_AI_MODEL:s.model,
     MOMO_PROCESSING_PAUSED:'true',COLLECT_SMS_ENABLED:'true',COLLECT_SMS_DISPATCH_PAUSED:'false',
-    BURIMUNSI_PAYMENT_SMS_ENABLED:'true'};
+    BURIMUNSI_PAYMENT_SMS_ENABLED:recordsPayments?'false':'true'};
   must(Object.entries(expected).every(([k,v])=>x.keys.get(k)===sha(v)) && x.keys.has('OPENAI_API_KEY') &&
-    x.keys.get('BURIMUNSI_COLLECTION_ID')===s.scope_digest && x.keys.get('BURIMUNSI_PAYMENT_SMS_COLLECTION_ID')===s.scope_digest &&
+    x.keys.get('BURIMUNSI_COLLECTION_ID')===s.scope_digest &&
+    (recordsPayments||x.keys.get('BURIMUNSI_PAYMENT_SMS_COLLECTION_ID')===s.scope_digest) &&
     s.key_count===1 && digest.test(s.vault_digest) && x.keys.get('COLLECT_JOB_SIGNING_KEY')===s.vault_digest,
     'edge_settings_or_scheduler_key_changed');
 }
@@ -145,9 +149,10 @@ async function prepare(p, [priorFile,bundlesFile,gatewayFile,quotaFile]) {
     FROM collect_ops.jobs_dispatches d LEFT JOIN private.collect_managed_job_tickets t ON t.dispatch_id=d.id
     WHERE d.state='reviewed_unknown' ORDER BY d.created_at DESC LIMIT 16`);
   const copyInventory=readFileSync(new URL('../../../supabase/retention-inventory.json',import.meta.url));
+  const recordsPayments=paymentsRecordingInstalled(s);
   const guards=await sql(`SELECT p.oid::regprocedure::text AS routine,p.proowner::regrole::text AS owner,
      encode(sha256(convert_to(p.prosrc,'UTF8')),'hex') AS digest FROM pg_proc p
-     WHERE p.pronamespace='collect_ops'::regnamespace OR p.proname IN ('collect_native_provider_reserve','collect_managed_job_complete','collect_managed_job_claim')
+     WHERE p.pronamespace='collect_ops'::regnamespace OR p.proname IN ('collect_native_provider_reserve','collect_managed_job_complete','collect_managed_job_claim','burimunsi_auto_finish')
      ORDER BY 1`);
   must(guards.length>=14 && guards.every(g=>g.owner==='postgres') && journal.every(r=>r.reviewed),'runtime_or_dispatch_evidence_incomplete');
   const qualification={project:PROJECT,at:timestamp(),bundlesSha256:sha(readFileSync(bundlesFile)),
@@ -163,7 +168,9 @@ async function prepare(p, [priorFile,bundlesFile,gatewayFile,quotaFile]) {
     previousSourceSha256:s.old_source,previousApprovalSha256:s.approval,model:s.model,
     providerUsedPreserved:s.used,applicationLimit:s.cap,applicationDeadline:s.deadline,
     qualificationSha256:p.hash('qualification'),
-    scope:'Continue the existing authorized BuriMunsi automatic payment processing on this verified release. Preserve collection, model, provider limits and verified payer delivery.',
+    scope:recordsPayments
+     ?'Continue authorized M-Money SMS extraction and recording in BuriMunsi Payments on this verified release. Preserve the collection, model and provider limits.'
+     :'Continue the existing authorized BuriMunsi automatic payment processing on this verified release. Preserve collection, model, provider limits and verified payer delivery.',
     at:timestamp()});
   console.log(JSON.stringify({ready:true,epoch:s.epoch,readyGateways:s.ready_gateways,waiting:s.waiting_jobs,remainingInvocations:validateQuota(quota)}));
 }

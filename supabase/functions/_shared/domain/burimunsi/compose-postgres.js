@@ -44,6 +44,7 @@ export function createPostgresNativePorts({admission,config,db,bridges,clock=()=
   requireThat(config.canonicalIntegrationEnabled===undefined||typeof config.canonicalIntegrationEnabled==='boolean','invalid_worker_config',503);
   requireThat(config.nativeObservationEnabled===undefined||typeof config.nativeObservationEnabled==='boolean','invalid_worker_config',503);
   const integrated=config.canonicalIntegrationEnabled===true;
+  const paymentsOnly=integrated&&bridges.canonical?.env?.BURIMUNSI_PRODUCT_MODE==='standalone';
   requireThat(config.smartOnboardingAdvancedEnabled===undefined||typeof config.smartOnboardingAdvancedEnabled==='boolean','invalid_worker_config',503);
   let smartOnboardingImport=null;
   if(config.smartOnboardingAdvancedEnabled===true&&!integrated){
@@ -98,7 +99,7 @@ export function createPostgresNativePorts({admission,config,db,bridges,clock=()=
     const journal=new PostgresSmartOnboardingJournal({authority:auth,env,clock});
     smartOnboardingImport=createGuardedSmartOnboardingImport({env,groupId:config.groupId,policy,journal});
   }
-  const memberCommands=integrated?new PostgresCollectMemberCommands({authority:auth}):null;
+  const memberCommands=integrated?new PostgresCollectMemberCommands({authority:auth,paymentsOnly}):null;
   if(memberCommands)bridges={...bridges,commands:{...bridges.commands,
     createDirectMember:(...args)=>memberCommands.createDirectMember(...args),
     setMembershipActive:(...args)=>memberCommands.setMembershipActive(...args)}};
@@ -161,13 +162,13 @@ export function createPostgresNativePorts({admission,config,db,bridges,clock=()=
   }
   const canonical=new PostgresCanonicalStore({authority:auth,commands,identities:bridges.identities,jobs:automaticJobs,clock});
   const records=new PostgresRecordsStore({authority:auth,sourceReader,clock,
-    nativeAutoRecordsEnabled:integrated&&bridges.canonical.env.BURIMUNSI_NATIVE_AUTO_RECORDS_ENABLED==='true'});
+    nativeAutoRecordsEnabled:integrated&&bridges.canonical.env.BURIMUNSI_NATIVE_AUTO_RECORDS_ENABLED==='true',paymentsOnly});
   const gateway=integrated?new PostgresCollectGateway({authority:auth,env:bridges.canonical.env,clock}):bridges.gateway(auth);
   const observations=integrated&&config.nativeObservationEnabled===true&&hasPhonePinContext(db)?
     new PostgresNativeObservations({authority:auth,env:bridges.canonical.env,
       validateProviderProfile:bridges.canonical.validateProviderProfile,custody,storageWitnesses,clock}):null;
   requirePort(gateway,['withAuthorityTransaction','withReadSnapshot']);
-  return Object.freeze({auth,canonical,records,gateway,jobs,...(smartOnboardingImport?{smartOnboardingImport}:{}),...(observations?{observations}:{}),...(storageWitnesses?{storageWitnesses}:{}),...(integrated?{sources:bridges.sources,memberCommands,sourceReader}:{}),...(managedSessions?{managedSessions}:{}),...(scheduler?{scheduler}:{}),...(workerAuthority?{workerAuthority}:{}),...(postingAuthority?{postingAuthority}:{}),...(rematches?{rematches}:{}),...(posting?{posting}:{}),...(custody?{custody}:{}),...(allocation?{allocation}:{}),...(preparation?{preparation}:{})});
+  return Object.freeze({auth,canonical,records,gateway,jobs,paymentsOnly,...(smartOnboardingImport?{smartOnboardingImport}:{}),...(observations?{observations}:{}),...(storageWitnesses?{storageWitnesses}:{}),...(integrated?{sources:bridges.sources,memberCommands,sourceReader}:{}),...(managedSessions?{managedSessions}:{}),...(scheduler?{scheduler}:{}),...(workerAuthority?{workerAuthority}:{}),...(postingAuthority?{postingAuthority}:{}),...(rematches?{rematches}:{}),...(posting?{posting}:{}),...(custody?{custody}:{}),...(allocation?{allocation}:{}),...(preparation?{preparation}:{})});
 }
 export function composePostgresNativeRequest(options) {
   const ports=createPostgresNativePorts(options);

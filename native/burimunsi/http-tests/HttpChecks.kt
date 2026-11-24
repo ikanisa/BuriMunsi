@@ -274,7 +274,7 @@ fun main(){
   ck("protocol mutation $index cannot settle dispatched command",failure(true).let{it.code==pair.first&&it.uncertain})
  }
  Wire.reply=Reply(transform={v->v.put("data",v.getJSONObject("data").put("paymentCount","17"))})
- ck("numeric string rejected",failure().code=="contract_amount")
+ ck("payment count rejects numeric strings",failure().code=="contract_type")
  Wire.reply=Reply(body="{\"x\":1,\"x\":2}");ck("duplicate keys rejected",failure().code=="contract_duplicate_key")
  Wire.reply=Reply(body="{\"x\":1e3}");ck("exponent coercion rejected",failure().code=="contract_number")
  Wire.reply=Reply(body="not-json");ck("malformed JSON not offline",failure().code=="contract_json")

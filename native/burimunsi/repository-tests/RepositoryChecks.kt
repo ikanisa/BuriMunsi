@@ -34,7 +34,7 @@ fun main(){
  fun emptyPage()=JSONObject().put("items",JSONArray()).put("totalCount",0).put("nextCursor",JSONObject.NULL).put("revision","v1").put("asOf","2026-11-08T10:00:00Z").toString()
  fun recovered(req:Request,state:String,id:String=if(req.path.endsWith("/recovery"))req.path.substringBeforeLast('/').substringAfterLast('/') else req.path.substringAfterLast('/'))=if(!req.path.endsWith("/recovery")) JSONObject()
   .put("contractVersion",2).put("requestId",id).put("groupId","group-1").put("actorId","admin-1")
-  .put("state",state).put("operation","burimunsi.allocate").put("financialState","posted").toString() else JSONObject()
+  .put("state",state).put("operation","burimunsi.allocate").put("allocationState","allocated").toString() else JSONObject()
   .put("protocol","burimunsi.operation-recovery.v1").put("requestId",id).put("state",state)
   .put("originDigest",req.recoveryOrigin).put("groupId","group-1").put("actorId","admin-1").put("installationId","installation-1").toString()
  val api=ApiClient()
@@ -252,7 +252,8 @@ fun main(){
  requestedState="committed";repo.reconcilePending()
  forcedPostFailure=false;requestedState="committed";postCalls=0;outcomeCalls=0
  val resultVerified=repo.allocate(p.copy(id="payment-verified"),m)
- ck("success needs a matching retained command outcome",resultVerified.getString("state")=="committed"&&postCalls==1&&outcomeCalls==1&&repo.pending()==null)
+ ck("success needs a matching retained allocation outcome",resultVerified.getString("state")=="committed"&&
+  resultVerified.getString("allocationState")=="allocated"&&postCalls==1&&outcomeCalls==1&&repo.pending()==null)
  // The mutation may have committed before a status GET receives a 401.
  // It must remain UNKNOWN, not a definite rejected command.
  postCalls=0;outcomeCalls=0

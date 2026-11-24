@@ -138,21 +138,29 @@ async function content(request,env,account,actor,parts,url){
  const reason=text(request.headers.get('X-Collect-Review-Reason'),'review reason',1000);
  if(reason.length<8||DISPLAY_CONTROL.test(reason))fail(400,'reason_required','Record a review reason of 8 to 1000 characters.');
  const scoped=accountDatabase(accountDatabase(env,account,'sms.read',{mfa:true,fresh:true}),account,'sms.reveal',{mfa:true,fresh:true});
- const source=await select(scoped,'SELECT private.burimunsi_observation_admin_source(?,?) AS result',collectionId,sourceId);
- if(source===null)missing();
+ const standalone=env.BURIMUNSI_PRODUCT_MODE==='standalone';
+ const sourceSql=standalone?'private.burimunsi_observation_admin_payment_source(?,?)':'private.burimunsi_observation_admin_source(?,?)';
+ const proof=await select(scoped,`SELECT ${sourceSql} AS result`,collectionId,sourceId);
+ if(proof===null)missing();
+ if(standalone&&(!isObject(proof)||!Object.hasOwn(proof,'inlineEnvelope')))bad();
+ const source=standalone?proof.source:proof;
+ let envelope=standalone?proof.inlineEnvelope:null;
  const initialHintProfile=hintsEnabled?await select(scoped,'SELECT private.burimunsi_observation_admin_hint_profile(?,?) AS result',collectionId,sourceId):null;
  if(!isObject(source)||source.collectionId!==collectionId||source.sourceId!==sourceId||!ID.test(source.requestId??'')||
   !HASH.test(source.bodySha256??'')||!HASH.test(source.cipherSha256??'')||!HASH.test(source.storageFingerprint??'')||
   typeof source.storageOperationId!=='string'||!source.storageOperationId||!await reservationMatches(source))bad();
  const plaintextSize=num(source.sizeBytes,1,131072),cipherSize=num(source.cipherSize,1,262144);
- const object=await scoped.PRIVATE_MEDIA?.get(source.objectKey);
- if(!object)fail(503,'source_unavailable','Retained SMS storage is unavailable.');
- if(object.key!==source.objectKey||object.size!==cipherSize||object.sha256!==source.cipherSha256||
-  object.customMetadata?.sha256!==source.objectSha256||object.customMetadata?.key_id!==source.keyId||
-  object.customMetadata?.source_fingerprint!==source.sourceFingerprint)bad();
+ if(envelope===null){
+  const object=await scoped.PRIVATE_MEDIA?.get(source.objectKey);
+  if(!object)fail(503,'source_unavailable','Retained SMS storage is unavailable.');
+  if(object.key!==source.objectKey||object.size!==cipherSize||object.sha256!==source.cipherSha256||
+   object.customMetadata?.sha256!==source.objectSha256||object.customMetadata?.key_id!==source.keyId||
+   object.customMetadata?.source_fingerprint!==source.sourceFingerprint)bad();
+  envelope=await object.text();
+ }else if(typeof envelope!=='string'||bytes.encode(envelope).length!==cipherSize||await digest(envelope)!==source.cipherSha256)bad();
  let payload,plain;
  try{
-  plain=await decrypt(scoped,await object.text(),`sms:${sourceId}:${source.objectSha256}`);
+  plain=await decrypt(scoped,envelope,`sms:${sourceId}:${source.objectSha256}`);
   if(plain.length!==plaintextSize||await digest(plain)!==source.objectSha256)bad();
   payload=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(plain));
   if(!isObject(payload)||payload.provenance!=='native_observation_unverified'||typeof payload.raw_sender!=='string'||
@@ -172,8 +180,8 @@ async function content(request,env,account,actor,parts,url){
  const displayHints=hintsEnabled&&initialHintProfile&&currentHintProfile&&canonicalJson(initialHintProfile)===canonicalJson(currentHintProfile)
   ?await observationDisplayHints(payload,currentHintProfile,source.bodySha256):null;
  const sourceGuard=displayHints
-  ?admitted.DB.prepare('INSERT INTO admin_bridge_guards(id,passed) SELECT ?,CASE WHEN private.burimunsi_observation_admin_source(?,?)=?::jsonb AND private.burimunsi_observation_admin_hint_profile(?,?)=?::jsonb THEN 1 ELSE 0 END').bind(guardId,collectionId,sourceId,source,collectionId,sourceId,currentHintProfile)
-  :admitted.DB.prepare('INSERT INTO admin_bridge_guards(id,passed) SELECT ?,CASE WHEN private.burimunsi_observation_admin_source(?,?)=?::jsonb THEN 1 ELSE 0 END').bind(guardId,collectionId,sourceId,source);
+  ?admitted.DB.prepare(`INSERT INTO admin_bridge_guards(id,passed) SELECT ?,CASE WHEN ${sourceSql}=?::jsonb AND private.burimunsi_observation_admin_hint_profile(?,?)=?::jsonb THEN 1 ELSE 0 END`).bind(guardId,collectionId,sourceId,proof,collectionId,sourceId,currentHintProfile)
+  :admitted.DB.prepare(`INSERT INTO admin_bridge_guards(id,passed) SELECT ?,CASE WHEN ${sourceSql}=?::jsonb THEN 1 ELSE 0 END`).bind(guardId,collectionId,sourceId,proof);
  await assertMutationAdmission(admitted,current,[
   sourceGuard,
   admitted.DB.prepare("INSERT INTO audit_log(actor_user_id,actor_session_id,action,entity_type,entity_id,details_json,created_at) VALUES(?,?,'sms.observation.revealed','sms_observation',?,?,?)")

@@ -10,6 +10,12 @@ reply against the original dispatch.
 
 Start with the managed release tools in `scripts/supabase/cloud-release/`.
 
+The BuriMunsi scheduler processes retained raw M-Money SMS into incoming and
+outgoing payments in `burimunsi.payments`. Member allocation is an authorized
+operator action on the recorded payment. Follow the
+[BuriMunsi release scope](../../README.md#account-roles-sms-access-and-payments)
+and the exact release receipts when qualifying the scheduler.
+
 | Tool | Purpose |
 | --- | --- |
 | `managed-jobs-scheduler.mjs` | Render the Cloud scheduler and read back its source hashes without connecting |
@@ -21,7 +27,7 @@ renderer and an isolated PostgreSQL test fixture. The Cloud installation starts
 inactive. The active schedule and runtime gates come from the exact deployed
 migration and live readback.
 
-## Modes and private server configuration
+## Shared Collect modes and private server configuration
 
 | `COLLECT_JOBS_MODE` | Readiness file format | Receipt pause | Required request contracts |
 | --- | --- | --- | --- |

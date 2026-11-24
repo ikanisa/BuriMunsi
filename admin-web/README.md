@@ -4,6 +4,12 @@ This package owns the BuriMunsi browser Admin and installable PWA. The Supabase
 Admin API owns session admission, permissions and writes. Android Staff and
 Admin Sync ship from `native/burimunsi/`.
 
+Payments shows the configured group's incoming and outgoing M-Money payments
+together. The member assignment determines whether a payment is Allocated or
+Unallocated. Operators with allocation access can select a member from the
+same group. Authorized Admins can inspect the separate raw SMS evidence under
+Payments.
+
 ## Local verification
 
 From the repository root, with Node 24.19.0, npm and Python 3:
@@ -49,4 +55,4 @@ Finish or explicitly discard unsaved form edits in their current tabs. When a
 new worker is waiting, enter `about:blank` in each open Admin tab. After the last
 tab has left Admin, return online to Admin in those same tabs. Keep an installed
 window open if it has pending work and offers no browser address bar. Use the
-original request references to reconcile uncertain outcomes before resubmitting.
+original request references to check uncertain outcomes before resubmitting.

@@ -155,12 +155,12 @@ export function nativeRuntime(client,group){
  };
  const media={
   namespace:{origin:'https://fixture.invalid',bucket:'private-evidence'},
-  async get(key){const value=objects.get(key);return value?{text:async()=>value.sealed}:null;},
+  async get(key){const value=objects.get(key);return value?{key,sha256:sha(value.sealed),text:async()=>value.sealed}:null;},
   async put(key,sealed,options){
    const descriptor={scope:options.scope,aad:options.aad,keyId:env.DATA_KEY_ID,plaintextSha256:options.customMetadata.sha256,
     requestDigest:options.sourceDigest,httpMetadata:options.httpMetadata,customMetadata:options.customMetadata};
    const sourceHash=sha(canonicalJson(descriptor)),prior=objects.get(key);
-   if(prior){assert.equal(prior.sourceHash,sourceHash);return {key,stored:true,metadataCommitted:true};}
+   if(prior){assert.equal(prior.sourceHash,sourceHash);return {key,sha256:sha(prior.sealed),stored:true,metadataCommitted:true};}
    const operation=sha('collect.storage.put.v1\n'+key),cipherHash=sha(sealed),custom={...options.customMetadata,source_fingerprint:sourceHash},size=Buffer.byteLength(sealed);
    const fingerprint=sha(canonicalJson({key,size,sha256:cipherHash,scope:options.scope,httpMetadata:options.httpMetadata,customMetadata:custom}));
    await client.query('BEGIN');
@@ -172,13 +172,14 @@ export function nativeRuntime(client,group){
       [key,options.scope,options.aad,env.DATA_KEY_ID,descriptor.plaintextSha256,sourceHash,sealed]);
     await client.query('COMMIT');
    }catch(error){await client.query('ROLLBACK');if(process.env.BURIMUNSI_FIXTURE_DEBUG)process.stderr.write(error.stack+' '+(error.where??'')+'\n');throw error;}
-   objects.set(key,{sealed,sourceHash});return {key,stored:true,metadataCommitted:true};
+   objects.set(key,{sealed,sourceHash});return {key,sha256:cipherHash,stored:true,metadataCommitted:true};
   }
  };
  env.PRIVATE_MEDIA=media;
  const journal=async(tx,key)=>{
-  const rows=await tx.unsafe('SELECT key_id,source_fingerprint FROM private.storage_payload_reservations WHERE object_key=$1',[key]);
-  assert.equal(rows.length,1);return {reservation:rows[0],put:{object_key:key}};
+  const rows=await tx.unsafe(`SELECT r.key_id,r.source_fingerprint,i.sha256
+    FROM private.storage_payload_reservations r JOIN private.storage_put_intents i USING (object_key) WHERE object_key=$1`,[key]);
+  assert.equal(rows.length,1);const {sha256,...reservation}=rows[0];return {reservation,put:{object_key:key,sha256}};
  };
  return {env,objects,run,tx,journal};
 }

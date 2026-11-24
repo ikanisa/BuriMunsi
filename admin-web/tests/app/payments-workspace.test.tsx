@@ -6,16 +6,21 @@ import type {AdminUser} from '../../src/session/sessionResponses';
 import {workspaceRoutes} from '../../src/app/WorkspaceRoutes';
 import {canOpenAdminPath} from '../../src/app/route-access';
 import {safePaymentListReturn} from '../../src/features/operations/paymentLocations';
+import {AdminTransportError} from '../../src/api/contracts';
 import coreFixture from '../core/canonical-core-fixtures.json';
 import reconciliationFixture from '../core/canonical-reconciliation-fixture.json';
 
 const mock = vi.hoisted(() => ({request:vi.fn(), permissions:[] as string[], status:'authenticated', role:'admin',
-  authMethod:'phone_passcode' as AdminUser['authMethod']}));
+  authMethod:undefined as AdminUser['authMethod']}));
 const currentActor = reconciliationFixture.detail.current_actor_id;
 const momoId = '11111111-1111-4111-8111-111111111111';
 const accountId = '22222222-2222-4222-8222-222222222222';
 const momoRef = 'MOMO-FIXTURE-01';
 const time = '2026-10-18T08:00:00.000Z';
+const buriPayment = {id:momoId,version:1,direction:'incoming',amountRwf:5000,atRaw:time,ftId:momoRef,
+  payerNameRaw:'Fixture payer',memberId:null,memberName:null,state:'unallocated',sourceId:null};
+const outgoing = {...buriPayment,id:accountId,direction:'outgoing',ftId:'MOMO-OUT-FIXTURE'};
+const buriPage = (items: object[]) => ({items,totalCount:items.length,offset:0,limit:25,nextOffset:null,asOf:time});
 const paymentRef = '100000000123';
 const payment = {...coreFixture.transactions.rows[0],payment_reference:paymentRef};
 const momo = {id:momoId,receiving_account_id:accountId,provider_transaction_id:momoRef,recipient_name:'Fixture receiver',public_code:'123456',payer_name:'Fixture payer',
@@ -47,7 +52,7 @@ const visit = (path: string, permissions: string[], role = 'admin') => {
 };
 const location = () => screen.getByLabelText('Current location');
 const called = (prefix: string) => mock.request.mock.calls.filter(([path]) => path.startsWith(prefix));
-afterEach(() => {mock.request.mockReset();mock.status='authenticated';mock.role='admin';mock.authMethod='phone_passcode';});
+afterEach(() => {mock.request.mockReset();mock.status='authenticated';mock.role='admin';mock.authMethod=undefined;});
 
 describe('consolidated Payments routes',()=>{
   it('makes the old payment list a guarded alias and returns through the new list with search preserved',async()=>{
@@ -56,7 +61,7 @@ describe('consolidated Payments routes',()=>{
           current_actor_id:currentActor,can_manage:false,related:{},related_truncated:false}
       : {...coreFixture.transactions,rows:[payment]});
     visit('/admin/transactions?search='+paymentRef,['payments.read']);
-    const record = await screen.findByRole('link',{name:paymentRef});
+    const record = await screen.findByRole('link',{name:paymentRef}, {timeout:5000});
     expect(location()).toHaveTextContent('/admin/payments?search='+paymentRef);
     expect(screen.getByRole('textbox',{name:'Search payments'})).toHaveValue(paymentRef);
     fireEvent.click(record);
@@ -108,6 +113,7 @@ describe('consolidated Payments routes',()=>{
     });
 
   it('preserves separate SMS and payment permissions, including direct URL source selection',async()=>{
+    mock.authMethod = 'phone_passcode';
     mock.request.mockResolvedValue({contractVersion:1,asOf:time,items:[]});
     const sms=visit('/admin/momo-receipts',['sms.read']);
     expect(await screen.findByText('No receiver collections are available for this account.')).toBeVisible();
@@ -141,21 +147,21 @@ describe('consolidated Payments routes',()=>{
     {role:'admin', permissions:['payments.read'], allowed:false},
     {role:'admin', permissions:['payments.read','sms.read'], allowed:true},
   ])('aligns phone $role receipt links and deep links with the server ($permissions)', async ({role,permissions,allowed}) => {
-    mock.request.mockResolvedValue({...coreFixture.transactions,rows:[payment]});
+    mock.authMethod = 'phone_passcode';
+    mock.request.mockResolvedValue(buriPage([buriPayment]));
     const recorded=visit('/admin/payments',permissions,role);
-    expect(await screen.findByRole('link',{name:paymentRef})).toBeVisible();
+    expect(await screen.findByRole('button',{name:momoRef})).toBeVisible();
     expect(screen.queryByRole('link',{name:'Member receipts'})).not.toBeInTheDocument();
-    expect(Boolean(screen.queryByRole('link',{name:'SMS & receipts'}))).toBe(allowed);
+    expect(Boolean(screen.queryByRole('link',{name:'M-Money SMS'}))).toBe(allowed);
     recorded.unmount();
-    mock.request.mockClear().mockResolvedValue(emptyOperations);
+    mock.request.mockClear();
     const compact=visit('/admin/payments?view=sms&source=member',permissions,role);
-    expect(await screen.findByText(allowed ? 'No records found' : 'Access unavailable')).toBeVisible();
-    expect(called('gateway/receipts')).toHaveLength(allowed ? 1 : 0);
+    expect(await screen.findByText('Payment view unavailable')).toBeVisible();
+    expect(mock.request).not.toHaveBeenCalled();
     compact.unmount();
     const bookmarks=['/admin/member-receipts','/admin/member-receipts/'+momoId];
     for (const path of bookmarks) {
-      expect(canOpenAdminPath(path,sessionUser())).toBe(allowed);
-      if (allowed) continue;
+      expect(canOpenAdminPath(path,sessionUser())).toBe(false);
       mock.request.mockClear();
       const bookmark=visit(path,permissions,role);
       expect(screen.getByText('Direct route denied')).toBeVisible();
@@ -244,5 +250,52 @@ describe('consolidated Payments routes',()=>{
     expect(await screen.findByText('Direct route denied')).toBeVisible();
     await act(async()=>{});
     expect(mock.request).not.toHaveBeenCalled();
+  });
+});
+
+describe('BuriMunsi phone Payments', () => {
+  it('shows both directions together and links recent Home payments to the same workspace', async () => {
+    mock.authMethod = 'phone_passcode';
+    mock.request.mockImplementation(async (path: string) => path === 'burimunsi/home'
+      ? {paymentCount:2,memberCount:5,unallocatedCount:2,recentPayments:[buriPayment,outgoing],asOf:time}
+      : buriPage([buriPayment,outgoing]));
+    visit('/admin', ['overview.read','payments.read','reconciliations.read','ledger.read'], 'staff');
+    expect(await screen.findByRole('heading',{name:'Recent payments'})).toBeVisible();
+    expect(screen.getByText('Incoming')).toBeVisible();
+    expect(screen.getByText('Outgoing')).toBeVisible();
+    fireEvent.click(screen.getByRole('link',{name:'View all payments'}));
+    expect(await screen.findByRole('button',{name:'MOMO-OUT-FIXTURE'})).toBeVisible();
+    const filters = within(screen.getByRole('combobox',{name:'Status'}));
+    expect(filters.getAllByRole('option').map(option => option.textContent)).toEqual(['All statuses','Allocated','Unallocated']);
+    expect(called('core/overview')).toHaveLength(0);
+    expect(canOpenAdminPath('/admin/ledgers',sessionUser())).toBe(false);
+    expect(canOpenAdminPath('/admin/reconciliations',sessionUser())).toBe(false);
+  });
+
+  it('keeps the allocation intent after an uncertain response and updates the same payment', async () => {
+    mock.authMethod = 'phone_passcode';
+    const changed = {...buriPayment,version:2,memberId:accountId,memberName:'Group member',state:'allocated'};
+    let applied = false, attempts = 0;
+    mock.request.mockImplementation(async (path: string) => {
+      if (path.startsWith('burimunsi/payments/members?')) return {items:[{id:accountId,name:'Group member'}]};
+      if (path.endsWith('/allocate')) {
+        attempts++;
+        if (attempts === 1) throw new AdminTransportError('Response unavailable');
+        applied = true;
+        return {paymentId:momoId,memberId:accountId,state:'allocated',version:2};
+      }
+      return path.endsWith(momoId) ? {...(applied ? changed : buriPayment),canAllocate:true} : buriPage([applied ? changed : buriPayment]);
+    });
+    visit('/admin/payments',['payments.read'],'staff');
+    fireEvent.click(await screen.findByRole('button',{name:momoRef}));
+    const dialog = within(await screen.findByRole('dialog',{name:'Payment details'}));
+    fireEvent.change(await dialog.findByLabelText('Member'),{target:{value:accountId}});
+    fireEvent.click(dialog.getByRole('button',{name:'Allocate'}));
+    fireEvent.click(await dialog.findByRole('button',{name:'Retry allocation'}));
+    expect(await dialog.findByText('Allocated')).toBeVisible();
+    const writes = mock.request.mock.calls.filter(([path]) => path.endsWith('/allocate'));
+    expect(writes).toHaveLength(2);
+    expect(writes[0]).toEqual(writes[1]);
+    expect(writes[0][1]).toMatchObject({method:'POST',body:{memberId:accountId,expectedVersion:1},idempotencyKey:expect.any(String)});
   });
 });

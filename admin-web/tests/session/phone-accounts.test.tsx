@@ -119,7 +119,7 @@ describe('dedicated phone accounts', () => {
     expect(screen.getByRole('link', {name: 'Profile access'})).toHaveAttribute('href', '#/admin/burimunsi');
   });
 
-  it('opens the scoped Admin group and SMS controls with the current session after the old five-minute deadline', async () => {
+  it('opens scoped Admin group access and omits legacy SMS controls after the old five-minute deadline', async () => {
     const groups = ['group-one', 'another-group'];
     const fetchImpl = vi.fn<typeof fetch>(async input => {
       const path = String(input);
@@ -136,9 +136,8 @@ describe('dedicated phone accounts', () => {
     expect(fetchImpl.mock.calls.some(([path]) => String(path).includes('collectionId=another-group'))).toBe(false);
     expect(screen.queryByText('Owner verification')).toBeNull();
     fireEvent.click(screen.getByRole('button', {name: /^Account:/}));
-    fireEvent.click(screen.getByText('Advanced', {selector: 'summary'}));
-    fireEvent.click(screen.getByRole('link', {name: 'SMS controls'}));
-    await waitFor(() => expect(fetchImpl.mock.calls.some(([path]) => path === '/api/admin/notification-operator/access')).toBe(true), {timeout: 5000});
+    expect(screen.queryByRole('link', {name: 'SMS controls'})).toBeNull();
+    expect(fetchImpl.mock.calls.some(([path]) => path === '/api/admin/notification-operator/access')).toBe(false);
     expect(screen.queryByText(/Verify your passcode to open these controls/)).toBeNull();
     expect(fetchImpl.mock.calls.filter(([path]) => String(path).includes('/auth/') && path !== '/api/admin/auth/session')).toHaveLength(0);
   }, 12_000);

@@ -19,6 +19,7 @@ import {createNativeHandler} from '../../../supabase/functions/_shared/domain/bu
 import {validateObservationInput} from '../../../supabase/functions/_shared/domain/burimunsi/observation-evidence.js';
 import {PostgresNativeObservations} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-observations.js';
 import {PostgresNativeAutoWorker} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-native-auto-worker.js';
+import {NATIVE_AUTO_SCHEMA_VERSION} from '../../../supabase/functions/_shared/domain/burimunsi/native-auto-parser.js';
 import {PostgresNativeSmsLedger} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-native-sms-ledger.js';
 import {PostgresPostingCustody} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-posting-custody.js';
 import {PostgresStorageWitnesses} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-storage-witnesses.js';
@@ -53,7 +54,7 @@ function providerOutput(body){
   evidence:{incoming_success:'You have received',principal:'You have received '+amount+' RWF',transaction_id:'FT Id: '+reference,
     transaction_datetime:'at '+time,payer:'from '+name+' ('+identifier+')',fee:null,wallet_balance_after:'Balance: '+balance+' RWF'}};
 }
-function receiptFixture(f,a=nativeActor(group)){
+function receiptFixture(f,a=nativeActor(group),{standalone=false}={}){
  const {run,env,journal,objects}=nativeRuntime(f.client,group),work={assert:async()=>{}};
  const actor={id:a.accountId,sessionId:a.sessionId,principalUserId:a.principalUserId,installationId:a.installationId,
   groupId:group,role:'admin',installationProfile:'internal_receiver',capabilities:['records.read','sms.read','gateway.manage'],
@@ -64,13 +65,15 @@ function receiptFixture(f,a=nativeActor(group)){
   if(sql===PIN_CONTEXT_SQL)return [pinRow];assert.ok(sql.startsWith('SET TRANSACTION'));return [];
  }})};
  env.DB=db;env.BURIMUNSI_PAYMENT_SMS_ENABLED="true";env.BURIMUNSI_PAYMENT_SMS_COLLECTION_ID=group;
+ if(standalone)env.BURIMUNSI_PRODUCT_MODE='standalone';
  const authority={db,groupId:group,read:run('http_collect',{readOnly:true}),write:run('http_collect'),session:async()=>actor,assertOwned:work.assert};
  const custody={namespace:env.PRIVATE_MEDIA.namespace,journal,sameJournal:(x,y)=>canonicalJson(x)===canonicalJson(y),decrypt:(sealed,aad)=>decrypt(env,sealed,aad)};
  const pageCustody=new PostgresPostingCustody({db,groupId:group,namespace:custody.namespace,decrypt:custody.decrypt,
   storageWitnesses:new PostgresStorageWitnesses({db,groupId:group,namespace:custody.namespace,media:env.PRIVATE_MEDIA,
    applicationWorkTuple:()=>[uuid(888),1,'a'.repeat(64)]})});
  custody.keyedObservationJournal=pageCustody.keyedObservationJournal.bind(pageCustody);
- const witnesses={stage:async(_binding,targets)=>targets,prefetch:async targets=>{for(const target of targets)assert.ok(objects.has(target.key));},
+ let externalFetches=0,providerCalls=0;
+ const witnesses={stage:async(_binding,targets)=>targets,prefetch:async targets=>{externalFetches++;for(const target of targets)assert.ok(objects.has(target.key));},
   sealed:async(_binding,key)=>{assert.ok(objects.has(key));return objects.get(key).sealed;},forget(){}};
  const authGate=createPhonePinRequestGate({origin,secrets:{pinPepper:new Uint8Array(32),pinPepperId:'fixture'},networkBucket:async()=>sha('network')});
  const unused=()=>assert.fail('unexpected command');
@@ -91,7 +94,7 @@ function receiptFixture(f,a=nativeActor(group)){
  const jobAuthority={write:run('jobs')};
  let output;
  const parser=Object.assign(Object.create(PostgresNativeAutoWorker.prototype),{
-  env:{...env,MOMO_AI_ENABLED:'true',MOMO_AI_MODEL:'synthetic-provider',AI:{run:async()=>({response:output})}},
+  env:{...env,MOMO_AI_ENABLED:'true',MOMO_AI_MODEL:'synthetic-provider',AI:{run:async()=>{providerCalls++;return {response:output};}}},
   authority:jobAuthority,custody,witnesses,
   // Production plan checks the journal digest calculated on encrypted admission.
   groupId:group
@@ -100,8 +103,100 @@ function receiptFixture(f,a=nativeActor(group)){
   db:{prepare:sql=>({bind:(...values)=>({sql,values})}),statement:async(tx,statement)=>{
    const {text,values}=compileSql(statement.sql,statement.values);return tx.unsafe(text,values);
   }}});
- return {route,parser,ledger,pageCustody,provider:(body)=>{output=providerOutput(body);}};
+ return {route,parser,ledger,pageCustody,provider:(body)=>{output=typeof body==='string'?providerOutput(body):body;},
+  counts:()=>({providerCalls,externalFetches})};
 }
+
+test('standalone capture commits encrypted SMS and records incoming and outgoing once without financial side effects',async t=>{
+ const f=await startPayerFixture(t,{groupId:group,memberId:member,phoneNumber:phone,
+  beforeNoticeMigration:client=>installNativeChain(client,group)});
+ const load=name=>readFile(new URL('../../../supabase/migrations/'+name,import.meta.url),'utf8');
+ const [oldJobs,wakes,idle,central,record,review]=await Promise.all([
+  '20261112200100_burimunsi_native_auto_transactions.sql','20261122191300_burimunsi_event_driven_jobs.sql',
+  '20261124091329_burimunsi_idle_native_jobs.sql','20261124114500_burimunsi_payments.sql',
+  '20261124114501_burimunsi_record_payments.sql'].map(load)
+  .concat(readFile(new URL('./native-parser-review-preimage.sql',import.meta.url),'utf8')));
+ const stateCheck=oldJobs.slice(oldJobs.indexOf(" CHECK((state='processing'"),oldJobs.indexOf('\n);\nALTER TABLE private.burimunsi_auto_sms_jobs')).trim();
+ const wakeBody=wakes.slice(wakes.indexOf('CREATE FUNCTION private._burimunsi_wake_sms_worker'),wakes.indexOf('CREATE OR REPLACE FUNCTION collect_ops.tick_jobs()'));
+ const idleBody=idle.slice(idle.indexOf('CREATE FUNCTION private.burimunsi_native_job_candidates'),idle.indexOf('COMMIT;'));
+ await f.client.query(`
+  SET SESSION AUTHORIZATION postgres;
+  CREATE ROLE collect_sms_runtime;
+  ALTER TABLE app.memberships ADD UNIQUE(collection_id,user_id);
+  UPDATE collect_ops.jobs_config SET enabled=false;
+  CREATE TABLE private.burimunsi_sms_wakes(event_xid xid8,wake_class smallint DEFAULT 0,
+    due_at timestamptz DEFAULT clock_timestamp(),PRIMARY KEY(event_xid,wake_class));
+  CREATE TABLE private.collect_fence_admissions(admission_id uuid,kind text,epoch bigint,source_sha256 text);
+  ALTER TABLE private.burimunsi_auto_sms_jobs ADD CONSTRAINT burimunsi_auto_sms_jobs_state_check
+    CHECK (state IN ('processing','retry','failed','completed','security_message'));
+  ALTER TABLE private.burimunsi_auto_sms_jobs ADD CONSTRAINT fixture_auto_job_shape ${stateCheck};
+  CREATE FUNCTION private.burimunsi_native_sms_post_defer(text,integer) RETURNS boolean LANGUAGE sql AS $$SELECT true$$;
+  CREATE FUNCTION private.burimunsi_native_sms_post_retry(text,text) RETURNS jsonb LANGUAGE sql AS $$SELECT '{}'::jsonb$$;
+  REVOKE EXECUTE ON FUNCTION private.burimunsi_native_sms_post_defer(text,integer),
+    private.burimunsi_native_sms_post_retry(text,text) FROM PUBLIC;
+  GRANT EXECUTE ON FUNCTION private.burimunsi_native_sms_post_defer(text,integer),
+    private.burimunsi_native_sms_post_retry(text,text) TO collect_runtime;
+ `);
+ await f.client.query(wakeBody);
+ await f.client.query(idleBody);
+ await f.client.query(review.slice(review.indexOf('CREATE OR REPLACE FUNCTION collect_ops.reconcile_jobs()')));
+ await f.client.query(central);
+ await f.client.query(record);
+ const flow=receiptFixture(f,undefined,{standalone:true});
+ const outgoingClause='Your payment of RWF 250 to Example Shop has been completed';
+ const outgoingBody=outgoingClause+'. FT Id: 12345007.';
+ const outgoing={...providerOutput(masked.rawBody),schema_version:NATIVE_AUTO_SCHEMA_VERSION,wallet_effect:'debit',
+  event_kind:'outgoing',transaction_id_raw:'12345007',transaction_datetime_raw:null,principal_amount_raw:'250',
+  payer_name_raw:'Example Shop',payer_identifier_raw:null,wallet_balance_after_raw:null,
+  evidence:{incoming_success:outgoingClause,principal:'Your payment of RWF 250',transaction_id:'FT Id: 12345007',
+   transaction_datetime:null,payer:'to Example Shop',fee:null,wallet_balance_after:null}};
+ const notice={...outgoing,event_kind:'other',wallet_effect:'none',payment_outcome:'unknown',transaction_id_raw:null,
+  principal_amount_raw:null,currency_raw:null,payer_name_raw:null,
+  evidence:{incoming_success:null,principal:null,transaction_id:null,transaction_datetime:null,payer:null,fee:null,wallet_balance_after:null}};
+ const samples=[
+  [masked.rawBody,{...providerOutput(masked.rawBody),schema_version:NATIVE_AUTO_SCHEMA_VERSION,wallet_effect:'credit'},{state:'completed',relation:'accepted'}],
+  [outgoingBody,outgoing,{state:'completed',relation:'accepted'}],
+  [outgoingBody+' Thank you.',outgoing,{state:'completed',relation:'duplicate'}],
+  ['Our services are available today.',notice,{state:'non_payment'}],
+ ];
+ const saved=[];
+ for(const [index,[body,output,result]] of samples.entries()){
+  const input={...masked,requestId:uuid(800+index),sourceKey:sha('receipt:'+index),rawBody:body};
+  const source=await flow.route('',input);saved.push(source.sourceId);
+  assert.deepEqual(await flow.route('',input),source);
+  const [row]=(await f.client.query(`SELECT r.object_sha256,encode(sha256(r.ciphertext),'hex') AS encrypted_sha256,
+     o.sha256 AS storage_sha256,convert_from(r.ciphertext,'UTF8') AS envelope
+    FROM burimunsi.raw_sms r JOIN private.storage_objects o ON o.object_key='sms/'||r.id WHERE r.id=$1`,[source.sourceId])).rows;
+  assert.ok(row);assert.equal(row.encrypted_sha256,row.storage_sha256);
+  assert.equal(row.envelope.includes(body),false);
+  const plaintext=await decrypt({DATA_KEY_ID:'fixture-key',DATA_ENCRYPTION_KEY:Buffer.alloc(32,7).toString('base64')},
+   row.envelope,`sms:${source.sourceId}:${row.object_sha256}`);
+  assert.equal(JSON.parse(Buffer.from(plaintext)).raw_body,body);
+  flow.provider(output);
+  assert.deepEqual(await flow.parser.process(source.sourceId),result);
+  assert.deepEqual(await flow.parser.process(source.sourceId),result);
+ }
+ assert.deepEqual(flow.counts(),{providerCalls:4,externalFetches:0});
+ const {rows:payments}=await f.client.query(`SELECT id,direction,amount_rwf::int,provider_reference,allocation_state
+  FROM burimunsi.payments ORDER BY direction`);
+ assert.deepEqual(payments,[
+  {id:saved[0],direction:'incoming',amount_rwf:1000,provider_reference:'987654321',allocation_state:'unallocated'},
+  {id:saved[1],direction:'outgoing',amount_rwf:250,provider_reference:'12345007',allocation_state:'unallocated'},
+ ]);
+ const {rows:jobs}=await f.client.query(`SELECT state,payment_id,transaction_id FROM private.burimunsi_auto_sms_jobs
+  ORDER BY array_position($1::text[],source_id)`,[saved]);
+ assert.deepEqual(jobs,[
+  {state:'completed',payment_id:saved[0],transaction_id:null},{state:'completed',payment_id:saved[1],transaction_id:null},
+  {state:'completed',payment_id:saved[1],transaction_id:null},{state:'non_payment',payment_id:null,transaction_id:null},
+ ]);
+ assert.equal((await f.client.query(`SELECT (SELECT count(*) FROM app.ledger_entries)::int ledger,
+  (SELECT count(*) FROM app.payments)::int legacy,(SELECT count(*) FROM app.momo_transactions)::int canon,
+  (SELECT count(*) FROM private.burimunsi_payment_sms_obligations)::int notices`)).rows
+  .every(row=>Object.values(row).every(count=>count===0)),true);
+ await f.client.query("BEGIN; SET LOCAL ROLE collect_runtime; SET LOCAL burimunsi.collection_id='another-group'");
+ assert.equal((await f.client.query('SELECT count(*)::int n FROM burimunsi.raw_sms')).rows[0].n,0);
+ await f.client.query('ROLLBACK');
+});
 
 test('keyed inbox custody returns the original journal under both advisory and all three row locks',async t=>{
  let peer;t.after(async()=>{if(peer)await peer.end();});
