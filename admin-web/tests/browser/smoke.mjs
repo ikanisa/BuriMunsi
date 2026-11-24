@@ -235,15 +235,25 @@ try {
   assert.equal(await page.getByRole('navigation', {name: 'Member directory views'}).count(), 0);
   const memberStatus = page.getByRole('combobox', {name: 'Status', exact: true});
   assert.deepEqual(await memberStatus.locator('option').allTextContents(), ['All statuses', 'Active', 'Inactive']);
+  const inactiveRoster = page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return url.origin === origin && url.pathname === '/api/admin/core/members' &&
+      url.searchParams.get('directory') === 'roster' && url.searchParams.get('status') === 'inactive' && response.ok();
+  });
   await memberStatus.selectOption('inactive');
+  await inactiveRoster;
   const inactiveRow = page.getByRole('row').filter({hasText: fixtureInactiveMember.display_name});
   await inactiveRow.getByRole('cell', {name: 'Inactive', exact:true}).waitFor();
   const memberRecords = page.getByRole('region', {name: 'Members records', exact: true});
-  assert.deepEqual(await memberRecords.getByRole('columnheader', {name: /number|phone|WhatsApp/i}).allTextContents(), ['Mobile number']);
+  await memberRecords.getByRole('columnheader', {name: 'Mobile number', exact: true}).waitFor();
+  const memberHeadings = await memberRecords.getByRole('columnheader').allTextContents();
+  assert.deepEqual(memberHeadings.filter(name => /number|phone|WhatsApp/i.test(name)), ['Mobile number']);
   const scopedDetail = member => page.waitForResponse(response => response.url() === origin + '/api/admin/operations/members/' + member.id && response.ok());
   await Promise.all([scopedDetail(fixtureInactiveMember), inactiveRow.getByRole('button', {name:'View ' + fixtureInactiveMember.public_id}).click()]);
   await page.getByRole('heading', {name: 'Record details',exact:true}).waitFor();
-  assert.deepEqual(await page.getByRole('term').filter({hasText: /number|phone|WhatsApp/i}).allTextContents(), ['Mobile number']);
+  await page.getByText('Mobile number', {exact: true}).locator('+ dd').waitFor();
+  const contactLabels = await page.locator('main dl dt').allTextContents();
+  assert.deepEqual(contactLabels.filter(name => /number|phone|WhatsApp/i.test(name)), ['Mobile number']);
   assert.equal(await page.getByText('Status', {exact:true}).locator('+ dd').textContent(), 'Inactive');
   await page.getByRole('button', {name:'Back to members',exact:true}).click();
   assert.equal(await memberStatus.inputValue(), 'inactive');
@@ -316,9 +326,21 @@ try {
   const receiptCells = receiptRow.getByRole('cell');
   assert.match(await receiptCells.nth(1).innerText(), /\bParsed\b/);
   assert.equal(await observationTable.getByRole('columnheader', {name: 'Payment reference', exact: true}).count(), 0);
-  assert.equal(await observationTable.getByRole('columnheader', {name: 'Payer SMS', exact: true}).count(), 0);
+  await observationTable.getByRole('columnheader', {name: 'Payer SMS', exact: true}).waitFor();
+  const receiptHeadings = await observationTable.getByRole('columnheader').allTextContents();
+  const payerSmsCell = receiptCells.nth(receiptHeadings.indexOf('Payer SMS'));
+  await payerSmsCell.filter({hasText: 'No receipt recorded'}).waitFor();
+  await desktop.context.route(receipts, async route => {
+    const response = await route.fetch();
+    const pageData = await response.json();
+    const [first, ...rest] = pageData.items;
+    await route.fulfill({response, json: {...pageData, items: [{...first, payerStatus: 'delivered'}, ...rest]}});
+  }, {times: 1});
+  await receiptInbox.getByRole('button', {name: 'Refresh receiver', exact: true}).click();
+  await payerSmsCell.filter({hasText: 'Reported delivered'}).waitFor();
   await page.setViewportSize({width: 320, height: 768});
   assert.equal(await receiptRow.evaluate((row) => getComputedStyle(row).display), 'grid');
+  assert.match(await payerSmsCell.innerText(), /Payer SMS\s+Reported delivered/);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.setViewportSize({width: 1440, height: 900});
   await page.goBack();
@@ -449,7 +471,7 @@ try {
   assert.deepEqual(unexpectedAuth, []);
   assert.deepEqual(incorrectIdentityHeaders, []);
   const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'admin_home_reports_scoped_sms_health', 'retired_passcode_bookmark_returns_to_overview', 'three_daily_links_and_no_redundant_sidebar_search', 'canonical_payment_direction_filter_and_clear', 'inline_inbox_preserves_financial_table_and_390px_scroll', 'protected_sms_deep_link', 'filtered_member_detail_and_return', 'single_mobile_number_in_member_roster_and_detail', 'payment_details_link_to_authorized_sms_evidence', 'payment_without_source_and_320px_reflow', 'sms_read_failure_retry',
-      'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
+      'payer_sms_empty_and_reported_delivered', 'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
       'retired_authenticator_bookmark_preserves_safe_destination', 'missing_scoped_admin_identity_removes_controls', 'session_failure_and_recovery_require_server_authority', 'expired_request_and_history_return_require_sign_in',
       'mobile_drawer_traps_and_restores_focus_and_reflows', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, 'no_unexpected_auth_request', 'identity_version_only_on_session_exchanges'];
   console.log(JSON.stringify({status: 'pass', environment: 'synthetic_loopback', origin, count: checks.length, checks,

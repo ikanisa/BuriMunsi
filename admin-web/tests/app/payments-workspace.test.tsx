@@ -321,7 +321,11 @@ describe('BuriMunsi phone Payments', () => {
     expect(screen.getByRole('link',{name:'M-Money SMS'})).toHaveAttribute('href','/admin/payments?view=sms');
   });
 
-  it('opens the exact collection-bound linked SMS inline and leaves independent evidence closed', async () => {
+  it.each([
+    {payerStatus:'delivered', payerReason:null, label:'Reported delivered', reason:null},
+    {payerStatus:'suppressed', payerReason:'preferences_disabled', label:'Suppressed', reason:'Payer opted out'},
+    {payerStatus:null, payerReason:null, label:'No receipt recorded', reason:null},
+  ])('opens the exact collection-bound linked SMS and shows its recorded outcome “$label” inline', async ({payerStatus,payerReason,label,reason}) => {
     mock.authMethod = 'phone_passcode';
     mock.scoped = true;
     const linked = {...buriPayment,sourceId:accountId};
@@ -336,7 +340,8 @@ describe('BuriMunsi phone Payments', () => {
         const second = search.get('cursor') === 'next';
         return {contractVersion:1,collectionId:'fixture-group',asOf:time,nextCursor:second ? null : 'next',
           inboxCheck:{state:'unknown',checkedAt:null,candidateCount:null,missingCount:null,pendingCount:null,headsMatch:null},
-          items:[second ? evidence(accountId,'parsed') : evidence(momoId,'held')]};
+          items:[second ? {...evidence(accountId,'parsed'),payerStatus,payerReason}
+            : {...evidence(momoId,'held'),payerStatus:'failed',payerReason:'gateway_failed'}]};
       }
       throw new Error('Unexpected request');
     });
@@ -347,6 +352,10 @@ describe('BuriMunsi phone Payments', () => {
     fireEvent.click(screen.getByRole('button',{name:'Review linked SMS'}));
     const evidenceRegion = within(await screen.findByRole('region',{name:'Linked SMS'}));
     expect(await evidenceRegion.findByText('Parsed')).toBeVisible();
+    const payer = evidenceRegion.getByText('Payer SMS',{selector:'dt'}).nextElementSibling!;
+    expect(payer).toHaveTextContent(label);
+    if (reason) expect(payer).toHaveTextContent(reason);
+    expect(evidenceRegion.queryByText('Gateway failed')).not.toBeInTheDocument();
     expect(evidenceRegion.queryByText('Held for review')).not.toBeInTheDocument();
     expect(called('momo/observations').map(([path]) => path)).toEqual([
       'momo/observations?collectionId=fixture-group&limit=25&includeProcessing=1',

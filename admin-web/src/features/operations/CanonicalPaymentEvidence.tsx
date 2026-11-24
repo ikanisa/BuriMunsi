@@ -2,6 +2,7 @@ import {useCallback} from 'react';
 import {useSession} from '../../session/SessionProvider';
 import {canReadSmsEvidence} from '../../session/sessionContext';
 import {ErrorState, LoadingState} from '../../ui';
+import {receiptLabels, reasonLabels} from '../overview/smsOversightContract';
 import {Facts} from './OperationsRecords';
 import {MomoSourceRevealPanel} from './MomoSourceRevealPanel';
 import {processingLabels, receiverPage} from './receiverSmsContract';
@@ -10,7 +11,7 @@ import {useOperationRead} from './useOperationRead';
 
 export function CanonicalPaymentEvidence({group, sourceId}: {group: string; sourceId: string}) {
   const {epoch, request, user} = useSession();
-  const enabled = canReadSmsEvidence(user);
+  const enabled = canReadSmsEvidence(user) && !!user?.permissions.includes('payments.read');
   const load = useCallback(async (signal: AbortSignal) => {
     const cursors = new Set<string>(), seen = new Set<string>();
     let cursor: string | null = null;
@@ -39,6 +40,8 @@ export function CanonicalPaymentEvidence({group, sourceId}: {group: string; sour
   return <section aria-label="Linked SMS"><h3>Linked SMS</h3>
     {!result ? <LoadingState label="Loading linked SMS" /> : result.status === 'error' ? <ErrorState message={result.message} onRetry={retry} /> :
       evidence ? <><Facts items={[['Received (Kigali)', paymentTime(evidence.admittedAt)], ['Processing', processingLabels[evidence.processing]],
+        ['Payer SMS', <>{evidence.payerStatus ? receiptLabels[evidence.payerStatus] : 'No receipt recorded'}
+          {evidence.payerReason && <div>{reasonLabels[evidence.payerReason]}</div>}</>],
         ['Source', evidence.retentionState === 'retained' ? 'Retained' : 'Unresolved']]} />
         {user?.permissions.includes('sms.reveal') && evidence.retentionState === 'retained' && evidence.bodySha256 &&
           <MomoSourceRevealPanel source={{raw_sms_id: evidence.sourceId, body_sha256: evidence.bodySha256}} observationGroup={group} enabled />}

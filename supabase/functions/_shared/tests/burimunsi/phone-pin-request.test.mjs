@@ -145,7 +145,7 @@ test('expired standalone Home renews separately and revalidates in a fresh read-
  const boundaries=f.state.calls.map(({text})=>text).filter(text=>text.startsWith('SET TRANSACTION')||text===PIN_SET_CONTEXT_SQL||text===PIN_RENEW_SQL);
  const readOnly='SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY';
  assert.deepEqual(boundaries,[readOnly,PIN_SET_CONTEXT_SQL,PIN_RENEW_SQL,readOnly,PIN_SET_CONTEXT_SQL]);
- assert.ok(f.state.calls.some(({text})=>text.includes('pg_advisory_xact_lock')));
+ assert.equal(f.state.calls.some(({text})=>text.includes('pg_advisory_xact_lock')),false,'GET delegates locking to the renewal function');
  assert.equal(hasPhonePinContext(f.db),false);
 });
 
@@ -339,7 +339,7 @@ test('expired device-bound session renews through its exact session revalidation
  assert.ok([...f.state.sessions.values()][0].expires>f.state.time);
  const renewal=f.state.calls.find(x=>x.text===PIN_RENEW_SQL);
  assert.deepEqual(renewal.args,[data.token,installation,device,'internal_receiver','actual-group',1800000]);
- assert.ok(f.state.calls.some(x=>x.text.includes('pg_advisory_xact_lock')));
+ assert.equal(f.state.calls.some(x=>x.text.includes('pg_advisory_xact_lock')),false);
  await f.invoke(f.request({login:false,token:data.token,path:'/session',query:'?include=home'}),async actor=>{
   assert.equal(actor.principalSessionId,observed.principalSessionId);
  });
@@ -360,6 +360,7 @@ test('expired session revalidates its exact device proof before a passcode chang
  let actor;await f.invoke(f.request({login:false,token:data.token,path:'/session/passcode',method:'POST'}),value=>{actor=value});
  assert.equal(actor.principalSessionId,[...f.state.sessions.values()][0].id);
  assert.deepEqual(f.state.calls.find(x=>x.text===PIN_RENEW_SQL).args,[data.token,installation,device,'internal_receiver','actual-group',1800000]);
+ assert.ok(f.state.calls.some(x=>x.text.startsWith('SELECT pg_advisory_xact_lock(')));
  const revoked=fixture(),old=await revoked.login();revoked.state.time=old.expiresAt+1;revoked.state.revoked=true;
  await assert.rejects(revoked.invoke(revoked.request({login:false,token:old.token,path:'/session/passcode',method:'POST'}),()=>assert.fail('Must not change PIN')),e=>e.status===401);
 });

@@ -2,7 +2,7 @@ import { applicationWork } from '../../application-fence.js';
 import { MANAGED_SUPABASE_ORIGIN } from '../../deployment-profile.js';
 import { createOpenSmsReceiptTransport, openSmsReceiptConfiguration } from '../../opensms-receipts.js';
 import { digest } from '../core.js';
-import { renderPaymentSms } from './payment-sms-template.mjs';
+import { renderPaymentSms, renderAllocationSms } from './payment-sms-template.mjs';
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const states = new Set(['accepted', 'assigned', 'phone_accepted', 'queued', 'handoff_started',
@@ -19,8 +19,16 @@ function check(value) {
   if (!value) throw Error('burimunsi_payment_sms_unconfirmed');
 }
 
-function configured(env) {
-  if (env.BURIMUNSI_PAYMENT_SMS_ENABLED !== 'true') return null;
+const allocationCommands = {
+  claim: 'SELECT private.burimunsi_claim_allocation_sms($1::text,$2::timestamptz,$3::text,$4::uuid,false) AS result',
+  resume: 'SELECT private.burimunsi_claim_allocation_sms($1::text,$2::timestamptz,$3::text,$4::uuid,true) AS result',
+  prepare: 'SELECT private.burimunsi_prepare_allocation_sms($1::text,$2::uuid,$3::uuid,$4::text) AS result',
+  finish: 'SELECT private.burimunsi_finish_allocation_sms($1::text,$2::uuid,$3::uuid,$4::text,$5::text,$6::text) AS result',
+};
+
+function configured(env, allocation) {
+  const enabled = allocation ? env.BURIMUNSI_ALLOCATION_SMS_ENABLED : env.BURIMUNSI_PAYMENT_SMS_ENABLED;
+  if (enabled !== 'true') return null;
   const config = openSmsReceiptConfiguration(env);
   const group = env.BURIMUNSI_PAYMENT_SMS_COLLECTION_ID;
   const enabledAt = env.BURIMUNSI_PAYMENT_SMS_ENABLED_AT;
@@ -30,7 +38,9 @@ function configured(env) {
     env.COLLECT_SMS_CORE_SOURCE_SHA256 === env.BUILD_SOURCE_ID && uuid.test(group ?? '') &&
     typeof enabledAt === 'string' && Number.isFinite(Date.parse(enabledAt)) &&
     new Date(enabledAt).toISOString() === enabledAt);
-  return { config, group, enabledAt };
+  if (allocation) check(env.BURIMUNSI_PRODUCT_MODE === 'standalone' && group === env.BURIMUNSI_COLLECTION_ID &&
+    env.BURIMUNSI_PAYMENT_SMS_ENABLED === 'false');
+  return { config, group, enabledAt, commands: allocation ? allocationCommands : keys, allocation };
 }
 
 async function command(db, work, sql, args) {
@@ -46,14 +56,14 @@ async function command(db, work, sql, args) {
 }
 
 async function runClaim(job, runtime, command, work, transport) {
-  const { group, config } = runtime;
+  const { group, config, commands } = runtime;
   check(job && ['send', 'inspect'].includes(job.phase) && job.collection_id === group &&
     job.application_id === config.applicationId && uuid.test(job.attempt_id ?? '') && uuid.test(job.claim_token ?? '') &&
     typeof job.message_id === 'string' && job.message_id === config.applicationId + ':' + job.idempotency_key &&
     typeof job.idempotency_key === 'string' && /^[A-Za-z0-9:._-]{1,128}$/.test(job.idempotency_key));
   const identity = [group, job.attempt_id, job.claim_token];
   const save = async (status, providerState = null, evidence = null) => {
-    check(await command(keys.finish, [...identity, status, providerState, evidence]) === true);
+    check(await command(commands.finish, [...identity, status, providerState, evidence]) === true);
     return { outcome: status, ...(providerState ? { gateway_state: providerState } : {}) };
   };
   const to = job.destination;
@@ -61,7 +71,7 @@ async function runClaim(job, runtime, command, work, transport) {
   try {
     check(sha256.test(job.destination_sha256 ?? ''));
     if (job.phase === 'send') check(/^\+2507[2389][0-9]{7}$/.test(to ?? '') && await digest(to) === job.destination_sha256);
-    text = renderPaymentSms({ amount: job.amount_rwf, memberBalance: job.member_balance_rwf,
+    text = runtime.allocation ? renderAllocationSms(job) : renderPaymentSms({ amount: job.amount_rwf, memberBalance: job.member_balance_rwf,
       recordedAt: job.posted_at, reference: job.posted_reference });
     bodyHash = await digest(text);
     check(typeof job.not_after === 'string' && Number.isFinite(Date.parse(job.not_after)));
@@ -73,7 +83,7 @@ async function runClaim(job, runtime, command, work, transport) {
   if (job.phase === 'send') {
     // A durable, one-use transition rechecks contact, payment and preferences.
     // No external request follows a refusal or an uncertain database result.
-    const prepared = await command(keys.prepare, [...identity, bodyHash]);
+    const prepared = await command(commands.prepare, [...identity, bodyHash]);
     check(['prepared', 'suppressed', 'held'].includes(prepared));
     if (prepared !== 'prepared') return { outcome: prepared };
   }
@@ -93,18 +103,18 @@ async function runClaim(job, runtime, command, work, transport) {
   return save('accepted', result.state, result.evidenceSha256);
 }
 
-export async function drainBuriMunsiPaymentSms(env, { makeTransport = createOpenSmsReceiptTransport } = {}) {
-  const runtime = configured(env);
+async function drain(env, { makeTransport = createOpenSmsReceiptTransport } = {}, allocation) {
+  const runtime = configured(env, allocation);
   if (!runtime) return { status: 'disabled', processed: 0 };
   const db = env.DB, work = applicationWork(env);
   const query = (sql, args) => command(db, work, sql, args);
   const scope = [runtime.group, runtime.enabledAt, runtime.config.applicationId], requestId = crypto.randomUUID();
   let jobs;
-  try {jobs = await query(keys.claim, [...scope, 1, requestId]);}
+  try {jobs = await query(runtime.commands.claim, allocation ? [...scope, requestId] : [...scope, 1, requestId]);}
   catch {
     // A lost commit reply can only resume this request under its original
-    // admission. The database revalidates the immutable recipient and ledger.
-    jobs = await query(keys.resume, [...scope, requestId]);
+    // admission. The database revalidates the original receipt and recipient.
+    jobs = await query(runtime.commands.resume, [...scope, requestId]);
   }
   check(Array.isArray(jobs) && jobs.length <= 1);
   if (jobs.length === 0) return { status: 'complete', processed: 0 };
@@ -115,6 +125,14 @@ export async function drainBuriMunsiPaymentSms(env, { makeTransport = createOpen
   return { status, processed: 1, ...result };
 }
 
+
+export function drainBuriMunsiPaymentSms(env, options) {
+  return drain(env, options, false);
+}
+
+export function drainBuriMunsiAllocationSms(env, options) {
+  return drain(env, options, true);
+}
 
 export function scheduledPaymentSmsResult(result) {
   if (result?.status === 'complete' && result.processed === 0 && result.outcome === undefined)

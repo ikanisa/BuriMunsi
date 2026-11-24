@@ -65,7 +65,7 @@ const pageSql='SELECT private.burimunsi_observation_admin_page(?,?,?) AS result'
 const processingPageSql=standalone=>`WITH page AS MATERIALIZED (${pageSql})
  SELECT page.result || jsonb_build_object(
    'outcomes', private.${standalone?'burimunsi_admin_payment_observation_outcomes':'burimunsi_admin_observation_outcomes'}(page.result->>'collectionId',
-     ARRAY(SELECT item->>'sourceId' FROM jsonb_array_elements(page.result->'items') AS rows(item))${standalone?'':', ?::boolean'}),
+     ARRAY(SELECT item->>'sourceId' FROM jsonb_array_elements(page.result->'items') AS rows(item)), ?::boolean),
    'inboxCheck', private.burimunsi_observation_admin_inbox_check(page.result->>'collectionId')
  ) AS result FROM page`;
 const observationStates=new Set(['pending','blocked','held','historical','duplicate','excluded','retrying','non_payment']);
@@ -80,10 +80,10 @@ async function page(env,account,actor,url){
  const limit=Number(rawLimit),token=url.searchParams.get('cursor');if(token!==null&&(!token||token.length>2048))invalid();
  const scoped=accountReadDatabase(env,account,'sms.read'),cursor=requestCursorKey(env);
  const standalone=env.BURIMUNSI_PRODUCT_MODE==='standalone';
- const wantProcessing=includeProcessing==='1',finances=!standalone&&actor.permissions.has('payments.read');
+ const wantProcessing=includeProcessing==='1',finances=actor.permissions.has('payments.read');
  const allowedStates=standalone?paymentObservationStates:legacyObservationStates;
  const get=(offset,processing)=>processing
-  ?select(scoped,processingPageSql(standalone),collectionId,limit,offset,...(standalone?[]:[finances]))
+  ?select(scoped,processingPageSql(standalone),collectionId,limit,offset,finances)
   :select(scoped,pageSql,collectionId,limit,offset);
  const first=await get(0,wantProcessing&&token===null);if(!isObject(first)||first.collectionId!==collectionId||!HASH.test(first.revision??''))bad();
  const filterHash=await digest(canonicalJson({kind:'managed_admin_observation_v1',collectionId,limit,sessionId:actor.sessionId}));
@@ -115,7 +115,7 @@ async function page(env,account,actor,url){
   for(const row of outcomes){
    if(!isObject(row)||Object.keys(row).length!==5||!seen.has(row.sourceId)||indexed.has(row.sourceId)||
     !allowedStates.has(row.processing)||
-    !(row.paymentReference===null||finances&&typeof row.paymentReference==='string'&&/^[0-9]{12}$/.test(row.paymentReference))||
+    !(row.paymentReference===null||!standalone&&finances&&typeof row.paymentReference==='string'&&/^[0-9]{12}$/.test(row.paymentReference))||
     !(row.payerStatus===null||finances&&payerStates.has(row.payerStatus))||
     !(row.payerReason===null||finances&&payerReasons.has(row.payerReason)))bad();
    indexed.set(row.sourceId,{processing:row.processing,paymentReference:row.paymentReference,payerStatus:row.payerStatus,payerReason:row.payerReason});

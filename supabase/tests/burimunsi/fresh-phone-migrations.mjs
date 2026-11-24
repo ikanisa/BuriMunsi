@@ -26,6 +26,8 @@ const latest = [
   '20261123061132_burimunsi_single_admin.sql',
   '20261124080000_burimunsi_read_admission.sql',
   '20261124091329_burimunsi_idle_native_jobs.sql',
+  '20261124100000_burimunsi_payment_activity_source_metadata.sql',
+  '20261124114503_burimunsi_phone_renewal_lock.sql',
 ];
 
 export async function verifyFreshPhoneReads({owner,admin,database,fixtureRoot}) {

@@ -10,6 +10,7 @@ import {startPayerFixture} from './fixtures/burimunsi-payer-postgres.mjs';
 import {openFixturePayerWorker} from './fixtures/burimunsi-payer-delivery.mjs';
 import pg from '../node_modules/pg/lib/index.js';
 import {installNativeChain,installHandsetInventory,nativeRuntime,nativeActor,uuid,sha,testProfile} from './fixtures/burimunsi-native-chain.mjs';
+import {assignPayment} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-payments.js';
 import {compileSql} from '../../../supabase/functions/_shared/postgres-compatibility-sql.js';
 import {validateProviderProfile,MOMO_SCHEMA_VERSION} from '../../../supabase/functions/_shared/domain/momo_pipeline.js';
 import {decrypt} from '../../../supabase/functions/_shared/domain/encryption.js';
@@ -72,6 +73,7 @@ function receiptFixture(f,a=nativeActor(group),{standalone=false,runtime=nativeR
   storageWitnesses:new PostgresStorageWitnesses({db,groupId:group,namespace:custody.namespace,media:env.PRIVATE_MEDIA,
    applicationWorkTuple:()=>[uuid(888),1,'a'.repeat(64)]})});
  custody.keyedObservationJournal=pageCustody.keyedObservationJournal.bind(pageCustody);
+ custody.keyedObservationJournals=pageCustody.keyedObservationJournals.bind(pageCustody);
  let externalFetches=0,providerCalls=0;
  const witnesses={stage:async(_binding,targets)=>targets,prefetch:async targets=>{externalFetches++;for(const target of targets)assert.ok(objects.has(target.key));},
   sealed:async(_binding,key)=>{assert.ok(objects.has(key));return objects.get(key).sealed;},forget(){}};
@@ -111,10 +113,11 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
  const f=await startPayerFixture(t,{groupId:group,memberId:member,phoneNumber:phone,
   beforeNoticeMigration:client=>installNativeChain(client,group)});
  const load=name=>readFile(new URL('../../../supabase/migrations/'+name,import.meta.url),'utf8');
- const [oldJobs,wakes,idle,central,record,review]=await Promise.all([
+ const [oldJobs,wakes,idle,central,record,allocation,live,review]=await Promise.all([
   '20261112200100_burimunsi_native_auto_transactions.sql','20261122191300_burimunsi_event_driven_jobs.sql',
   '20261124091329_burimunsi_idle_native_jobs.sql','20261124114500_burimunsi_payments.sql',
-  '20261124114501_burimunsi_record_payments.sql'].map(load)
+  '20261124114501_burimunsi_record_payments.sql','20261124114502_burimunsi_allocation_receipts.sql',
+  '20261122191400_burimunsi_admin_realtime.sql'].map(load)
   .concat(readFile(new URL('./native-parser-review-preimage.sql',import.meta.url),'utf8')));
  const stateCheck=oldJobs.slice(oldJobs.indexOf(" CHECK((state='processing'"),oldJobs.indexOf('\n);\nALTER TABLE private.burimunsi_auto_sms_jobs')).trim();
  const wakeBody=wakes.slice(wakes.indexOf('CREATE FUNCTION private._burimunsi_wake_sms_worker'),wakes.indexOf('CREATE OR REPLACE FUNCTION collect_ops.tick_jobs()'));
@@ -123,10 +126,18 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
   SET SESSION AUTHORIZATION postgres;
   CREATE ROLE collect_sms_runtime;
   ALTER TABLE app.memberships ADD UNIQUE(collection_id,user_id);
-  UPDATE collect_ops.jobs_config SET enabled=false;
+  UPDATE collect_ops.jobs_config SET enabled=false; UPDATE cron.job SET active=false;
   CREATE TABLE private.burimunsi_sms_wakes(event_xid xid8,wake_class smallint DEFAULT 0,
     due_at timestamptz DEFAULT clock_timestamp(),PRIMARY KEY(event_xid,wake_class));
   CREATE TABLE private.collect_fence_admissions(admission_id uuid,kind text,epoch bigint,source_sha256 text);
+  CREATE OR REPLACE FUNCTION private._collect_fence_require_runtime() RETURNS void LANGUAGE plpgsql AS $$
+    BEGIN IF current_setting('role',true) IS DISTINCT FROM 'collect_runtime' OR current_setting('collect.edge_verified',true) IS DISTINCT FROM 'true'
+      THEN RAISE insufficient_privilege; END IF; END $$;
+  CREATE FUNCTION private._collect_fence_admission(uuid,bigint,text) RETURNS private.collect_fence_admissions LANGUAGE sql AS $$
+    SELECT $1,current_setting('test.work_kind',true),$2,$3 WHERE $1 IS NOT NULL AND $2=1 AND $3=repeat('a',64) $$;
+  CREATE FUNCTION private.collect_fence_assert_write(uuid,bigint,text) RETURNS jsonb LANGUAGE plpgsql AS $$
+    BEGIN IF $1 IS NULL OR $2 IS DISTINCT FROM 1 OR $3 IS DISTINCT FROM repeat('a',64) THEN RAISE insufficient_privilege; END IF;
+    RETURN '{}'::jsonb; END $$;
   ALTER TABLE private.burimunsi_auto_sms_jobs ADD CONSTRAINT burimunsi_auto_sms_jobs_state_check
     CHECK (state IN ('processing','retry','failed','completed','security_message'));
   ALTER TABLE private.burimunsi_auto_sms_jobs ADD CONSTRAINT fixture_auto_job_shape ${stateCheck};
@@ -152,6 +163,10 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
  await f.client.query("UPDATE private.burimunsi_auto_sms_jobs SET posting_last_error='legacy posting issue' WHERE source_id=$1",[archived.sourceId]);
  await f.client.query(central);
  await f.client.query(record);
+ // Use the production change trigger. The external Realtime transport is inert in this database.
+ await f.client.query("CREATE FUNCTION private._burimunsi_admin_live_publish(text) RETURNS void LANGUAGE sql AS 'SELECT'");
+ await f.client.query(live.slice(live.indexOf('CREATE FUNCTION private._burimunsi_admin_live_change()'),
+   live.indexOf('REVOKE ALL ON FUNCTION private._burimunsi_admin_live_publish')));
  const flow=receiptFixture(f,undefined,{standalone:true,runtime});
  const outgoingClause='Your payment of RWF 250 to Example Shop has been completed';
  const outgoingBody=outgoingClause+'. FT Id: 12345007.';
@@ -241,6 +256,58 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
    assert.equal(health.state,'incomplete');
   }finally{await f.client.query('ROLLBACK');}
  }
+ // An unrelated member receives the allocation. Only the full payer number in the original SMS may receive the confirmation.
+ const differentMember=uuid(940);
+ await f.client.query("INSERT INTO app.users(id,access_status,member_type,momo_number) VALUES($1,'active','direct','+250780000099')",[differentMember]);
+ await f.client.query('INSERT INTO app.memberships VALUES($1,$2,1)',[group,differentMember]);
+ const incoming=fullWire();const source=await flow.route('',incoming);
+ flow.provider({...providerOutput(incoming.rawBody),schema_version:NATIVE_AUTO_SCHEMA_VERSION,wallet_effect:'credit'});
+ assert.deepEqual(await flow.parser.process(source.sourceId),{state:'completed',relation:'accepted'});
+ const count=async()=>Number((await f.client.query('SELECT count(*) FROM private.burimunsi_allocation_receipts')).rows[0].count);
+ const allocate=(sql,paymentId)=>assignPayment(sql,{groupId:group,paymentId,memberId:differentMember,expectedVersion:1});
+ const owner=runtime.run('http_collect');
+ await owner(sql=>allocate(sql,archivedPayment)); // already assigned before the allocation notification feature
+ await f.client.query(allocation);
+ assert.equal(await count(),0);
+ await assert.rejects(owner(async sql=>{await allocate(sql,source.sourceId);throw Error('rolled back allocation');}),/rolled back allocation/);
+ assert.equal(await count(),0);
+ await owner(sql=>allocate(sql,saved[1])); // outgoing
+ assert.equal(await count(),0);
+ const worker=await openFixturePayerWorker({client:f.client,collectionId:group,enabledAt:f.enabledAt,allocation:true,lostReply:true,lostClaimReply:true});
+ assert.deepEqual(await worker.drain(),{status:'complete',processed:0});
+ await owner(sql=>allocate(sql,saved[0])); // masked
+ assert.deepEqual(await worker.drain(),{status:'complete',processed:0});
+ const receiptStatus=async(id)=>(await f.client.query('SELECT status,reason FROM private.burimunsi_allocation_receipts WHERE payment_id=$1',[id])).rows[0];
+ assert.deepEqual(await receiptStatus(saved[0]),{status:'suppressed',reason:'unverified_destination'});
+ const peer=new pg.Client({host:f.cluster.socket,port:f.cluster.port,database:'postgres',user:f.cluster.initialUser});
+ await peer.connect();
+ try {
+  await peer.query('SET ROLE postgres');
+  const other=nativeRuntime(peer,group).run('http_admin');
+  const allocations=await Promise.allSettled([owner(sql=>allocate(sql,source.sourceId)), other(sql=>allocate(sql,source.sourceId))]);
+  assert.equal(allocations.filter(a=>a.status==='fulfilled').length,1);
+  assert.deepEqual(allocations.filter(a=>a.status==='rejected').map(a=>a.reason.code),['payment_changed']);
+ } finally {await peer.end();}
+ await assert.rejects(owner(sql=>allocate(sql,source.sourceId)),error=>error.code==='payment_changed');
+ assert.equal(await count(),2);
+ assert.deepEqual(await worker.drain(),{status:'complete',processed:1,outcome:'unknown'});
+ assert.deepEqual(worker.requests,['POST']);
+ assert.equal(worker.submitted.to,phone);
+ assert.ok(worker.submitted.text.includes('1,000 RWF'));
+ assert.ok(!worker.submitted.text.includes('2,000'));
+ assert.deepEqual(await receiptStatus(source.sourceId),{status:'unknown',reason:'gateway_unconfirmed'});
+ await worker.carrierDelivered();
+ assert.deepEqual(await worker.drain(),{status:'complete',processed:1,outcome:'accepted',gateway_state:'delivered'});
+ assert.deepEqual(await worker.drain(),{status:'complete',processed:0});
+ assert.deepEqual(worker.requests,['POST','GET']);
+ assert.deepEqual(await receiptStatus(source.sourceId),{status:'delivered',reason:null});
+ await worker.complete();
+ const adminStatus=withPayer=>f.rpc('burimunsi_admin_payment_observation_outcomes',[group,[source.sourceId],withPayer],['text','text[]','boolean'],'http_admin');
+ assert.equal((await adminStatus(false))[0].payerStatus,null);
+ await f.client.query("DELETE FROM app.admin_grants WHERE permission='payments.read'");
+ await assert.rejects(adminStatus(true),/permission denied/);
+ await f.client.query("INSERT INTO app.admin_grants VALUES('principal','payments.read')");
+ assert.equal((await adminStatus(true))[0].payerStatus,'delivered');
  await f.client.query("BEGIN; SET LOCAL ROLE collect_runtime; SET LOCAL burimunsi.collection_id='another-group'");
  assert.equal((await f.client.query('SELECT count(*)::int n FROM burimunsi.raw_sms')).rows[0].n,0);
  await f.client.query('ROLLBACK');
@@ -308,6 +375,67 @@ test('keyed inbox custody returns the original journal under both advisory and a
   assert.equal((await peer.query('SELECT pg_try_advisory_xact_lock(hashtextextended($1,7346370)) AS acquired',[ownerId])).rows[0].acquired,true);
   await peer.query('COMMIT');
  }finally{await peer.query('ROLLBACK');if(pending)await pending;}
+});
+
+test('the page custody barrier verifies all ten journals in two statements after ordered advisory acquisition',async t=>{
+ let peer;t.after(async()=>{if(peer)await peer.end();});
+ const f=await startPayerFixture(t,{groupId:group,memberId:member,phoneNumber:phone,beforeNoticeMigration:client=>installNativeChain(client,group)});
+ const flow=receiptFixture(f),targets=[],inputs=[];
+ for(let i=0;i<10;i++){
+  const input={...fullWire(),rawBody:'Synthetic receipt '+i,requestId:randomUUID(),sourceKey:sha('page-key '+i)};
+  inputs.push(input);
+  const {sourceId}=await flow.route('',input);
+  const {object_key:key,object_sha256:hash,principal_user_id:ownerId}=(await f.client.query(
+   'SELECT object_key,object_sha256,principal_user_id FROM private.burimunsi_unresolved_observations WHERE source_id=$1',[sourceId])).rows[0];
+  targets.push({key,expect:{ownerId,purpose:'sms_receipt',entityId:sourceId,plaintextSha256:hash,aad:'sms:'+sourceId+':'+hash}});
+ }
+ const run=nativeRuntime(f.client,group).run('http_collect'),custody=flow.pageCustody;
+ peer=new pg.Client({host:f.cluster.socket,port:f.cluster.port,database:'postgres',user:f.cluster.initialUser});
+ await peer.connect();await peer.query('SET ROLE postgres');
+ const prior=await run(async tx=>{
+  const saved=[];for(const {key,expect} of targets)saved.push(await custody.keyedObservationJournal(tx,key,expect));
+  return saved;
+ });
+ let assertions=0,queries=0;custody.work.assert=async()=>{assertions++;};
+ await run(async tx=>{
+  const actual=await custody.keyedObservationJournals({unsafe:(sql,params)=>{queries++;return tx.unsafe(sql,params);}},targets);
+  assert.deepEqual(actual,prior);
+  for(const table of ['storage_put_intents','storage_objects','storage_payload_reservations']){
+   for(const {key} of targets)await assert.rejects(peer.query('SELECT object_key FROM private.'+table+' WHERE object_key=$1 FOR UPDATE NOWAIT',[key]),{code:'55P03'});
+  }
+  for(const {key,expect} of targets){
+   const [lock]=(await peer.query('SELECT pg_try_advisory_xact_lock(hashtextextended($1,7346369)) AS key,pg_try_advisory_xact_lock(hashtextextended($2,7346370)) AS owner',[key,expect.ownerId])).rows;
+   assert.deepEqual(lock,{key:false,owner:false});
+  }
+ });
+ assert.deepEqual({queries,assertions},{queries:2,assertions:14});
+ const endpoint=f.cluster.socket+'/.s.PGSQL.'+f.cluster.port;
+ const driver=fileURLToPath(new URL('./fixtures/burimunsi-keyed-journal-driver.mjs',import.meta.url));
+ const lock=fileURLToPath(new URL('../deno.lock',import.meta.url));
+ assert.equal(execFileSync('deno',['run','--frozen','--cached-only','--node-modules-dir=none','--lock='+lock,
+  '--allow-read','--allow-env','--allow-net=unix:'+endpoint,'--allow-write='+endpoint,driver,f.cluster.socket,String(f.cluster.port)],
+  {timeout:15000,encoding:'utf8',input:JSON.stringify({group,...targets[0],targets})}).trim(),'verified');
+ const page=inputs.map(i=>({sourceKey:i.sourceKey,bodySha256:sha(i.rawBody),rawSender:i.rawSender,
+  serviceCentreAt:i.serviceCentreAt,inboxReceivedAt:i.inboxReceivedAt,subscriptionId:i.subscriptionId}));
+ const replay=()=>flow.route('/reconcile-batch',{items:page,includeProcessing:true});
+ assert.deepEqual((await replay()).items.map(x=>x.sourceId),targets.map(t=>t.expect.entityId));
+ assert.deepEqual(await replay(),await replay());
+ const [{pid}]=(await f.client.query('SELECT pg_backend_pid() AS pid')).rows;
+ await peer.query('BEGIN');let blocked;
+ try{
+  const last=targets.at(-1).key;
+  await peer.query('SELECT pg_advisory_xact_lock(hashtextextended($1,7346369))',[last]);
+  await peer.query('INSERT INTO private.storage_delete_intents(object_key) VALUES($1)',[last]);
+  blocked=assert.rejects(run(tx=>custody.keyedObservationJournals(tx,targets)),{code:'posting_evidence_unavailable'});
+  const until=performance.now()+5000;
+  while(!(await peer.query('SELECT pg_backend_pid()=ANY(pg_blocking_pids($1)) AS waiting',[pid])).rows[0].waiting){
+   assert.ok(performance.now()<until);await new Promise(r=>setTimeout(r,5));
+  }
+  assert.equal((await peer.query('SELECT pg_try_advisory_xact_lock(hashtextextended($1,7346369)) AS acquired',[targets[0].key])).rows[0].acquired,false);
+  await peer.query('COMMIT');
+ }finally{await peer.query('ROLLBACK');if(blocked)await blocked;}
+ assert.equal((await f.client.query('SELECT count(*)::int AS n FROM app.payments')).rows[0].n,0);
+ t.diagnostic(JSON.stringify({items:inputs.length,oldFinalStatements:20,newFinalStatements:queries,oldFinalWorkChecks:50,newFinalWorkChecks:14}));
 });
 
 test('ordinary Android replay posts once, explicitly suppresses the masked payer and delivers the fully proven payer obligation to scoped Admin',async t=>{

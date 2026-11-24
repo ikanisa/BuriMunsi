@@ -18,7 +18,7 @@ import {drainNotificationDeliveries} from './domain/notification_delivery.js';
 import {runCollectNativeScheduledCycle} from './domain/burimunsi/collect-runtime.js';
 import {drainNativeAutoTransactions} from './domain/burimunsi/postgres-native-auto-worker.js';
 import {drainNativeSmsLedger} from './domain/burimunsi/postgres-native-sms-ledger.js';
-import {drainBuriMunsiPaymentSms} from './domain/burimunsi/payment-sms-delivery.mjs';
+import {drainBuriMunsiPaymentSms, drainBuriMunsiAllocationSms} from './domain/burimunsi/payment-sms-delivery.mjs';
 
 const cloudJobDispatch = Object.freeze({
   verify: verifyManagedJobSignature,
@@ -39,6 +39,7 @@ export function createScheduledHandler(
     processNativeAuto = drainNativeAutoTransactions,
     processNativeSmsLedger = drainNativeSmsLedger,
     processPaymentSms = drainBuriMunsiPaymentSms,
+    processAllocationSms = drainBuriMunsiAllocationSms,
     processCanonical = runCollectNativeScheduledCycle,
     processNativeFinancialWork = scheduledNativeFinancialWork,
     jobDispatch = cloudJobDispatch,
@@ -47,7 +48,7 @@ export function createScheduledHandler(
 ) {
   const workers = {
     cleanup, processReceipts, processNotifications, processNativeAuto, processNativeSmsLedger,
-    processPaymentSms, processCanonical, processNativeFinancialWork, cleanupDiagnostics,
+    processPaymentSms, processAllocationSms, processCanonical, processNativeFinancialWork, cleanupDiagnostics,
   };
   return async request => {
     const started = performance.now();

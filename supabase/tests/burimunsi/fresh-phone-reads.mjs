@@ -7,8 +7,9 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {openApplicationWork, sqlFenceBackend} from '../../functions/_shared/application-fence.js';
 import {prepareDeploymentCheck} from '../../functions/_shared/deployment-database.js';
 import {CONTRACT_VERSION} from '../../functions/_shared/domain/burimunsi/wire/native-contract.mjs';
-import {createPhonePinRequestGate, phonePinReadSelector} from '../../functions/_shared/domain/burimunsi/phone-pin-request.js';
+import {createPhonePinRequestGate, phonePinReadSelector, PIN_RENEW_SQL, PIN_SET_CONTEXT_SQL} from '../../functions/_shared/domain/burimunsi/phone-pin-request.js';
 import {PostgresDatabase} from '../../functions/_shared/postgres.js';
+import {storageApplicationPool} from '../../functions/_shared/storage/application-pool.js';
 import {lockCollectMutation} from '../../functions/_shared/postgres-mutation-lock.js';
 import {drainNativeAutoTransactions} from '../../functions/_shared/domain/burimunsi/postgres-native-auto-worker.js';
 import {drainNativeSmsLedger} from '../../functions/_shared/domain/burimunsi/postgres-native-sms-ledger.js';
@@ -32,17 +33,17 @@ const token = () => randomBytes(32).toString('hex');
 const hash = raw => createHash('sha256').update(raw).digest('hex');
 const unused = () => { throw Error('Unexpected write or external operation'); };
 
-export async function qualifyNativeReads({pool, admissionPool, businessStatements, inspect, source}) {
+export async function qualifyNativeReads({pool, competingPool, admissionPool, businessStatements, inspect, source}) {
   const [deployment] = await inspect('SELECT profile_raw, profile_sha256 FROM private.collect_deployment_identity WHERE singleton', []);
   const check = await prepareDeploymentCheck({COLLECT_DEPLOYMENT_PROFILE:deployment.profile_raw,
     COLLECT_DEPLOYMENT_PROFILE_SHA256:deployment.profile_sha256}, group);
   const regular = sqlFenceBackend(admissionPool, admissionPool, check);
   const nativeRead = sqlFenceBackend(admissionPool, admissionPool, check, new AbortController().signal, true);
-  async function admitted(fn, kind = 'http_collect', backend = regular) {
+  async function admitted(fn, kind = 'http_collect', backend = regular, businessPool = pool) {
     const admission = await openApplicationWork({backend, sourceSha256:source, kind});
     let failed = true;
     try {
-      const result = await fn(new PostgresDatabase(pool, {}, admission));
+      const result = await fn(new PostgresDatabase(businessPool, {}, admission));
       failed = false;
       return result;
     } finally {
@@ -86,7 +87,7 @@ export async function qualifyNativeReads({pool, admissionPool, businessStatement
     return actor;
   }
 
-  async function read(actor, path, device = actor.device, {requestedGroup=group,clock=Date.now,status=200}={}) {
+  async function read(actor, path, device = actor.device, {requestedGroup=group,clock=Date.now,status=200,businessPool=pool}={}) {
     return admitted(async db => {
       const sessions = new PostgresPhonePinSessions({db, groupId:group});
       const directory = new PostgresOperatorDirectory({db, groupId:group, managedSessions:sessions});
@@ -113,7 +114,7 @@ export async function qualifyNativeReads({pool, admissionPool, businessStatement
       assert.equal(response.status, status, JSON.stringify(body));
       assert.equal(response.headers.get('Cache-Control'), 'no-store');
       return body.data;
-    }, 'http_collect', nativeRead);
+    }, 'http_collect', nativeRead, businessPool);
   }
 
   async function lease(actor) {
@@ -124,8 +125,8 @@ export async function qualifyNativeReads({pool, admissionPool, businessStatement
     return {initial:Number(rows[0].initial), renewed:rows[0].renewed===null ? null : Number(rows[0].renewed), now:Number(rows[0].now)};
   }
 
-  async function assertHome(actor) {
-    const data = await read(actor, home);
+  async function assertHome(actor, businessPool = pool) {
+    const data = await read(actor, home, actor.device, {businessPool});
     assert.equal(data.profile.role, actor.role);
     assert.equal(data.home.groupBalanceRwf, 0);
     assert.ok(data.expiresAt > Date.now());
@@ -291,4 +292,98 @@ export async function qualifyNativeReads({pool, admissionPool, businessStatement
     }
   }
   await verifyAdminIncoming();
+
+  // Hold the same shared transaction used for encrypted object metadata. A
+  // session that genuinely needs renewal must render before the reader releases it.
+  for (const account of accounts) {
+    const due = await issue(account,45000), expired = await issue(account,1500);
+    let disabledConsent;
+    if (account.role==='admin') {
+      disabledConsent=await admitted(db=>db.transaction(async tx=>{
+        await db.context(tx);
+        await tx.unsafe(PIN_SET_CONTEXT_SQL,[due.bearer,due.installation,due.device,due.profile]);
+        const [{result:consent}]=await tx.unsafe('SELECT private.burimunsi_observation_consent_current() AS result');
+        const [{result}]=await tx.unsafe('SELECT private.burimunsi_observation_set_consent(false,$1) AS result',[consent.generation+1]);
+        assert.equal(result.enabled,false);
+        return result;
+      }));
+    }
+    await delay(1600);
+    await admitted(async db => {
+      const journal = await storageApplicationPool(db).connectJournal();
+      try {
+        await journal.query('BEGIN');
+        await journal.query('SELECT pg_advisory_xact_lock(hashtextextended($1,7346369))',['synthetic-receipt-key']);
+        for (const [state, actor] of [['due',due],['expired',expired]]) {
+          if (state==='expired') await assert.rejects(read(actor,payments),{code:'session_unavailable'});
+          const start=performance.now(), expiry=await assertHome(actor);
+          const elapsedMs=Math.round(performance.now()-start);
+          assert.equal((await lease(actor)).renewed,expiry);
+          await assertPayments(actor);
+          console.log('PASS receipt journal held during '+account.role+' '+state+' Home renewal',elapsedMs,'ms');
+        }
+      } finally {
+        await journal.query('ROLLBACK');
+        journal.release();
+      }
+    },'http_collect',regular,competingPool);
+    if(disabledConsent){
+      const [{enabled,generation}]=await inspect('SELECT enabled,generation::int FROM private.burimunsi_observation_consents WHERE collection_id=$1 AND account_id=$2 AND installation_id=$3',[group,due.id,due.installation]);
+      assert.deepEqual({enabled,generation},disabledConsent);
+    }
+  }
+
+  async function waitForLock(blockerPid,mode) {
+    const deadline=performance.now()+4000;
+    while(performance.now()<deadline) {
+      const [{waiting}]=await inspect("SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted AND mode=$2 AND $1::int=ANY(pg_blocking_pids(pid))) AS waiting",[blockerPid,mode]);
+      if(waiting) return;
+      await delay(15);
+    }
+    assert.fail('expected a '+mode+' waiter on the held transaction');
+  }
+
+  const sameDevice=await issue(accounts[0],45000);
+  const renewArgs=[sameDevice.bearer,sameDevice.installation,sameDevice.device,sameDevice.profile,group,1800000];
+  for (const [setting,value] of [['admission_id',''],['admission_id','invalid'],['epoch','0'],['source_sha256','invalid']]) {
+    await assert.rejects(admitted(db=>db.transaction(async tx=>{
+      await db.context(tx);
+      await tx.unsafe('SELECT set_config($1,$2,true)',['collect.fence_'+setting,value]);
+      await tx.unsafe(PIN_RENEW_SQL,renewArgs);
+    })),{code:'55000',message:'burimunsi_setup_unavailable'});
+  }
+  assert.equal((await lease(sameDevice)).renewed,null);
+  const otherDevice=await issue(accounts[0],45000);
+  let second;
+  const first=await admitted(db=>db.transaction(async tx=>{
+    await db.context(tx);
+    const [renewed]=await tx.unsafe(PIN_RENEW_SQL,renewArgs);
+    const [{pid}]=await tx.unsafe('SELECT pg_backend_pid() AS pid');
+    second=assertHome(sameDevice);
+    void second.catch(()=>{});
+    await waitForLock(pid,'ExclusiveLock');
+    await assertHome(otherDevice,competingPool);
+    return renewed.expires_at;
+  }),'http_collect',regular,competingPool);
+  assert.equal(await second,first);
+  assert.equal((await lease(sameDevice)).renewed,first);
+
+  // Commit a genuine logout while renewal is waiting behind an exclusive
+  // writer. The waiter must observe the revocation before extending the lease.
+  const revoked=await issue(accounts[0],45000);
+  let denial;
+  await admitted(db=>db.transaction(async tx=>{
+    await db.context(tx);
+    await lockCollectMutation(tx);
+    const [{pid}]=await tx.unsafe('SELECT pg_backend_pid() AS pid');
+    denial=assert.rejects(assertHome(revoked),{code:'session_unavailable'});
+    void denial.catch(()=>{});
+    await waitForLock(pid,'ShareLock');
+    const [logout]=await tx.unsafe('SELECT private.burimunsi_pin_logout_barrier($1,$2::uuid,$3,$4,$5,NULL) AS result',
+      [revoked.bearer,revoked.installation,revoked.device,revoked.profile,group]);
+    assert.equal(logout.result.accountId,revoked.id);
+  }),'http_collect',regular,competingPool);
+  await denial;
+  assert.equal((await lease(revoked)).renewed,null);
+  console.log('PASS per-installation renewals serialize, another installation proceeds, logout denies renewal and disabled SMS consent persists');
 }

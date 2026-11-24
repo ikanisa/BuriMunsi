@@ -41,6 +41,26 @@ export class PostgresStorageJournal {
   }
   async getObject(key){return this.#journalTransaction(key,async c=>meta((await c.query('SELECT * FROM private.storage_objects WHERE object_key=$1',[key])).rows[0])??null);}
   async getPutByKey(key){return this.#journalTransaction(key,async c=>put((await c.query('SELECT * FROM private.storage_put_intents WHERE object_key=$1',[key])).rows[0])??null);}
+  async getReceiptReadBindings(keys) {
+    if (!Array.isArray(keys) || keys.length < 2 || keys.length > 20 || new Set(keys).size !== keys.length ||
+        keys.some(key => typeof key !== 'string' || !/^sms\/[a-zA-Z0-9_-]{1,200}$/.test(key))) {
+      throw new TypeError('Expected a bounded list of distinct SMS object keys');
+    }
+    const ordered = [...keys].sort();
+    return this.#journalTransaction(ordered[0], async client => {
+      // The first object lock is held by the transaction. Acquire the rest in
+      // the same order for every page before taking the read-committed snapshot.
+      await client.query(`SELECT pg_advisory_xact_lock(hashtextextended(item.key, 7346369))
+        FROM jsonb_array_elements_text($1::text::jsonb) WITH ORDINALITY AS item(key, pos)
+        ORDER BY item.pos`, [JSON.stringify(ordered.slice(1))]);
+      const {rows} = await client.query(`SELECT item.key, row_to_json(p) AS put_row, row_to_json(m) AS meta_row
+        FROM jsonb_array_elements_text($1::text::jsonb) WITH ORDINALITY AS item(key, pos)
+        LEFT JOIN private.storage_put_intents p ON p.object_key = item.key
+        LEFT JOIN private.storage_objects m ON m.object_key = item.key ORDER BY item.pos`, [JSON.stringify(keys)]);
+      if (rows.length !== keys.length || rows.some((row, i) => row.key !== keys[i])) conflict('storage_page_changed');
+      return new Map(rows.map(row => [row.key, {intent: put(row.put_row), meta: meta(row.meta_row)}]));
+    });
+  }
   async beginPut(intent) {
     return this.#journalTransaction(intent.key, async c => {
       await c.query(`INSERT INTO private.storage_put_intents(operation_id,object_key,fingerprint,sha256,size,scope,http_metadata,custom_metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING`, [intent.operationId,intent.key,intent.fingerprint,intent.sha256,intent.size,intent.scope,intent.httpMetadata,intent.customMetadata]);

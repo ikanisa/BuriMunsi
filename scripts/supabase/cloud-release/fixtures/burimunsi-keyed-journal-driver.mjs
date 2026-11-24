@@ -7,7 +7,7 @@ const [socket, portText] = Deno.args;
 assert.match(socket, /^\/(?:private\/)?tmp\/collect-pg-transfer-[a-zA-Z0-9]+\/s$/);
 const port = Number(portText);
 assert.ok(Number.isInteger(port) && port >= 51000 && port <= 60999);
-const {group, key, expect} = await new Response(Deno.stdin.readable).json();
+const {group, key, expect, targets} = await new Response(Deno.stdin.readable).json();
 const sql = postgres({host: socket, port, database: 'postgres', user: 'collect_fixture', max: 1, ssl: false,
   prepare: false, onnotice() {}, types: {whole: {to: 20, from: [20,1700], serialize: String, parse: Number}}});
 try {
@@ -22,6 +22,11 @@ try {
     const current = await custody.keyedObservationJournal(tx, key, expect);
     assert.deepEqual(current, previous);
     assert.ok(Number.isSafeInteger(current.put.size));
+    if (targets) {
+      const individual=[];
+      for (const t of targets) individual.push(await custody.keyedObservationJournal(tx,t.key,t.expect));
+      assert.deepEqual(await custody.keyedObservationJournals(tx,targets),individual);
+    }
   });
   console.log('verified');
 } finally {

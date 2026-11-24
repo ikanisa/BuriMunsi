@@ -60,10 +60,10 @@ async function fixture(){
     const items=f.rows.slice(offset,offset+limit);
     const result={collectionId,totalCount:f.rows.length,revision:f.revision,items};
     if(s.sql.includes('burimunsi_admin_payment_observation_outcomes(')){
-     assert.equal(s.args.length,3);
+     assert.equal(s.args.length,4);
      assert.ok(s.sql.includes('burimunsi_observation_admin_inbox_check('));
      result.outcomes=items.map(({sourceId},i)=>({sourceId,processing:f.processing?.[i]??'parsed',
-      paymentReference:null,payerStatus:f.legacyPayerStatus??null,payerReason:null}));
+      paymentReference:f.legacyRef??null,payerStatus:f.payerStatuses?.[i]??null,payerReason:null}));
      result.inboxCheck=f.check;
     }else if(s.sql.includes('burimunsi_admin_observation_outcomes(')){
      assert.ok(s.sql.includes('burimunsi_observation_admin_inbox_check('));
@@ -251,6 +251,11 @@ test('standalone receiver parses the new status and rejects any legacy financial
  assert.deepEqual(result.items.map(x=>[x.processing,x.paymentReference,x.payerStatus,x.payerReason]),
   [['parsed',null,null,null],['non_payment',null,null,null]]);
  assert.equal(result.inboxCheck.state,'verified');
- f.legacyPayerStatus='delivered';
+ f.payerStatuses=['delivered',null];
+ assert.equal((await(await call(f,endpoint)).json()).items[0].payerStatus,'delivered');
+ f.actor.permissions.delete('payments.read');
+ await assert.rejects(call(f,endpoint),error(503,'observation_unavailable'));
+ f.actor.permissions.add('payments.read');
+ f.legacyRef='100000000001';
  await assert.rejects(call(f,endpoint),error(503,'observation_unavailable'));
 });

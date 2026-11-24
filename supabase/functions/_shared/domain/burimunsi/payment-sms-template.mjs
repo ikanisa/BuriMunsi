@@ -40,3 +40,11 @@ export function renderPaymentSms(facts) {
   return paymentSmsTemplate.body.replace(/\{\{([a-z_]+)\}\}/g,
     (_, field) => field === 'recorded_at' ? local : variables[field]);
 }
+
+// The payer can be a different person from the member receiving the allocation.
+export function renderAllocationSms({amount_rwf, reference}) {
+  const amount = formattedRwf(amount_rwf, 1);
+  const ref = typeof reference === 'string' && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,63}$/.test(reference)
+    ? ' Ref: ' + reference + '.' : '';
+  return 'BuriMunsi: Twakiriye ubwishyu bwa ' + amount + ' RWF.' + ref;
+}

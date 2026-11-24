@@ -105,7 +105,7 @@ async function maintainDiagnostics(env, cleanupDiagnostics) {
 
 export async function runEdgeJobCycle(env, payload, dispatch, nativeGate, {
   cleanup, processReceipts, processNotifications, processNativeAuto, processNativeSmsLedger,
-  processPaymentSms, processCanonical, processNativeFinancialWork, cleanupDiagnostics,
+  processPaymentSms, processAllocationSms, processCanonical, processNativeFinancialWork, cleanupDiagnostics,
 }) {
   const standalone = env.BURIMUNSI_PRODUCT_MODE === 'standalone';
   const admission = scheduledProcessingAdmission(env, dispatch);
@@ -124,9 +124,9 @@ export async function runEdgeJobCycle(env, payload, dispatch, nativeGate, {
   // The native provider budget and managed processing admission are independent.
   const nativeEnv = nativeGate.enabled ? withNativeProviderBudget(env, payload) : env;
   const {nativeAuto, nativeLedger} = await runNativeAuto(env, nativeEnv, admission, processNativeAuto, processNativeSmsLedger);
-  const paymentSmsEnabled = !standalone && env.BURIMUNSI_PAYMENT_SMS_ENABLED === 'true';
+  const paymentSmsEnabled = (standalone ? env.BURIMUNSI_ALLOCATION_SMS_ENABLED : env.BURIMUNSI_PAYMENT_SMS_ENABLED) === 'true';
   const paymentSmsAdmitted = paymentSmsEnabled && nativeGate.enabled && admission.allowed;
-  const paymentSms = await runPaymentSms(env, paymentSmsEnabled, paymentSmsAdmitted, processPaymentSms);
+  const paymentSms = await runPaymentSms(env, paymentSmsEnabled, paymentSmsAdmitted, standalone ? processAllocationSms : processPaymentSms);
 
   const canonical = standalone ? null : await scheduledCanonicalDrain(env, admission, {runCycle: processCanonical});
   const nativeFinancial = standalone ? null : await processNativeFinancialWork(env, admission);
@@ -149,7 +149,7 @@ export async function runEdgeJobCycle(env, payload, dispatch, nativeGate, {
       ...(notifications ? {notifications} : {}),
       ...(nativeAuto ? {native_auto_processing: nativeAuto} : {}),
       ...(nativeLedger ? {native_sms_ledger: nativeLedger} : {}),
-      ...(paymentSms ? {payment_receipt_sms: paymentSms} : {}),
+      ...(paymentSms ? {[standalone ? 'allocation_receipt_sms' : 'payment_receipt_sms']: paymentSms} : {}),
       ...(canonical ? {canonical_processing: canonical} : {}),
       ...(nativeFinancial ? {native_financial_work: nativeFinancial} : {}),
       realtime, diagnostics,
