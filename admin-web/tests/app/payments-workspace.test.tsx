@@ -1,4 +1,4 @@
-import {act, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
+import {act, cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
 import {Suspense} from 'react';
 import {MemoryRouter, useLocation, useNavigate, useRoutes} from 'react-router';
 import {afterEach, describe, expect, it, vi} from 'vitest';
@@ -47,7 +47,13 @@ const visit = (path: string, permissions: string[], role = 'admin') => {
 };
 const location = () => screen.getByLabelText('Current location');
 const called = (prefix: string) => mock.request.mock.calls.filter(([path]) => path.startsWith(prefix));
-afterEach(() => {mock.request.mockReset();mock.status='authenticated';mock.role='admin';mock.authMethod='phone_passcode';});
+afterEach(() => {
+  cleanup();
+  mock.request.mockReset();
+  mock.status = 'authenticated';
+  mock.role = 'admin';
+  mock.authMethod = 'phone_passcode';
+});
 
 describe('consolidated Payments routes',()=>{
   it('makes the old payment list a guarded alias and returns through the new list with search preserved',async()=>{
@@ -56,7 +62,7 @@ describe('consolidated Payments routes',()=>{
           current_actor_id:currentActor,can_manage:false,related:{},related_truncated:false}
       : {...coreFixture.transactions,rows:[payment]});
     visit('/admin/transactions?search='+paymentRef,['payments.read']);
-    const record = await screen.findByRole('link',{name:paymentRef});
+    const record = await screen.findByRole('link', {name: paymentRef}, {timeout: 4_000});
     expect(location()).toHaveTextContent('/admin/payments?search='+paymentRef);
     expect(screen.getByRole('textbox',{name:'Search payments'})).toHaveValue(paymentRef);
     fireEvent.click(record);

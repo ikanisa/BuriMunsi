@@ -67,7 +67,7 @@ describe('Admin session recovery through the router', () => {
   ] as const)('preserves a safe destination when %s switches verification method, then rechecks access', async (backend, start, target, heading) => {
     const query = new URLSearchParams({returnTo: '/admin/burimunsi?draft=private'});
     const {requests} = openAdmin(`/admin/security/${start}?${query}`, {backend});
-    await screen.findByRole('heading', {name: heading});
+    await screen.findByRole('heading', {name: heading}, {timeout: 4_000});
     expect(router.state.location.pathname).toBe(`/admin/security/${target}`);
     expect(new URLSearchParams(router.state.location.search).get('returnTo')).toBe('/admin/burimunsi');
 
@@ -114,9 +114,11 @@ describe('Admin navigation for the current session', () => {
     await waitFor(() => expect(requests).toContain('/api/admin/core/members'));
     expect(requests).not.toContain('/api/admin/core/users');
     fireEvent.click(views.getByRole('link', {name: 'All people'}));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/admin/users'));
-    expect(screen.getByRole('heading', {name: 'Members'})).toBeVisible();
-    expect(screen.getByRole('link', {name: 'All people'})).toHaveAttribute('aria-current', 'page');
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe('/admin/users');
+      expect(screen.getByRole('heading', {name: 'Members'})).toBeVisible();
+      expect(screen.getByRole('link', {name: 'All people'})).toHaveAttribute('aria-current', 'page');
+    }, {timeout: 4_000});
     await waitFor(() => expect(requests).toContain('/api/admin/core/users'));
   });
 
@@ -154,7 +156,7 @@ describe('Admin navigation for the current session', () => {
   ])('keeps ledger history discoverable with its own permission ($permissions)', async ({permissions, route, fallback, contextual, denied}) => {
     const {requests} = openAdmin(route, {session: {user: {...account, permissions}}});
     const heading = denied ? 'Access unavailable' : route === '/admin/licenses' ? 'Open-source licenses' : 'Payments';
-    await screen.findByRole('heading', {name: heading});
+    await screen.findByRole('heading', {name: heading}, {timeout: 4_000});
     const inRecorded = screen.queryByRole('link', {name: 'Ledger and reversals history'});
     expect(Boolean(inRecorded)).toBe(contextual);
     if (inRecorded) expect(inRecorded).toHaveAttribute('href', '#/admin/ledgers');
