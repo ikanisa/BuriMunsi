@@ -105,7 +105,8 @@ export function createHandler(functionName, envReader = () => Deno.env.toObject(
         (path === '/v1/burimunsi/payments' ||
          (path === '/v1/burimunsi/session' && new URL(logical.url).search === '?include=home'));
       await runtime.initializeDatabase(env, collectionId, standalone && openWork === openApplicationWork);
-      const work = await runtime.admit(env, openWork, admin ? 'http_admin' : 'http_collect', request.signal);
+      const work = await runtime.admit(env, openWork, admin ? 'http_admin' : 'http_collect', request.signal,
+        standalone && logical.method === 'GET');
       const admittedAt = timedRead ? performance.now() : 0;
       assertNotCancelled(request.signal);
 
