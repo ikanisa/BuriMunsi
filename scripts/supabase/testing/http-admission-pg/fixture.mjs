@@ -157,7 +157,7 @@ export async function createOwnedFixture(env=process.env,{signal}={}){
    const result=await psql("BEGIN READ ONLY;SELECT row_to_json(a) FROM private.collect_fence_admissions a WHERE admission_id="+quote(id)+"::uuid;COMMIT;");
    const line=result.split('\n').find(value=>value.startsWith('{'));if(!line)fail('HTTP_ADMISSION_FIXTURE_RESULT_INVALID');return JSON.parse(line);
   }
-  return Object.freeze({invoke,stored,close,sourceSha256:FENCE_MIGRATION_SHA256,providerCalls:0});
+  return Object.freeze({invoke,stored,close,socketPath:join(socket,'.s.PGSQL.'+port),sourceSha256:FENCE_MIGRATION_SHA256,providerCalls:0});
  }catch(error){
   try{await close();}catch(cleanup){throw cleanup;}
   throw error;

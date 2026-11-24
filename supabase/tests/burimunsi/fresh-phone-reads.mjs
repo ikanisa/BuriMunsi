@@ -5,6 +5,7 @@ import {Buffer} from 'node:buffer';
 import {createHash, randomBytes, randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 import {openApplicationWork, sqlFenceBackend} from '../../functions/_shared/application-fence.js';
+import {prepareDeploymentCheck} from '../../functions/_shared/deployment-database.js';
 import {CONTRACT_VERSION} from '../../functions/_shared/domain/burimunsi/wire/native-contract.mjs';
 import {createPhonePinRequestGate, phonePinReadSelector} from '../../functions/_shared/domain/burimunsi/phone-pin-request.js';
 import {PostgresDatabase} from '../../functions/_shared/postgres.js';
@@ -29,8 +30,12 @@ const hash = raw => createHash('sha256').update(raw).digest('hex');
 const unused = () => { throw Error('Unexpected write or external operation'); };
 
 export async function qualifyNativeReads({pool, admissionPool, inspect, source}) {
-  const backend = sqlFenceBackend(admissionPool, admissionPool);
-  async function admitted(fn, kind = 'http_collect') {
+  const [deployment] = await inspect('SELECT profile_raw, profile_sha256 FROM private.collect_deployment_identity WHERE singleton', []);
+  const check = await prepareDeploymentCheck({COLLECT_DEPLOYMENT_PROFILE:deployment.profile_raw,
+    COLLECT_DEPLOYMENT_PROFILE_SHA256:deployment.profile_sha256}, group);
+  const regular = sqlFenceBackend(admissionPool, admissionPool, check);
+  const nativeRead = sqlFenceBackend(admissionPool, admissionPool, check, true);
+  async function admitted(fn, kind = 'http_collect', backend = regular) {
     const admission = await openApplicationWork({backend, sourceSha256:source, kind});
     let failed = true;
     try {
@@ -83,7 +88,7 @@ export async function qualifyNativeReads({pool, admissionPool, inspect, source})
       assert.equal(response.status, 200, JSON.stringify(body));
       assert.equal(response.headers.get('Cache-Control'), 'no-store');
       return body.data;
-    });
+    }, 'http_collect', nativeRead);
   }
 
   async function lease(actor) {

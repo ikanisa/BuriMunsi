@@ -44,17 +44,29 @@ const leaseSetupSql = "SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout=
  runtimeRoleSql + '; SELECT pg_catalog.pg_advisory_xact_lock_shared(7346371,1)';
 async function runtimeRole(tx){await tx.unsafe(runtimeRoleSql);}
 async function result(tx,name,values){const rows=await tx.unsafe('SELECT '+signatures[name]+' AS result',values);need(rows.length===1&&rows[0].result&&typeof rows[0].result==='object');return rows[0].result;}
-/** @param {(tx: import('npm:postgres@3.4.7').TransactionSql) => unknown} [verifyAdmission] */
-export function sqlFenceBackend(businessSql,controlSql,verifyAdmission=undefined){
+/** @param {(tx: import('npm:postgres@3.4.7').TransactionSql, registration?: {id:string,source:string,kind:string}) => unknown} [verifyAdmission] */
+export function sqlFenceBackend(businessSql,controlSql,verifyAdmission=undefined,standaloneRead=false){
  need(typeof businessSql?.begin==='function'&&typeof controlSql?.reserve==='function');
  need(verifyAdmission===undefined||typeof verifyAdmission==='function');
+ need(!standaloneRead||typeof verifyAdmission==='function');
  const rawCall=(name,values)=>businessSql.begin('ISOLATION LEVEL READ COMMITTED',async tx=>{
   await runtimeRole(tx);
   if(name==='register'&&verifyAdmission)await verifyAdmission(tx);
   return result(tx,name,values);
  });
  const call=(name,values)=>bounded(rawCall(name,values));
- const register=(id,source,kind)=>observeFenceRegistration(rawCall('register',[id,source,kind]));
+ function register(id,source,kind) {
+  if(!standaloneRead)return observeFenceRegistration(rawCall('register',[id,source,kind]));
+  need(kind==='http_collect');
+  const original=businessSql.begin('ISOLATION LEVEL READ COMMITTED',async tx=>{
+   // postgres.js executes these in submission order on this one transaction.
+   // A setup error aborts it. The checked SQL itself gates the registration.
+   const [,row]=await Promise.all([runtimeRole(tx),verifyAdmission(tx,{id,source,kind})]);
+   need(row&&typeof row==='object');
+   return row;
+  });
+  return observeFenceRegistration(original);
+ }
  return Object.freeze({register,close:(id,epoch,source,outcome,reason,dispatches,uncertain)=>call('close',[id,epoch,source,outcome,reason,dispatches,uncertain]),status:id=>call('status',[id]),
   async lease(id,epoch,source){
    const tx=await reserveDatabaseConnection(controlSql);let beginDispatched=false,released=false,cleanup=null,reusable=false;
@@ -75,10 +87,15 @@ export function sqlFenceBackend(businessSql,controlSql,verifyAdmission=undefined
     // a rejection quarantines forever. Never enqueue another rollback/reset.
     return bounded(cleanup).catch(error=>{reusable=false;throw error;});
    };
-   try{beginDispatched=true;await tx.unsafe('BEGIN ISOLATION LEVEL READ COMMITTED');
-    // These fixed setup commands share one wire round trip. No authority
-    // lookup starts until PostgreSQL confirms the role, limits and WORK lock.
-    await tx.unsafe(leaseSetupSql);
+   try{beginDispatched=true;
+    const begin='BEGIN ISOLATION LEVEL READ COMMITTED';
+    if(standaloneRead)await tx.unsafe(begin+'; '+leaseSetupSql);
+    else {
+     await tx.unsafe(begin);
+     await tx.unsafe(leaseSetupSql);
+    }
+    // The role, limits and transaction-owned WORK lock must all acknowledge
+    // before the separately bound assertion and before any handler work.
     const row=await result(tx,'assert',[id,epoch,source]);
     reusable=active(row,id,source,epoch).mode==='open';
     return {row,async assert(){
