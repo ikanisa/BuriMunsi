@@ -62,8 +62,13 @@ try{
  assert.deepEqual((await data('/processing-status',{sourceIds:[id]})).statuses,[{sourceId:id,status:'unknown',canRetry:false}]);
  const item={sourceKey:'3'.repeat(64),bodySha256:'4'.repeat(64),rawSender:'+15555219877',
   inboxReceivedAt:new Date().toISOString(),serviceCentreAt:null,subscriptionId:1};
- const page=await data('/reconcile-batch',{runId:run.runId,items:[item],includeProcessing:true});
- assert.deepEqual(page.items,[{sourceKey:item.sourceKey,state:'missing',sourceId:null}]);
- assert.equal((await data('/inbox-check',{...run,state:'incomplete',candidateCount:1,missingCount:1,phoneLatestKey:item.sourceKey})).state,'incomplete');
+ const items=Array.from({length:10},(_,i)=>({...item,sourceKey:(10-i).toString(16).padStart(64,'0'),
+  bodySha256:(i+1).toString(16).repeat(64),...(i===1?{gatewayEnvelopeId:crypto.randomUUID()}:{})}));
+ const batch={runId:run.runId,items,includeProcessing:true};
+ for(let attempt=0;attempt<2;attempt++){
+  const page=await data('/reconcile-batch',batch);
+  assert.deepEqual(page.items,items.map(x=>({sourceKey:x.sourceKey,state:'missing',sourceId:null})));
+ }
+ assert.equal((await data('/inbox-check',{...run,state:'incomplete',candidateCount:10,missingCount:10,phoneLatestKey:items[0].sourceKey})).state,'incomplete');
  console.log(JSON.stringify({driver:'postgres@3.4.7',original:'42501 consent_changed',staleConsent:403,checkpoint:200,processingStatus:200,page:200,missing:'incomplete'}));
 }finally{await sql.end();}

@@ -42,6 +42,13 @@ function batchWitnessFailure(error) {
   return error;
 }
 
+function scopedRecord(result, bodySha, actor) {
+  if (result === null) return null;
+  const record = row(result);
+  check(record.bodySha256 === bodySha && record.sessionId === actor.sessionId, 'observation_changed', 409);
+  return record;
+}
+
 const processingStates = new Set(['pending','retrying','parsed','needs_review','conflict','duplicate','security','historical','unknown']);
 
 export async function readObservationProcessingStatus(tx, groupId, sourceIds) {
@@ -214,11 +221,23 @@ export class PostgresObservationReconciliation {
   }
   async #readBatchSnapshot(tx, actor, values, hashes) {
     const { ctx, profile } = await this.context(tx, actor);
-    const records = [], candidates = [];
-    for (let i = 0; i < values.length; i++) {
-      const item = await this.#readItem(tx, actor, profile, values[i], hashes[i], batchKeyFailure);
-      records.push(item.record);
-      candidates.push(item.candidates);
+    if (values.length === 1) {
+      const item = await this.#readItem(tx, actor, profile, values[0], hashes[0], batchKeyFailure);
+      return { ctx, records: [item.record], candidates: [item.candidates] };
+    }
+    check(values.every(v => isObservationSenderAllowed(v.rawSender, profile)), 'unsupported_receipt', 422);
+    let results;
+    try {
+      results = await this.#evidence.lookupSourceKeys(tx, values, hashes);
+    } catch (error) {
+      throw batchKeyFailure(error);
+    }
+    const records = results.map((r, i) => scopedRecord(r, values[i].bodySha256, actor));
+    const candidates = values.map(() => []);
+    const missing = values.map((v, i) => !records[i] && !v.gatewayEnvelopeId ? i : -1).filter(i => i >= 0);
+    if (missing.length) {
+      const sets = await this.#evidence.readLegacyCandidateSets(tx, actor, missing.map(i => values[i].bodySha256));
+      missing.forEach((i, j) => { candidates[i] = sets[j]; });
     }
     return { ctx, records, candidates };
   }
@@ -232,14 +251,7 @@ export class PostgresObservationReconciliation {
       throw mapKeyError ? mapKeyError(error) : error;
     }
     check(found.length === 1);
-    const record = found[0].result === null ? null : row(found[0].result);
-    if (record) {
-      check(
-        record.bodySha256 === value.bodySha256 && record.sessionId === actor.sessionId,
-        'observation_changed',
-        409,
-      );
-    }
+    const record = scopedRecord(found[0].result, value.bodySha256, actor);
     const candidates = record||value.gatewayEnvelopeId ? [] : await this.#evidence.readLegacyCandidates(tx, actor, value.bodySha256);
     return { record, candidates };
   }
