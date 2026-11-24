@@ -38,7 +38,7 @@ async function select(scoped,sql,...args){
  if(!answer||!Array.isArray(answer.results)||answer.results.length!==1||!Object.hasOwn(answer.results[0],'result'))bad();
  return answer.results[0].result;
 }
-async function reservationMatches(row){
+export async function reservationMatches(row){
  if(!row||!ID.test(row.sourceId??'')||typeof row.ownerUserId!=='string'||!row.ownerUserId||row.ownerUserId.length>128||
   row.objectKey!=='sms/'+row.sourceId||!HASH.test(row.objectSha256??'')||!HASH.test(row.fingerprint??'')||
   !KEY.test(row.keyId??'')||!HASH.test(row.sourceFingerprint??''))return false;
