@@ -159,6 +159,26 @@ fun main()=runBlocking {
     check(quiet.state.route==Route.PAYMENTS&&quiet.state.payments===prioritizedPayments&&quiet.state.home==null)
     println("PASS Payments completes while quiet Home is blocked and the late Home cannot publish")
 
+    quiet.navigate(Route.HOME);idle(quiet)
+    val pendingMembersHome=CountDownLatch(1)
+    val beforeMembersHome=Fixture.homeReads
+    Fixture.homeBarrier=pendingMembersHome
+    try {
+        quiet.refreshSession(quiet=true)
+        withTimeout(3_000){while(Fixture.homeReads==beforeMembersHome)delay(2)}
+        check(!quiet.navigationBlocked)
+        quiet.navigate(Route.MEMBERS)
+        withTimeout(2_000){while(quiet.state.route!=Route.MEMBERS||quiet.state.busy)delay(2)}
+        check(quiet.state.members!=null&&quiet.state.home==null)
+    } finally {
+        Fixture.homeBarrier=null
+        pendingMembersHome.countDown()
+    }
+    delay(50)
+    check(quiet.state.route==Route.MEMBERS&&quiet.state.home==null)
+    println("PASS Members opens while quiet Home is blocked and the late Home cannot publish")
+    quiet.navigate(Route.PAYMENTS);idle(quiet)
+
     Fixture.sessionEntered=CountDownLatch(1);Fixture.sessionBarrier=CountDownLatch(1)
     val paymentListings=Fixture.listingQueries.size
     val ordinaryHomeReads=Fixture.homeReads
@@ -180,6 +200,25 @@ fun main()=runBlocking {
     check(quiet.state.operator==null&&quiet.state.home==null&&quiet.state.payments==null&&quiet.requestedRoute==null)
     println("PASS revocation discards a queued destination and all prior records")
     quiet.viewModelScope.cancel();Fixture.sessionEntered=null;Fixture.sessionBarrier=null;Fixture.sessionFailure=null
+
+    val protectedMembers=BuriViewModel(Application()){now};idle(protectedMembers)
+    val originalListings=Fixture.listingQueries.size
+    Fixture.sessionEntered=CountDownLatch(1);Fixture.sessionBarrier=CountDownLatch(1)
+    Fixture.sessionFailure=ApiFailure("session_unavailable",401)
+    try {
+        protectedMembers.refreshSession(quiet=true)
+        check(Fixture.sessionEntered!!.await(3,TimeUnit.SECONDS))
+        protectedMembers.navigate(Route.MEMBERS)
+        check(protectedMembers.requestedRoute==Route.MEMBERS&&Fixture.listingQueries.size==originalListings)
+        Fixture.sessionBarrier!!.countDown();idle(protectedMembers)
+        check(protectedMembers.state.operator==null&&protectedMembers.state.members==null&&
+            protectedMembers.requestedRoute==null&&Fixture.listingQueries.size==originalListings)
+    } finally {
+        Fixture.sessionBarrier?.countDown()
+        Fixture.sessionEntered=null;Fixture.sessionBarrier=null;Fixture.sessionFailure=null
+        protectedMembers.viewModelScope.cancel()
+    }
+    println("PASS a revoked profile drops queued Members before any directory read")
 
     val members=BuriViewModel(Application()){now};idle(members);members.onForeground();idle(members)
     val memberHomeReads=Fixture.homeReads
