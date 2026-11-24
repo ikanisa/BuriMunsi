@@ -5,6 +5,7 @@ import {randomUUID} from 'node:crypto';
 import {readFile,writeFile} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {join} from 'node:path';
 import test from 'node:test';
 import {startPayerFixture} from './fixtures/burimunsi-payer-postgres.mjs';
 import {openFixturePayerWorker} from './fixtures/burimunsi-payer-delivery.mjs';
@@ -398,6 +399,85 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
  assert.deepEqual(worker.requests,['POST','GET']);
  assert.deepEqual(await receiptStatus(source.sourceId),{status:'delivered',reason:null});
  await worker.complete();
+ await t.test('an owned PostgreSQL restore preserves standalone SMS custody and allocation delivery without replay', async t=>{
+  // Both databases are test-owned, under the same fixture PostgreSQL process
+  // with no TCP listener. This is a synthetic DB/object round trip; it does
+  // not qualify hosted capture, recovery keys, or live provider replay.
+  const c=f.cluster, target='burimunsi_restore_fixture', archive=join(c.root,'burimunsi-synthetic.dump');
+  const identity=(client)=>client.query(`SELECT current_database() AS db,current_setting('data_directory') AS data,
+    current_setting('cluster_name') AS cluster,INET_SERVER_ADDR() IS NULL AS socket_only`).then(x=>x.rows[0]);
+  assert.deepEqual(await identity(f.client),{db:'postgres',data:c.data,cluster:c.clusterName,socket_only:true});
+  const cli=(name,args)=>execFileSync(join(c.bin,name),['-h',c.socket,'-p',String(c.port),'-U',c.initialUser,...args],{
+   env:{...c.env,PGCONNECT_TIMEOUT:'3'},timeout:15000,maxBuffer:1048576,stdio:['ignore','pipe','pipe']});
+  const snapshot=async client=>{
+   const {rows:[manifest]}=await client.query(`SELECT
+    (SELECT count(*)::int FROM burimunsi.raw_sms) AS raw_count,
+    (SELECT count(*)::int FROM burimunsi.payments) AS payment_count,
+    (SELECT count(*)::int FROM private.burimunsi_allocation_receipts) AS delivery_count,
+    (SELECT count(*)::int FROM app.ledger_entries) AS ledger_count,
+    (SELECT count(*)::int FROM collect_sms.messages) AS gateway_count,
+    (SELECT count(*)::int FROM private.storage_objects) AS storage_count,
+    (SELECT count(*)::int FROM private.burimunsi_auto_sms_jobs) AS parse_count`);
+   const {rows:[entry]}=await client.query(`SELECT r.object_sha256 AS object_plaintext_sha256,
+     encode(sha256(r.ciphertext),'hex') AS ciphertext_sha256,o.sha256 AS storage_sha256,
+     o.object_key,i.state AS object_put_state,j.source_fingerprint,p.allocation_state,p.version,a.status,a.attempt_id,a.body_sha256 AS notice_sha256,
+     a.destination_sha256 AS destination_sha256,a.provider_state,a.evidence_sha256
+    FROM burimunsi.payments p
+    JOIN burimunsi.raw_sms r ON r.id=p.sms_source_id AND r.collection_id=p.collection_id
+    JOIN private.burimunsi_unresolved_observations u ON u.source_id=r.id AND u.collection_id=r.collection_id
+    JOIN private.storage_objects o ON o.object_key=u.object_key AND u.object_sha256=r.object_sha256
+    JOIN private.storage_put_intents i ON i.object_key=o.object_key AND i.sha256=o.sha256
+    JOIN private.storage_payload_reservations j ON j.object_key=o.object_key AND j.plaintext_sha256=r.object_sha256
+    JOIN private.burimunsi_allocation_receipts a ON a.payment_id=p.id AND a.collection_id=p.collection_id
+    WHERE p.collection_id=$1 AND p.id=$2`,[group,source.sourceId]);
+   return {manifest,entry};
+  };
+  const before=await snapshot(f.client);
+  assert.equal(before.manifest.delivery_count,2);
+  assert.equal(before.manifest.ledger_count,0);
+  assert.ok(before.manifest.raw_count>0&&before.manifest.parse_count>0);
+  assert.equal(before.entry.status,'delivered');
+  assert.equal(before.entry.allocation_state,'allocated');
+  assert.match(before.entry.notice_sha256,/^[a-f0-9]{64}$/);
+  assert.match(before.entry.destination_sha256,/^[a-f0-9]{64}$/);
+  const key=before.entry.object_key;
+  const {sealed,sourceHash}=runtime.objects.get(key);
+  assert.equal(before.entry.object_put_state,'committed');
+  assert.equal(before.entry.source_fingerprint,sourceHash);
+  // The fixture object store is separately held from the DB dump.
+  const objectBackup=new Map([[key,Buffer.from(sealed)]]);
+  const checkObject=(manifest,objects)=>{
+   const bytes=objects.get(manifest.entry.object_key);
+   return !!bytes&&sha(bytes)===manifest.entry.storage_sha256&&manifest.entry.storage_sha256===manifest.entry.ciphertext_sha256;
+  };
+  assert.equal(checkObject(before,objectBackup),true);
+  cli('pg_dump',['-Fc','-f',archive,'-d','postgres']);
+  const archiveSha=sha(await readFile(archive));
+  await f.client.query('CREATE DATABASE '+target+' TEMPLATE template0');
+  const restored=new pg.Client({host:c.socket,port:c.port,database:target,user:c.initialUser});
+  try {
+   cli('pg_restore',['--exit-on-error','--single-transaction','-d',target,archive]);
+   await restored.connect();
+   await restored.query("SET ROLE postgres; SET default_transaction_read_only = 'on'");
+   assert.deepEqual(await identity(restored),{db:target,data:c.data,cluster:c.clusterName,socket_only:true});
+   const after=await snapshot(restored);
+   assert.deepEqual(after,before);
+   assert.equal(sha(await readFile(archive)),archiveSha);
+   assert.equal(checkObject(after,objectBackup),true);
+   const restoredBody=await decrypt(runtime.env,objectBackup.get(key).toString('utf8'),
+    `sms:${source.sourceId}:${after.entry.object_plaintext_sha256}`);
+   assert.equal(sha(Buffer.from(restoredBody)),after.entry.object_plaintext_sha256);
+   assert.equal(JSON.parse(Buffer.from(restoredBody)).raw_body,incoming.rawBody);
+   assert.equal(checkObject(after,new Map()),false);
+   const altered=Buffer.from(objectBackup.get(key));altered[0]^=1;
+   assert.equal(checkObject(after,new Map([[key,altered]])),false);
+   assert.deepEqual(worker.requests,['POST','GET']);
+   t.diagnostic('Restored counts: '+JSON.stringify(after.manifest)+'; synthetic archive SHA-256 '+archiveSha);
+  } finally {
+   await restored.end();
+   await f.client.query('DROP DATABASE '+target);
+  }
+ });
  const adminStatus=withPayer=>f.rpc('burimunsi_admin_payment_observation_outcomes',[group,[source.sourceId],withPayer],['text','text[]','boolean'],'http_admin');
  assert.equal((await adminStatus(false))[0].payerStatus,null);
  await f.client.query("DELETE FROM app.admin_grants WHERE permission='payments.read'");

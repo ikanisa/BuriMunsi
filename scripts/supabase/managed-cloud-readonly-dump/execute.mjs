@@ -12,7 +12,7 @@ import {prepareAttempt,recordDispatchIntent,recordOutcome} from './journal.mjs';
 import {authenticateAndInspectArchive,createBackupEncryptor,PROVIDER_ROOT_SHA256} from './archive.mjs';
 import {openInventory,sealInventory} from './manifest-crypto.mjs';
 import {MAX_DUMP_BYTES,requireDiskHeadroom,createProgressGuard} from './capacity.mjs';
-import {createTocScanner} from './toc.mjs';
+import {createTocScanner,DUMP_TOC_SCHEMAS} from './toc.mjs';
 import {normalizedExitCode,normalizedSignal} from './diagnostics.mjs';
 export class DumpError extends Error{constructor(code){super(code);this.name='DumpError';this.code=code;}}
 const fail=c=>{throw new DumpError(c);},HASH=/^[0-9a-f]{64}$/,UUID=/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
@@ -56,7 +56,10 @@ async function inspect(fd,key,metadata,inventory,restore,progress){
   let x=await within(closed,5000);if(!x){x=await stop(child,closed);done=true;if(!x){report(progress,{phase:'toc_stop_unconfirmed'});fail('inspection_stop_unconfirmed');}report(progress,{phase:'toc_process_closed',exitCode:normalizedExitCode(x.code),signal:normalizedSignal(x.signal),stderrBytes:stderr});fail('inspection_timed_out');}done=true;
   report(progress,{phase:'toc_process_closed',exitCode:normalizedExitCode(x.code),signal:normalizedSignal(x.signal),stderrBytes:stderr});
   if(x.error||x.signal||x.code!==0){report(progress,{phase:'toc_exit_refused'});fail('inspection_failed');}if(stderr){report(progress,{phase:'toc_stderr_refused'});fail('inspection_failed');}if(outputRefused)fail('inspection_failed');
-  try{scanner.finish([...new Set(inventory.inventory.map(x=>x.schema).filter(x=>['app','private','collect_sms','auth','storage','supabase_migrations'].includes(x)))]);}catch(e){report(progress,{phase:e?.code==='required_schemas_missing'?'toc_missing_schema_refused':'toc_stream_refused'});fail('inspection_output_refused');}
+  try{
+   const required=[...new Set(inventory.inventory.map(x=>x.schema).filter(x=>DUMP_TOC_SCHEMAS.includes(x)))];
+   scanner.finish(required,metadata.scope==='managed'||required.includes('burimunsi'));
+  }catch(e){report(progress,{phase:['required_schemas_missing','required_recovery_tables_missing'].includes(e?.code)?'toc_missing_schema_refused':'toc_stream_refused'});fail('inspection_output_refused');}
   if(first.ciphertextSha256!==checked.ciphertextSha256||first.dumpBytes!==checked.dumpBytes)fail('artifact_changed');return checked;
  }catch(e){if(!done){const x=await stop(child,closed);done=true;if(!x){report(progress,{phase:'toc_stop_unconfirmed'});fail('inspection_stop_unconfirmed');}report(progress,{phase:'toc_process_closed',exitCode:normalizedExitCode(x.code),signal:normalizedSignal(x.signal),stderrBytes:stderr});}throw e;}
  finally{if(timer!==undefined)clearTimeout(timer);scanner.clear();}

@@ -5,7 +5,9 @@ import {types} from 'node:util';
 import pg from '../node_modules/pg/lib/index.js';
 import {isManagedReconciliationPeer,managedReconciliationSsl} from '../current-pg-transfer/managed-target.mjs';
 import {isSyntheticReconciliationSocket} from '../current-pg-transfer/reconcile.mjs';
+import {BURIMUNSI_RECOVERY_TABLES,DUMP_TOC_SCHEMAS} from './toc.mjs';
 const {Client}=pg;
+const visibleSchemas=[...DUMP_TOC_SCHEMAS,'public'];
 export class SnapshotError extends Error{constructor(code){super(code);this.name='SnapshotError';this.code=code;}}
 const fail=c=>{throw new SnapshotError(c);};
 const HOST='db.rrlduytparvsjfmegalh.supabase.co',DB='postgres',USER='postgres';
@@ -24,10 +26,18 @@ export async function checkDumpVisibility(c){
   count(c.oid) FILTER (WHERE CASE WHEN c.relkind='S' THEN NOT pg_catalog.has_sequence_privilege(c.oid,'SELECT') ELSE false END)::int AS inaccessible_sequences,
   count(c.oid) FILTER (WHERE CASE WHEN c.relkind IN ('r','p') THEN pg_catalog.row_security_active(c.oid) ELSE false END)::int AS rls_active_tables
   FROM pg_catalog.pg_namespace n LEFT JOIN pg_catalog.pg_class c ON c.relnamespace=n.oid
-  WHERE n.nspname=ANY($1::text[])`,[['app','private','collect_sms','auth','storage','public','supabase_migrations']]);
+  WHERE n.nspname=ANY($1::text[])`,[visibleSchemas]);
  if(r.rowCount!==1||!['inaccessible_schemas','foreign_tables','inaccessible_tables','inaccessible_sequences','rls_active_tables']
   .every(k=>Number.isInteger(r.rows[0][k])&&r.rows[0][k]===0))fail('visibility_preflight_refused');
  return r.rows[0];
+}
+// Exact named ordinary tables are required as metadata only. Do not
+// inspect customer rows or extend authority to make a failed gate pass.
+export async function checkBuriMunsiRecoveryTables(c) {
+ const result=await c.query(`SELECT count(*)::int AS count FROM pg_catalog.pg_class rel
+  JOIN pg_catalog.pg_namespace ns ON ns.oid=rel.relnamespace
+  WHERE rel.relkind='r' AND (ns.nspname||'.'||rel.relname)=ANY($1::text[])`,[BURIMUNSI_RECOVERY_TABLES]);
+ if(result.rowCount!==1||result.rows[0]?.count!==BURIMUNSI_RECOVERY_TABLES.length)fail('required_recovery_tables_missing');
 }
 async function createSnapshot(c,expected){
  let started=false;
@@ -47,7 +57,8 @@ async function createSnapshot(c,expected){
   const inventory=await c.query(`SELECT n.nspname AS schema,coalesce(c.relkind::text,'-') AS kind,count(c.oid)::int AS count
    FROM pg_catalog.pg_namespace n LEFT JOIN pg_catalog.pg_class c ON c.relnamespace=n.oid AND c.relkind IN ('r','p','v','m','S','f')
    WHERE n.nspname=ANY($1::text[])
-   GROUP BY n.nspname,c.relkind ORDER BY n.nspname,c.relkind`,[['app','private','collect_sms','auth','storage','public','supabase_migrations']]);
+   GROUP BY n.nspname,c.relkind ORDER BY n.nspname,c.relkind`,[visibleSchemas]);
+  if(expected.managed||inventory.rows.some(x=>x.schema==='burimunsi'))await checkBuriMunsiRecoveryTables(c);
   let clusterIdentifierSha256=null;
   await c.query('SAVEPOINT optional_cluster_id');
   try{const s=await c.query('SELECT system_identifier::text AS id FROM pg_catalog.pg_control_system()');if(s.rowCount===1&&/^[0-9]{1,20}$/.test(s.rows[0].id))clusterIdentifierSha256=sha(s.rows[0].id);}

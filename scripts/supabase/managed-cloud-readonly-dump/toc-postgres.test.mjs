@@ -6,7 +6,7 @@ import {mkdirSync,readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import pg from '../node_modules/pg/lib/index.js';
 import {resolvePg17Bin,startOwnedPg17} from '../current-pg-transfer/test-support/owned-pg17.mjs';
-import {createTocScanner} from './toc.mjs';
+import {BURIMUNSI_RECOVERY_TABLES,createTocScanner} from './toc.mjs';
 import {planDigest,runReviewedDump} from './supervisor.mjs';
 function outcome(c){return new Promise((resolve,reject)=>{c.once('error',reject);c.once('close',(code,signal)=>resolve({code,signal}));});}
 test('a real owned pg_restore TOC larger than 512 KiB is streamed and checked',{timeout:180000},async()=>{
@@ -15,12 +15,13 @@ test('a real owned pg_restore TOC larger than 512 KiB is streamed and checked',{
   admin=new pg.Client({host:f.socket,port:f.port,user:'fixture_bootstrap',database:'postgres'});await admin.connect();await admin.query('CREATE DATABASE collect_fixture_dump');
   source=new pg.Client({host:f.socket,port:f.port,user:'fixture_bootstrap',database:'collect_fixture_dump'});await source.connect();
   await source.query(`CREATE SCHEMA app;DO $test$ BEGIN FOR i IN 1..3600 LOOP EXECUTE format('CREATE TABLE app.%I(id integer)', 'synthetic_'||lpad(i::text,4,'0')||repeat('x',40)); END LOOP;END $test$;`);
+  await source.query('CREATE SCHEMA burimunsi; CREATE SCHEMA private; '+BURIMUNSI_RECOVERY_TABLES.map(rel=>'CREATE TABLE '+rel+'(id integer)').join('; '));
   const bin=resolvePg17Bin(),env={PATH:'/usr/bin:/bin',LC_ALL:'C'},dump=spawn(join(bin,'pg_dump'),['--format=custom','--no-password','-h',f.socket,'-p',String(f.port),'-U','fixture_bootstrap','-d','collect_fixture_dump'],{stdio:['ignore','pipe','pipe'],env});
   let stderr=0,size=0,chunks=[];dump.stderr.on('data',x=>stderr+=x.length);const a=outcome(dump);
   for await(const x of dump.stdout){size+=x.length;assert(size<=32*1024*1024);chunks.push(x);}assert.deepEqual(await a,{code:0,signal:null});const archive=Buffer.concat(chunks);for(const x of chunks)x.fill(0);chunks=[];
   const restore=spawn(join(bin,'pg_restore'),['--list'],{stdio:['pipe','pipe','pipe'],env}),b=outcome(restore),scanner=createTocScanner();
   restore.stderr.on('data',x=>stderr+=x.length);restore.stdout.on('data',x=>scanner.push(x));restore.stdin.on('error',()=>{});restore.stdin.end(archive);
-  try{assert.deepEqual(await b,{code:0,signal:null});assert.equal(stderr,0);assert(scanner.finish(['app']).bytes>512*1024);}
+  try{assert.deepEqual(await b,{code:0,signal:null});assert.equal(stderr,0);assert(scanner.finish(['app','burimunsi','private'],true).bytes>512*1024);}
   finally{scanner.clear();archive.fill(0);}
   // The actual supervisor must accept the same large TOC, not just the parser
   // in isolation. All database rows and credentials here are synthetic.

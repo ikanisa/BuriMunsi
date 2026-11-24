@@ -27,7 +27,7 @@ tokens are not globally unique. The optional exporter cluster-identifier digest
 does not attest the separate `pg_dump` connection, so cluster continuity remains
 an endpoint-routing assumption. A count-only catalogue inventory and
 privilege check use that same snapshot and role for existing `app`, `private`,
-`collect_sms`, `auth`, `storage`, `public` and `supabase_migrations` schemas. Within those
+`collect_sms`, `auth`, `storage`, `public`, `supabase_migrations` and `burimunsi` schemas. Within those
 schemas it refuses absent schema USAGE, absent SELECT on ordinary, partitioned
 or materialized tables or sequences, active row security, and any foreign
 table. This conservative check does not examine every possible permission,
@@ -37,11 +37,16 @@ table, data item or sequence against the dump's table of contents. It cannot
 guarantee visibility of rows hidden by mechanisms outside the tested RLS state,
 or reconcile any row counts.
 
-The list check only requires a schema entry for each existing inventoried
-`app`, `private`, `collect_sms`, `auth`, `storage` or `supabase_migrations`
-schema. The TOC output is parsed incrementally, with an 8 MiB total cap and
-16 KiB per-line cap; only required-schema flags are retained. It does not assert
-table or data coverage. `pg_dump` errors, warnings, failed authentication, malformed or
+The managed path requires the fixed canonical payment/recovery tables to
+exist as ordinary tables in the read-only source catalogue. This includes the
+encrypted raw SMS table, canonical payments, the allocation command and payer
+delivery receipts, and supporting observation/hold/recovery sources. It also
+requires both `TABLE` and `TABLE DATA` entries for those fixed relations in
+the authenticated dump. The check applies to synthetic captures with the
+canonical schema too; historical readers are unchanged. The streamed TOC
+retains only bounded schema and fixed-name presence flags. Name presence is not
+row completeness, ciphertext or object verification, proof of restore, or an
+approval for live use. `pg_dump` errors, warnings, failed authentication, malformed or
 oversized inspection output, missing required schema entries and failed
 readback fail the attempt. Concurrent catalogue or privilege changes may cause
 failure or leave coverage uncertain; this code does not enforce DDL exclusion.

@@ -7,6 +7,7 @@ import {Writable} from 'node:stream';
 import pg from '../node_modules/pg/lib/index.js';
 import {resolvePg17Bin,startOwnedPg17} from '../current-pg-transfer/test-support/owned-pg17.mjs';
 import {checkDumpVisibility,cleanManagedEnvironment,openPinnedManagedSnapshot,openSyntheticSnapshot,SnapshotError} from './snapshot.mjs';
+import {BURIMUNSI_RECOVERY_TABLES} from './toc.mjs';
 const {Client}=pg,code=x=>e=>e instanceof SnapshotError&&e.code===x;
 function outcome(c){return new Promise((resolve,reject)=>{c.once('error',reject);c.once('close',(status,signal)=>resolve({status,signal}));});}
 test('exported repeatable-read snapshot pins synthetic pg_dump',{timeout:90000},async t=>{
@@ -41,6 +42,16 @@ test('exported repeatable-read snapshot pins synthetic pg_dump',{timeout:90000},
    await source.query('CREATE FOREIGN DATA WRAPPER fixture_fdw; CREATE SERVER fixture_server FOREIGN DATA WRAPPER fixture_fdw; CREATE FOREIGN TABLE app.remote(id int) SERVER fixture_server');
    try{await assert.rejects(openSyntheticSnapshot({mode:'synthetic',socket:f.socket,port:f.port}),code('visibility_preflight_refused'));}
    finally{await source.query('DROP FOREIGN TABLE app.remote; DROP SERVER fixture_server; DROP FOREIGN DATA WRAPPER fixture_fdw');}
+  });
+  await t.test('refuses incomplete canonical coverage and checks custom-schema visibility',async()=>{
+   await source.query('CREATE SCHEMA burimunsi; CREATE TABLE burimunsi.raw_sms(id int)');
+   try{
+    await assert.rejects(asLimited(()=>checkDumpVisibility(source)),code('visibility_preflight_refused'));
+    await assert.rejects(openSyntheticSnapshot({mode:'synthetic',socket:f.socket,port:f.port}),code('required_recovery_tables_missing'));
+    await source.query(BURIMUNSI_RECOVERY_TABLES.filter(rel=>rel!=='burimunsi.raw_sms').map(rel=>'CREATE TABLE '+rel+'(id int)').join('; '));
+    const full=await openSyntheticSnapshot({mode:'synthetic',socket:f.socket,port:f.port});
+    try{assert(full.metadata.inventory.some(x=>x.schema==='burimunsi'&&x.kind==='r'&&x.count===2));}finally{await full.close();}
+   }finally{await source.query('DROP SCHEMA burimunsi CASCADE; '+BURIMUNSI_RECOVERY_TABLES.filter(rel=>rel.startsWith('private.')).map(rel=>'DROP TABLE IF EXISTS '+rel).join('; '));}
   });
   await t.test('dump imports the same live snapshot and excludes a later committed row',async()=>{
    const snap=await openSyntheticSnapshot({mode:'synthetic',socket:f.socket,port:f.port});let closed=false;
