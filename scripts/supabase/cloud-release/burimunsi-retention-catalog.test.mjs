@@ -88,10 +88,12 @@ test('the complete e76 catalog reads inside the budget and retains every descrip
 
   await db.query("SET statement_timeout = '1500ms'");
   const start = performance.now();
-  const result = (await db.query('SELECT private._retention_manifest_catalog_v2() AS catalog')).rows[0].catalog;
+  const {catalog: result, digest} = (await db.query(`
+    WITH checked AS MATERIALIZED (SELECT private._retention_manifest_catalog_v2() AS catalog)
+    SELECT catalog, encode(sha256(convert_to(catalog::text,'UTF8')),'hex') AS digest FROM checked`)).rows[0];
   const elapsedMs = Math.round(performance.now() - start);
   assert.deepEqual(result, expected);
-  t.diagnostic(JSON.stringify({elapsedMs, privateClasses: result.private_classes.length, copyClasses: result.copy_classes.length}));
+  t.diagnostic(JSON.stringify({elapsedMs, catalogSha256:digest, privateClasses: result.private_classes.length, copyClasses: result.copy_classes.length}));
   await assert.rejects(db.query(sql), {code: '55000', message: 'retention_catalog_predecessor_changed'});
   await db.query('ROLLBACK');
 });
