@@ -16,7 +16,7 @@ const isHash = value => typeof value === 'string' && value.length === 64 && HEX.
 const own = (value,key) => Object.hasOwn(value,key);
 const bounded = (value, maximum, min=1) => Number.isSafeInteger(value) && value >= min && value <= maximum;
 
-class InventoryError extends Error {
+export class InventoryError extends Error {
   constructor(code) { super(code); this.name='InventoryError'; this.code=code; }
 }
 const requireThat = (condition,code) => {if(!condition) throw new InventoryError(code);};
@@ -27,7 +27,7 @@ function exact(value,keys,code) {
 function inspectBytes(bytes,cap) {
   requireThat(Buffer.isBuffer(bytes) && bytes.length > 0 && bytes.length <= cap,'INPUT_BYTES_BOUND');
 }
-function parse(bytes) {
+export function parseStrictJson(bytes) {
   try {
     // Strict wire form prevents duplicate/overwritten keys, malformed UTF-8,
     // unexpected escape aliases, signed zero and precision-losing numeric input.
@@ -41,7 +41,7 @@ function parse(bytes) {
 function policy(bytes, expectedDigest) {
   inspectBytes(bytes,HARD.policyBytes);
   requireThat(isHash(expectedDigest) && hash(bytes)===expectedDigest,'POLICY_PIN_MISMATCH');
-  const value = parse(bytes);
+  const value = parseStrictJson(bytes);
   exact(value,['format','sourceCommit','scopeSha256','snapshotSha256','referenceSha256','maxObjects','maxObjectBytes','maxTotalBytes'],'POLICY_SHAPE_INVALID');
   requireThat(value.format===POLICY_FORMAT && typeof value.sourceCommit==='string' &&
     value.sourceCommit.length===40 && COMMIT.test(value.sourceCommit) &&
@@ -52,7 +52,7 @@ function policy(bytes, expectedDigest) {
 }
 function inventory(bytes, p) {
   inspectBytes(bytes,HARD.inventoryBytes);
-  const value = parse(bytes);
+  const value = parseStrictJson(bytes);
   exact(value,['format','sourceCommit','scopeSha256','snapshotSha256','objects'],'INVENTORY_SHAPE_INVALID');
   requireThat(value.format===INVENTORY_FORMAT && value.sourceCommit===p.sourceCommit &&
     value.scopeSha256===p.scopeSha256 && value.snapshotSha256===p.snapshotSha256,'INVENTORY_BINDING_MISMATCH');
@@ -71,12 +71,17 @@ function inventory(bytes, p) {
   return {objects,total};
 }
 
-/** Compare strictly bounded manifests. The separately supplied policy hash is the trust anchor. */
-export function verifyInventory({policyBytes,expectedPolicySha256,referenceBytes,observedBytes}) {
+export function parseApprovedReference({policyBytes,expectedPolicySha256,referenceBytes}) {
   const p=policy(policyBytes,expectedPolicySha256);
   inspectBytes(referenceBytes,HARD.inventoryBytes);
   requireThat(hash(referenceBytes)===p.referenceSha256,'REFERENCE_PIN_MISMATCH');
-  const reference=inventory(referenceBytes,p), observed=inventory(observedBytes,p);
+  return {policy:p,reference:inventory(referenceBytes,p)};
+}
+
+/** Compare strictly bounded manifests. The separately supplied policy hash is the trust anchor. */
+export function verifyInventory({policyBytes,expectedPolicySha256,referenceBytes,observedBytes}) {
+  const {policy:p,reference}=parseApprovedReference({policyBytes,expectedPolicySha256,referenceBytes});
+  const observed=inventory(observedBytes,p);
   for(const [identity, seen] of observed.objects) {
     const a=reference.objects.get(identity);
     requireThat(a,'OBJECT_UNKNOWN_IDENTITY');
@@ -89,7 +94,7 @@ export function verifyInventory({policyBytes,expectedPolicySha256,referenceBytes
     readbackBytesVerified:false, operationalStorageRecoveryVerified:false, migrationAuthorized:false};
 }
 
-async function readBounded(path,cap,differentFrom) {
+export async function readBounded(path,cap,differentFrom) {
   requireThat(typeof path==='string' && isAbsolute(path) && normalize(path)===path,'INPUT_PATH_INVALID');
   requireThat(await realpath(path)===path,'INPUT_PATH_INVALID');
   const fd=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);

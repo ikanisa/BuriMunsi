@@ -23,3 +23,25 @@ The CLI emits one sanitized JSON result and returns nonzero on refusal. A match 
     node --test --test-reporter=tap scripts/supabase/storage-inventory-verify/verify.test.mjs
 
 The fixtures use 61 invented opaque identities, no real record names, keys, provider responses or files. They cover order independence and equal-count/size replacement, rejected substitutions, pins, duplicates, byte limits, malformed input and private-file CLI behavior. The tests give no authority to run a real inventory or capture.
+
+## Synthetic byte-readback witness
+
+The separate readback command does not obtain, extract or decrypt an archive. It reads only already-furnished synthetic files under a reviewed, explicit private ordinal map. Never give it a real archive, object or credentials. The synthetic map marker is an input contract, not independent proof that supplied contents are synthetic or acquired independently.
+
+The independently approved map digest pins compact UTF-8 JSON with exactly these fields:
+
+- format: collect.storage.synthetic-byte-readback-map.v1
+- syntheticOnly: true
+- policySha256 and referenceSha256: exact previously approved hashes
+- sourceCommit, scopeSha256, snapshotSha256: must match the approved policy
+- files: exactly one entry per reference identity, in dense ordinal order starting at 1. Each entry has ordinal, identitySha256, versionSha256 and sizeBytes, with no path, name or body digest. A file’s allowed name is derived only from the ordinal (for example, 000001.opaque).
+
+Run the command only against distinct, existing, private mode-0700 physical directories outside the checkout. The restore root must contain exactly the mapped files, owned by the current user and mode 0600 with one link each. The output directory must be empty. Keep the three separately supplied mode-0600 input JSON files outside both directories.
+
+    node scripts/supabase/storage-inventory-verify/readback.mjs <reviewed_policy_sha256> <policy_file> <reference_file> <reviewed_map_sha256> <map_file> <furnished_synthetic_root> <empty_private_output_directory>
+
+The witness checks exact length and SHA-256 of actual bounded file reads, including empty files, and rechecks file identities after the full sweep. It refuses missing or extra entries, private-permission violations, hash/length mismatch, traversal and relevant inode/path drift. Its further limits are 256 files, 64 MiB per file and 128 MiB total; wider scope needs a new review. A successful match publishes one mode-0600 observed-manifest.json in the empty output directory without overwriting; failure never publishes a matching manifest. The stdout receipt contains only scalar counts/status, not file paths, object IDs or hashes. The private output manifest contains opaque digest identifiers and is compatible with verify.mjs.
+
+This is single-host, bounded readback of controlled files, not an atomic source snapshot, custody proof, decryption, database/Storage restore, or production release/migration authorization. Keep the furnished and output directories under exclusive operator control throughout the check. Real archive support would require a different review of provenance, independent custody, permissions, acquisition and inert restoration.
+
+    node --test --test-reporter=tap scripts/supabase/storage-inventory-verify/readback.test.mjs
