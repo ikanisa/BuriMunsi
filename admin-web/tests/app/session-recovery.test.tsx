@@ -44,6 +44,23 @@ afterEach(() => {
 });
 
 describe('Admin session recovery through the router', () => {
+  it('keeps a waiting PWA update out of the signed-in workspace', async () => {
+    const scriptURL = new URL('/custom-sw.js', location.origin).href;
+    const active = Object.assign(new EventTarget(), {scriptURL, state: 'activated'});
+    const waiting = Object.assign(new EventTarget(), {scriptURL, state: 'installed'});
+    const registration = Object.assign(new EventTarget(), {active, waiting, installing: null, scope: location.origin + '/'});
+    const serviceWorker = Object.assign(new EventTarget(), {controller: active, ready: Promise.resolve(registration)});
+    vi.stubGlobal('isSecureContext', true);
+    vi.stubGlobal('navigator', Object.create(navigator, {serviceWorker: {value: serviceWorker}}));
+    try {
+      openAdmin('/admin/licenses');
+      expect(await screen.findByRole('heading', {name: 'Open-source licenses'})).toBeVisible();
+      expect(screen.queryByText(/Admin update ready/i)).not.toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it.each([
     ['supabase', 'authenticator', 'verify-email', 'Verify your email'],
     ['cloudflare', 'verify-email', 'authenticator', 'Authenticator'],
@@ -130,13 +147,14 @@ describe('Admin navigation for the current session', () => {
 
   it.each([
     {permissions: ['ledger.read'], route: '/admin/licenses', fallback: true, contextual: false},
-    {permissions: ['ledger.read', 'sms.read'], route: '/admin/payments?view=sms', fallback: true, contextual: false},
+    {permissions: ['ledger.read', 'sms.read'], route: '/admin/payments?view=sms', fallback: true, contextual: false, denied: true},
     {permissions: ['ledger.read', 'reconciliations.read'], route: '/admin/payments?view=attention', fallback: true, contextual: false},
     {permissions: ['ledger.read', 'payments.read'], route: '/admin/payments', fallback: false, contextual: true},
     {permissions: ['payments.read'], route: '/admin/payments', fallback: false, contextual: false},
-  ])('keeps ledger history discoverable with its own permission ($permissions)', async ({permissions, route, fallback, contextual}) => {
+  ])('keeps ledger history discoverable with its own permission ($permissions)', async ({permissions, route, fallback, contextual, denied}) => {
     const {requests} = openAdmin(route, {session: {user: {...account, permissions}}});
-    await screen.findByRole('heading', {name: route === '/admin/licenses' ? 'Open-source licenses' : 'Payments'});
+    const heading = denied ? 'Access unavailable' : route === '/admin/licenses' ? 'Open-source licenses' : 'Payments';
+    await screen.findByRole('heading', {name: heading});
     const inRecorded = screen.queryByRole('link', {name: 'Ledger and reversals history'});
     expect(Boolean(inRecorded)).toBe(contextual);
     if (inRecorded) expect(inRecorded).toHaveAttribute('href', '#/admin/ledgers');

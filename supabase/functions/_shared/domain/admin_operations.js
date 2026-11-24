@@ -1,3 +1,4 @@
+import {activePhoneOperator} from './admin_email_policy.js';
 import {json,readJson,uuid,text,integer} from './core.js';
 import {permission,lists,list,filters,operatingDetail,iso,fail,unavailable} from './admin_records.js';
 import {adminAccountSession,adminCanonicalActor,adminInternalRequest,accountDatabase,accountReadDatabase} from './admin_accounts.js';
@@ -28,6 +29,13 @@ export async function operatingRead(request,env,account,parts,url){
   return {...result,kind,group_id:groupId??null,rows:result.rows.map(r=>({...r,label:r.display_name||r.title,name:r.display_name||r.title}))};
  }
  if(parts.length!==2||!lists[parts[0]])unavailable();const type=parts[0];if(!account.permissions.includes(`${permission[type]}.read`))fail(403,'permission_required','This view is unavailable.');
+ if(type==='members'){
+  const operator=activePhoneOperator(account);
+  if(operator){
+   const caps=account.permissions.includes('collections.read')?['users.read','collections.read']:'users.read';
+   return operatingDetail(accountReadDatabase(env,account,caps),account,type,uuid(parts[1]),url,{rosterGroupId:operator.collectionId});
+  }
+ }
  return operatingDetail(accountDatabase(env,account,`${permission[type]}.read`),account,type,uuid(parts[1]),url);
 }
 

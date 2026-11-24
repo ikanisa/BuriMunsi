@@ -1,12 +1,12 @@
 import {Link, useSearchParams} from 'react-router';
 import {ErrorState, PageHeader} from '../../ui';
 import {useSession} from '../../session/SessionProvider';
-import {canDisplaySessionRecords} from '../../session/sessionContext';
+import {canDisplaySessionRecords, canReadSmsEvidence} from '../../session/sessionContext';
 import {CoreListPage} from '../core/CoreListPage';
 import type {FeatureAccess} from '../core/types';
 import {ReconciliationQueuePage} from '../reconciliation/ReconciliationQueuePage';
 import {MemberReceiptsPage} from './MemberReceiptPages';
-import {UploadedSms} from './MomoIncomingSms';
+import {UploadedSms} from './UploadedSms';
 import {WorkspaceMomoTransactionList} from './MomoTransactionList';
 import {ReceiverSmsPanel} from './ReceiverSmsPanel';
 import {canOpenPaymentView, canOpenReceiptSource, paymentViewLocation, paymentViews, receiptSources} from './paymentLocations';
@@ -19,10 +19,12 @@ export function PaymentsWorkArea(access: FeatureAccess) {
   const session = useSession(), [params] = useSearchParams();
   // Reuse the session presentation fence and keep each child under its own read permission.
   const permissions = canDisplaySessionRecords(session) ? access.permissions : [];
-  const views = paymentViews.filter(({id}) => canOpenPaymentView(id, permissions));
+  const authority = {role: access.role, permissions, authMethod: session.user?.authMethod};
+  const canReadSms = canReadSmsEvidence(authority);
+  const views = paymentViews.filter(({id}) => canOpenPaymentView(id, authority));
   const requested = params.get('view');
   const view = views.find(({id}) => id === requested) ?? (requested === null ? views[0] : undefined);
-  const sources = receiptSources.filter(({id}) => canOpenReceiptSource(id, permissions));
+  const sources = receiptSources.filter(({id}) => canOpenReceiptSource(id, authority));
   const sourceParam = params.get('source');
   const source = sources.find(({id}) => id === sourceParam) ?? (sourceParam === null
     ? sources.find(({id}) => id === (session.user?.authMethod === 'phone_passcode' ? 'android' : 'app')) ?? sources[0]
@@ -34,7 +36,9 @@ export function PaymentsWorkArea(access: FeatureAccess) {
   return <section className="payments-workspace" key={access.authorityKey}>
     <PageHeader title="Payments" />
     {views.length > 1 && <nav className="payments-nav" aria-label="Payment views">
-      {views.map(({id, label}) => <Link key={id} to={paymentViewLocation(id)} aria-current={view?.id === id ? 'page' : undefined}>{label}</Link>)}
+      {views.map(({id, label}) => <Link key={id} to={paymentViewLocation(id)} aria-current={view?.id === id ? 'page' : undefined}>
+        {id === 'sms' && !canReadSms ? 'Member receipts' : label}
+      </Link>)}
     </nav>}
     {!view || invalidSelector ? denied : view.id === 'recorded' ? <>
       <nav className="payments-nav payments-sources" aria-label="Recorded payment sources">
@@ -45,14 +49,14 @@ export function PaymentsWorkArea(access: FeatureAccess) {
         <CoreListPage {...access} area="transactions" locationSearch={params.toString()} paymentsWorkspace />}
       {permissions.includes('ledger.read') && <p className="operations-note"><Link to="/admin/ledgers">Ledger and reversals history</Link></p>}
     </> : view.id === 'sms' ? <>
-      <nav className="payments-nav payments-sources" aria-label="Receipt sources">
+      {sources.length > 1 && <nav className="payments-nav payments-sources" aria-label="Receipt sources">
         {sources.map(({id, label}) => <Link key={id} to={paymentViewLocation('sms', {source: id})}
           aria-current={source?.id === id ? 'page' : undefined}>{label}</Link>)}
-      </nav>
-      <p className="operations-note">SMS and receipts are evidence. Capture, parsing, crediting and settlement are separate outcomes.</p>
+      </nav>}
+      {canReadSms && <p className="operations-note">SMS and receipts are evidence. Capture, parsing, crediting and settlement are separate outcomes.</p>}
       {!source ? denied : source.id === 'android' ? <ReceiverSmsPanel /> : source.id === 'app' ?
-        <UploadedSms paymentsWorkspace /> : <MemberReceiptsPage paymentsWorkspace />}
-      {permissions.includes('sms.read') && <p className="operations-note"><Link to="/admin/sms-receipts">Full SMS records and source filters</Link></p>}
+        <UploadedSms /> : <MemberReceiptsPage paymentsWorkspace />}
+      {canReadSms && <p className="operations-note"><Link to="/admin/sms-receipts">Full SMS records and source filters</Link></p>}
     </> : <ReconciliationQueuePage {...access} locationSearch={params.toString()} paymentsWorkspace />}
   </section>;
 }

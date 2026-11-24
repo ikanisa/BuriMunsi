@@ -1,5 +1,6 @@
 import {ApiError,uuid} from './core.js';
-import {accountDatabase} from './admin_accounts.js';
+import {accountDatabase,accountReadDatabase} from './admin_accounts.js';
+import {adminPasscodeProof} from './admin_email_policy.js';
 import {captureDeviceSeconds} from './admin_sms_receipts.js';
 
 // The canonical capture is a client observation, not a reviewed submission or
@@ -36,11 +37,16 @@ function filters(url,list){
  return {limit:number('limit',25,1,100),offset:number('offset',0,0,2147483647),status};
 }
 export async function adminMemberReceiptRead(request,env,account,actor,parts,url){
- if(!actor.permissions.has('payments.read'))fail(403,'permission_required','Receipt metadata is unavailable for this account.');
+ // The original member-receipt route reads the same capture metadata as the
+ // SMS view. Browser phone operators also need the independent SMS grant.
+ const phoneOperator=adminPasscodeProof(account);
+ if(!actor.permissions.has('payments.read')||phoneOperator&&!actor.permissions.has('sms.read'))
+  fail(403,'permission_required','Receipt metadata is unavailable for this account.');
  if(request.method!=='GET')fail(405,'method_not_allowed','Captured receipt metadata is read-only.');
  const list=parts.length===1&&parts[0]==='receipts',detail=parts.length===2&&parts[0]==='receipts';
  if(!list&&!detail)fail(404,'not_found','This receipt view does not exist.');
- const f=filters(url,list),scoped=accountDatabase(env,account,'payments.read');
+ const f=filters(url,list);
+ const scoped=phoneOperator?accountReadDatabase(env,account,['payments.read','sms.read']):accountDatabase(env,account,'payments.read');
  if(detail){
   const id=uuid(parts[1],'receipt_id');
   const [result]=await scoped.DB.batch([scoped.DB.prepare(sourceSql+' WHERE s.id=?').bind(id)]);

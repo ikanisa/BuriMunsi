@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {withReceiptFacts} from '../domain/receipt_facts.js';
-import {MANAGED_MOMO_SOURCE_SQL,momoTransactionSql,momoTransactionPredicates,momoTransactionPageRow} from '../domain/admin_momo_reads.js';
+import {MANAGED_MOMO_SOURCE_SQL,momoTransactionSql,momoTransactionPredicates,momoTransactionDetail,momoTransactionPageRow} from '../domain/admin_momo_reads.js';
 
 const tx='11111111-1111-4111-8111-111111111111';
 const account='22222222-2222-4222-8222-222222222222';
@@ -113,4 +113,35 @@ test('native account-scope response is explicit and does not claim a receiving d
  assert.equal(scoped.receiving_context.basis,'unestablished');
  assert.equal(Object.hasOwn(momoTransactionPageRow(row(),null),'capture_scope_account_id'),false);
  assert.throws(()=>momoTransactionPageRow(row(),group),{code:'invalid_source_data'});
+});
+
+test('restricted native payment projections keep financial facts and suppress underlying SMS lineage',async()=>{
+ const original={...row(),payer_name:'Synthetic payer',payer_identifier:'+250780000111',payer_last3:'111',
+  provider_transaction_id:'synthetic-reference',amount_minor:1000,currency:'RWF',currency_scale:0,
+  raw_sms_id:source,validation_json:{classification:'synthetic-sensitive'},group_id:group,payment_id:tx,
+  credited_amount_minor:1000,status:'credited'};
+ const restricted=momoTransactionPageRow(original,null,{sourceHistory:false});
+ assert.equal(restricted.source_history_available,false);
+ assert.equal(restricted.provider_transaction_id,'synthetic-reference');
+ assert.equal(restricted.payment_id,tx);
+ assert.equal(restricted.amount_minor,1000);
+ assert.equal(restricted.credited_amount_minor,1000);
+ assert.equal(restricted.receipt_facts.transaction_id,tx);
+ assert.equal(restricted.receipt_facts.payer_last3,'111');
+ assert.equal(restricted.receipt_facts.provider_confirmation,false);
+ for(const field of ['parse_attempt_id','raw_sms_id','capture_id','source_body_sha256','parser_version','profile_version',
+  'parsed_at','validation_json','payer_identifier','payer_identifier_raw','transaction_datetime_raw']){
+  assert.equal(Object.hasOwn(restricted,field),false,field);
+  assert.equal(Object.hasOwn(restricted.receipt_facts,field),false,field);
+ }
+ const url=new URL('https://admin.example/transactions/'+tx);
+ const read={DB:{prepare:statement=>({bind:(...values)=>({statement,values})}),
+  batch(statements){assert.equal(statements.length,1);return [{results:[original]}];}}};
+ assert.deepEqual(await momoTransactionDetail(read,{},url,tx,{sourceHistory:false}),{
+  transaction:restricted,sources:[],conflicting_attempt_ids:[],conflict_reviews:[],
+ });
+ const full=momoTransactionPageRow(original,null);
+ assert.equal(full.parse_attempt_id,attempt);
+ assert.equal(full.receipt_facts.capture_id,source);
+ assert.equal(full.receipt_facts.source_body_sha256,digest);
 });

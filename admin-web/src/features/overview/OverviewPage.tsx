@@ -1,8 +1,9 @@
-import {useEffect, useState, useSyncExternalStore} from 'react';
+import {useEffect, useId, useState, useSyncExternalStore} from 'react';
 import {Link} from 'react-router';
 import type {AdminRequest} from '../../api/client';
 import {Button, ErrorState, Icon, LoadingState, PageHeader} from '../../ui';
-import type {FinancialModel} from '../core/types';
+import {canReadSmsEvidence} from '../../session/sessionContext';
+import type {FeatureAccess, FinancialModel} from '../core/types';
 import {formatOverviewValue, parseOverview, type OverviewData, type OverviewMetric} from './overview';
 import {SmsOversight} from './SmsOversight';
 import {kigaliDate, kigaliTime} from './kigaliTime';
@@ -21,24 +22,30 @@ function subscribeKigaliDate(update: () => void) {
 const currentKigaliDate = () => kigaliDate.format(new Date());
 
 function SummaryMetric({metric, label, large, link}: {metric: OverviewMetric; label: string; large?: boolean; link?: {to: string; label: string}}) {
-  return <div className={large ? 'overview-metric overview-metric--primary' : 'overview-metric'}>
-    <dt>{label}</dt><dd>{formatOverviewValue(metric)}</dd>
-    {link && <dd><Link className="overview-link" to={link.to}>{link.label}<Icon name="chevron" /></Link></dd>}
-  </div>;
+  const metricId = useId();
+  const cardClass = `overview-metric overview-metric-card${large ? ' overview-metric--primary' : ''}`;
+  const figure = <dl id={metricId}><dt>{label}</dt><dd>{formatOverviewValue(metric)}</dd></dl>;
+  if (!link) return <div className={cardClass}>{figure}</div>;
+  return <Link className={`${cardClass} overview-metric-card--link`} to={link.to}
+    aria-label={link.label} aria-describedby={metricId}>
+    {figure}
+    <span className="overview-card-action">{link.label}<Icon name="chevron" /></span>
+  </Link>;
 }
 
-export function OverviewPage({request, permissions, financialModel, authorityKey, preferSmsHealth}: {
-  request: AdminRequest; permissions: readonly string[]; financialModel: FinancialModel; authorityKey: string; preferSmsHealth?: boolean;
+export function OverviewPage({request, permissions, role, financialModel, authorityKey, preferSmsHealth}: {
+  request: AdminRequest; permissions: readonly string[]; role: FeatureAccess['role']; financialModel: FinancialModel; authorityKey: string; preferSmsHealth?: boolean;
 }) {
   const [result, setResult] = useState<{scope: string; data: OverviewData | null; error: string} | null>(null);
   const [generation, setGeneration] = useState(0);
+  const measuredAtId = useId();
   const today = useSyncExternalStore(subscribeKigaliDate, currentKigaliDate);
   const allowed = permissions.includes('overview.read');
   const canReadPayments = permissions.includes('payments.read');
   const canReadReconciliation = permissions.includes('reconciliations.read');
   const canReadPeople = permissions.includes('users.read');
-  const canReadSms = permissions.includes('sms.read');
-  const hasHealth = permissions.includes('system_health.read');
+  const canReadSms = canReadSmsEvidence({role, permissions});
+  const hasHealth = role !== 'staff' && permissions.includes('system_health.read');
   const scope = JSON.stringify([authorityKey, financialModel, generation, canReadPayments, canReadReconciliation, canReadPeople, canReadSms, allowed]);
   const current = result?.scope === scope ? result : null;
   const loading = allowed && current === null;
@@ -70,15 +77,14 @@ export function OverviewPage({request, permissions, financialModel, authorityKey
       actions={current?.error && !hasHealth ? undefined
         : <Button className="overview-refresh" icon="refresh" disabled={loading} aria-label="Refresh Home" onClick={refresh} />} />
     {loading ? <LoadingState label="Loading workspace snapshot" /> : current?.error ?
-      <ErrorState message={current.error} onRetry={hasHealth ? undefined : refresh} /> : data && <section className="overview-summary" aria-label="Workspace snapshot">
-        <p className="overview-measured">Workspace snapshot · <time dateTime={data.measuredAt}>As of {kigaliTime.format(new Date(data.measuredAt))} Kigali</time></p>
-        <dl className="overview-metrics">
+      <ErrorState message={current.error} onRetry={hasHealth ? undefined : refresh} /> : data && <section className="overview-summary" aria-label="Workspace snapshot" aria-describedby={measuredAtId}>
+        <time hidden id={measuredAtId} dateTime={data.measuredAt}>Measured {kigaliTime.format(new Date(data.measuredAt))} Kigali</time>
+        <div className="overview-metrics">
           {contributions && <SummaryMetric metric={contributions} label={contributions.label} large link={{to: '/admin/payments', label: 'Open payments'}} />}
           {activeMembers && <SummaryMetric metric={activeMembers} label="Active members" link={canReadPeople ? {to: '/admin/members', label: 'Open members'} : undefined} />}
           {attention && <SummaryMetric metric={attention} label={canonical ? 'Unallocated payments' : attention.label} link={attentionLink} />}
-        </dl>
-        {contributions && <p className="overview-measured">Cumulative records, not provider settlement.</p>}
+        </div>
       </section>}
-    <SmsOversight request={request} permissions={permissions} authorityKey={authorityKey} preferSmsHealth={preferSmsHealth} refreshGeneration={generation} />
+    {hasHealth && <SmsOversight request={request} permissions={permissions} authorityKey={authorityKey} preferSmsHealth={preferSmsHealth} refreshGeneration={generation} />}
   </>;
 }

@@ -1,7 +1,7 @@
 import {first,uuid,integer,now} from './core.js';
 import {coreStatuses,coreOrdering,coreSearch} from './admin_search.js';
 import {marker,contributionBasis,collectedBasis,fail,unavailable,iso,exact,amountString} from './admin_record_values.js';
-import {lists,membershipSql,membershipRow,payeeSql,payeeRow,ledgerSql,ledgerRow,evidenceMetadataSql,evidenceMetadata} from './admin_record_sources.js';
+import {lists,rosterSource,membershipSql,membershipRow,payeeSql,payeeRow,ledgerSql,ledgerRow,evidenceMetadataSql,evidenceMetadata} from './admin_record_sources.js';
 
 // These read adapters receive an already authorized D1 binding from the route.
 export {marker,permission,lists,list,filters,overview,operatingDetail,relatedPage,ledgerSql,ledgerRow,evidenceMetadataSql,evidenceMetadata,exact,iso,fail,unavailable};
@@ -16,7 +16,8 @@ export const adminBridgeMetrics={
  total_unallocated_rwf:'Unallocated evidence amount',total_net_contributions_rwf:'Net recorded contributions',
 };
 
-function filters(url,allowed=['country','search','status','limit','offset','sort'],type=null){
+const listFilters=['country','search','status','limit','offset','sort'];
+function filters(url,allowed=listFilters,type=null){
  for(const key of url.searchParams.keys())if(!allowed.includes(key)||url.searchParams.getAll(key).length!==1)fail(400,'invalid_filter','This filter is not supported.');
  if((url.searchParams.get('country')??'RW')!=='RW')fail(400,'invalid_filter','Only the Rwanda workspace is available.');
  const numeric=(key,fallback,min,max)=>{const raw=url.searchParams.get(key);if(raw===null)return fallback;if(!/^(0|[1-9][0-9]*)$/.test(raw))fail(400,'invalid_filter',`Invalid ${key}.`);return integer(Number(raw),key,min,max);};
@@ -24,8 +25,12 @@ function filters(url,allowed=['country','search','status','limit','offset','sort
  const sort=url.searchParams.get('sort')??'created_at_desc';if(type)coreOrdering(type,sort);else if(!['created_at_asc','created_at_desc'].includes(sort))fail(400,'invalid_filter','This sort is unsupported.');
  return {search:search.trim(),status:url.searchParams.get('status')??'',limit:numeric('limit',25,1,100),offset:numeric('offset',0,0,2147483647),sort};
 }
-async function list(env,type,url,{id:resourceId=null,activeOnly=false,eligiblePeople=false,groupId=null}={}){
- const spec=lists[type];if(!spec)unavailable();const f=filters(url,undefined,type),args=[],predicates=[];
+async function list(env,type,url,{id:resourceId=null,activeOnly=false,eligiblePeople=false,groupId=null,rosterGroupId=null}={}){
+ const roster=type==='members'&&rosterGroupId!==null;
+ const spec=roster?rosterSource:lists[type],filterType=roster?'roster':type;
+ if(!spec)unavailable();
+ const f=filters(url,roster?[...listFilters,'directory']:listFilters,filterType),args=[],predicates=[];
+ if(roster&&url.searchParams.get('directory')!=='roster')fail(400,'invalid_filter','This member directory is unavailable.');
  if(resourceId){predicates.push('id=?');args.push(uuid(resourceId));}
  if(activeOnly)predicates.push("status='active'");
  if(eligiblePeople)predicates.push("member_type!='operator'");
@@ -34,9 +39,9 @@ async function list(env,type,url,{id:resourceId=null,activeOnly=false,eligiblePe
   else if(type==='members'){predicates.push("id IN (SELECT user_id FROM memberships WHERE collection_id=? AND active=1) AND EXISTS(SELECT 1 FROM collections WHERE id=? AND status='active')");args.push(uuid(groupId),groupId);}
   else fail(400,'invalid_filter','This lookup filter is unavailable.');
  }
- if(f.status){if(!coreStatuses[type].includes(f.status))fail(400,'invalid_filter','This status is unavailable for these records.');predicates.push('status=?');args.push(f.status);}
- if(f.search){const search=coreSearch(type,f.search,spec.search);predicates.push(...search.predicates);args.push(...search.args);}
- const where=predicates.length?` WHERE ${predicates.map(p=>`(${p})`).join(' AND ')}`:'',ordering=coreOrdering(type,f.sort);
+ if(f.status){if(!coreStatuses[filterType].includes(f.status))fail(400,'invalid_filter','This status is unavailable for these records.');predicates.push(roster?'membership_status=?':'status=?');args.push(f.status);}
+ if(f.search){const search=coreSearch(filterType,f.search,spec.search);predicates.push(...search.predicates);args.push(...search.args);}
+ const where=predicates.length?` WHERE ${predicates.map(p=>`(${p})`).join(' AND ')}`:'',ordering=coreOrdering(filterType,f.sort);
  // A skipped member does not need a balance or membership count unless it sorts or filters the page.
  const pageSql = type==='members' && f.offset>0
   ? `SELECT records.* FROM records JOIN (
@@ -46,7 +51,7 @@ async function list(env,type,url,{id:resourceId=null,activeOnly=false,eligiblePe
  const [page]=await env.DB.batch([env.DB.prepare(`WITH records AS NOT MATERIALIZED (${spec.query}),
   totals AS (SELECT count(*) AS page_total FROM records${where}), page AS (${pageSql})
   SELECT page.*,totals.page_total FROM totals LEFT JOIN page ON true ORDER BY ${ordering}`)
-  .bind(...args,...args,f.limit,f.offset)]);
+  .bind(...(roster?[rosterGroupId]:[]),...args,...args,f.limit,f.offset)]);
  const total=exact(page.results[0].page_total);
  const result=page.results.flatMap(row=>row.id===null?[]:[spec.row(row)]);
  if(result.length!==Math.max(0,Math.min(f.limit,total-f.offset)))fail(503,'invalid_source_data','Workspace measurements are unavailable.');
@@ -81,10 +86,12 @@ function allowedOperations(type,resource,account,receiverLocked=false){
  else if(type==='transactions'&&['reconciled','confirmed'].includes(resource.status)&&resource.allocated_amount_rwf===resource.amount_rwf)add('reverseTransaction','payments.reconcile');
  return allowed;
 }
-async function operatingDetail(env,account,type,resourceId,url){
+async function operatingDetail(env,account,type,resourceId,url,{rosterGroupId=null}={}){
  const relation=url.searchParams.get('relation'),f=filters(url,['relation','limit','offset']);
  if(!relation&&(url.searchParams.has('limit')||url.searchParams.has('offset')))fail(400,'invalid_filter','Choose a related record page.');
- const baseUrl=new URL(url.origin),result=await list(env,type,baseUrl,{id:resourceId});
+ const baseUrl=new URL(url.origin);
+ if(rosterGroupId)baseUrl.searchParams.set('directory','roster');
+ const result=await list(env,type,baseUrl,{id:resourceId,rosterGroupId});
  if(!result.rows.length)fail(404,'not_found','This record was not found.');
  let resource=result.rows[0];const relations={},related={},related_pages={};
  if(type==='groups'){
@@ -92,6 +99,8 @@ async function operatingDetail(env,account,type,resourceId,url){
   resource={...resource,description:source.description,owner_user_id:source.creator_user_id};
   if(account.permissions.includes('users.read'))relations.memberships=[`${membershipSql} WHERE m.collection_id=?`,[resourceId],membershipRow];
   if(account.permissions.includes('receivers.read'))relations.payees=[`SELECT * FROM (${payeeSql}) WHERE group_id=?`,[resourceId],payeeRow];
+ }else if(type==='members'&&rosterGroupId){
+  if(account.permissions.includes('collections.read'))relations.memberships=[`${membershipSql} WHERE m.user_id=? AND m.collection_id=?`,[resourceId,rosterGroupId],membershipRow];
  }else if(type==='users'){
   if(account.permissions.includes('collections.read'))relations.memberships=[`${membershipSql} WHERE m.user_id=?`,[resourceId],membershipRow];
  }else if(type==='payees')resource={...resource,label:resource.title,group_title:resource.group_name};

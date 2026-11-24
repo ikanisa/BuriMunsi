@@ -17,6 +17,10 @@ export function canDisplaySessionRecords(session: Pick<SessionSnapshot, 'status'
   return !!session.user && (session.status === 'authenticated' || session.status === 'rechecking');
 }
 
+export function canReadSmsEvidence(user: Pick<AdminUser, 'role' | 'permissions'> | null | undefined): boolean {
+  return !!user && user.role !== 'staff' && user.permissions.includes('sms.read');
+}
+
 export type PasswordChangeOutcome = 'session-retained' | 'signed-out';
 
 export interface SessionContextValue extends SessionSnapshot {

@@ -16,6 +16,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import rw.ikanisa.burimunsi.core.*
+import rw.ikanisa.burimunsi.storage.SecureStore
 import java.io.File
 import java.util.UUID
 
@@ -293,6 +294,44 @@ class GatewayDurabilityTest {
         assertNull(reopened.profile(ObservationOwner("other-group","synthetic-admin"),now))
         assertNull(reopened.consent(ObservationOwner("synthetic-group","other-admin")))
         assertFalse(File(root,"buri-observation-profile.v1").readBytes().toString(Charsets.ISO_8859_1).contains("synthetic-profile"))
+
+        val holder = ObservationHeldInbox(context, reopened)
+        val device = checkNotNull(holder.deviceId())
+        val deviceScope = Values.sha256(listOf("burimunsi-held-device-v1", scope.collectionId, device.lowercase())
+            .joinToString("") { "${it.length}:$it" })
+        val name = "observation-legacy-held-" + Values.sha256(scope.collectionId)
+        val heldStore = SecureStore(context, name)
+        val heldFile = File(root, "buri-$name.v1")
+        val approved = checkNotNull(reopened.profile(scope, now))
+        val session = ObservationSessionOwner(scope, 1)
+        fun key(index: Int) = index.toString(16).padStart(64, '0')
+        fun snapshot(count: Int) = JSONObject().put("collectionId", scope.collectionId)
+            .put("deviceScope", deviceScope).put("keys", JSONArray().also { keys ->
+                repeat(count) { keys.put(key(it)) }
+            }).toString()
+
+        // Each additional ASCII digest adds 67 bytes, including its quotes and comma.
+        val byteLimit = 2_000_000
+        val maxCount = 1 + (byteLimit - snapshot(1).toByteArray(Charsets.UTF_8).size) / 67
+        val oversized = snapshot(maxCount + 1)
+        assertTrue(oversized.toByteArray(Charsets.UTF_8).size > byteLimit)
+        for (count in listOf(20_001, maxCount)) {
+            val original = snapshot(count)
+            assertTrue(original.toByteArray(Charsets.UTF_8).size <= byteLimit)
+            heldStore.write(original)
+            val ciphertext = heldFile.readBytes()
+            assertFalse(ciphertext.toString(Charsets.ISO_8859_1).contains(key(0)))
+            val (reopenedDevice, keys) = checkNotNull(holder.snapshot(session, approved, consent, reopened.controlState(scope)) { false })
+            assertEquals(device, reopenedDevice)
+            assertEquals(count, keys.size)
+            assertEquals(key(0), keys.first())
+            assertEquals(key(count - 1), keys.last())
+            assertEquals(original, heldStore.read())
+            assertArrayEquals(ciphertext, heldFile.readBytes())
+        }
+        val ciphertext = heldFile.readBytes()
+        assertTrue(runCatching { heldStore.write(oversized) }.exceptionOrNull() is IllegalArgumentException)
+        assertArrayEquals(ciphertext, heldFile.readBytes())
     }
     @Test fun observationPauseIsEncryptedAndSurvivesAnotherAccount() {
         val owner=ObservationOwner("synthetic-group","synthetic-admin")

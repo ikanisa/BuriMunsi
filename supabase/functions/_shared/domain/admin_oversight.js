@@ -119,15 +119,6 @@ function nativeSmsCounters(row){
  return {burimunsi_sms:smsCounters(row.burimunsi_sms,nativeQueueKeys,true),
   burimunsi_payer_sms:smsCounters(row.burimunsi_payer_sms,payerQueueKeys)};
 }
-async function nativeSmsHealth(scoped,env,account,actor){
- if(!canReadNativeSms(env,account,actor))return {};
- const [[catalog]]=(await scoped.DB.batch([scoped.DB.prepare(
-  "SELECT to_regprocedure('private.burimunsi_admin_sms_health()') IS NOT NULL AS available")])).map(item=>item.results);
- if(catalog?.available===false)return {};
- if(catalog?.available!==true)unavailable();
- const [sample]=await scoped.DB.batch([scoped.DB.prepare(nativeSmsHealthSql)]);
- return nativeSmsCounters(sample?.results?.length===1?sample.results[0].result:undefined);
-}
 function healthRows(result,count){
  if(!Array.isArray(result)||result.length!==count||result.some(item=>!Array.isArray(item?.results)||item.results.length!==1))unavailable();
  return result.map(item=>item.results[0]);
@@ -158,10 +149,7 @@ async function smsHealth(env,account,actor){
    assisted_sms:{...metrics(sms,assistedSmsCounts,assistedSmsTimes,at),automatic_retry:false},
   }};
 }
-async function operationalSmsHealth(scoped,env,account,actor){
- if(typeof env.DB.adminReadBatch!=='function'||!account.permissions.includes('sms.read')||!actor.permissions.has('sms.read'))return null;
- const [sample]=await scoped.DB.batch([scoped.DB.prepare('SELECT private.burimunsi_admin_sms_operations() AS result')]);
- const row=sample?.results?.length===1?sample.results[0].result:undefined;
+function operationalSmsHealth(row){
  if(row===null)return null;
  const timestamp=value=>value===null||typeof value==='string'&&Number.isFinite(Date.parse(value))&&new Date(value).toISOString()===value;
  if(!row||Object.keys(row).length!==(Object.hasOwn(row,'cron_interval_seconds')?11:10)||
@@ -176,13 +164,24 @@ async function operationalSmsHealth(scoped,env,account,actor){
 }
 async function health(env,account,actor,includeEvidence){
  const scoped=accountReadDatabase(env,account,'system_health.read');
- let result,nativeSms,operations;
+ const canReadSms=canReadNativeSms(env,account,actor),withOperations=canReadSms&&includeEvidence;
+ let rows,withCounters=false;
  try{
-  result=await scoped.DB.batch(oversightHealthSql.map(sql=>scoped.DB.prepare(sql)));
-  nativeSms=await nativeSmsHealth(scoped,env,account,actor);
-  if(includeEvidence)operations=await operationalSmsHealth(scoped,env,account,actor);
+  if(canReadSms){
+   // Older installations can serve the other queues before native SMS is installed.
+   const lookup=scoped.DB.prepare("SELECT to_regprocedure('private.burimunsi_admin_sms_health()') IS NOT NULL AS available");
+   const [catalog]=healthRows(await scoped.DB.batch([lookup]),1);
+   if(typeof catalog?.available!=='boolean')unavailable();
+   withCounters=catalog.available;
+  }
+  const statements=oversightHealthSql.map(sql=>scoped.DB.prepare(sql));
+  if(withCounters)statements.push(scoped.DB.prepare(nativeSmsHealthSql));
+  if(withOperations)statements.push(scoped.DB.prepare('SELECT private.burimunsi_admin_sms_operations() AS result'));
+  rows=healthRows(await scoped.DB.batch(statements),statements.length);
  }catch(error){if(error instanceof ApiError)throw error;unavailable();}
- const [clock,momo,sms,notifications,email,invitations,delivery]=healthRows(result,oversightHealthSql.length),at=clock.observed_seconds;
+ const [clock,momo,sms,notifications,email,invitations,delivery]=rows,at=clock.observed_seconds;
+ const nativeSms=withCounters?nativeSmsCounters(rows[oversightHealthSql.length]?.result):{};
+ const operations=withOperations?operationalSmsHealth(rows.at(-1)?.result):null;
  return {contract_version:1,scope:'admin_operational_health',database:'available',
   storage_binding:env.PRIVATE_MEDIA?'configured':'missing',
   source_revision:/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(env.BUILD_SOURCE_ID??'')?env.BUILD_SOURCE_ID:'unknown',

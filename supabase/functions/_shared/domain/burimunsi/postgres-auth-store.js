@@ -3,7 +3,8 @@ import {authorize} from './policy.js';
 import {requireId,requireRequestId,canonicalJson,sha256,normalizePhone} from './values.js';
 import {pgInteger} from './postgres-values.js';
 import {PostgresNativeAuthority} from './postgres-authority.js';
-import {hasPhonePinContext,ownsPhonePinReadSnapshot,PIN_CLOCK_SKEW_MS} from './phone-pin-request.js';
+import {hasPhonePinContext,ownsPhonePinReadSnapshot,takePhonePinReadActor} from './phone-pin-request.js';
+import {sessionRowSql} from './postgres-session-row.js';
 import {readRecoveryProof} from './postgres-operation-recovery.js';
 import {retainPhoneBoundPin} from './pin.js';
 import {requireOriginDigest,projectRecoveredOutcome,cancelledStaffOperation,originalStaffOperation} from './operation-recovery.js';
@@ -41,30 +42,18 @@ export class PostgresNativeAuthStore extends PostgresNativeAuthority {
     // original expiry remains authoritative for managed-email sessions. Only a
     // SQL-proven PIN context may use the bounded edge/database clock skew;
     // the expiry check remains strict against the edge clock for both paths.
-    const pin=hasPhonePinContext(this.db),expiry=pin?'pin.expires_at':'s.expires_at';
-    const pinJoin=pin?'JOIN LATERAL private.burimunsi_pin_context() pin ON pin.native_session_id=s.id':'';
+    const pin=hasPhonePinContext(this.db);
     const sameSnapshot=pin&&this.sessionBinding!==null&&this.operatorDirectory!==null&&ownsPhonePinReadSnapshot(this.db,tx);
-    const currentProof=sameSnapshot?`,
-      (pin.collection_id=s.collection_id AND pin.principal_user_id=a.principal_user_id AND pin.account_id=a.id
-       AND pin.created_at<=floor(extract(epoch FROM clock_timestamp())*1000)+${PIN_CLOCK_SKEW_MS}
-       AND pin.expires_at>floor(extract(epoch FROM clock_timestamp())*1000)) AS pin_current,
-      private.burimunsi_operator_is_current(a.collection_id,a.principal_user_id,a.phone,a.role,a.capabilities) AS operator_current`:'';
-    const rows=await tx.unsafe(`SELECT s.id AS session_id,${expiry} AS expires_at,s.installation_id,
-      a.id,a.collection_id,a.principal_user_id,a.phone,a.name,a.role,a.capabilities,d.profile AS installation_profile${currentProof}
-      FROM private.burimunsi_sessions s
-      ${pinJoin}
-      JOIN private.burimunsi_accounts a ON a.id=s.account_id AND a.collection_id=s.collection_id
-      JOIN private.burimunsi_device_grants d ON d.id=s.grant_id AND d.collection_id=s.collection_id
-      JOIN private.burimunsi_device_accounts da ON da.grant_id=d.id AND da.account_id=a.id AND da.collection_id=s.collection_id
-      JOIN private.burimunsi_scopes c ON c.collection_id=s.collection_id
-      JOIN app.users u ON u.id=a.principal_user_id AND u.access_status='active'
-      WHERE s.collection_id=$1 AND ($2::uuid IS NULL OR s.id=$2::uuid) AND ($3::text IS NULL OR s.token_hash=$3)
-        AND ($4::uuid IS NULL OR s.installation_id=$4::uuid) AND NOT s.revoked AND ${expiry}>$5
-        AND a.active AND NOT a.removed AND d.active AND ${pin?"(c.enabled OR s.auth_method='phone_pin')":'c.enabled'}
-        AND a.credential_version=s.credential_version AND d.version=s.grant_version
-        AND d.installation_id=s.installation_id AND s.principal_user_id=a.principal_user_id
-        AND s.created_at<=$5${pin?`+${PIN_CLOCK_SKEW_MS}`:''}`,[this.groupId,id,tokenHash,installationId,now]);
-    requireThat(rows.length<=1,'session_unavailable',401);const r=rows[0];if(!r)return null;
+    let r;
+    if(sameSnapshot&&id!==null&&tokenHash===null&&installationId===null) {
+      r=takePhonePinReadActor(this.db,tx,this.groupId,id,now);
+    }
+    if(r===undefined) {
+      const rows=await tx.unsafe(sessionRowSql({pin,sameSnapshot}),[this.groupId,id,tokenHash,installationId,now]);
+      requireThat(rows.length<=1,'session_unavailable',401);
+      r=rows[0];
+    }
+    if(!r)return null;
     const actor={id:r.id,principalUserId:r.principal_user_id,sessionId:r.session_id,phone:r.phone,name:r.name,groupId:r.collection_id,
       role:r.role,capabilities:r.capabilities,active:true,revoked:false,expiresAt:pgInteger(r.expires_at,{minimum:now+1,code:'session_unavailable'}),installationId:r.installation_id,installationProfile:r.installation_profile};
     if(sameSnapshot){

@@ -192,9 +192,48 @@ async function contention(fast) {
     await Promise.all(clientsForBurst.map(client=>client.close()));
   }
 }
+async function verifyBoundReadLease(client) {
+  let reservation;
+  const releasedSettings=[];
+  const capture={async reserve(){
+    reservation=await client.control.reserve();
+    const [prior]=await reservation.unsafe(`SELECT pg_backend_pid() AS pid,
+      current_setting('burimunsi.read_work_id',true) AS id,
+      current_setting('burimunsi.read_work_epoch',true) AS epoch,
+      current_setting('burimunsi.read_work_source',true) AS source`);
+    releasedSettings.push(prior);
+    return reservation;
+  }};
+  const backend=readBackend(client.business,capture,check,true);
+  for(let i=0;i<2;i++){
+    const work=await open(backend);
+    assert.equal((await work.assert()).admissionId,work.id);
+    await work.finish();
+  }
+  assert.equal(releasedSettings[0].pid,releasedSettings[1].pid);
+  assert.ok(releasedSettings.every(row=>!row.id&&!row.epoch&&!row.source));
+  const otherId=randomUUID(),other=await backend.register(otherId,source,kind);
+  try{
+    for(const [field,value] of [['id',otherId],['epoch',String(other.epoch+1)],['source','b'.repeat(64)]]){
+      const work=await open(backend);
+      await reservation.unsafe('SELECT pg_catalog.set_config($1,$2,true)',['burimunsi.read_work_'+field,value]);
+      await assert.rejects(work.assert(),{code:'application_fence_unavailable'});
+      await work.finish({failed:true});
+      assert.equal((await stored(otherId)).state,'active');
+    }
+  }finally{
+    await backend.close(otherId,other.epoch,source,'settled','cancelled_before_work',0,0);
+  }
+  const next=await open(backend);
+  assert.equal((await next.assert()).admissionId,next.id);
+  await next.finish();
+  console.log('PASS original lease tuple checked on every protected use, changed id/epoch/source denied, pooled rollback clears all settings');
+}
+
 async function regressions() {
   const c = await clients(db.socketPath);
   try {
+    await verifyBoundReadLease(c);
     const base = readBackend(c.business, c.control, check, true);
     const unmarkedId=randomUUID();
     const unmarked=await c.business.begin('ISOLATION LEVEL READ COMMITTED',async tx=>{

@@ -27,7 +27,8 @@ const integer=value=>{
 };
 const options={host:socket,port,database,password:'',ssl:false,prepare:false,connect_timeout:5,idle_timeout:20,
   onnotice(){},types:{whole:{to:20,from:[20,1700],serialize:String,parse:integer}}};
-const runtime=postgres({...options,user:'postgres',max:1});
+const businessStatements=[];
+const runtime=postgres({...options,user:'postgres',max:1,debug:(_pid,query)=>businessStatements.push(query)});
 const admission=postgres({...options,user:'postgres',max:3});
 const inspector=postgres({...options,user:'collect_test',max:1});
 try{
@@ -36,7 +37,7 @@ try{
     inet_server_addr() IS NULL AND current_setting('listen_addresses')='' AS socket_only`;
   assert.deepEqual({...target},{db:database,role:'postgres',cluster:'collect_archive_next_fixture',major:17,socket_only:true});
   console.log('PASS cached pinned postgres.js 3.4.7 on verified owned PG17 Unix socket only');
-  await qualifyNativeReads({pool:runtime,admissionPool:admission,source,inspect:(sql,values)=>inspector.unsafe(sql,values)});
+  await qualifyNativeReads({pool:runtime,admissionPool:admission,businessStatements,source,inspect:(sql,values)=>inspector.unsafe(sql,values)});
 }finally{
   await Promise.all([runtime.end({timeout:5}),admission.end({timeout:5}),inspector.end({timeout:5})]);
 }

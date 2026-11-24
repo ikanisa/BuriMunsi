@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {handleAdmin} from '../domain/admin_bridge.js';
+import {accountReadDatabase} from '../domain/admin_accounts.js';
 import {adminAccountSession, adminCanonicalActor} from '../domain/admin_session.js';
 import {digest} from '../domain/core.js';
 import {adminEmailProofId, requireFreshAdminEmail} from '../domain/admin_email_policy.js';
@@ -14,7 +15,7 @@ const group = 'synthetic-group';
 const owner = 'synthetic-owner';
 const principal = 'synthetic-principal';
 
-function request(path, {body, cookie, csrf, from = origin, bearer} = {}) {
+function routeRequest(path, {body, cookie, csrf, from = origin, bearer} = {}) {
   const headers = new Headers({Origin: from});
   if (body) {
     headers.set('X-Collect-Requested-With', 'collect-admin');
@@ -23,9 +24,10 @@ function request(path, {body, cookie, csrf, from = origin, bearer} = {}) {
   if (cookie) headers.set('Cookie', cookie);
   if (csrf) headers.set('X-Collect-CSRF', csrf);
   if (bearer) headers.set('Authorization', 'Bearer '+bearer);
-  return new Request(origin + '/api/admin/auth/' + path,
+  return new Request(origin + '/api/admin/' + path,
     {method: body ? 'POST' : 'GET', headers, body: body ? JSON.stringify(body) : undefined});
 }
+const request = (path, options) => routeRequest('auth/' + path, options);
 
 async function fixture({role = 'admin'} = {}) {
   const env = {BURIMUNSI_PRODUCT_MODE:'standalone', BURIMUNSI_COLLECTION_ID:group,
@@ -38,7 +40,7 @@ async function fixture({role = 'admin'} = {}) {
   let issued = 0;
   let changes = 0;
   env.DB = {setBrowserPasscodeAccount: account => assert.equal(account.principal_id, principal),
-    prepare: statement => ({bind: (...values) => ({first: async () => {
+    prepare: statement => ({bind: (...values) => ({sql:statement, values, first: async () => {
     assert.equal(values[0], group);
     let result;
     if (statement.includes('browser_pin_candidate(')) {
@@ -77,7 +79,8 @@ async function fixture({role = 'admin'} = {}) {
     }
     return {result};
   }})})};
-  return {env, denyBudget:()=>{budgetAllowed=false;}, issued:()=>issued, changes:()=>changes};
+  return {env, denyBudget:()=>{budgetAllowed=false;}, issued:()=>issued, changes:()=>changes,
+    setGrants: permissions => {for (const session of sessions.values()) session.permissions=permissions;}};
 }
 
 test('the existing native Admin credentials open an opaque same-origin browser session', async () => {
@@ -177,4 +180,72 @@ test('Staff receive their own limited account and can optionally change their pa
   assert.equal((await (await handleAdmin(request('session',{cookie}),env)).json()).user,null);
   assert.equal((await handleAdmin(request('phone-passcode',{body:{phone:staffPhone,pin}}),env)).status,401);
   assert.equal((await handleAdmin(request('phone-passcode',{body:{phone:staffPhone,pin:change.newPin}}),env)).status,200);
+});
+
+test('an existing Staff cookie keeps Payments and loses inherited SMS access on all direct receipt routes', async () => {
+  const {env,setGrants} = await fixture({role:'staff'});
+  const login = await handleAdmin(request('phone-passcode',{body:{phone:staffPhone,pin}}),env);
+  assert.equal(login.status,200);
+  const {csrfToken} = await login.json(),cookie=login.headers.get('set-cookie').split(';')[0];
+  setGrants(['overview.read','payments.read','sms.read','sms.reveal','sms.extract']);
+  const sessionRequest=request('session',{cookie});
+  const renewed=await (await handleAdmin(sessionRequest,env)).json();
+  assert.deepEqual(renewed.user.permissions,['overview.read','payments.read']);
+  const account=await adminAccountSession(sessionRequest,env);
+  const actor=await adminCanonicalActor(sessionRequest,env,account,'payments.read');
+  assert.deepEqual([...actor.permissions],['overview.read','payments.read']);
+
+  let paymentsReads=0;
+  env.DB.adminReadBatch=async (_context,authority,statements)=>{
+    assert.ok(authority.values.includes('payments.read'));
+    assert.ok(!authority.values.includes('sms.read'));
+    assert.match(statements[0].sql,/momo_transactions/);
+    paymentsReads++;
+    return [{results:[{id:null,page_total:0,page_received:0,page_credited:0,page_unallocated:0}]}];
+  };
+  assert.throws(()=>accountReadDatabase(env,account,'sms.read'),{status:403,code:'permission_required'});
+  env.BURIMUNSI_ADMIN_SMS_OBSERVATIONS_ENABLED='true';
+  const receiptId=crypto.randomUUID();
+  for(const path of ['sms/receipts',`sms/receipts/capture/${receiptId}`,`sms/receipts/capture/${receiptId}/content`,
+    'gateway/receipts',`gateway/receipts/${receiptId}`,'momo/sources',`momo/sources/${receiptId}/content`,
+    'momo/observations',`momo/observations/${receiptId}/content`]){
+    const response=await handleAdmin(routeRequest(path,{cookie}),env);
+    assert.equal(response.status,403,path);
+  }
+  const live=await handleAdmin(routeRequest('sync/live',{cookie,body:{},csrf:csrfToken}),env);
+  assert.equal(live.status,403);
+  assert.equal(paymentsReads,0);
+  const payments=await handleAdmin(routeRequest('momo/transactions',{cookie}),env);
+  assert.equal(payments.status,200);
+  assert.deepEqual((await payments.json()).rows,[]);
+  assert.equal(paymentsReads,1);
+});
+
+test('a phone Admin needs both current grants to read full payment source history',async()=>{
+  const {env,setGrants}=await fixture();
+  const login=await handleAdmin(request('phone-passcode',{body:{phone,pin}}),env);
+  assert.equal(login.status,200);
+  const cookie=login.headers.get('set-cookie').split(';')[0];
+  setGrants(['payments.read','sms.read']);
+  const checks=[];
+  env.DB.adminReadBatch=async (_context,authority,statements)=>{
+    checks.push(authority.values.filter(value=>['payments.read','sms.read'].includes(value)));
+    if(statements[0].sql.includes('SELECT count(*) AS total FROM sms_receipts'))return [{results:[{total:0}]},{results:[]}];
+    return statements[0].sql.includes('FROM sms_receipts')
+      ? [{results:[{id:null,page_total:0}]}]
+      : [{results:[{id:null,page_total:0,page_received:0,page_credited:0,page_unallocated:0}]}];
+  };
+  const receipts=await handleAdmin(routeRequest('sms/receipts',{cookie}),env);
+  assert.equal(receipts.status,200);
+  assert.deepEqual((await receipts.json()).rows,[]);
+  const payments=await handleAdmin(routeRequest('momo/transactions',{cookie}),env);
+  assert.equal(payments.status,200);
+  const gateway=await handleAdmin(routeRequest('gateway/receipts',{cookie}),env);
+  assert.equal(gateway.status,200);
+  assert.deepEqual(await gateway.json(),{rows:[],total:0});
+  const paymentsAndSms=['payments.read','payments.read','payments.read','sms.read','sms.read','sms.read'];
+  assert.deepEqual(checks,[['sms.read','sms.read','sms.read'],paymentsAndSms,paymentsAndSms]);
+  setGrants(['payments.read']);
+  assert.equal((await handleAdmin(routeRequest('sms/receipts',{cookie}),env)).status,403);
+  assert.equal((await handleAdmin(routeRequest('gateway/receipts',{cookie}),env)).status,403);
 });

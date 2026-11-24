@@ -166,7 +166,7 @@ const records: Record<CoreArea, RecordRoutes> = {
 };
 
 export const recordRoutes = [
-  workspaceRoute('payments', <PaymentsRoute />, user => paymentViews.some(({id}) => canOpenPaymentView(id, user.permissions))),
+  workspaceRoute('payments', <PaymentsRoute />, user => paymentViews.some(({id}) => canOpenPaymentView(id, user))),
   ...(Object.keys(CORE_PERMISSIONS) as CoreArea[]).flatMap(area => {
     const {list, create, edit} = records[area];
     const canRead = area === 'payees' ? canReadReceivingAccounts : canReadCoreArea(area);

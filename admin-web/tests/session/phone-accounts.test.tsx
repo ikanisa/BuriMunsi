@@ -49,14 +49,20 @@ describe('dedicated phone accounts', () => {
     expect(() => parsePhoneLoginSession({...staffSession, adminIdentity: adminSession.adminIdentity}, staff.phone)).toThrow();
   });
 
-  it('shows the assigned BuriMunsi role for an operator whose underlying shared role differs', () => {
-    const operator: BuriSharedOperator = {adminId, principalId, displayName: 'Test operator', role: 'staff', email: ''};
+  it.each([
+    {sharedRole: 'staff', assignedRole: 'admin', active: true, label: 'Admin', hiddenLabel: 'Staff', status: 'Recorded enabled'},
+    {sharedRole: 'admin', assignedRole: 'staff', active: false, label: 'Staff', hiddenLabel: 'Admin', status: 'Recorded disabled'},
+    {sharedRole: 'owner', assignedRole: null, active: false, label: 'Unassigned', hiddenLabel: 'Admin', status: 'No approval recorded'},
+  ] as const)('shows $label for an operator with shared $sharedRole authority', ({sharedRole, assignedRole, active, label, hiddenLabel, status}) => {
+    const operator: BuriSharedOperator = {adminId, principalId, displayName: 'Test operator', role: sharedRole, email: ''};
     const directory = {collectionId: 'group-one', configured: true, team: [operator],
-      approvals: [{operator, phone: admin.phone, role: 'admin' as const, active: true, version: 1,
-        sharedStatus: 'active' as const, capabilities: ['records.read']}]};
+      approvals: assignedRole ? [{operator, phone: assignedRole === 'admin' ? admin.phone : staff.phone, role: assignedRole,
+        active, version: 1, sharedStatus: 'active' as const, capabilities: ['records.read']}] : []};
     render(<BuriDirectoryView directory={directory} provisioning={null} provisioningError={false} phoneAccounts />);
-    expect(screen.getByRole('cell', {name: 'Admin'})).toBeVisible();
-    expect(screen.queryByRole('cell', {name: 'Staff'})).toBeNull();
+    const row = within(screen.getByRole('row', {name: /Test operator/}));
+    expect(row.getByRole('cell', {name: label})).toBeVisible();
+    expect(row.queryByRole('cell', {name: hiddenLabel})).toBeNull();
+    expect(row.getByText(status)).toBeVisible();
   });
 
   it('binds the two-role directory and scoped administrator to the authenticated native account', () => {

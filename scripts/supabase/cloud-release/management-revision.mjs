@@ -181,6 +181,16 @@ export async function reviseRuntimeViaManagement(input, {api = management, ...de
   const candidate = smsSourceSettings(smsBinding, testEvidence.sourceSha256, smsBinding.candidateApprovalSha256);
   const beforeDigests = settingDigests(before), candidateDigests = settingDigests(candidate);
   requireSecretPreimages(beforeDigests, initialSecrets);
+  // A caller preimage must hold throughout the revision. A shared setting
+  // that would change during the SMS rebind cannot satisfy both contracts.
+  if (Object.entries(candidateDigests).some(([name, value]) =>
+      Object.hasOwn(expectedSecretPreimages, name) && expectedSecretPreimages[name] !== value)) {
+    throw Error('runtime_revision_secret_preimage_changed');
+  }
+  function requireProtectedSettings(smsDigests, metadata) {
+    requireSecretPreimages(expectedSecretPreimages, metadata);
+    requireSecretPreimages(smsDigests, metadata);
+  }
 
   let revisionDatabase, fenceId, writeAttempted = false, sourceChanged = false;
   async function confirmStoppedFence() {
@@ -200,7 +210,7 @@ export async function reviseRuntimeViaManagement(input, {api = management, ...de
       if (writeAttempted || options.body !== JSON.stringify([{name: 'BUILD_SOURCE_ID', value: testEvidence.sourceSha256}])) {
         throw Error('management_sms_rebind_post_refused');
       }
-      requireSecretPreimages({...expectedSecretPreimages, ...beforeDigests}, (await api('secrets')).json());
+      requireProtectedSettings(beforeDigests, (await api('secrets')).json());
       await confirmStoppedFence();
       writeAttempted = true;
       const body = JSON.stringify([{name: 'BUILD_SOURCE_ID', value: testEvidence.sourceSha256},
@@ -223,7 +233,7 @@ export async function reviseRuntimeViaManagement(input, {api = management, ...de
         const read = async () => {
           const [settings, functions] = await Promise.all([api('secrets'), api('functions')]);
           const rows = settings.json(), deployed = functions.json();
-          requireSecretPreimages({...expectedSecretPreimages,...candidateDigests}, rows);
+          requireProtectedSettings(candidateDigests, rows);
           const updates = names.map((name, index) => {
             const matched = rows.filter(row => row.name === name);
             if (matched.length !== 1 || matched[0].value !== sha(values[index])) throw error;
@@ -251,7 +261,7 @@ export async function reviseRuntimeViaManagement(input, {api = management, ...de
         });
       }
       await confirmStoppedFence();
-      requireSecretPreimages({...expectedSecretPreimages, ...candidateDigests}, (await api('secrets')).json());
+      requireProtectedSettings(candidateDigests, (await api('secrets')).json());
       sourceChanged = true;
       return written;
     }
@@ -260,7 +270,7 @@ export async function reviseRuntimeViaManagement(input, {api = management, ...de
       await confirmStoppedFence();
     }
     const response = await api(path, options);
-    if (path === 'secrets') requireSecretPreimages(sourceChanged ? candidateDigests : beforeDigests, response.json());
+    if (path === 'secrets') requireProtectedSettings(sourceChanged ? candidateDigests : beforeDigests, response.json());
     return response;
   };
   const {save = record} = dependencies;

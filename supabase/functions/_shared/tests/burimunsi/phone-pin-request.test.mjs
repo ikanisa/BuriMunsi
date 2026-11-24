@@ -4,6 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createPhonePinRequestGate,hasPhonePinContext,applyPhonePinContext,claimPhonePinReadSnapshot,phonePinReadSelector,PIN_CONTEXT_SQL,PIN_SET_CONTEXT_SQL,PIN_RENEW_SQL,PIN_LOGOUT_SQL,RETIREMENT_OUTCOME_SQL} from '../../domain/burimunsi/phone-pin-request.js';
+import {PIN_READ_ACTOR_SQL} from '../../domain/burimunsi/postgres-session-row.js';
 import {PostgresNativeAuthority} from '../../domain/burimunsi/postgres-authority.js';
 import {PostgresPhonePinSessions} from '../../domain/burimunsi/postgres-phone-pin-sessions.js';
 import {PostgresNativeAuthStore} from '../../domain/burimunsi/postgres-auth-store.js';
@@ -56,6 +57,14 @@ function fixture(){
    if(!s||args[1]!==installation||args[2]!==device||args[3]!=='internal_receiver'||args[4]!==s.groupId)return [{result:null}];
    state.revoked=true;return [{result:{accountId:s.accountId,collectionId:s.groupId}}];
   }
+  if(text===PIN_READ_ACTOR_SQL){
+   if(state.actorQueryError)throw state.actorQueryError;
+   const [proof]=row(await sha256(args[0]),args[1],args[2],args[3]);
+   if(!proof)throw Object.assign(Error('session_changed'),{code:'42501'});
+   state.current=proof;
+   const actor=state.readActor?.(text,args)?.[0]??null;
+   return [{result:proof,actor,checked_at:state.dbCheckedAt??state.time}];
+  }
   if(text===PIN_SET_CONTEXT_SQL){const rows=row(await sha256(args[0]),args[1],args[2],args[3]);state.current=rows[0];return rows.map(r=>({result:r}));}
   if(state.readActor&&text.startsWith('SELECT s.id AS session_id'))return state.readActor(text,args);
   if(text.includes('FROM private.burimunsi_pin_context()'))return state.current?[{...state.current,now_ms:now}]:[];
@@ -88,15 +97,20 @@ function freshRead(f,{scope='actual-group',enabled=true,actorScope=scope,pinCurr
   sessionBinding,operatorDirectory,clock:()=>f.state.time});
  if(combined)authority.read=()=>assert.fail('unnecessary second business transaction');
  f.state.readActor=(text,args)=>{
-  assert.match(text,/JOIN LATERAL private\.burimunsi_pin_context\(\)/);
+  const row=f.state.current;
+  if(text===PIN_READ_ACTOR_SQL){
+   assert.match(text,/pin\.collection_id=\$5 AND s\.collection_id=\$5/);
+   assert.deepEqual(args.slice(4),[scope,f.state.time]);
+  }else{
+   assert.match(text,/JOIN LATERAL private\.burimunsi_pin_context\(\)/);
+   assert.equal(args[0],scope);assert.equal(args[4],f.state.time);
+   if(args[2]===null)assert.deepEqual(args.slice(1,4),[row.native_session_id,null,null]);
+   else{
+    assert.equal(combined,false);assert.equal(args[1],null);assert.equal(args[3],row.installation_id);
+   }
+  }
   assert.equal(text.includes('private.burimunsi_operator_is_current(a.collection_id'),combined);
   assert.doesNotMatch(text,/\ba\.\*/);
-  const row=f.state.current;
-  assert.equal(args[0],scope);assert.equal(args[4],f.state.time);
-  if(args[2]===null)assert.deepEqual(args.slice(1,4),[row.native_session_id,null,null]);
-  else {
-   assert.equal(combined,false);assert.equal(args[1],null);assert.equal(args[3],row.installation_id);
-  }
   actorReloads.push(row.native_session_id);
   return enabled?[{id:row.account_id,collection_id:actorScope,session_id:row.native_session_id,
    principal_user_id:row.principal_user_id,installation_id:row.installation_id,installation_profile:row.profile,
@@ -550,4 +564,24 @@ test('fresh snapshot rolls back when the original response binding changes after
  const before=f.state.rollbacks;
  await assert.rejects(f.invoke(req,()=>handler(req),{BURIMUNSI_PRODUCT_MODE:'standalone'}),{code:'request_not_admitted'});
  assert.equal(f.state.rollbacks-before,1);assert.equal(hasPhonePinContext(f.db),false);
+});
+
+test('bound Home actor stays on the owned snapshot and rechecks a database deadline reached in transit',async()=>{
+ const f=fixture(),login=await f.login(),{handler,actorReloads}=freshRead(f);
+ let active=false;
+ f.db.withNativeReadSnapshot=fn=>f.db.transaction(async sql=>{
+  active=true;try{return await fn(sql);}finally{active=false;}
+ });
+ f.db.ownsNativeRead=sql=>active&&sql===f.sql;
+ const read=()=>{
+  const req=f.request({login:false,token:login.token,path:'/session',query:'?include=home'});
+  return f.invoke(req,()=>handler(req),{BURIMUNSI_PRODUCT_MODE:'standalone'});
+ };
+ f.state.readQuery=()=>[{balance:0,today:0,members:0,unallocated:0,unallocated_amount:0,id:null}];
+ assert.equal((await read()).status,200);assert.equal(actorReloads.length,1);
+ f.state.dbCheckedAt=login.expiresAt;
+ assert.equal((await read()).status,200);assert.equal(actorReloads.length,3);
+ assert.equal(f.state.calls.filter(call=>call.text===PIN_READ_ACTOR_SQL).length,2);
+ f.state.actorQueryError=Object.assign(Error('directory_permission_denied'),{code:'42501'});
+ await assert.rejects(read(),{code:'session_unavailable'});assert.equal(f.state.calls.some(call=>call.text===PIN_RENEW_SQL),false);
 });

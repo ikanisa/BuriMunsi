@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import test from 'node:test';
-import {list} from '../domain/admin_records.js';
+import {list,operatingDetail} from '../domain/admin_records.js';
 import {operatingRead} from '../domain/admin_bridge.js';
 import {coreSorts} from '../domain/admin_search.js';
 import {createAdminReadDatabase} from '../domain/admin_read_database.js';
@@ -20,7 +20,7 @@ test('Admin directory counts active groups and filters member eligibility before
       CREATE TABLE admin_users(id TEXT,role TEXT,status TEXT);
       CREATE TABLE collections(id TEXT PRIMARY KEY,status TEXT);
       CREATE TABLE memberships(user_id TEXT,collection_id TEXT,active INTEGER);
-      CREATE TABLE ledger_entries(member_id TEXT,amount_minor INTEGER);
+      CREATE TABLE ledger_entries(member_id TEXT,amount_minor INTEGER,collection_id TEXT);
     `);
     const people = db.prepare(`INSERT INTO users VALUES (?, ?, NULL, NULL, ?, ?, NULL, NULL,
       NULL, ?, 1, ?, ?)`);
@@ -41,9 +41,9 @@ test('Admin directory counts active groups and filters member eligibility before
     for (const [person, group, active] of [[1, 11, 1], [1, 12, 1], [2, 13, 1], [3, 11, 0], [4, 11, 1], [5, 11, 1]]) {
       memberships.run(uuid(person), uuid(group), active);
     }
-    const ledger = db.prepare('INSERT INTO ledger_entries VALUES (?, ?)');
-    ledger.run(uuid(1), 750);
-    ledger.run(uuid(1), -250);
+    const ledger = db.prepare('INSERT INTO ledger_entries VALUES (?, ?, ?)');
+    ledger.run(uuid(1), 750, uuid(11));
+    ledger.run(uuid(1), -250, uuid(11));
 
     const env = {DB: {
       prepare(sql) { return {bind(...args) { return {sql, args}; }}; },
@@ -82,6 +82,34 @@ test('Admin directory counts active groups and filters member eligibility before
         }
       }
     }
+    // The phone-session roster includes inactive memberships and scopes money to the selected collection.
+    ledger.run(uuid(1), 1000, uuid(12));
+    const roster = query => list(env, 'members', new URL('https://fixture.invalid/?directory=roster' + query),
+      {rosterGroupId:uuid(11)});
+    const result = await roster('&sort=public_id_asc');
+    assert.deepEqual(result.rows.map(row => [row.id, row.membership_status, row.account_status, row.active_groups, row.total_contributed_rwf]), [
+      [uuid(1), 'active', 'active', 1, 500],
+      [uuid(3), 'inactive', 'active', 0, 0],
+      [uuid(5), 'active', 'suspended', 1, 0],
+    ]);
+    assert.equal(result.total, 3);
+    const filtered = await roster('&status=active&sort=public_id_asc&limit=1&offset=1');
+    assert.equal(filtered.total, 2);
+    assert.equal(filtered.rows[0].id, uuid(5));
+    assert.deepEqual((await roster('&search=status:inactive&sort=status_desc')).rows.map(row=>row.id), [uuid(3)]);
+    assert.equal((await roster('&search=Noel')).total, 0);
+    const actor={id:uuid(50),role:'staff',permissions:['users.read']};
+    const detail=(id,scope)=>operatingDetail(env,actor,'members',uuid(id),new URL('https://fixture.invalid/'),{rosterGroupId:uuid(scope)});
+    const inactive=await detail(3,11);
+    assert.equal(inactive.resource.membership_status,'inactive');
+    assert.equal(inactive.resource.status,'active');
+    assert.deepEqual(inactive.related,{});
+    assert.equal((await detail(1,11)).resource.total_contributed_rwf,500);
+    assert.equal((await detail(1,12)).resource.total_contributed_rwf,1000);
+    await assert.rejects(detail(3,12),{status:404,code:'not_found'});
+    await assert.rejects(roster('&status=suspended'), {status:400,code:'invalid_filter'});
+    await assert.rejects(roster('&directory=all'), {status:400,code:'invalid_filter'});
+    await assert.rejects(roster('&group_id='+uuid(12)), {status:400,code:'invalid_filter'});
   } finally {
     db.close();
   }

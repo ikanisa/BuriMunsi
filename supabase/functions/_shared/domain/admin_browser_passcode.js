@@ -3,7 +3,7 @@ import {BURIMUNSI_ADMIN_ORIGIN, BURIMUNSI_PRODUCT_MODE} from '../burimunsi-stand
 import {ApiError, digest, first, json, readJson} from './core.js';
 import {adminCookie, adminPublicUser} from './admin_accounts_legacy.js';
 import {newAdminCookieToken} from './admin_bff_tokens.js';
-import {adminPasscodeProof, attestAdminPasscodeAccount} from './admin_email_policy.js';
+import {adminPasscodeProof, attestAdminPasscodeAccount, phoneOperatorRoleAllowsPermission} from './admin_email_policy.js';
 import {nativePinHasher} from './burimunsi/native-secrets.js';
 import {PIN_ITERATIONS} from './burimunsi/pin.js';
 import {normalizePhone, requirePin} from './burimunsi/values.js';
@@ -64,13 +64,16 @@ export async function browserPasscodeSession(request, env, required = true) {
       result.expiresAt <= Math.floor(Date.now() / 1000) || !Array.isArray(result.permissions) ||
       result.permissions.some(permission => typeof permission !== 'string')) throw unavailable();
   if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) await requireCsrf(request, token);
+  // The configured browser operator role caps older platform grants on every
+  // request, including cookies issued before the standalone role policy.
+  const permissions = result.permissions.filter(permission => phoneOperatorRoleAllowsPermission(result.operatorRole, permission));
   const account = attestAdminPasscodeAccount({
     id: result.adminId, principal_id: result.principalId, email: result.email, role: result.storageRole,
     auth_version: result.authVersion, auth_session_id: result.sessionId, public_id: result.publicId,
     origin, token_hash: hash, expires_at: result.expiresAt, auth_at: result.verifiedAt,
     issued_assurance_level: 1, issued_mfa_at: null, issued_mfa_factor_id: null,
-    permissions: result.permissions, csrfToken: await csrfToken(token),
-  }, result);
+    permissions, csrfToken: await csrfToken(token),
+  }, {...result, permissions});
   env.DB.setBrowserPasscodeAccount(account);
   env.ADMIN_ACCOUNT = account;
   return account;

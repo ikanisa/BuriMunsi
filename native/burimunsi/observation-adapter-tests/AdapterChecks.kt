@@ -664,6 +664,26 @@ fun main(args:Array<String>) {
   e.repository.failSubmit=false;check(ObservationCoordinator(e.context,e.repository).cycle())
   check(pending(adminA).isEmpty()&&e.repository.requests.size==2&&e.repository.requests.all{it==original})
  }
+ test("post-dispatch transport failures hold both original receipts until typed acknowledgement") {
+  for ((code, status) in listOf("connection_unavailable" to 0, "contract_response_timeout" to 200)) {
+   val e = setup()
+   e.context.contentResolver.rows = listOf(row(42), row(43))
+   ObservationRecovery(e.context).scan()
+   val original = pending(adminA).map { it.observation }
+   check(original.size == 2)
+
+   e.repository.submitFailure = rw.ikanisa.burimunsi.data.ApiFailure(code, status, true)
+   check(!ObservationCoordinator(e.context, e.repository).cycle())
+   check(e.repository.requests == listOf(original.first()))
+   check(pending(adminA).map { it.observation } == original)
+
+   e.repository.submitFailure = null
+   check(ObservationCoordinator(e.context, e.repository).cycle())
+   check(pending(adminA).isEmpty())
+   check(e.repository.requests == listOf(original.first()) + original)
+   check(e.repository.retainedSources.size == original.size)
+  }
+ }
  test("a proven unresolved source stays queued while two later entries can advance") {
   val e=setup();e.context.contentResolver.rows=(100L..103L).map{row(it)};ObservationRecovery(e.context).scan()
   val original=pending(adminA).map{it.observation};e.repository.unresolvedIds=setOf(original.first().requestId)

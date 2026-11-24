@@ -1,6 +1,6 @@
 import {useCallback, useState, useSyncExternalStore} from 'react';
 import {useSession} from '../../session/SessionProvider';
-import {canDisplaySessionRecords} from '../../session/sessionContext';
+import {canDisplaySessionRecords, canReadSmsEvidence} from '../../session/sessionContext';
 import {Button, Card, ErrorState, LoadingState} from '../../ui';
 import {receiptLabels, reasonLabels} from '../overview/smsOversightContract';
 import {MomoCell, MomoTable, momoReadOptions} from './MomoRecordViews';
@@ -11,7 +11,7 @@ import {useOperationRead} from './useOperationRead';
 
 export function ReceiverSmsPanel() {
   const session = useSession(), request = session.request;
-  const enabled = canDisplaySessionRecords(session) && !!session.user?.permissions.includes('sms.read');
+  const enabled = canDisplaySessionRecords(session) && canReadSmsEvidence(session.user);
   const load = useCallback(async (signal: AbortSignal) => receiverCollections(await request('momo/observations/collections', {signal})), [request]);
   const {result, retry} = useOperationRead(String(session.epoch), enabled, load, {...momoReadOptions, live:false});
   const [selection, setSelection] = useState('');

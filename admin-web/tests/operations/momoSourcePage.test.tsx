@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 const mock = vi.hoisted(() => ({request: vi.fn(), user: {id: '22222222-2222-4222-8222-222222222222', principalId: '22222222-2222-4222-8222-222222222222', sessionId: 'session-1', email: 'admin@example.com', role: 'admin' as const, permissions: ['payments.read', 'sms.read', 'sms.reveal'], expiresAt: new Date(Date.now() + 3600000).toISOString(), financialModel: 'canonical_evidence_ledger' as const, assuranceLevel: 2 as const, mfaAt: new Date().toISOString()}}));
 vi.mock('../../src/session/SessionProvider', () => ({useSession: () => ({user: mock.user, epoch: 1, status: 'authenticated', request: mock.request, verificationMode: 'authenticator', isCurrentAuthority: () => true, recheckSensitiveEmailVerification: async () => false})}));
-import { MomoReceiptsPage } from '../../src/features/operations/MomoReceiptsPage';
+import { WorkspaceMomoTransactionList } from '../../src/features/operations/MomoTransactionList';
 
 const rawId = '11111111-1111-4111-8111-111111111111', hash = 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9', time = '2026-10-18T08:00:00.000Z';
 const job = {raw_sms_id: rawId, state: 'needs_review', binding_id: null, receiving_account_id: null, received_at: time, last_error: 'schema_mismatch', body_sha256: hash};
@@ -16,8 +16,7 @@ afterEach(() => {mock.request.mockReset();});
 it('opens source metadata from the attention list and gates its audited reveal', async () => {
   const user = userEvent.setup();
   mock.request.mockImplementation(async (path: string) => path.startsWith('sms/receipts?') ? {rows: [], total: 0, limit: 25, offset: 0, next_offset: null} : path.startsWith('momo/transactions?') ? transactionPage : path.startsWith('momo/sources?') ? {rows: [job], total: 1, limit: 25, offset: 0} : response);
-  const view = render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
-  await user.click(screen.getByRole('button', {name: 'Transactions'}));
+  const view = render(<MemoryRouter><WorkspaceMomoTransactionList /></MemoryRouter>);
   await user.selectOptions(screen.getByLabelText('Payment status'), 'needs_attention');
   await user.click(screen.getByRole('button', {name: 'Apply filters'}));
   await user.click(await screen.findByRole('button', {name: rawId}));
@@ -26,8 +25,7 @@ it('opens source metadata from the attention list and gates its audited reveal',
   expect(within(dialog).queryByRole('button', {name: 'Review source access'})).not.toBeInTheDocument();
   expect(mock.request.mock.calls.every(([path]) => path !== `momo/sources/${rawId}/content`)).toBe(true);
   view.unmount();
-  render(<MemoryRouter><MomoReceiptsPage allowActions /></MemoryRouter>);
-  await user.click(screen.getByRole('button', {name: 'Transactions'}));
+  render(<MemoryRouter><WorkspaceMomoTransactionList allowActions /></MemoryRouter>);
   await user.selectOptions(screen.getByLabelText('Payment status'), 'needs_attention');
   await user.click(screen.getByRole('button', {name: 'Apply filters'}));
   await user.click(await screen.findByRole('button', {name: rawId}));

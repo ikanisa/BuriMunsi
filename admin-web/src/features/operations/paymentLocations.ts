@@ -1,4 +1,6 @@
 import {safeAdminReturnLocation} from '../../session/returnLocation';
+import {canReadSmsEvidence} from '../../session/sessionContext';
+import type {AdminUser} from '../../session/sessionResponses';
 
 export const paymentsPath = '/admin/payments';
 export type PaymentView = 'recorded' | 'sms' | 'attention';
@@ -11,14 +13,22 @@ export const receiptSources = [
   {id: 'android', label: 'Android receiver'}, {id: 'app', label: 'App uploads'}, {id: 'member', label: 'Member submitted'},
 ] as const;
 
-export function canOpenPaymentView(view: PaymentView, permissions: readonly string[]) {
-  if (view === 'recorded') return permissions.includes('payments.read');
-  if (view === 'attention') return permissions.includes('reconciliations.read');
-  return permissions.includes('sms.read') || permissions.includes('payments.read');
+type PaymentAccess = Pick<AdminUser, 'role' | 'permissions' | 'authMethod'>;
+
+export function canReadMemberReceipts(access: PaymentAccess): boolean {
+  return access.permissions.includes('payments.read') &&
+    (access.authMethod !== 'phone_passcode' || canReadSmsEvidence(access));
 }
 
-export function canOpenReceiptSource(source: ReceiptSource, permissions: readonly string[]) {
-  return permissions.includes(source === 'member' ? 'payments.read' : 'sms.read');
+export function canOpenPaymentView(view: PaymentView, access: PaymentAccess) {
+  const {permissions} = access;
+  if (view === 'recorded') return permissions.includes('payments.read');
+  if (view === 'attention') return permissions.includes('reconciliations.read');
+  return canOpenReceiptSource('member', access) || canReadSmsEvidence(access);
+}
+
+export function canOpenReceiptSource(source: ReceiptSource, access: PaymentAccess) {
+  return source === 'member' ? canReadMemberReceipts(access) : canReadSmsEvidence(access);
 }
 
 export function paymentViewLocation(view: PaymentView, options?: {source?: ReceiptSource; momo?: boolean}) {

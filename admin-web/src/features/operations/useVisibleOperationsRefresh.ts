@@ -5,7 +5,7 @@ import {useOperationsLive} from './operationsLiveContext';
 export function useVisibleOperationsRefresh(enabled: boolean, pollMs: number | undefined,
   refresh: (invalidated: boolean, minimumAge: number) => void, collectionId?: string, liveReads = false) {
   const stream = useOperationsLive(enabled && (!!pollMs || liveReads), collectionId);
-  const interval = stream.configured ? (stream.connected ? 60000 : Math.min(pollMs ?? 5000, 5000)) : pollMs;
+  const interval = stream.connected ? 60_000 : pollMs ?? (stream.configured ? 5000 : undefined);
   useEffect(() => {
     if (!enabled || !interval) return;
     let timer: number | undefined;
