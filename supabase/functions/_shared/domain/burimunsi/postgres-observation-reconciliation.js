@@ -256,11 +256,16 @@ export class PostgresObservationReconciliation {
     return { record, candidates };
   }
 
-  async #verifyBatchObjects({ actor, values, hashes, initial, indexes, legacy }) {
+  async #verifyBatchObjects(batch) {
+    const records = batch.indexes.map(i => batch.initial.records[i]);
+    return this.#evidence.withKeyedObjectReader(records, read => this.#checkBatchObjects(batch, read));
+  }
+
+  async #checkBatchObjects({ actor, values, hashes, initial, indexes, legacy }, readKeyedObject) {
     // Both the custody checks and Storage's journal reads acquire the same
-    // database mutation lock. Serialize complete item checks within this batch
-    // so its own workers cannot exhaust the lock timeout against each other.
-    // No transaction or mutation lock is held during network operations.
+    // database mutation lock. Older ports and mixed/legacy pages serialize
+    // those checks. A keyed page has already read its journals in one closed
+    // transaction, so its three workers may now verify the remote objects.
     let next = 0, failure = null;
     let verificationTail = Promise.resolve();
     const serialize = (fn) => {
@@ -275,9 +280,11 @@ export class PostgresObservationReconciliation {
         const i = indexes[next++];
         try {
           if (initial.records[i]) {
-            await serialize(() =>
-              this.#evidence.verifyKeyedObject(hashes[i], values[i].bodySha256, initial.records[i],values[i])
+            const verify = () => this.#evidence.verifyKeyedObject(
+              hashes[i], values[i].bodySha256, initial.records[i], values[i], readKeyedObject,
             );
+            if (readKeyedObject) await verify();
+            else await serialize(verify);
           } else {
             const proof = await serialize(() =>
               this.#evidence.verifyLegacyCandidates(
@@ -335,17 +342,21 @@ export class PostgresObservationReconciliation {
             check(same(namespace, proof.namespace), 'observation_changed', 409);
           }
         }
-        for (const i of indexes) {
-          const records = initial.records[i] ? [initial.records[i]] : initial.candidates[i];
-          for (let j = 0; j < records.length; j++) {
-            const prior = records[j],
-              journal = await this.#evidence.verifyJournal(tx, prior, values.length > 1 && Boolean(initial.records[i]));
-            if (!initial.records[i]) {
-              check(
-                this.#evidence.matchesJournal(journal, legacy.get(i).journals[j]),
-                'observation_changed',
-                409,
-              );
+        if (!legacy.size && values.length > 1) {
+          await this.#evidence.verifyKeyedJournals(tx, indexes.map(i => initial.records[i]));
+        } else {
+          for (const i of indexes) {
+            const records = initial.records[i] ? [initial.records[i]] : initial.candidates[i];
+            for (let j = 0; j < records.length; j++) {
+              const prior = records[j],
+                journal = await this.#evidence.verifyJournal(tx, prior, values.length > 1 && Boolean(initial.records[i]));
+              if (!initial.records[i]) {
+                check(
+                  this.#evidence.matchesJournal(journal, legacy.get(i).journals[j]),
+                  'observation_changed',
+                  409,
+                );
+              }
             }
           }
         }

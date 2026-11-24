@@ -175,6 +175,46 @@ export class PostgresPostingCustody {
       CROSS JOIN (SELECT ${reservationFields} FROM private.storage_payload_reservations WHERE object_key=$1 FOR UPDATE) r
       WHERE NOT EXISTS (SELECT 1 FROM app.privacy_retention_barriers WHERE subject_id=$2)
         AND NOT EXISTS (SELECT 1 FROM private.storage_delete_intents WHERE object_key=$1)`,[key,expect.ownerId]);
+    return this.#validateKeyedJournal(key,expect,journal);
+  }
+
+  async keyedObservationJournals(sql,targets){
+    check(targets.length>=2 && targets.length<=20 && new Set(targets.map(x=>x.key)).size===targets.length);
+    check(targets.every(({key,expect})=>expect.purpose==='sms_receipt' && key==='sms/'+expect.entityId));
+    const input=JSON.stringify(targets.map(({key,expect})=>({key,owner:expect.ownerId})));
+    // The original fence takes each object lock immediately before its owner
+    // lock. The recursive dependency preserves that order across the page.
+    const lock=await this.one(sql,`WITH RECURSIVE items AS MATERIALIZED (
+        SELECT item, pos FROM jsonb_array_elements($1::text::jsonb) WITH ORDINALITY AS x(item,pos)
+      ), locks AS MATERIALIZED (
+        SELECT 2*pos-1 AS seq,hashtextextended(item->>'key',7346369) AS id FROM items
+        UNION ALL SELECT 2*pos,hashtextextended(item->>'owner',7346370) FROM items
+      ), acquired(seq,held) AS (
+        SELECT seq,pg_advisory_xact_lock(id) FROM locks WHERE seq=1
+        UNION ALL SELECT l.seq,pg_advisory_xact_lock(l.id) FROM locks l JOIN acquired a ON l.seq=a.seq+1
+      ) SELECT count(*)::int AS held FROM acquired`,[input]);
+    check(lock.held===targets.length*2);
+    // Start a fresh read-committed statement after any wait. The outer
+    // authority transaction holds these rows through the inbox-page commit.
+    const journals=await this.query(sql,`SELECT item->>'key' AS key,row_to_json(p) AS put,row_to_json(m) AS metadata,
+        row_to_json(r) AS reservation,p.size AS put_size,m.size AS metadata_size
+      FROM jsonb_array_elements($1::text::jsonb) WITH ORDINALITY AS input(item,pos)
+      CROSS JOIN LATERAL (SELECT ${intentFields} FROM private.storage_put_intents WHERE object_key=item->>'key' FOR UPDATE) p
+      CROSS JOIN LATERAL (SELECT ${objectFields} FROM private.storage_objects WHERE object_key=item->>'key' FOR UPDATE) m
+      CROSS JOIN LATERAL (SELECT ${reservationFields} FROM private.storage_payload_reservations WHERE object_key=item->>'key' FOR UPDATE) r
+      WHERE NOT EXISTS (SELECT 1 FROM app.privacy_retention_barriers WHERE subject_id=item->>'owner')
+        AND NOT EXISTS (SELECT 1 FROM private.storage_delete_intents WHERE object_key=item->>'key')
+      ORDER BY pos`,[input]);
+    check(journals.length===targets.length);
+    const verified=[];
+    for(const [i,{key,expect}] of targets.entries()){
+      check(journals[i].key===key);
+      verified.push(await this.#validateKeyedJournal(key,expect,journals[i]));
+    }
+    return verified;
+  }
+
+  #validateKeyedJournal(key,expect,journal){
     // Keep the driver's original int8 representation in both journal views.
     journal.put.size=journal.put_size;
     journal.metadata.size=journal.metadata_size;
