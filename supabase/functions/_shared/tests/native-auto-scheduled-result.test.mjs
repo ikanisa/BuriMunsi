@@ -54,7 +54,15 @@ test('the standalone signed cycle only parses and records Payments even with old
  for (const key of ['notifications','native_sms_ledger','payment_receipt_sms','canonical_processing','native_financial_work']) {
   assert.equal(Object.hasOwn(result.body,key),false);
  }
+ const withAllocation = await runEdgeJobCycle({...env,BURIMUNSI_PAYMENT_SMS_ENABLED:'false',BURIMUNSI_ALLOCATION_SMS_ENABLED:'true'},
+  payload,dispatch,{allowed:true,enabled:true,admission:native},{...workers,processAllocationSms:async()=>{
+   calls.push('allocated');return {status:'complete',processed:1,outcome:'accepted',gateway_state:'delivered'};
+  }});
+ assert.equal(withAllocation.status,200);
+ assert.deepEqual(withAllocation.body.allocation_receipt_sms,{status:'complete',processed:1,outcome:'accepted',gateway_state:'delivered'});
+ assert.equal(Object.hasOwn(withAllocation.body,'payment_receipt_sms'),false);
+ assert.deepEqual(calls,['parse','parse','allocated']);
  const denied = await runEdgeJobCycle(env,payload,{...dispatch,processing:{}},{allowed:true,enabled:true,admission:native},workers);
  assert.equal(denied.status,503);
- assert.deepEqual(calls,['parse']);
+ assert.deepEqual(calls,['parse','parse','allocated']);
 });

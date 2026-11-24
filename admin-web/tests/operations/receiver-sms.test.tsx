@@ -24,6 +24,16 @@ describe('BuriMunsi receiver observations',()=>{
     expect(screen.queryByRole('button',{name:'Review source'})).not.toBeInTheDocument();
     expect(fixture.request.mock.calls[1][0]).toBe('momo/observations?collectionId=first-group&limit=25&includeProcessing=1');
   });
+  it('shows the original payer delivery status for an allocation on the standalone M-Money page',async()=>{
+    fixture.request.mockImplementation(async path=>path==='momo/observations/collections'?
+      {contractVersion:1,asOf:time,items:[{collectionId:group,label:'Test group'}]}:
+      {...page,items:[{...page.items[0],processing:'parsed',paymentReference:null,payerStatus:'delivered'}]});
+    render(<MemoryRouter><ReceiverSmsPanel simplePayments /></MemoryRouter>);
+    const records=await screen.findByRole('region',{name:'Android receiver observations'});
+    expect(within(records).getByText('Parsed')).toBeVisible();
+    expect(within(records).getByText('Reported delivered')).toBeVisible();
+    expect(within(records).queryByText('Payment reference')).not.toBeInTheDocument();
+  });
   it('expires a fresh inbox match at five minutes even without a new response',async()=>{
     vi.useFakeTimers();
     const asOf='2026-11-22T10:04:58.000Z';

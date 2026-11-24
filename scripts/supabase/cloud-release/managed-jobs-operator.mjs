@@ -61,13 +61,20 @@ const paymentsMigrations={
   payments_migration:'20261124114500_burimunsi_payments.sql',
   payment_record_migration:'20261124114501_burimunsi_record_payments.sql',
 };
-export const paymentsMigrationHistorySql=Object.entries(paymentsMigrations).map(([field,file])=>
+const allocationMigration='20261124114502_burimunsi_allocation_receipts.sql';
+export const paymentsMigrationHistorySql=Object.entries({...paymentsMigrations,allocation_receipt_migration:allocationMigration}).map(([field,file])=>
   `(SELECT encode(sha256(convert_to(statements[1],'UTF8')),'hex') FROM supabase_migrations.schema_migrations
     WHERE version='${file.slice(0,14)}') AS ${field}`).join(',\n ');
 export function paymentsRecordingInstalled(row){
  const entries=Object.entries(paymentsMigrations);
  if(entries.every(([field])=>row[field]==null))return false;
  if(entries.some(([field,file])=>row[field]!==sha(readFileSync(new URL('../../../supabase/migrations/'+file,import.meta.url)))))
+  throw Error('scheduler_migration_changed');
+ return true;
+}
+export function allocationReceiptsInstalled(row) {
+ if(row.allocation_receipt_migration==null)return false;
+ if(!paymentsRecordingInstalled(row)||row.allocation_receipt_migration!==sha(readFileSync(new URL('../../../supabase/migrations/'+allocationMigration,import.meta.url))))
   throw Error('scheduler_migration_changed');
  return true;
 }
@@ -250,6 +257,11 @@ export function verifyNativeBudget(pre,r,now=Date.now()){
 }
 function verifyMode(pre,r,native){
  if(r.project_ref!==PROJECT||r.endpoint!==`https://${PROJECT}.supabase.co/functions/v1/collect-jobs`)throw Error('readiness_project_changed');
+ if(allocationReceiptsInstalled(pre.row)&&
+    (pre.secrets.get('BURIMUNSI_ALLOCATION_SMS_ENABLED')!==sha('true')||
+     pre.secrets.get('BURIMUNSI_COLLECTION_ID')!==pre.secrets.get('BURIMUNSI_PAYMENT_SMS_COLLECTION_ID')||
+     !pre.secrets.has('BURIMUNSI_PAYMENT_SMS_ENABLED_AT')||pre.secrets.get('COLLECT_RECEIPT_SMS_ENABLED')!==sha('true')))
+  throw Error('allocation_receipt_config_not_qualified');
  if(paymentsRecordingInstalled(pre.row)&&pre.secrets.get('BURIMUNSI_PAYMENT_SMS_ENABLED')!==sha('false'))
   throw Error('native_config_not_qualified');
  if(native){verifyNativeBudget(pre,r);const a=r.native_sms_admission;if(a.source_sha256!==pre.source||pre.secrets.get('BURIMUNSI_NATIVE_AUTO_TRANSACTIONS_ENABLED')!==sha('true')||

@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
 import {PROJECT, ROOT, management, record, sha} from './access.mjs';
-import {parseManagedReadiness,paymentsMigrationHistorySql,paymentsRecordingInstalled} from './managed-jobs-operator.mjs';
+import {parseManagedReadiness,paymentsMigrationHistorySql,paymentsRecordingInstalled,allocationReceiptsInstalled} from './managed-jobs-operator.mjs';
 
 const digest = /^[0-9a-f]{64}$/;
 const slug = /^[a-z0-9][a-z0-9-]{0,50}$/;
@@ -76,10 +76,11 @@ function checkSettings(x) {
     COLLECT_JOB_AUTH_MODE:'supabase_dispatch_hmac_v1',BURIMUNSI_PRODUCT_MODE:'standalone',
     BURIMUNSI_NATIVE_AUTO_TRANSACTIONS_ENABLED:'true',MOMO_AI_ENABLED:'true',MOMO_AI_MODEL:s.model,
     MOMO_PROCESSING_PAUSED:'true',COLLECT_SMS_ENABLED:'true',COLLECT_SMS_DISPATCH_PAUSED:'false',
-    BURIMUNSI_PAYMENT_SMS_ENABLED:recordsPayments?'false':'true'};
+    BURIMUNSI_PAYMENT_SMS_ENABLED:recordsPayments?'false':'true',
+    ...(allocationReceiptsInstalled(s)?{BURIMUNSI_ALLOCATION_SMS_ENABLED:'true',COLLECT_RECEIPT_SMS_ENABLED:'true'}:{})};
   must(Object.entries(expected).every(([k,v])=>x.keys.get(k)===sha(v)) && x.keys.has('OPENAI_API_KEY') &&
     x.keys.get('BURIMUNSI_COLLECTION_ID')===s.scope_digest &&
-    (recordsPayments||x.keys.get('BURIMUNSI_PAYMENT_SMS_COLLECTION_ID')===s.scope_digest) &&
+    ((recordsPayments&&!allocationReceiptsInstalled(s))||x.keys.get('BURIMUNSI_PAYMENT_SMS_COLLECTION_ID')===s.scope_digest) &&
     s.key_count===1 && digest.test(s.vault_digest) && x.keys.get('COLLECT_JOB_SIGNING_KEY')===s.vault_digest,
     'edge_settings_or_scheduler_key_changed');
 }
