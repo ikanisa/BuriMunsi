@@ -13,7 +13,12 @@ export const receiptSources = [
   {id: 'android', label: 'Android receiver'}, {id: 'app', label: 'App uploads'}, {id: 'member', label: 'Member submitted'},
 ] as const;
 
-type PaymentAccess = Pick<AdminUser, 'role' | 'permissions'>;
+type PaymentAccess = Pick<AdminUser, 'role' | 'permissions' | 'authMethod'>;
+
+export function canReadMemberReceipts(access: PaymentAccess): boolean {
+  return access.permissions.includes('payments.read') &&
+    (access.authMethod !== 'phone_passcode' || canReadSmsEvidence(access));
+}
 
 export function canOpenPaymentView(view: PaymentView, access: PaymentAccess) {
   const {permissions} = access;
@@ -23,7 +28,7 @@ export function canOpenPaymentView(view: PaymentView, access: PaymentAccess) {
 }
 
 export function canOpenReceiptSource(source: ReceiptSource, access: PaymentAccess) {
-  return source === 'member' ? access.permissions.includes('payments.read') : canReadSmsEvidence(access);
+  return source === 'member' ? canReadMemberReceipts(access) : canReadSmsEvidence(access);
 }
 
 export function paymentViewLocation(view: PaymentView, options?: {source?: ReceiptSource; momo?: boolean}) {

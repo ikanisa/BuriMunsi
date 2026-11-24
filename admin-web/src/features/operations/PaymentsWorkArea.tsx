@@ -19,7 +19,7 @@ export function PaymentsWorkArea(access: FeatureAccess) {
   const session = useSession(), [params] = useSearchParams();
   // Reuse the session presentation fence and keep each child under its own read permission.
   const permissions = canDisplaySessionRecords(session) ? access.permissions : [];
-  const authority = {role: access.role, permissions};
+  const authority = {role: access.role, permissions, authMethod: session.user?.authMethod};
   const canReadSms = canReadSmsEvidence(authority);
   const views = paymentViews.filter(({id}) => canOpenPaymentView(id, authority));
   const requested = params.get('view');
