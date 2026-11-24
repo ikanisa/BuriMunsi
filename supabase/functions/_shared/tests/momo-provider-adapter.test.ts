@@ -203,7 +203,9 @@ fencedTest({name:'actual Supabase MoMo model adapter: controlled HTTP, fail-clos
   });
   await t.step('a non-byte stream chunk is refused and cancelled without a transparent retry',async()=>{
    let cancels=0;
-   await fixture({},()=>new Response(new ReadableStream({pull(controller){controller.enqueue('not bytes');},cancel(){cancels++;}},{highWaterMark:0})),async f=>{
+   // Model the malformed boundary before asserting its runtime rejection.
+   const malformed=new ReadableStream<unknown>({pull(controller){controller.enqueue('not bytes');},cancel(){cancels++;}},{highWaterMark:0});
+   await fixture({},()=>new Response(malformed as ReadableStream<Uint8Array>),async f=>{
     await assert.rejects(f.run,apiError('ai_response_unavailable'));assert.equal(cancels,1);assert.equal(f.calls(),1);
     assert.equal((await f.work.finish()).uncertainDispatches,1);
    });
