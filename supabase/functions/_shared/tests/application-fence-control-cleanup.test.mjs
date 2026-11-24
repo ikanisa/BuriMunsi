@@ -9,6 +9,74 @@ const SOURCE='a'.repeat(64),ID='11111111-1111-4111-8111-111111111111';
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return{promise,resolve,reject};};
 
+function registrationFixture(respond, signal) {
+ const calls=[];
+ const business={begin:async (_isolation,run)=>run({unsafe:async (text,values)=>{
+  if(!text.includes('private.collect_fence_register')) return [];
+  calls.push([...values]);
+  return [{result:await respond(calls.length)}];
+ }})};
+ const control={reserve(){throw Error('registration must not start business work');}};
+ const backend=sqlFenceBackend(business,control,undefined,signal);
+ return {calls,register:()=>backend.register(ID,SOURCE,'http_admin')};
+}
+const saturated=()=>Object.assign(Error('burimunsi_read_capacity'),{code:'55000'});
+
+test('a standalone read waits for transient capacity using its original registration ID',async()=>{
+ const f=registrationFixture(attempt=>{if(attempt===1)throw saturated();return {admitted:true};},new AbortController().signal);
+ assert.deepEqual(await f.register(),{admitted:true});
+ assert.deepEqual(f.calls,[[ID,SOURCE,'http_admin'],[ID,SOURCE,'http_admin']]);
+});
+
+test('ordinary admissions, unknown outcomes, cancellation and other database refusals do not retry',async()=>{
+ const controller=new AbortController();
+ const scenarios=[
+  {error:saturated()},
+  {error:Error('lost commit acknowledgement'),signal:controller.signal},
+  {error:Object.assign(Error('collect_fence_closed'),{code:'55000'}),signal:controller.signal},
+  {error:Object.assign(Error('collect_fence_capacity'),{code:'55000'}),signal:controller.signal},
+  {error:Object.assign(Error('burimunsi_read_capacity'),{code:'08006'}),signal:controller.signal},
+  {error:saturated(),signal:controller.signal,cancel:true},
+ ];
+ for(const scenario of scenarios){
+  const f=registrationFixture(()=>{if(scenario.cancel)controller.abort();throw scenario.error;},scenario.signal);
+  await assert.rejects(f.register(),error=>error===scenario.error);
+  assert.equal(f.calls.length,1);
+ }
+});
+
+test('aborting a waiting read cancels its next registration',async()=>{
+ const controller=new AbortController();
+ const f=registrationFixture(()=>{throw saturated();},controller.signal);
+ const rejected=assert.rejects(f.register(),{code:'application_fence_unavailable'});
+ await tick();
+ controller.abort();
+ await rejected;
+ assert.equal(f.calls.length,1);
+});
+
+test('a read observes one five-second deadline across attempts and never repeats an uncertain registration',async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});
+ const second=deferred(),controller=new AbortController();
+ const f=registrationFixture(n=>{if(n===1)throw saturated();return second.promise;},controller.signal);
+ let observed=false;
+ const rejected=assert.rejects(f.register(),{code:'application_fence_unavailable'}).then(()=>{observed=true;});
+ await tick();
+ t.mock.timers.tick(300);
+ await tick();
+ assert.equal(f.calls.length,2);
+ t.mock.timers.tick(4699);
+ await tick();
+ assert.equal(observed,false);
+ t.mock.timers.tick(1);
+ await rejected;
+ second.reject(Error('registration commit acknowledgement lost'));
+ await tick();
+ t.mock.timers.tick(5000);
+ await tick();
+ assert.equal(f.calls.length,2);
+});
+
 // Fake wire only: the real sqlFenceBackend owns every BEGIN/ROLLBACK/reserve and
 // real openApplicationWork owns register/close. This is not native PG proof.
 function fixture({begin=async()=>[],rollback=async()=>[],role=async()=>[],verifyAdmission}={}){

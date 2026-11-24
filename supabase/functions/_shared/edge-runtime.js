@@ -23,10 +23,11 @@ export class EdgeRuntimeWork {
     }
   }
 
-  async admit(env, openWork, kind, signal) {
+  async admit(env, openWork, kind, signal, waitForReadCapacity = false) {
     this.stage = 'fence_admission';
     this.work = await openWork({
-      backend: sqlFenceBackend(env.DB.sql, fenceConnection(env.COLLECT_DATABASE_URL, env), this.beforeRegister),
+      backend: sqlFenceBackend(env.DB.sql, fenceConnection(env.COLLECT_DATABASE_URL, env), this.beforeRegister,
+        waitForReadCapacity ? signal : undefined),
       sourceSha256: env.BUILD_SOURCE_ID,
       kind,
       ...(signal === undefined ? {} : {signal}),

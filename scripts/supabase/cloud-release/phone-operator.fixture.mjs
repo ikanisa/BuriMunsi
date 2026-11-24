@@ -191,7 +191,7 @@ export async function verifyPhoneOperatorAccounts({owner,database,fixtureRoot,ph
       '20261122191000_burimunsi_sms_completeness.sql','20261122191100_burimunsi_payment_sms_obligations.sql',
       '20261122191200_burimunsi_known_device_login_budget.sql','20261122191300_burimunsi_event_driven_jobs.sql',
       '20261122200000_burimunsi_admin_handset_intake.sql','20261122201000_burimunsi_admin_inbox_coverage.sql',
-      '20261122202000_burimunsi_current_admin_inbox_authority.sql'])await owner.query(await migration(name));
+      '20261122202000_burimunsi_current_admin_inbox_authority.sql','20261124080000_burimunsi_read_admission.sql'])await owner.query(await migration(name));
   }
   await owner.query('SELECT private.collect_fence_release_v3($1,$2,$3)',[randomUUID(),state.epoch,state.source_sha256]);
   await admitted(owner,'http_collect',async db=>{
@@ -221,7 +221,10 @@ export async function verifyPhoneOperatorAccounts({owner,database,fixtureRoot,ph
   }
   let smsHealth;
   try { smsHealth=await qualifyBrowserReads(pool,state.source_sha256,originalCookie,phoneSmsHealth?installSmsScopeRepair:undefined); } finally { await pool.end(); }
-  if(phoneSmsHealth)await owner.query(await fixture('burimunsi-phone-sms-read-scope.sql'));
+  if(phoneSmsHealth){
+    await owner.query(await fixture('burimunsi-phone-sms-read-scope.sql'));
+    await owner.query(await fixture('burimunsi-screen-read-capacity.sql'));
+  }
   assert.deepEqual(await receiverState(),originalReceiver);
   return {existingBrowserSession:true,existingNativeSession:true,phoneAccountLifecycle:true,adminAndStaffGroupsAndPayments:true,unchangedDisabledReceiver:true,...(smsHealth?{smsHealth}:{})};
 }
