@@ -167,6 +167,36 @@ export async function qualifyNativeReads({pool, admissionPool, inspect, source})
     });
   });
   console.log('PASS read-only context, nested snapshot, write refusal and rollback on the same postgres.js connection');
+
+  const scopeSettings = `SELECT current_user AS role, current_setting('statement_timeout') AS statement_limit,
+    current_setting('lock_timeout') AS lock_limit, current_setting('search_path') AS path,
+    current_setting('request.jwt.claims',true) AS claims, current_setting('collect.edge_verified',true) AS verified`;
+  for (const wrongMode of ['BEGIN ISOLATION LEVEL REPEATABLE READ READ WRITE','BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY']) {
+    await admitted(async db => {
+      let before,atRollback;
+      const wrongModePool = {async reserve() {
+        const connection = await pool.reserve();
+        const tx = (...args) => connection(...args);
+        tx.unsafe = async (text,...values) => {
+          if (text === 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY') {
+            const result = await connection.unsafe(wrongMode);
+            [before] = await connection.unsafe(scopeSettings);
+            return result;
+          }
+          if (text === 'ROLLBACK') [atRollback] = await connection.unsafe(scopeSettings);
+          return connection.unsafe(text,...values);
+        };
+        tx.release = () => connection.release();
+        return tx;
+      }};
+      const restricted = new PostgresDatabase(wrongModePool,{sub:'wrong_mode_fixture'},db.applicationWork);
+      await assert.rejects(restricted.withNativeReadSnapshot(() => assert.fail('wrong-mode read was dispatched')),
+        {code:'application_fence_unavailable'});
+      assert.ok(before && atRollback);
+      assert.deepEqual({...atRollback},{...before},'a rejected mode must install no role, claims or local settings');
+    });
+  }
+  console.log('PASS wrong native isolation and writable mode install no scope before rollback');
   for (const account of accounts) {
     for (const [state, ttl] of [['current',1800000], ['due',45000], ['expired',2500]]) {
       const actor = await issue(account, ttl);

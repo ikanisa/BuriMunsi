@@ -64,23 +64,25 @@ export class PostgresTransactions {
     const work = this.applicationWork;
     if (!work) throw fenceFailure(null);
     await work.assert();
-    const [mode] = await tx.unsafe("SELECT pg_catalog.current_setting('transaction_read_only') AS transaction_read_only,pg_catalog.current_setting('transaction_isolation') AS transaction_isolation");
-    if (mode?.transaction_read_only !== readOnly || mode?.transaction_isolation !== isolation) throw fenceFailure(null);
     const claims = JSON.stringify(this.claims);
     if (native && work.kind === 'http_collect') {
-      // The mode check above must finish before installing any scope. These
-      // transaction-local settings need one acknowledgement before reading.
+      // A mode mismatch produces no row, so none of the transaction-local
+      // settings are applied. The consumer runs only after the role is confirmed.
       const [setup] = await tx`SELECT
         pg_catalog.set_config('role','collect_runtime',true) AS runtime_role,
         pg_catalog.set_config('statement_timeout','15s',true),
         pg_catalog.set_config('lock_timeout','5s',true),
         pg_catalog.set_config('search_path','app,public,pg_catalog',true),
         pg_catalog.set_config('request.jwt.claims',${claims},true),
-        pg_catalog.set_config('collect.edge_verified','true',true)`;
+        pg_catalog.set_config('collect.edge_verified','true',true)
+        WHERE pg_catalog.current_setting('transaction_read_only') = 'on'
+          AND pg_catalog.current_setting('transaction_isolation') = 'repeatable read'`;
       if (setup?.runtime_role !== 'collect_runtime') throw fenceFailure(null);
       await this.#applyBrowserPasscode(tx);
       return;
     }
+    const [mode] = await tx.unsafe("SELECT pg_catalog.current_setting('transaction_read_only') AS transaction_read_only,pg_catalog.current_setting('transaction_isolation') AS transaction_isolation");
+    if (mode?.transaction_read_only !== readOnly || mode?.transaction_isolation !== isolation) throw fenceFailure(null);
     await tx.unsafe(runtimeSetup);
     if (work.kind === 'http_admin') {
       const [id, epoch, source] = applicationWorkTuple(work);

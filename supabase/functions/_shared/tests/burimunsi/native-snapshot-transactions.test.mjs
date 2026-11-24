@@ -14,8 +14,9 @@ async function database({readOnly='on',isolation='repeatable read',role='collect
   function execute(text,values=[]) {
     calls.push({text,values});
     if(text===failed || (rollbackFails && text==='ROLLBACK')) throw Error('simulated query failure');
-    if(text.includes("current_setting('transaction_read_only')")) return [{transaction_read_only:readOnly,transaction_isolation:isolation}];
-    if(text.includes("set_config('role','collect_runtime',true)")) return [{runtime_role:role}];
+    if(text.includes("set_config('role','collect_runtime',true)")) {
+      return readOnly==='on' && isolation==='repeatable read' ? [{runtime_role:role}] : [];
+    }
     return [];
   }
   const tx=(parts,...values)=>execute(parts.join('?'),values);
@@ -33,13 +34,13 @@ test('native read starts in the required mode and installs its role and bound cl
     assert.throws(()=>db.transaction(()=>{}),/read_snapshot_cannot_write/);
     await tx.unsafe('SELECT 1');
   });
-  assert.equal(calls.length,5);
+  assert.equal(calls.length,4);
   assert.equal(calls[0].text,begin);
-  assert.match(calls[1].text,/transaction_read_only.*transaction_isolation/);
+  assert.match(calls[1].text,/WHERE pg_catalog\.current_setting\('transaction_read_only'\) = 'on'\s+AND pg_catalog\.current_setting\('transaction_isolation'\) = 'repeatable read'/);
   for(const field of ['role','statement_timeout','lock_timeout','search_path','request.jwt.claims','collect.edge_verified']) {
-    assert.ok(calls[2].text.includes("set_config('"+field+"'"),field);
+    assert.ok(calls[1].text.includes("set_config('"+field+"'"),field);
   }
-  assert.deepEqual(calls[2].values,[JSON.stringify(claims)]);
+  assert.deepEqual(calls[1].values,[JSON.stringify(claims)]);
   assert.deepEqual(calls.slice(-2).map(call=>call.text),['SELECT 1','COMMIT']);
   assert.deepEqual(releases,['COMMIT']);
 });
@@ -52,7 +53,7 @@ test('unexpected read mode or runtime role rolls back before dispatch',async()=>
     assert.equal(ran,false);
     assert.equal(calls.at(-1).text,'ROLLBACK');
     assert.deepEqual(releases,['ROLLBACK']);
-    if(options.role===undefined) assert.equal(calls.length,3);
+    assert.equal(calls.length,3);
   }
 });
 
