@@ -243,19 +243,15 @@ try {
   assert.equal(await memberSearch.inputValue(), fixtureMember.display_name);
 
   await nav.getByRole('link', {name: 'Payments', exact: true}).click();
-  const paymentSearch = page.getByLabel('Search payments', {exact: true});
-  await paymentSearch.fill(fixturePayment.ftId);
-  const filteredMomoResult = page.waitForResponse(response => {
-    const url = new URL(response.url());
-    return url.origin === origin && url.pathname === '/api/admin/burimunsi/payments' &&
-      url.searchParams.get('q') === fixturePayment.ftId && response.ok();
-  });
-  await page.getByRole('button', {name: 'Search', exact: true}).click();
-  await filteredMomoResult;
+  await page.getByRole('button', {name: 'Filter FT reference', exact: true}).click();
+  const paymentFilter = page.getByRole('dialog', {name: 'Filter FT reference', exact: true});
+  await paymentFilter.getByRole('searchbox', {name:'Contains', exact:true}).fill(fixturePayment.ftId);
+  await paymentFilter.getByRole('button', {name:'Apply filter', exact:true}).click();
+  assert.equal(await page.getByRole('button', {name: fixtureOutgoingPayment.ftId, exact:true}).count(), 0);
   const chosenPayment = page.getByRole('button', {name: fixturePayment.ftId, exact: true});
   await chosenPayment.click();
-  const paymentDetail = page.getByRole('dialog', {name: 'Payment details', exact: true});
-  await paymentDetail.getByRole('link', {name: 'Open M-Money SMS', exact: true}).waitFor();
+  const paymentDetail = page.getByRole('region', {name: 'Payment details', exact: true});
+  await paymentDetail.getByRole('region', {name:'Linked SMS', exact:true}).getByText('Parsed', {exact:true}).waitFor();
   await paymentDetail.getByText('Unallocated', {exact: true}).waitFor();
   await paymentDetail.getByRole('button', {name: 'Close', exact: true}).click();
   await paymentDetail.waitFor({state: 'hidden'});
@@ -264,7 +260,7 @@ try {
   await chosenPayment.click();
   await paymentDetail.getByText(fixturePayment.ftId, {exact: true}).waitFor();
   await paymentDetail.getByText('RWF 5,000', {exact: true}).waitFor();
-  assert.equal(await paymentDetail.getByRole('link', {name: 'Open M-Money SMS', exact: true}).count(), 0);
+  assert.equal(await paymentDetail.getByRole('region', {name:'Linked SMS', exact:true}).count(), 0);
   assert.equal(await paymentDetail.getByText(fixtureSmsEvidenceId, {exact: true}).count(), 0);
   await page.setViewportSize({width: 320, height: 640});
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
@@ -282,7 +278,8 @@ try {
   await page.goto(origin + '/#/admin/sms-receipts');
   await page.getByRole('heading', { name: 'Payments', level: 1, exact: true }).waitFor();
   await page.getByRole('button', { name: /retry|try again/i }).click();
-  const receiptRow = page.getByRole('table').getByRole('row').nth(1);
+  const receiptInbox = page.getByRole('region', {name:'M-Money SMS inbox', exact:true});
+  const receiptRow = receiptInbox.getByRole('table').getByRole('row').nth(1);
   await receiptRow.waitFor();
   const receiptCells = receiptRow.getByRole('cell');
   assert.match(await receiptCells.nth(1).innerText(), /\bParsed\b/);

@@ -1,0 +1,191 @@
+import {Fragment, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode} from 'react';
+import {Button, Dialog, Icon} from '../../ui';
+import {useFocusScope} from '../../ui/useFocusScope';
+import {analyzeFinancialRows, categoryChoices, describeColumnFilter, emptyFilter, formatAnalysisCell, hasCriteria, initialColumnFilters, rangeError,
+  type ColumnFilter, type FinancialColumn, type FinancialSort} from './financialAnalysisModel';
+import './financialAnalysis.css';
+
+export type {FinancialColumn, FinancialSort} from './financialAnalysisModel';
+export interface FinancialAnalysisTableProps<T> {
+  rows: readonly T[];
+  columns: readonly FinancialColumn<T>[];
+  rowKey: (row: T) => string;
+  initialSort?: FinancialSort;
+  initialFilters?: Readonly<Record<string,string>>;
+  expanded?: {key: string; content: ReactNode} | null;
+  label?: string;
+  pageSize?: number;
+  page?: number;
+  onPageChange?: (page: number) => void;
+  summary?: (matching: readonly T[]) => ReactNode;
+  actions?: ReactNode;
+}
+
+function FilterEditor<T>({column, rows, active, close, apply}: {
+  column: FinancialColumn<T>; rows: readonly T[]; active: ColumnFilter; close: () => void; apply: (filter: ColumnFilter) => void;
+}) {
+  const [draft,setDraft] = useState<ColumnFilter>(active);
+  const [error,setError] = useState('');
+  const formId = useId();
+  const options = useMemo(() => column.kind === 'category' ? categoryChoices(column,rows,active.choices) : [],[column,rows,active.choices]);
+  const update = (changes: Partial<ColumnFilter>) => {setDraft(current => ({...current,...changes})); setError('');};
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const invalid = rangeError(draft,column.kind);
+    if (invalid) {setError(invalid); return;}
+    apply(draft.presence === 'blank' ? {...emptyFilter,presence:'blank'} : {...draft,text:draft.text.trim()});
+  };
+  const range = column.kind === 'date' || column.kind === 'number';
+  return <Dialog open title={'Filter ' + column.label} onClose={close} footer={<>
+    <Button onClick={() => apply(emptyFilter)}>Clear filter</Button>
+    <Button onClick={close}>Cancel</Button>
+    <Button variant="primary" type="submit" form={formId}>Apply filter</Button>
+  </>}>
+    <form id={formId} className="financial-filter-form" onSubmit={submit}>
+      <label>Values<select className="admin-input" value={draft.presence}
+        onChange={event => update({presence:event.target.value as ColumnFilter['presence']})}>
+        <option value="any">All values</option><option value="blank">Blank only</option><option value="present">Non-blank only</option>
+      </select></label>
+      {draft.presence !== 'blank' && <>
+        {column.kind === 'text' && <label>Contains<input className="admin-input" type="search" autoComplete="off"
+          value={draft.text} onChange={event => update({text:event.target.value})} /></label>}
+        {range && <div className="financial-filter-range">
+          {(['min','max'] as const).map((key,index) => <label key={key}>
+            {column.kind === 'date' ? ['From','Through'][index] : ['Minimum','Maximum'][index]}
+            <input className="admin-input" type={column.kind} step={column.kind === 'number' ? 'any' : undefined}
+              value={draft[key]} onChange={event => update({[key]:event.target.value})}
+              aria-invalid={error ? true : undefined} aria-describedby={error ? formId + '-error' : undefined} />
+          </label>)}
+        </div>}
+        {column.kind === 'category' && <fieldset className="financial-filter-choices">
+          <legend>Match any selected value</legend>
+          {options.length ? options.map(option => <label key={option.value}><input type="checkbox" checked={draft.choices.includes(option.value)}
+            onChange={event => update({choices:event.target.checked ? [...draft.choices,option.value] : draft.choices.filter(value => value !== option.value)})} />
+            {option.label}</label>) : <p>No non-blank values.</p>}
+        </fieldset>}
+      </>}
+      {error && <p role="alert" id={formId + '-error'} className="admin-field-error">{error}</p>}
+    </form>
+  </Dialog>;
+}
+
+export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, initialFilters, expanded, label='Payment activity',
+    pageSize=25, page, onPageChange, summary, actions}: FinancialAnalysisTableProps<T>) {
+  const [sort,setSort] = useState(initialSort);
+  const [filters,setFilters] = useState(() => initialColumnFilters(columns,initialFilters));
+  const [editing,setEditing] = useState<string | null>(null);
+  const [navigation,setNavigation] = useState<{position:number; given?:number; revealed?:string}>({position:page ?? 1,given:page});
+  const [maximized,setMaximized] = useState(false);
+  const panel = useRef<HTMLDivElement>(null), expandControl = useRef<HTMLButtonElement>(null);
+  const instance = useId();
+  useFocusScope(maximized,panel,() => setMaximized(false),expandControl);
+  const matching = useMemo(() => analyzeFinancialRows(rows,columns,filters,sort),[rows,columns,filters,sort]);
+  const size = Number.isSafeInteger(pageSize) && pageSize > 0 ? pageSize : 25;
+  const count = Math.max(1,Math.ceil(matching.length / size));
+  const selected = expanded?.key;
+  const selectedIndex = selected && selected !== navigation.revealed ? matching.findIndex(row => rowKey(row) === selected) : -1;
+  const revealed = selected && selectedIndex >= 0 ? selected : selected ? navigation.revealed : undefined;
+  const bookmark = Object.is(page,navigation.given) ? navigation.position : page ?? navigation.position;
+  const requested = selectedIndex >= 0 ? Math.floor(selectedIndex / size) + 1 : bookmark;
+  const current = Math.max(1,Math.min(count,Number.isFinite(requested) ? Math.trunc(requested) : 1));
+  if (navigation.position !== current || navigation.revealed !== revealed || !Object.is(navigation.given,page)) {
+    setNavigation({position:current,given:page,revealed});
+  }
+  const offset = (current - 1) * size;
+  const visible = matching.slice(offset,offset + size);
+  const activeColumns = columns.filter(column => filters.has(column.key));
+  const editor = columns.find(column => column.key === editing);
+  const changePage = (next: number) => {
+    if (page === undefined) setNavigation(previous => ({...previous,position:next}));
+    else if (next !== page) onPageChange?.(next);
+  };
+  const lastPage = useRef(1), corrected = useRef('');
+  useEffect(() => {
+    const correction = page === undefined || page === current ? '' : String(page) + '/' + current;
+    if (page === undefined && lastPage.current !== current || correction && corrected.current !== correction) onPageChange?.(current);
+    lastPage.current = current;
+    corrected.current = correction;
+  },[page,current,onPageChange]);
+  const apply = (column: string, filter: ColumnFilter) => {
+    setFilters(previous => {
+      const next = new Map(previous);
+      if (hasCriteria(filter)) next.set(column,filter); else next.delete(column);
+      return next;
+    });
+    setEditing(null);
+    changePage(1);
+  };
+  const clearAll = () => {setFilters(new Map()); changePage(1);};
+  const sortBy = (column: FinancialColumn<T>, direction: FinancialSort['direction']) => {
+    setSort({key:column.key,direction}); changePage(1);
+  };
+  const numberLabel = activeColumns.length ? matching.length + ' of ' + rows.length : rows.length;
+  return <div ref={panel} className={'financial-analysis' + (maximized ? ' financial-analysis--expanded' : '')}
+    role={maximized ? 'dialog' : undefined} aria-modal={maximized || undefined} aria-label={maximized ? label : undefined}>
+    <div className="financial-analysis-tools">
+      <span className="financial-analysis-count" role="status">{numberLabel} {rows.length === 1 ? 'record' : 'records'}</span>
+      <button ref={expandControl} type="button" className="financial-analysis-expand" onClick={() => setMaximized(value => !value)}
+        aria-label={maximized ? 'Restore table' : 'Expand table'} aria-expanded={maximized}>
+        <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d={maximized ?
+          'M2 7h5V2m6 0v5h5M2 13h5v5m6 0v-5h5' : 'M7 3H3v4m10-4h4v4M3 13v4h4m10-4v4h-4'} /></svg>
+        {maximized ? 'Restore' : 'Expand'}</button>
+      {actions}
+    </div>
+    {activeColumns.length > 0 && <div className="financial-analysis-filters" role="group" aria-label="Applied filters">
+      {activeColumns.map((column,index) => {
+        const criteria = describeColumnFilter(column,filters.get(column.key)!);
+        const descriptionId = instance + '-criteria-' + index;
+        return <button key={column.key} type="button" aria-label={'Edit ' + column.label + ' filter'} aria-describedby={descriptionId}
+          title={column.label + ' · ' + criteria} aria-haspopup="dialog" onClick={() => setEditing(column.key)}>
+          <span className="financial-analysis-chip">{column.label}{/^[=≥≤]/u.test(criteria) ? ' ' : ' · '}<span id={descriptionId}>{criteria}</span></span>
+          <Icon name="filter" /></button>;
+      })}
+      <button type="button" className="financial-analysis-clear" onClick={clearAll}>Clear all filters</button>
+    </div>}
+    <div className="financial-analysis-scroll" role="region" aria-label={label + ' table scroll area'} tabIndex={0}>
+      <table className="financial-analysis-grid" aria-label={label}>
+        <thead><tr>{columns.map((column,index) => {
+          const selectedSort = sort?.key === column.key ? sort.direction : undefined;
+          const next = selectedSort === 'asc' ? 'desc' : 'asc';
+          const filtered = filters.has(column.key), filteredId = instance + '-filtered-' + index;
+          return <th key={column.key} scope="col" aria-label={column.label}
+            className={column.align === 'end' || !column.align && column.kind === 'number' ? 'financial-analysis-number' : undefined}
+            aria-sort={selectedSort ? selectedSort === 'asc' ? 'ascending' : 'descending' : undefined}>
+            <div className="financial-analysis-heading">
+              <button type="button" className="financial-analysis-sort" onClick={() => sortBy(column,next)}
+                aria-label={'Sort ' + column.label + (next === 'asc' ? ' ascending' : ' descending')}>
+                {column.label}<span className="financial-analysis-sort-mark" data-direction={selectedSort} aria-hidden="true">
+                  {selectedSort === 'asc' ? '↑' : selectedSort === 'desc' ? '↓' : '↕'}</span>
+              </button>
+              <button type="button" className="financial-analysis-filter" data-filtered={filtered || undefined}
+                aria-label={'Filter ' + column.label} aria-haspopup="dialog" aria-expanded={editing === column.key}
+                aria-describedby={filtered ? filteredId : undefined} onClick={() => setEditing(column.key)}><Icon name="filter" /></button>
+              {filtered && <span className="financial-analysis-sr" id={filteredId}>Filter applied</span>}
+            </div>
+          </th>;
+        })}</tr></thead>
+        <tbody>{visible.map(row => {
+          const key = rowKey(row);
+          return <Fragment key={key}><tr>{columns.map(column => <td key={column.key}
+            className={column.align === 'end' || !column.align && column.kind === 'number' ? 'financial-analysis-number' : undefined}>
+            <div className="financial-analysis-value">{column.render ? column.render(row) : formatAnalysisCell(column,row)}</div>
+          </td>)}</tr>
+          {expanded?.key === key && <tr className="financial-analysis-detail-row"><td colSpan={columns.length}>
+            <div className="financial-analysis-detail">{expanded.content}</div>
+          </td></tr>}</Fragment>;
+        })}
+        {!visible.length && <tr><td colSpan={Math.max(1,columns.length)} className="financial-analysis-empty">
+          <span>{activeColumns.length ? 'No matching records.' : 'No records.'}</span></td></tr>}
+        </tbody>
+      </table>
+    </div>
+    {summary && <div className="financial-analysis-summary">{summary(matching)}</div>}
+    {count > 1 && <nav className="financial-analysis-pager" aria-label={label + ' pages'}>
+      <span>Page {current} of {count}</span>
+      <button type="button" aria-label="Previous page" disabled={current === 1} onClick={() => changePage(current - 1)}>Previous</button>
+      <button type="button" aria-label="Next page" disabled={current === count} onClick={() => changePage(current + 1)}>Next</button>
+    </nav>}
+    {editor && <FilterEditor key={editor.key} column={editor} rows={rows} active={filters.get(editor.key) ?? emptyFilter}
+      close={() => setEditing(null)} apply={filter => apply(editor.key,filter)} />}
+  </div>;
+}

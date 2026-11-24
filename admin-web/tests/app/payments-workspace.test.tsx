@@ -18,10 +18,11 @@ const momoId = '11111111-1111-4111-8111-111111111111';
 const accountId = '22222222-2222-4222-8222-222222222222';
 const momoRef = 'MOMO-FIXTURE-01';
 const time = '2026-10-18T08:00:00.000Z';
-const buriPayment = {id:momoId,version:1,direction:'incoming',amountRwf:5000,atRaw:time,ftId:momoRef,
-  payerNameRaw:'Fixture payer',memberId:null,memberName:null,state:'unallocated',sourceId:null};
-const outgoing = {...buriPayment,id:accountId,direction:'outgoing',ftId:'MOMO-OUT-FIXTURE'};
-const buriPage = (items: object[]) => ({items,totalCount:items.length,offset:0,limit:25,nextOffset:null,asOf:time});
+const buriPayment = {id:momoId,groupId:'fixture-group',version:1,direction:'incoming',amountRwf:5000,atRaw:time,ftId:momoRef,
+  payerNameRaw:'Fixture payer',payerPhoneRaw:'000071',memberId:null,memberName:null,memberPhone:null,state:'unallocated',sourceId:null};
+const outgoing = {...buriPayment,id:accountId,direction:'outgoing',ftId:'MOMO-OUT-FIXTURE',
+  state:'allocated',memberId:currentActor,memberName:'Fixture member'};
+const buriPage = (items: object[]) => ({items,totalCount:items.length,offset:0,limit:100,nextOffset:null,asOf:time});
 const paymentRef = '100000000123';
 const payment = {...coreFixture.transactions.rows[0],payment_reference:paymentRef};
 const momo = {id:momoId,receiving_account_id:accountId,provider_transaction_id:momoRef,recipient_name:'Fixture receiver',public_code:'123456',payer_name:'Fixture payer',
@@ -155,7 +156,7 @@ describe('consolidated Payments routes',()=>{
     const recorded=visit('/admin/payments',permissions,role);
     expect(await screen.findByRole('button',{name:momoRef})).toBeVisible();
     expect(screen.queryByRole('link',{name:'Member receipts'})).not.toBeInTheDocument();
-    expect(Boolean(screen.queryByRole('link',{name:'M-Money SMS'}))).toBe(allowed);
+    expect(Boolean(screen.queryByRole('button',{name:'M-Money SMS'}))).toBe(allowed);
     recorded.unmount();
     mock.request.mockClear();
     const compact=visit('/admin/payments?view=sms&source=member',permissions,role);
@@ -260,7 +261,7 @@ describe('BuriMunsi phone Payments', () => {
   it('shows both directions together and links recent Home payments to the same workspace', async () => {
     mock.authMethod = 'phone_passcode';
     mock.request.mockImplementation(async (path: string) => path === 'burimunsi/home'
-      ? {paymentCount:2,memberCount:5,unallocatedCount:2,recentPayments:[buriPayment,outgoing],asOf:time}
+      ? {paymentCount:2,memberCount:5,unallocatedCount:1,recentPayments:[buriPayment,outgoing],asOf:time}
       : buriPage([buriPayment,outgoing]));
     visit('/admin', ['overview.read','payments.read','reconciliations.read','ledger.read','sms.read'], 'staff');
     expect(await screen.findByRole('heading',{name:'Recent payments'})).toBeVisible();
@@ -270,11 +271,34 @@ describe('BuriMunsi phone Payments', () => {
     expect(called('momo/observations')).toHaveLength(0);
     fireEvent.click(screen.getByRole('link',{name:'View all payments'}));
     expect(await screen.findByRole('button',{name:'MOMO-OUT-FIXTURE'})).toBeVisible();
-    const filters = within(screen.getByRole('combobox',{name:'Status'}));
-    expect(filters.getAllByRole('option').map(option => option.textContent)).toEqual(['All statuses','Allocated','Unallocated']);
+    expect(screen.getByRole('columnheader',{name:'Counterparty number / code'})).toBeVisible();
+    expect(screen.queryByRole('columnheader',{name:'SMS evidence'})).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button',{name:'Filter Allocation'}));
+    const filters = within(screen.getByRole('dialog',{name:'Filter Allocation'}));
+    expect(filters.getByRole('checkbox',{name:'Allocated'})).not.toBeChecked();
+    expect(filters.getByRole('checkbox',{name:'Unallocated'})).not.toBeChecked();
     expect(called('core/overview')).toHaveLength(0);
     expect(canOpenAdminPath('/admin/ledgers',sessionUser())).toBe(false);
     expect(canOpenAdminPath('/admin/reconciliations',sessionUser())).toBe(false);
+  });
+
+  it('opens an old offset bookmark, sorts the complete set and opens a record from the last fetched page', async () => {
+    mock.authMethod = 'phone_passcode';
+    const rows = Array.from({length:105}, (_, i) => ({...buriPayment,id:'pay-' + i,ftId:'FT-' + i,amountRwf:105-i}));
+    mock.request.mockImplementation(async (path: string) => {
+      if (path === 'burimunsi/payments/pay-104') return rows[104];
+      const offset = Number(new URLSearchParams(path.split('?')[1]).get('offset'));
+      return {...buriPage(rows.slice(offset,offset+100)),offset,totalCount:rows.length,nextOffset:offset === 0 ? 100 : null};
+    });
+    visit('/admin/payments?offset=25',['payments.read'],'staff');
+    expect(await screen.findByRole('button',{name:'FT-25'})).toBeVisible();
+    fireEvent.click(screen.getByRole('button',{name:'Sort Amount (RWF) ascending'}));
+    fireEvent.click(await screen.findByRole('button',{name:'FT-104'}));
+    const detail = within(await screen.findByRole('region',{name:'Payment details'}));
+    expect(await detail.findByText('pay-104')).toBeVisible();
+    expect(called('burimunsi/payments?').map(([path]) => path)).toEqual([
+      'burimunsi/payments?limit=100&offset=0', 'burimunsi/payments?limit=100&offset=100',
+    ]);
   });
 
   it('loads the scoped Admin SMS health independently of Home payments', async () => {
@@ -297,6 +321,42 @@ describe('BuriMunsi phone Payments', () => {
     expect(screen.getByRole('link',{name:'M-Money SMS'})).toHaveAttribute('href','/admin/payments?view=sms');
   });
 
+  it('opens the exact collection-bound linked SMS inline and leaves independent evidence closed', async () => {
+    mock.authMethod = 'phone_passcode';
+    mock.scoped = true;
+    const linked = {...buriPayment,sourceId:accountId};
+    const evidence = (id: string, processing: string) => ({requestId:id,sourceId:id,admittedAt:time,retentionState:'retained',
+      bodySha256:'a'.repeat(64),processing,paymentReference:null,payerStatus:null,payerReason:null});
+    mock.request.mockImplementation(async (path: string) => {
+      if (path.startsWith('burimunsi/payments?')) return buriPage([linked]);
+      if (path === 'burimunsi/payments/'+momoId) return linked;
+      if (path === 'momo/observations/collections') return {contractVersion:1,asOf:time,items:[]};
+      const search = new URLSearchParams(path.split('?')[1]);
+      if (path.startsWith('momo/observations?') && search.get('collectionId') === 'fixture-group') {
+        const second = search.get('cursor') === 'next';
+        return {contractVersion:1,collectionId:'fixture-group',asOf:time,nextCursor:second ? null : 'next',
+          inboxCheck:{state:'unknown',checkedAt:null,candidateCount:null,missingCount:null,pendingCount:null,headsMatch:null},
+          items:[second ? evidence(accountId,'parsed') : evidence(momoId,'held')]};
+      }
+      throw new Error('Unexpected request');
+    });
+    visit('/admin/payments',['payments.read','sms.read']);
+    expect(await screen.findByRole('button',{name:'Review linked SMS'})).toBeVisible();
+    expect(called('momo/observations')).toHaveLength(0);
+    expect(screen.getByRole('button',{name:'M-Money SMS'})).toHaveAttribute('aria-expanded','false');
+    fireEvent.click(screen.getByRole('button',{name:'Review linked SMS'}));
+    const evidenceRegion = within(await screen.findByRole('region',{name:'Linked SMS'}));
+    expect(await evidenceRegion.findByText('Parsed')).toBeVisible();
+    expect(evidenceRegion.queryByText('Held for review')).not.toBeInTheDocument();
+    expect(called('momo/observations').map(([path]) => path)).toEqual([
+      'momo/observations?collectionId=fixture-group&limit=25&includeProcessing=1',
+      'momo/observations?collectionId=fixture-group&limit=25&includeProcessing=1&cursor=next',
+    ]);
+    fireEvent.click(screen.getByRole('button',{name:'M-Money SMS'}));
+    expect(screen.queryByRole('region',{name:'Payment details'})).not.toBeInTheDocument();
+    expect(await screen.findByText('No receiver collections are available for this account.')).toBeVisible();
+  });
+
   it('keeps the allocation intent after an uncertain response and updates the same payment', async () => {
     mock.authMethod = 'phone_passcode';
     const changed = {...buriPayment,version:2,memberId:accountId,memberName:'Group member',state:'allocated'};
@@ -313,11 +373,11 @@ describe('BuriMunsi phone Payments', () => {
     });
     visit('/admin/payments',['payments.read'],'staff');
     fireEvent.click(await screen.findByRole('button',{name:momoRef}));
-    const dialog = within(await screen.findByRole('dialog',{name:'Payment details'}));
+    const dialog = within(await screen.findByRole('region',{name:'Payment details'}));
     fireEvent.change(await dialog.findByLabelText('Member'),{target:{value:accountId}});
     fireEvent.click(dialog.getByRole('button',{name:'Allocate'}));
     fireEvent.click(await dialog.findByRole('button',{name:'Retry allocation'}));
-    expect(await dialog.findByText('Allocated')).toBeVisible();
+    await waitFor(() => expect(within(screen.getByRole('region',{name:'Payment details'})).getByText('Allocated')).toBeVisible());
     const writes = mock.request.mock.calls.filter(([path]) => path.endsWith('/allocate'));
     expect(writes).toHaveLength(2);
     expect(writes[0]).toEqual(writes[1]);

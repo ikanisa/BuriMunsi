@@ -74,9 +74,9 @@ export function readMomoList(params) {
 }
 
 export const fixturePayment = {
-  id: transactionId, version: 1, direction: 'incoming', amountRwf: providerFacts.amount_minor, atRaw: time,
-  ftId: providerFacts.provider_transaction_id, payerNameRaw: fixtureMember.display_name,
-  memberId: null, memberName: null, state: 'unallocated', sourceId: fixtureSmsEvidenceId, canAllocate: false,
+  id: transactionId, groupId: 'fixture-group', version: 1, direction: 'incoming', amountRwf: providerFacts.amount_minor, atRaw: time,
+  ftId: providerFacts.provider_transaction_id, payerNameRaw: fixtureMember.display_name, payerPhoneRaw: '000071',
+  memberId: null, memberName: null, memberPhone:null, state: 'unallocated', sourceId: fixtureSmsEvidenceId, canAllocate: false,
 };
 export const fixtureOutgoingPayment = {
   ...fixturePayment, id: '94949494-9494-4494-8494-949494949494', direction: 'outgoing', ftId: 'MOMO-SYNTHETIC-OUT', sourceId: null,
@@ -84,7 +84,7 @@ export const fixtureOutgoingPayment = {
 export function readBuriMunsiPayments(params, sms) {
   const q = (params.get('q') ?? '').toLowerCase(), status = params.get('status'), direction = params.get('direction');
   const limit = Number(params.get('limit')), offset = Number(params.get('offset') ?? 0);
-  if (limit !== 25 || !Number.isSafeInteger(offset) || offset < 0) return null;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(offset) || offset < 0 || offset > 100_000) return null;
   const matching = [fixturePayment, fixtureOutgoingPayment].filter(item =>
     (!status || item.state === status) && (!direction || item.direction === direction) &&
     (!q || `${item.ftId} ${item.payerNameRaw}`.toLowerCase().includes(q)));

@@ -25,6 +25,12 @@
 .admin-profile-menu button, .admin-profile-destination, .admin-profile-more summary { display: flex; align-items: center; gap: 8px; min-height: 42px; margin-top: 4px; padding: 8px; border: 0; border-radius: 8px; color: var(--admin-ink); background: transparent; text-align: left; }
 .admin-profile-menu button:hover, .admin-profile-destination:hover, .admin-profile-more summary:hover { background: var(--admin-surface-soft); }
 .admin-content { width: 100%; max-width: 1640px; margin: 0 auto; padding: 31px 38px 72px; }
+.admin-content:has(.payments-workspace) {
+  max-width: none;
+  padding-block-start: clamp(1rem, 1.5vw, 1.5rem);
+  padding-inline: clamp(.75rem, 1.3vw, 1.5rem);
+}
+.payments-workspace > .admin-page-heading { margin-block-end: 1rem; }
 
 .admin-profile-more summary { display: list-item; list-style-position: inside; cursor: pointer; }
 .admin-profile-more a { margin-left: 10px; }

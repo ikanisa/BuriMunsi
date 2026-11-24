@@ -1,0 +1,6 @@
+.payment-flow-totals { padding: .625rem .875rem; color: var(--admin-ink); }
+.payment-flow-totals dl { display: flex; flex-wrap: wrap; gap: .375rem 1.75rem; margin: 0; }
+.payment-flow-totals dl > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem .45rem; min-inline-size: 0; }
+.payment-flow-totals dt, .payment-flow-totals p { color: var(--admin-muted); font-size: .75rem; }
+.payment-flow-totals dd { margin: 0; font-size: .8125rem; font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.payment-flow-totals p { margin: .375rem 0 0; }
