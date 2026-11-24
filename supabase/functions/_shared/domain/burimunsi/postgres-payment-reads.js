@@ -97,15 +97,15 @@ function validHomeZone(column) {
 }
 
 export async function readCanonicalHome(sql,g,at,auto) {
-  // Check the same source-grounded timestamps before paying for the full
-  // role-aware projection of the three receipts displayed on Home.
+  // The activity preview and ledger totals have different scopes. Check
+  // source-grounded times before projecting the three recent transactions.
   const nativeTimes = auto ? `native_times AS MATERIALIZED (
     SELECT * FROM private.burimunsi_home_payment_times($1, ARRAY(
-      SELECT DISTINCT c.native_source_id FROM credited c WHERE c.native_source_id IS NOT NULL
+      SELECT DISTINCT a.native_source_id FROM activity a WHERE a.native_source_id IS NOT NULL
     ))
   ),` : '';
-  const recentAt = auto ? 'coalesce(n.transaction_at,t.transaction_at)' : 't.transaction_at';
-  const recentZone = auto ? 'coalesce(n.transaction_timezone,t.transaction_timezone)' : 't.transaction_timezone';
+  const recentAt = auto ? 'coalesce(n.transaction_at,a.transaction_at)' : 'a.transaction_at';
+  const recentZone = auto ? 'coalesce(n.transaction_timezone,a.transaction_timezone)' : 'a.transaction_timezone';
   const rows=await sql.unsafe(`WITH credited AS MATERIALIZED (${creditedSql(auto)}),
     zones AS MATERIALIZED (SELECT name FROM pg_timezone_names),
     totals AS (SELECT coalesce(sum(amount_minor),0) AS balance FROM app.ledger_entries WHERE collection_id=$1),
@@ -128,15 +128,21 @@ export async function readCanonicalHome(sql,g,at,auto) {
      AND EXISTS(SELECT 1 FROM app.memberships m WHERE m.collection_id=x.collection_id AND m.user_id=p.member_id)),false) AS posted
      FROM app.ledger_entries l WHERE l.payment_id=p.id AND l.collection_id=x.collection_id) credit ON true
     WHERE x.collection_id=$1${managedOnly(auto)} AND ${UNALLOCATED_INCOMING}),
+    activity AS MATERIALIZED (
+      SELECT x.transaction_id,x.native_source_id,t.transaction_at,t.transaction_timezone
+      FROM private.burimunsi_transaction_scopes x
+      JOIN app.momo_transactions t ON t.id=x.transaction_id AND t.receiving_account_id=x.receiving_account_id
+      WHERE x.collection_id=$1
+    ),
     ${nativeTimes}
     recent_times AS (
-      SELECT c.transaction_id,c.credited_amount,
+      SELECT a.transaction_id,c.credited_amount,
         CASE WHEN ${recentAt} ~ '(Z|[+-][0-9]{2}:[0-9]{2})$'
           AND pg_input_is_valid(${recentAt},'timestamp with time zone')
           AND ${validHomeZone(recentZone)}
         THEN ${recentAt}::timestamptz END AS ordered_at
-      FROM credited c JOIN app.momo_transactions t ON t.id=c.transaction_id
-      ${auto?'LEFT JOIN native_times n ON n.source_id=c.native_source_id':''}
+      FROM activity a LEFT JOIN credited c ON c.transaction_id=a.transaction_id
+      ${auto?'LEFT JOIN native_times n ON n.source_id=a.native_source_id':''}
     ),
     recent_ids AS MATERIALIZED (
       SELECT transaction_id,credited_amount,ordered_at FROM recent_times
@@ -155,7 +161,10 @@ export async function readCanonicalHome(sql,g,at,auto) {
     memberCount:pgInteger(summary.members),
     unallocatedCount:pgInteger(summary.unallocated),
     unallocatedAmountRwf:pgInteger(summary.unallocated_amount),
-    recentPayments:rows.filter(row=>row.id!=null).map(row=>projectPayment({...row,amount_minor:row.credited_amount})),
+    recentPayments:rows.filter(row=>row.id!=null).map(row=>projectPayment({
+      ...row,amount_minor:row.credited_amount??row.amount_minor,
+      ledger_posted:row.credited_amount!=null&&row.ledger_posted,
+    })),
     asOf:at,
   };
 }
