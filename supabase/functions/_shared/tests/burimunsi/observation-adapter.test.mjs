@@ -76,6 +76,20 @@ function fixture(){
    return [{result:{kind:'new',context:{...ctx(),profile_tuple_sha256:state.tupleChangedOnPrepare?'e'.repeat(64):ctx().profile_tuple_sha256,
     consentGeneration:state.generation,requestId,fingerprint,sourceId}}}];
   }
+  if(query.includes('jsonb_array_elements($1::text::jsonb)')&&query.includes('observation_key_lookup')){
+   const result=[];
+   for(const item of JSON.parse(args[0])){
+    const lookup=item.envelope?'observation_gateway_lookup':'observation_key_lookup';
+    const values=item.envelope?[item.envelope,item.body]:[item.key,item.content,item.body];
+    result.push({source_key:item.key,result:(await sql.unsafe(lookup,values))[0].result});
+   }
+   return result;
+  }
+  if(query.includes('jsonb_array_elements_text($1::text::jsonb)')&&query.includes('observation_legacy_candidates')){
+   const result=[];
+   for(const body of JSON.parse(args[0]))result.push({body,result:(await sql.unsafe('observation_legacy_candidates',[body]))[0].result});
+   return result;
+  }
   if(query.includes('observation_key_lookup')){
    allowed();const [key,content,body]=args,prior=state.sourceKeys.get(key);
    if(!prior)return [{result:null}];if(prior.content!==content||prior.body!==body)throw sqlError('23505','burimunsi_observation_source_conflict');
@@ -716,7 +730,10 @@ test('inline parser outcomes share the final authorized source snapshot and omit
     }
     const result=await tx.unsafe(query,args);
     if(query.includes('burimunsi_observation_context'))authorized=true;
-    if(query.includes('burimunsi_observation_key_lookup'))keys.push(args[0]);
+    if(query.includes('burimunsi_observation_key_lookup')){
+     if(query.includes('WITH ORDINALITY'))keys.push(...JSON.parse(args[0]).map(x=>x.key));
+     else keys.push(args[0]);
+    }
     return result;
    }});
   });
@@ -770,6 +787,35 @@ test('a batch fails closed for per-item conflicts, reservations, storage failure
   adapter.authority.session=session;f.state.enabled=false;
   await assert.rejects(adapter.reconcileBatch(actor,proofs),e=>e.status===403);
   assert.equal(f.state.puts,2);assert.equal(f.state.commits,2);
+ });
+});
+
+test('a ten-message inbox page reads source metadata once per snapshot and still verifies every object',async()=>{
+ const f=fixture(),items=await Promise.all(Array.from({length:10},(_,i)=>batchWitness(201+i)));
+ await f.run(async adapter=>{
+  const retained=[];
+  for(const witness of items)retained.push(await adapter.observe(actor,witness.item));
+  const queries={keys:0,candidates:0},authority=adapter.authority;
+  for(const kind of ['read','write']){
+   const transaction=authority[kind];
+   authority[kind]=fn=>transaction(tx=>fn({unsafe:(query,args)=>{
+    if(query.includes('burimunsi_observation_key_lookup'))queries.keys++;
+    if(query.includes('burimunsi_observation_legacy_candidates'))queries.candidates++;
+    return tx.unsafe(query,args);
+   }}));
+  }
+  let fetched=0;f.state.onGet=async()=>{fetched++;};
+  const proofs=items.map(w=>w.proof).toReversed();
+  const page=await adapter.reconcileBatch(actor,{items:proofs});
+  assert.deepEqual(page.items.map(x=>x.sourceId),retained.map(x=>x.sourceId).toReversed());
+  assert.equal(fetched,10);
+  assert.deepEqual(queries,{keys:3,candidates:0});
+  queries.keys=queries.candidates=0;
+  const missing=proofs.map((proof,i)=>({...proof,sourceKey:(901+i).toString(16).padStart(64,'0')}));
+  assert.deepEqual((await adapter.reconcileBatch(actor,{items:missing})).items,
+   missing.map(x=>({sourceKey:x.sourceKey,state:'missing',sourceId:null})));
+  assert.deepEqual(queries,{keys:2,candidates:2});assert.equal(fetched,10);
+  assert.equal(f.state.puts,10);assert.equal(f.state.commits,10);
  });
 });
 
