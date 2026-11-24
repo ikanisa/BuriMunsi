@@ -118,7 +118,7 @@ import rw.ikanisa.burimunsi.core.*
 }
 @Composable internal fun FiltersPanel(s:UiState,m:BuriController){
     val t=LocalUiText.current;var selected by remember(s.filter){mutableStateOf(s.filter)};var expanded by remember{mutableStateOf(false)}
-    val options=listOf("all" to "All","allocated" to "Allocated","unallocated" to "Unallocated","processing" to "Processing")
+    val options=listOf("all" to "All","allocated" to "Allocated","unallocated" to "Unallocated")
     Panel(footer={Primary(t("Apply"),{m.setFilter(selected)},!s.busy)}){
         item{Text(t("Status"),fontSize=15.sp,color=BuriTheme.Muted);Spacer(Modifier.height(9.dp));Box{
             OutlinedButton({expanded=true},Modifier.testTag("payment-filter-select").fillMaxWidth().heightIn(min=60.dp),enabled=!s.busy,shape=RoundedCornerShape(17.dp)){
