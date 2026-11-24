@@ -311,6 +311,70 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
  await f.client.query("BEGIN; SET LOCAL ROLE collect_runtime; SET LOCAL burimunsi.collection_id='another-group'");
  assert.equal((await f.client.query('SELECT count(*)::int n FROM burimunsi.raw_sms')).rows[0].n,0);
  await f.client.query('ROLLBACK');
+
+ await t.test('a verified original inbox page adopts an exact earlier payment and parses a new held receipt once', async () => {
+  await f.client.query(await load('20261124114504_burimunsi_verified_inbox_recovery.sql'));
+  const duplicate = {...archivedInput,requestId:randomUUID(),sourceKey:sha('held archive row')};
+  const fresh = {...masked,requestId:randomUUID(),sourceKey:sha('held fresh row'),
+    rawBody:masked.rawBody.replace('987654321','987654345')};
+  const ambiguous = {...masked,requestId:randomUUID(),sourceKey:sha('held different original time'),
+    inboxReceivedAt:'2026-11-22T18:07:22Z'};
+  const deliveredCopy={...incoming,sourceMode:'catch_up',complete:false,requestId:randomUUID(),sourceKey:sha('verified copy of delivered receipt')};
+  const items=[duplicate,fresh,ambiguous,deliveredCopy],sources=[];
+  for(const input of items) {
+   const saved=await flow.route('/recover-held',{...input,expectedConsentGeneration:1});
+   assert.equal(saved.autoProcessing,'held');
+   sources.push(saved.sourceId);
+  }
+  const summary=async()=> (await f.client.query(`SELECT
+    (SELECT count(*)::int FROM burimunsi.payments) AS payments,
+    (SELECT count(*)::int FROM private.burimunsi_verified_inbox_recoveries) AS recovered,
+    (SELECT count(*)::int FROM private.burimunsi_allocation_receipts) AS notices,
+    (SELECT count(*)::int FROM app.ledger_entries) AS credits`)).rows[0];
+  const before=await summary();
+  const pageRun={...check,runId:randomUUID()};
+  await flow.route('/inbox-check',pageRun);
+  const page={runId:pageRun.runId,includeProcessing:true,items:items.map(input=>({
+    sourceKey:input.sourceKey,bodySha256:sha(input.rawBody),rawSender:input.rawSender,
+    inboxReceivedAt:input.inboxReceivedAt,serviceCentreAt:input.serviceCentreAt,subscriptionId:input.subscriptionId
+  }))};
+  const reconciled=await flow.route('/reconcile-batch',page);
+  assert.deepEqual(reconciled.items.map(row=>row.processingStatus),['duplicate','pending','needs_review','duplicate']);
+  assert.deepEqual((await flow.route('/reconcile-batch',page)).items,reconciled.items);
+  assert.deepEqual(await summary(),{...before,recovered:3});
+  const [withPayer]=await f.rpc('burimunsi_admin_payment_observation_outcomes',[group,[sources[3]],true],['text','text[]','boolean'],'http_admin');
+  assert.equal(withPayer.processing,'duplicate');
+  assert.equal(withPayer.payerStatus,'delivered');
+  const recovered=new Map((await f.client.query('SELECT source_id,prior_source_id FROM private.burimunsi_verified_inbox_recoveries')).rows
+    .map(row=>[row.source_id,row.prior_source_id]));
+  assert.deepEqual(recovered,new Map([[sources[1],null],[sources[0],archived.sourceId],[sources[3],source.sourceId]]));
+  await f.client.query("SELECT set_config('collect.fence_admission_id',$1,false),set_config('collect.fence_source_sha256',repeat('a',64),false),set_config('collect.fence_epoch','1',false)",[uuid(888)]);
+  await f.client.query('UPDATE private.burimunsi_observation_consents SET enabled=false');
+  await assert.rejects(flow.parser.process(sources[1]));
+  await f.client.query('UPDATE private.burimunsi_observation_consents SET enabled=true');
+  const priorCalls=flow.counts().providerCalls;
+  await assert.rejects(flow.parser.process(sources[0]));
+  await assert.rejects(flow.parser.process(sources[2]));
+  assert.equal(flow.counts().providerCalls,priorCalls);
+  flow.provider({...providerOutput(fresh.rawBody),schema_version:NATIVE_AUTO_SCHEMA_VERSION,wallet_effect:'credit'});
+  const result={state:'completed',relation:'accepted'};
+  assert.deepEqual(await flow.parser.process(sources[1]),result);
+  assert.deepEqual(await flow.parser.process(sources[1]),result);
+  assert.equal(flow.counts().providerCalls,priorCalls+1);
+  assert.deepEqual(await summary(),{...before,payments:before.payments+1,recovered:3});
+  assert.deepEqual((await flow.route('/reconcile-batch',page)).items.map(row=>row.processingStatus),['duplicate','parsed','needs_review','duplicate']);
+  assert.deepEqual((await f.client.query('SELECT direction,allocation_state,member_id FROM burimunsi.payments WHERE sms_source_id=$1',[sources[1]])).rows,
+    [{direction:'incoming',allocation_state:'unallocated',member_id:null}]);
+  await f.client.query('BEGIN');
+  try {
+   await f.client.query("UPDATE app.momo_parse_attempts SET source_body_sha256=repeat('0',64) WHERE raw_sms_id=$1",[archived.sourceId]);
+   await f.client.query("SET LOCAL ROLE collect_runtime; SET LOCAL collect.edge_verified='true'; SET LOCAL test.work_kind='http_admin'");
+   const [{result}]=(await f.client.query('SELECT private.burimunsi_admin_payment_observation_outcomes($1,$2::text[],true) AS result',[group,[sources[0]]])).rows;
+   assert.notEqual(result[0].processing,'duplicate');
+  } finally {await f.client.query('ROLLBACK');}
+  const publicAccess=(await f.client.query("SELECT has_function_privilege('collect_runtime','private._burimunsi_reconcile_held_payment_page(uuid,jsonb,jsonb)','EXECUTE') AS allowed")).rows[0];
+  assert.equal(publicAccess.allowed,false);
+ });
 });
 
 test('keyed inbox custody returns the original journal under both advisory and all three row locks',async t=>{

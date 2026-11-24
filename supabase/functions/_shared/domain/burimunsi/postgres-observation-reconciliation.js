@@ -70,6 +70,7 @@ export class PostgresObservationReconciliation {
     this.context = context;
     this.namespace = namespace;
     this.groupId = authority.groupId;
+    this.standalonePayments = evidence.env?.BURIMUNSI_PRODUCT_MODE === 'standalone';
     this.#evidence = new PostgresObservationReconcileEvidence({ authority, context, namespace, ...evidence });
   }
 
@@ -309,7 +310,7 @@ export class PostgresObservationReconciliation {
     if (failure) throw failure;
   }
 
-  async #verifyBatchJournals({ actor, values, initial, indexes, legacy }, snapshot, runId, matches) {
+  async #verifyBatchJournals({ actor, values, hashes, initial, indexes, legacy }, snapshot, runId, matches) {
     // The normal custody fence serializes journal verification with storage
     // mutation; it does not itself write an observation or financial record.
     const singleton = legacy.get(indexes[0]);
@@ -362,7 +363,8 @@ export class PostgresObservationReconciliation {
         }
         if (runId) {
           const page = values.map((v, i) => ({key: v.sourceKey, sourceId: matches[i]?.id ?? null,
-            bodySha256: v.bodySha256, inboxReceivedAt: v.inboxReceivedAt}));
+            bodySha256: v.bodySha256, inboxReceivedAt: v.inboxReceivedAt,
+            ...(this.standalonePayments && initial.records[i] ? {verifiedContentSha256: hashes[i]} : {})}));
           const saved = await tx.unsafe('SELECT private.burimunsi_observation_inbox_page($1::uuid,$2::text::jsonb) AS saved',
             [runId, JSON.stringify(page)]);
           check(saved.length === 1 && saved[0].saved === true);
