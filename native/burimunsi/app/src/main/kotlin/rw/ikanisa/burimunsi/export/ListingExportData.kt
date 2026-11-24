@@ -8,10 +8,10 @@ import rw.ikanisa.burimunsi.gateway.GatewayPort
 import java.time.Instant
 import java.time.ZoneId
 
-/** Fetches complete, authorized online pages. It never reads message bodies or derives balances. */
+/** Fetches complete, authorized online pages without reading message bodies. */
 internal class ListingExportData(private val repository:NativeRepository,private val gateway:GatewayPort) {
     data class Snapshot(val table:ExportTable,val validateLocal:()->Unit={})
-    fun collect(target:ListingTarget,query:ListingQuery,memberId:String?,paymentId:String?,scope:RecordReadScope,
+    fun collect(target:ListingTarget,query:ListingQuery,memberId:String?,scope:RecordReadScope,
         generatedAt:Instant,zone:ZoneId,check:()->Unit,progress:(Int,Int)->Unit):Snapshot {
         query.validated(target)
         var firstAsOf:String?=null
@@ -44,20 +44,14 @@ internal class ListingExportData(private val repository:NativeRepository,private
         val (title,cols,rows)=when(target){
             ListingTarget.PAYMENTS->{
                 val values=pages<Payment>({it.id}){repository.payments(query,it,memberId,scope)}
-                Triple(if(memberId==null)"Transactions" else "Member transactions",
-                    columns("Date","Payer name","MoMo number","Principal (RWF)","Fee (RWF)","Wallet balance after (RWF)","Direction","Outcome","Record state","FT ID","Member MoMo"),
-                    values.map{p->listOf(date(p.atRaw),text(p.payerNameRaw),text(p.payerPhoneRaw),money(p.amountRwf),money(p.feeRwf),money(p.walletBalanceAfterRwf),text(p.direction),text(p.outcome),text(p.state),text(p.ftId),text(p.memberPhone))})
+                Triple("Payments",
+                    columns("Date","Counterparty name","MoMo number","Amount (RWF)","Fee (RWF)","Direction","Allocation","FT ID","Member MoMo"),
+                    values.map{p->listOf(date(p.atRaw),text(p.payerNameRaw),text(p.payerPhoneRaw),money(p.amountRwf),money(p.feeRwf),text(p.direction),text(PaymentPresentation.payment(p).label),text(p.ftId),text(p.memberPhone))})
             }
             ListingTarget.MEMBERS->{
                 val values=pages<Member>({it.id}){repository.members(query,it,scope)}
-                Triple("Members",columns("Name","MoMo number","Member balance (RWF)","Active","Member ID"),
-                    values.map{m->listOf(text(m.name),text(m.phone),money(m.balanceRwf),ExportCell.Boolean(m.active),text(m.id))})
-            }
-            ListingTarget.LEDGER->{
-                val id=memberId?:throw ContractFailure("record_unavailable")
-                val values=pages<LedgerRow>({it.id}){repository.ledger(id,query,it,scope)}
-                Triple("Member ledger",columns("Date","Signed amount (RWF)","FT ID","Payer name","State","Transaction ID"),
-                    values.map{v->listOf(date(v.atRaw),money(v.amountRwf),text(v.ftId),text(v.payerNameRaw),text(v.state),text(v.transactionId))})
+                Triple("Members",columns("Name","MoMo number","Active","Member ID"),
+                    values.map{m->listOf(text(m.name),text(m.phone),ExportCell.Boolean(m.active),text(m.id))})
             }
             ListingTarget.STAFF->{
                 val values=pages<StaffAccount>({it.id}){repository.staff(query,it,scope)}
@@ -67,12 +61,6 @@ internal class ListingExportData(private val repository:NativeRepository,private
             ListingTarget.AUDIT->{
                 val values=pages<AuditRow>({it.id}){repository.audit(query,it,scope)}
                 Triple("Activity log",columns("Date","Action","Event ID"),values.map{v->listOf(date(v.at),text(v.action),text(v.id))})
-            }
-            ListingTarget.HISTORY->{
-                val id=paymentId?:throw ContractFailure("record_unavailable")
-                val values=pages<PaymentEvent>({it.id}){repository.paymentHistory(id,query,it,scope)}
-                Triple("Contribution history",columns("Recorded at","Event kind","Signed amount (RWF)","Member ID","Transaction ID","Event ID"),
-                    values.map{v->listOf(date(v.recordedAt),text(v.kind),money(v.amountRwf),text(v.memberId),text(v.transactionId),text(v.id))})
             }
             ListingTarget.SMS,ListingTarget.OBSERVATIONS->{
                 // This is an index of retained sources, not a bulk raw-message disclosure.
@@ -98,7 +86,7 @@ internal class ListingExportData(private val repository:NativeRepository,private
                 }
                 checkContract(metadata.size<=20_000,"export_limit")
                 val sorted=metadata.sortedWith(compareBy<Metadata>{Instant.parse(it.at)}.thenBy{it.kind}.thenBy{it.id}).let{if(query.sort==ListingSort.NEWEST)it.reversed()else it}
-                Triple("SMS source metadata",columns("Date","Source kind","Source ID","Sender","Status","Transaction ID"),
+                Triple("SMS source metadata",columns("Date","Source kind","Source ID","Sender","Status","Payment ID"),
                     sorted.map{v->listOf(date(v.at),text(v.kind),text(v.id),text(v.sender),text(v.status),text(v.transaction))})
             }
         }
@@ -108,7 +96,7 @@ internal class ListingExportData(private val repository:NativeRepository,private
             ExportDetail("Snapshot read",firstAsOf?:generatedAt.toString()),ExportDetail("Rows",rows.size.toString()),
             ExportDetail("Sort",query.sort.wire))
         query.queryValues(target).filterKeys{it !in setOf("sort")}.filterValues{it.isNotBlank()&&it!="all"}.forEach{(k,v)->details+=ExportDetail(k,v)}
-        memberId?.let{details+=ExportDetail("Member ID",it)};paymentId?.let{details+=ExportDetail("Transaction ID",it)}
+        memberId?.let{details+=ExportDetail("Member ID",it)}
         val table=ExportTable("BuriMunsi · $title",generatedAt,zone,details,cols,rows)
         table.validate(cancelled={try{check();false}catch(_:Exception){true}})
         return Snapshot(table,localCheck)

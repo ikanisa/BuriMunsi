@@ -40,7 +40,7 @@ fun main()=runBlocking {
         }
         m.navigate(Route.PAYMENTS);idle()
         val selected=ListingQuery(q="payer",filter="allocated",sort=ListingSort.AMOUNT_DESC,
-            minRwf=100,maxRwf=50_000,fromAt="2026-11-01T00:00:00Z",untilAt="2026-12-01T00:00:00Z",direction="incoming",outcome="successful",credit="credited")
+            minRwf=100,maxRwf=50_000,fromAt="2026-11-01T00:00:00Z",untilAt="2026-12-01T00:00:00Z",direction="incoming")
         m.openSheet(Sheet.FILTERS);idle();m.applyListingQuery(selected);idle()
         ck("filter apply restores origin and sends every selected selector",m.state.sheet==null&&m.listingQuery==selected&&Fixture.listingQueries.last().query==selected)
         m.openSheet(Sheet.FILTERS);idle();m.resetListingQuery()
@@ -91,9 +91,12 @@ fun main()=runBlocking {
         ck("role changes during the final live check prevent any provider write",writes==0&&m.exportFeedback?.phase!=UiExportPhase.COMPLETE&&aborted==2&&directory.listFiles().isNullOrEmpty())
         Fixture.refreshedRole=null;Fixture.refreshedCaps=null
         m.refreshSession();idle()
-        m.navigate(Route.MEMBER,"member-1");idle()
+        m.navigate(Route.PAYMENTS,"member-1");idle()
         m.prepareDownload(ExportFormat.CSV);prepared()
-        ck("member CSV preserves the explicitly labelled full ledger capability",rendered?.title?.contains("Member ledger")==true&&rendered?.rowCount==1&&Fixture.listingQueries.last().target==ListingTarget.LEDGER&&Fixture.listingQueries.last().memberId=="member-1"&&Fixture.listingQueries.last().query==ListingQuery.defaultsFor(ListingTarget.LEDGER)&&m.exportFeedback?.phase==UiExportPhase.CHOOSING_DESTINATION)
+        ck("legacy ledger export cannot dispatch from any list",m.downloadRequest==null)
+        m.prepareDownload(ExportFormat.XLSX);prepared()
+        ck("member scope downloads use the central Payments target",rendered?.title?.contains("Payments")==true&&rendered?.rowCount==1&&
+            Fixture.listingQueries.last().target==ListingTarget.PAYMENTS&&Fixture.listingQueries.last().memberId=="member-1"&&m.exportFeedback?.phase==UiExportPhase.CHOOSING_DESTINATION)
         m.cancelExport()
         val entered=CountDownLatch(1);val release=CountDownLatch(1)
         m.configureDownloads(directory){_,_,_,cancelled->entered.countDown();check(release.await(5,TimeUnit.SECONDS));if(cancelled())throw ExportCancelledException()}

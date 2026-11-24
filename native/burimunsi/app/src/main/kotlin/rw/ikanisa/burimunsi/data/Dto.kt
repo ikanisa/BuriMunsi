@@ -36,8 +36,7 @@ internal fun decodePaymentDetail(j:JSONObject):Payment {
     checkedDto(PAYMENT_DETAIL_V1+".data",j)
     return decodePayment(j.getJSONObject("payment")).copy(paymentReference=j.nullString("paymentReference"))
 }
-internal fun decodeMember(j:JSONObject):Member { checkedDto("member",j);return Member(j.getString("id"),j.getString("name"),Values.phone(j.getString("phone")),j.amount("balanceRwf"),j.getBoolean("active"),j.getLong("version")) }
-internal fun decodeLedger(j:JSONObject):LedgerRow { checkedDto("ledgerRow",j);return LedgerRow(j.getString("id"),j.nullString("transactionId"),j.amount("amountRwf"),j.getString("atRaw"),j.getString("ftId"),j.getString("payerNameRaw"),j.optionalNullString("state")) }
+internal fun decodeMember(j:JSONObject):Member { checkedDto("member",j);return Member(j.getString("id"),j.getString("name"),Values.phone(j.getString("phone")),j.getBoolean("active"),j.getLong("version")) }
 internal fun decodeSms(j:JSONObject):SmsRow { checkedDto("smsRow",j);return SmsRow(j.getString("id"),j.getString("sender"),j.getString("at"),j.getString("preview"),j.getString("state"),j.nullString("transactionId"),j.optionalNullString("simLabel")) }
 internal fun decodeStaff(j:JSONObject):StaffAccount { checkedDto("staffRow",j);return StaffAccount(j.getString("id"),j.getString("name"),Values.phone(j.getString("phone")),j.getBoolean("active"),j.getLong("version"),j.capabilities()) }
 /** Exact nonnegative integers; Android getInt/getLong can coerce or truncate. */
@@ -59,20 +58,6 @@ internal fun <T> page(json:String,read:(JSONObject)->T):Page<T>{
         checkContract(id.isNotBlank()&&ids.add(id),"invalid_page");read(row)}
     return Page(rows,cursor,total,revision,at)
 }
-internal fun decodePaymentHistory(json:String,groupId:String,transactionId:String):Page<PaymentEvent> = page(json){j->
-    checkContract(j.getString("groupId")==groupId&&j.getString("transactionId")==transactionId,"invalid_history_scope")
-    val id=j.getString("id");val kind=j.getString("kind");val at=j.getString("recordedAt")
-    checkContract(kind in setOf("transaction_recorded","ledger_entry"),"invalid_history_event")
-    val prefix=if(kind=="transaction_recorded")"transaction:" else "ledger:"
-    checkContract(id.startsWith(prefix),"invalid_history_event");val recordId=Values.id(id.removePrefix(prefix))
-    checkContract(at.endsWith("Z")&&runCatching{java.time.Instant.parse(at)}.isSuccess,"invalid_history_timestamp")
-    val amount=if(j.isNull("amountRwf"))null else j.amount("amountRwf")
-    val member=j.nullString("memberId")
-    if(kind=="transaction_recorded")checkContract(recordId==transactionId&&amount==null&&member==null,"invalid_history_event")
-    else{checkContract(amount!=null&&amount!=0L&&member!=null,"invalid_history_event");Values.id(member!!)}
-    PaymentEvent(id,transactionId,kind,at,amount,member)
-}
-
 /** Recovery fields must be actual strings, not Android JSON primitive coercions. */
 internal fun decodeRecoveryOutcome(json:String,requestId:String,originDigest:String,groupId:String,actorId:String,installationId:String):JSONObject {
     val value=try{JSONObject(json)}catch(_:Exception){throw ContractFailure("invalid_recovery_response")}

@@ -34,7 +34,7 @@ private val BottomNavBottomGap=18.dp
 private val BottomNavVerticalPadding=6.dp
 
 private fun iconFor(route:Route)=when(route){Route.HOME->R.drawable.ic_home;Route.PAYMENTS->R.drawable.ic_activity;Route.MEMBERS->R.drawable.ic_members;else->R.drawable.ic_settings}
-private fun titleFor(route:Route)=when(route){Route.LOGIN->"Sign in";Route.HOME->"Home";Route.PAYMENTS->"Payments";Route.PAYMENT->"M-Money";Route.MEMBERS->"Members";Route.MEMBER->"Member";Route.SMS->"SMS";Route.SETTINGS->"Account"}
+private fun titleFor(route:Route)=when(route){Route.LOGIN->"Sign in";Route.HOME->"Home";Route.PAYMENTS->"Payments";Route.PAYMENT->"Payment";Route.MEMBERS->"Members";Route.MEMBER->"Member";Route.SMS->"SMS";Route.SETTINGS->"Account"}
 
 @Composable
 fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExport:(ExportFormat)->Unit,onPhoneSettings:()->Unit,
@@ -81,7 +81,7 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
     }){
         Box(Modifier.matchParentSize().background(Color.Black.copy(alpha=BuriTheme.WashScrimAlpha)))
         Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()){
-            Header(if(gate==ScreenGate.OPEN)s.copy(route=displayedRoute) else s.copy(operator=null),model,openExport,onSupport)
+            Header(if(gate==ScreenGate.OPEN)s.copy(route=displayedRoute) else s.copy(operator=null),model,onSupport)
                 if(model.operation!=UiOperation.NONE&&!(model.operation==UiOperation.EXPORT&&model.exportFeedback!=null))BuriWorkingStrip(model.operation,model.operationLabel)
                 else if(model.operation==UiOperation.NONE&&s.busy)BuriInlineLoading("Working",Modifier.padding(horizontal=20.dp))
                 s.commandNotice?.takeIf{read}?.let{notice->
@@ -151,7 +151,7 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
                         Route.PAYMENTS->PaymentsScreen(s,model,openExport)
                         Route.PAYMENT->PaymentScreen(s,model)
                         Route.MEMBERS->MembersScreen(s,model,openExport)
-                        Route.MEMBER->MemberScreen(s,model,openExport)
+                        Route.MEMBER->MemberScreen(s,model)
                         Route.SMS->SmsScreen(s,model,openExport)
                         Route.SETTINGS->SettingsScreen(s,model,onPermissions,onPhoneSettings,onNotifications,onBatteryOptimization)
                     }}}
@@ -182,7 +182,7 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
     }
 }
 
-@Composable private fun Header(s:UiState,m:BuriController,onExport:()->Unit,onSupport:()->Unit){
+@Composable private fun Header(s:UiState,m:BuriController,onSupport:()->Unit){
     val t=LocalUiText.current
     val enabled=!s.busy&&m.screenGate==ScreenGate.OPEN
     Row(Modifier.fillMaxWidth().heightIn(min=62.dp).padding(horizontal=16.dp,vertical=6.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)){
@@ -191,8 +191,7 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
             Route.PAYMENT,Route.MEMBER->{
                 RoundAction(R.drawable.ic_back,t("Back"),m::back,enabled,size=48,tonal=false)
                 Text(t(titleFor(s.route)),Modifier.weight(1f),fontSize=16.sp,color=BuriTheme.Muted,textAlign=TextAlign.Center)
-                if(s.route==Route.MEMBER)RoundAction(R.drawable.ic_export,t("Download transactions"),onExport,enabled&&!s.offline&&m.canExportListing,size=48,tonal=false)
-                else RoundAction(R.drawable.ic_history,t("Contribution history"),{m.openSheet(Sheet.HISTORY)},enabled,size=48,tonal=false)
+                Spacer(Modifier.width(48.dp))
             }
             else->{
                 when(s.route){

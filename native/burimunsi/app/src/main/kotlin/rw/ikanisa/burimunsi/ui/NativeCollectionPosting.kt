@@ -12,12 +12,12 @@ import rw.ikanisa.burimunsi.core.SnapshotFreshness
 import rw.ikanisa.burimunsi.data.ApiFailure
 import rw.ikanisa.burimunsi.data.NativeRepository
 
-/** Allocation selection and verified collection command outcomes. The repository owns the durable request. */
+/** Allocation selection and command readback. The repository owns the durable request. */
 internal class NativeCollectionPosting(private val repository: NativeRepository) {
     enum class Outcome(val notice: String) {
         PENDING("Still awaiting an authoritative outcome. Do not repeat this action; contact the administrator if it remains unresolved."),
         COMMITTED("The original action committed. Refresh the records before starting another action; do not repeat it."),
-        CHANGED("The original action committed, but its financial effect was reversed or corrected. Review the current ledger; do not repeat the original action."),
+        CHANGED("This payment changed after the original action. Refresh it before continuing."),
         CANCELLED("The previous action was cancelled before it was applied. Review the records before starting another action."),
         REJECTED("The previous action was rejected. Review the records before starting a different action."),
     }
@@ -45,8 +45,7 @@ internal class NativeCollectionPosting(private val repository: NativeRepository)
         return Allocation(payment, member)
     }
 
-    fun post(allocation: Allocation, note: String): JSONObject =
-        repository.allocate(allocation.payment, allocation.member, note)
+    fun allocate(allocation: Allocation): JSONObject = repository.allocate(allocation.payment, allocation.member)
 
     data class PaymentRead(val payment: Payment, val cached: Boolean, val savedAt: Long?, val allocatedFromVersion: Long?)
 
@@ -100,7 +99,7 @@ internal class NativeCollectionPosting(private val repository: NativeRepository)
         data class Failed(val error: Exception, val invalidate: Boolean, val outcome: Outcome?) : Submission
     }
 
-    /** Called on IO. A failed response can follow a financial effect or a journal write. */
+    /** Called on IO. A failed response can follow a recorded change or a journal write. */
     fun submit(action: () -> JSONObject): Submission {
         return try {
             Submission.Committed(action())

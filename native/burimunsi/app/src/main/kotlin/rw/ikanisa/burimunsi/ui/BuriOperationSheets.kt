@@ -21,18 +21,17 @@ import app.cool.mobile.R
 import rw.ikanisa.burimunsi.core.*
 
 @Composable internal fun AllocatePanel(s:UiState,m:BuriController){
-    val t=LocalUiText.current;val query=s.draft["query"].orEmpty();val note=s.draft["note"].orEmpty();val p=s.payment?:return
-    Panel(footer={Primary(t("Allocate"),{m.allocate(note)},s.selectedMember?.active==true&&Presentation.validNote(note)&&!s.busy&&!s.offline&&!s.pending,working=s.busy&&m.operation==UiOperation.COMMAND)}){
-        item{CountLine(t("FT Id: %1\$s",p.ftId?:t("Unavailable")),p.amountRwf?.let{t("RWF %1\$s",money(it,t.locale))}?:t("Unavailable"))}
+    val t=LocalUiText.current;val query=s.draft["query"].orEmpty();val p=s.payment?:return
+    val canAllocate = PaymentPresentation.canAllocate(p) && m.allows(Capability.ALLOCATE) &&
+        s.selectedMember?.active == true && !s.busy && !s.offline && !s.pending
+    Panel(footer={Primary(t("Allocate"),m::allocate,canAllocate,working=s.busy&&m.operation==UiOperation.COMMAND)}){
+        item{CountLine(p.ftId?.let{t("FT Id: %1\$s",it)}?:t("Payment"),p.amountRwf?.let{t("RWF %1\$s",money(it,t.locale))}?:t("Unavailable"))}
         item{Search(query,{m.editDraft("query",it)},{m.allocationSearch(query)},t("Find member"),s.busy)}
         items(s.members?.items.orEmpty().filter{it.active},key={it.id}){member->Row(Modifier.fillMaxWidth().selectable(selected=s.selectedMember?.id==member.id,enabled=!s.busy,role=SemanticRole.RadioButton,onClick={m.selectMember(member)}).padding(vertical=9.dp),verticalAlignment=Alignment.CenterVertically){
             RadioButton(selected=s.selectedMember?.id==member.id,onClick=null,enabled=!s.busy);Column(Modifier.weight(1f)){SingleLineName(member.name);Text(member.phone,fontSize=14.sp,color=BuriTheme.Muted)}
         }}
         if(s.members?.items?.none{it.active}==true)item{Empty(t("No eligible members. Change the search or ask an administrator."))}
         moreButton(s.members?.nextCursor,s.busy,m::more,autoEnabled=!s.offline&&s.error==null)
-        item{Entry(t("Identification note"),note,{m.editDraft("note",it)},enabled=!s.busy,imeAction=ImeAction.Done,placeholder="How was the member confirmed?")}
-        s.selectedMember?.let{chosen->item{Fact(t("Member"),chosen.name);Fact(t("MoMo"),chosen.phone)}}
-        item{Text(t("Identification note: 8–500 characters. Credits once after confirmation."),fontSize=15.sp,color=BuriTheme.Muted)}
     }
 }
 @Composable private fun CheckRow(label:String,checked:Boolean,enabled:Boolean=true,change:(Boolean)->Unit){

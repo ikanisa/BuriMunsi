@@ -3,24 +3,26 @@ import rw.ikanisa.burimunsi.core.*
 fun main(){
  var n=0
  fun ck(label:String,v:Boolean){check(v){label};println("PASS $label");n++}
- for(v in listOf("posted","credited"))ck("confirmed $v",Presentation.payment(v).confirmedCredit&&!Presentation.payment(v).canAllocate)
- ck("corrected remains explicitly non-credit and cannot be allocated",PaymentPresentation.payment("corrected").let{it.label=="Corrected"&&!it.confirmedCredit&&!it.canAllocate})
- val automatic=Payment("tx-auto","","",null,"",null,"recorded",1,direction="outgoing",outcome="pending",sourceKind="observation")
- ck("automatic outgoing record does not invent values",automatic.amountRwf==null&&automatic.ftId==null&&
-   PaymentPresentation.directionLabel(automatic.direction)=="Outgoing"&&PaymentPresentation.outcomeLabel(automatic.outcome)=="Pending")
- ck("pending automatic transaction is not displayed as a successful one",PaymentPresentation.payment(automatic).label=="Pending"&&
-   !PaymentPresentation.payment(automatic).confirmedCredit)
- ck("outgoing and absent fields do not allow allocation",!PaymentPresentation.canAllocate(automatic.copy(state="unallocated")))
- ck("incoming successful known amount and reference can allocate",PaymentPresentation.canAllocate(
-   automatic.copy(state="unallocated",direction="incoming",outcome="successful",amountRwf=1000,ftId="reference")))
- ck("failed incoming does not allow allocation",!PaymentPresentation.canAllocate(
-   automatic.copy(state="unallocated",direction="incoming",outcome="failed",amountRwf=1000,ftId="reference")))
- for(v in listOf("processing","reversed","conflict","rejected","failed","unknown","allocated","__proto__","toString","",null))ck("no false success $v",!Presentation.payment(v).confirmedCredit&&!Presentation.payment(v).canAllocate)
- ck("only unallocated permits action",Presentation.payment("unallocated").canAllocate)
- for(v in listOf("queued","duplicate","synced","rejected","missing"))ck("receipt not financial success $v",Presentation.receipt(v).icon!="check")
+ val unallocated = Payment("payment-1", "Example counterparty", "", 1000, "", "provider-reference", "unallocated", 1)
+ for (direction in listOf("incoming", "outgoing")) {
+     val payment = unallocated.copy(direction = direction)
+     ck("successful $direction payment can be allocated", PaymentPresentation.canAllocate(payment))
+     ck("$direction payment starts unallocated", PaymentPresentation.payment(payment).label == "Unallocated")
+     val allocated = payment.copy(state = "allocated", memberId = "member-1")
+     ck("allocated $direction payment cannot allocate twice", PaymentPresentation.payment(allocated).label == "Allocated" && !PaymentPresentation.canAllocate(allocated))
+ }
+ ck("predecessor assignments have the same label", PaymentPresentation.payment(unallocated.copy(state = "posted")).label == "Allocated")
+ for (state in listOf("recorded", "processing", "corrected", "reversed", "conflict", "")) {
+     val predecessor = unallocated.copy(state = state)
+     ck("predecessor $state has no assignment action", PaymentPresentation.payment(predecessor).label == "Unallocated" && !PaymentPresentation.canAllocate(predecessor))
+ }
+ ck("missing amount does not allocate", !PaymentPresentation.canAllocate(unallocated.copy(amountRwf = null)))
+ ck("a recorded payment may be allocated without a provider reference", PaymentPresentation.canAllocate(unallocated.copy(ftId = null)))
+ ck("provider failure does not allocate", !PaymentPresentation.canAllocate(unallocated.copy(outcome = "failed")))
+ ck("provider pending is still unallocated", PaymentPresentation.payment(unallocated.copy(outcome = "pending")).label == "Unallocated")
+ for (state in listOf("queued", "duplicate", "synced", "rejected", "missing")) ck("receipt status is independent of allocation $state", Presentation.receipt(state).icon != "check")
  for((s,want) in listOf("A" to false,"Ab" to true,"A".repeat(100) to true,"A".repeat(101) to false,"AB\nC" to false))ck("name boundary ${s.length}",Presentation.validName(s)==want)
- for((s,want) in listOf("x".repeat(7) to false,"x".repeat(8) to true,"x".repeat(500) to true,"x".repeat(501) to false,"        " to false,"12345678\n" to false))ck("note boundary ${s.length}",Presentation.validNote(s)==want)
- val views=ViewMemory<String>(2);views.push("members","query Alice; scroll 8");views.push("member:1","ledger");ck("exact origin",views.previous()?.value=="ledger");ck("list context",views.previous()?.value=="query Alice; scroll 8");ck("empty trail",views.previous()==null)
+ val views=ViewMemory<String>(2);views.push("members","query Alice; scroll 8");views.push("member:1","member details");ck("exact origin",views.previous()?.value=="member details");ck("list context",views.previous()?.value=="query Alice; scroll 8");ck("empty trail",views.previous()==null)
  views.push("x","before mutation");views.invalidateRecords();ck("post-mutation stale snapshot",!views.isCurrent(views.previous()!!))
  views.push("1","1");views.push("2","2");views.push("3","3");ck("bounded newest",views.previous()?.key=="3");ck("bounded older",views.previous()?.key=="2");ck("bounded eviction",views.previous()==null)
  views.remember("x","record");views.clear();ck("logout clears records",views.remembered("x")==null&&views.previous()==null)
@@ -53,7 +55,7 @@ fun main(){
  ck("unknown unbound queue cannot suggest pairing",!GatewayHealth.describe(g.copy(authorized=false,pending=-1,problem="queue_unavailable")).canPair)
  ck("unknown status cannot suggest pairing",!GatewayHealth.describe(null).canPair)
  ck("enabled capture is not called confirmed receipt",GatewayHealth.describe(g).title=="Sync enabled")
- ck("zero queue never promises credit",GatewayHealth.describe(g).explanation.contains("does not"))
+ ck("zero queue describes the receiver",GatewayHealth.describe(g).explanation=="This phone is listening for M-Money SMS.")
  ck("unbound phone requests pairing",GatewayHealth.describe(g.copy(authorized=false)).canPair)
  ck("qualification never pairs",!GatewayHealth.describe(g.copy(authorized=false,problem="qualification_offline")).canPair)
  ck("permission denial blocks resume",GatewayHealth.describe(g.copy(captureEnabled=false,problem="permission_required")).let{it.needsPermission&&!it.canResume})
@@ -64,7 +66,7 @@ fun main(){
  ck("unknown problem refuses resume",!GatewayHealth.describe(g.copy(captureEnabled=false,problem="new_server_reason")).canResume)
  ck("upload hold distinguished from local pause",GatewayHealth.describe(g.copy(problem="uploads_on_hold")).code=="hold")
  ck("hold can preserve local capture while uploads remain held",GatewayHealth.describe(g.copy(captureEnabled=false,problem="uploads_on_hold")).canResume)
- ck("pending receipts distinguished from member credit",GatewayHealth.describe(g.copy(pending=2)).code=="pending")
+ ck("pending receipts identify the sync queue",GatewayHealth.describe(g.copy(pending=2)).code=="pending")
  ck("paused valid phone offers local resume",GatewayHealth.describe(g.copy(captureEnabled=false)).canResume)
  ck("active phone always offers non-destructive pause",GatewayHealth.describe(g.copy(problem="new_server_reason")).canPause)
  println("RESULT: $n presentation/navigation core checks passed; no Android UI compiled.")

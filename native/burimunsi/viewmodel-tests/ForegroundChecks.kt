@@ -9,7 +9,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicInteger
 import rw.ikanisa.burimunsi.ui.*
 import rw.ikanisa.burimunsi.core.*
-import rw.ikanisa.burimunsi.core.export.CsvEncoder
+import rw.ikanisa.burimunsi.core.export.XlsxEncoder
 import rw.ikanisa.burimunsi.core.export.ExportFormat
 import rw.ikanisa.burimunsi.data.*
 import rw.ikanisa.burimunsi.gateway.GatewayFixture
@@ -88,17 +88,12 @@ fun main()=runBlocking {
     ck("clock rollback closes active screen",m.screenGate==ScreenGate.STALE)
     Fixture.recordSavedAt=now;m.refresh();idle()
     m.navigate(Route.PAYMENT,"tx-1");idle();m.openSheet(Sheet.ALLOCATE);idle()
-    m.selectMember(Fixture.member);m.editDraft("note","A non-secret identity explanation")
+    m.selectMember(Fixture.member);m.editDraft("query","Example")
     m.onBackground();m.onForeground();idle()
-    ck("non-secret allocation draft survives revalidation",m.state.draft["note"]=="A non-secret identity explanation")
+    ck("allocation search draft survives revalidation",m.state.draft["query"]=="Example")
     ck("beneficiary must be selected again after revalidation",m.state.selectedMember==null)
     ck("resume never submits a draft",Fixture.mutations==0&&Fixture.reconciles==0)
-    m.discardDraft();m.refresh();idle();m.openSheet(Sheet.HISTORY);idle()
-    Fixture.historySavedAt=now-SnapshotFreshness.TTL_MS-1;m.refresh();idle()
-    ck("history expires independently of fresh payment",m.screenGate==ScreenGate.STALE&&m.state.savedAt==now)
-    Fixture.historySavedAt=now;m.refresh();idle()
-    ck("history refresh restores correct scoped panel",m.screenGate==ScreenGate.OPEN&&m.state.historyPaymentId=="tx-1")
-    m.closeSheet();m.refresh();idle();m.navigate(Route.HOME);idle()
+    m.discardDraft();m.refresh();idle();m.navigate(Route.HOME);idle()
     // A resume during an already running read is queued, not skipped or parallelized.
     val homeBefore=Fixture.homeReads;val sessionBefore=Fixture.sessionReads
     val readLatch=CountDownLatch(1);Fixture.homeBarrier=readLatch;m.refresh()
@@ -110,7 +105,7 @@ fun main()=runBlocking {
     // A submitted financial operation is not cancelled, repeated, or inferred to have failed.
     m.navigate(Route.PAYMENT,"tx-1");idle();m.openSheet(Sheet.ALLOCATE);idle();m.selectMember(Fixture.member)
     val mutationLatch=CountDownLatch(1);Fixture.allocateBarrier=mutationLatch
-    m.allocate("Verified identity and membership")
+    m.allocate()
     withTimeout(2000){while(Fixture.mutations==0)delay(2)}
     val sessionsDuring=Fixture.sessionReads;m.onBackground();m.onForeground()
     ck("dispatched mutation is not cancelled on pause",Fixture.mutations==1&&m.state.busy&&Fixture.sessionReads==sessionsDuring)
@@ -152,38 +147,38 @@ fun main()=runBlocking {
     m.setPaused(true);idle()
     ck("administrator cannot pause locked-on sync or erase the queue",GatewayFixture.changes==1&&m.state.gateway?.captureEnabled==true&&m.state.error!=null)
 
-    m.closeSheet();m.refresh();idle();m.navigate(Route.MEMBER,"member-1");idle()
+    m.closeSheet();m.refresh();idle();m.navigate(Route.PAYMENTS,"member-1");idle()
     val exportRoot = Files.createTempDirectory("burimunsi-foreground-exports").toFile()
     val exportDirectory = File(exportRoot, "burimunsi-exports")
     val exported = AtomicInteger()
     val aborted = AtomicInteger()
     m.configureDownloads(exportDirectory) { _, table, file, cancelled ->
-        file.outputStream().use { CsvEncoder.write(table, it, cancelled) }
+        file.outputStream().use { XlsxEncoder.write(table, it, cancelled) }
     }
-    suspend fun returnFromCsvPicker() {
-        m.prepareDownload(ExportFormat.CSV)
+    suspend fun returnFromPaymentPicker() {
+        m.prepareDownload(ExportFormat.XLSX)
         idle()
         val request = checkNotNull(m.takeDownloadRequest())
         m.onBackground()
         check(m.downloadDestination(request.id, request.format, write = { file, verify ->
             verify()
-            check(file.readText().contains("Member ledger"))
+            check(file.readBytes().take(2)==listOf(80.toByte(),75.toByte()))
             exported.incrementAndGet()
         }, abort = { aborted.incrementAndGet() }))
     }
     try {
-        returnFromCsvPicker()
+        returnFromPaymentPicker()
         ck("document-picker return waits for foreground validation", exported.get() == 0 && m.screenGate == ScreenGate.BACKGROUND)
         m.onForeground();idle()
         ck("requested export completes after revalidation", exported.get() == 1 && m.exportFeedback?.phase == UiExportPhase.COMPLETE)
 
-        returnFromCsvPicker()
+        returnFromPaymentPicker()
         now += SnapshotFreshness.TTL_MS + 1
         Fixture.recordSavedAt = now
         m.onForeground();idle()
         ck("expired pending export is cancelled", exported.get() == 1 && aborted.get() == 1 && exportDirectory.listFiles().isNullOrEmpty())
 
-        returnFromCsvPicker()
+        returnFromPaymentPicker()
         m.logout();idle();m.onForeground();idle()
         ck("signout retains no guarded operator", m.state.operator == null && m.screenGate == ScreenGate.OPEN)
         withTimeout(2_000) { while (aborted.get() < 2) delay(2) }

@@ -24,7 +24,7 @@ private class Scenario(private val role: String = "admin") {
  private fun page(vararg values:JSONObject)=JSONObject().put("items",JSONArray().also{a->values.forEach{a.put(it)}})
   .put("totalCount",values.size).put("revision","fixture-v1").put("asOf","2026-11-09T10:00:00Z").put("nextCursor",JSONObject.NULL).toString()
  private fun member()=JSONObject().put("id","member-1").put("groupId","synthetic-group").put("name","Synthetic Member").put("phone","+250780000816")
-  .put("balanceRwf",10000).put("active",memberActive).put("version",memberVersion)
+  .put("active",memberActive).put("version",memberVersion)
  private fun payment()=JSONObject().put("id",if(committed)postReadPaymentId else "payment-1").put("groupId","synthetic-group")
   .put("memberId",JSONObject.NULL).put("memberPhone",JSONObject.NULL).put("sourceId",JSONObject.NULL)
   .put("payerNameRaw","Synthetic Payer").put("payerPhoneRaw","+250780000816")
@@ -60,7 +60,7 @@ private class Scenario(private val role: String = "admin") {
    }
    else->{recordReads++;if(recordFailure)throw ApiFailure("connection_unavailable",0)
     when {
-     r.path.endsWith("/home")->JSONObject().put("groupBalanceRwf",10000).put("todayRwf",10000).put("memberCount",1).put("unallocatedCount",1)
+     r.path.endsWith("/home")->JSONObject().put("paymentCount",1).put("memberCount",1).put("unallocatedCount",1)
       .put("recentPayments",JSONArray().put(payment())).put("asOf","2026-11-09T10:00:00Z").toString()
      r.path.contains("/payments/payment-1")->payment().toString()
      r.path.endsWith("/payments/payment-2")->payment().put("id","payment-2").put("state","unallocated").put("version",1).toString()
@@ -83,7 +83,7 @@ private class Scenario(private val role: String = "admin") {
  }
  suspend fun idle(){withTimeout(15000){while(model.state.busy)delay(2)};delay(10)}
  suspend fun start(){model=BuriViewModel(Application()){System.currentTimeMillis()+uiClockOffset};idle();model.login("0780000001","2468");idle();check(model.state.operator!=null)}
- suspend fun allocation(){model.navigate(Route.PAYMENT,"payment-1");idle();model.openSheet(Sheet.ALLOCATE);idle();model.selectMember(model.state.members!!.items.single());model.editDraft("note","Verified original identity")}
+ suspend fun allocation(){model.navigate(Route.PAYMENT,"payment-1");idle();model.openSheet(Sheet.ALLOCATE);idle();model.selectMember(model.state.members!!.items.single());model.editDraft("query","Example")}
  suspend fun recreate(){
   close()
   val protectedRecords=SecureStore.records.toMap()
@@ -91,7 +91,7 @@ private class Scenario(private val role: String = "admin") {
   SecureStore.records.putAll(protectedRecords)
   model=BuriViewModel(Application());idle()
  }
- suspend fun submit(){model.allocate("Verified original identity");idle()}
+ suspend fun submit(){model.allocate();idle()}
  suspend fun close(){releaseStatus?.countDown();model.viewModelScope.coroutineContext[Job]!!.cancelAndJoin()}
  fun posts()=Transport.calls.count{it.method!="GET"&&!it.path.contains("/session/")}
  fun journal()=SecureStore.records["pending-command"]
@@ -102,7 +102,7 @@ fun main()=runBlocking {
  suspend fun scenario(role:String="admin",block:suspend (Scenario)->Unit){val s=Scenario(role);try{s.start();block(s)}finally{s.close()}}
  for(role in listOf("staff","admin"))scenario(role){s->
   s.model.navigate(Route.MEMBER,"member-1");s.idle()
-  ck("$role original member route shows the verified balance",s.model.state.member?.id=="member-1"&&s.model.state.member?.balanceRwf==10000L)
+  ck("$role original member route shows the member details",s.model.state.member?.id=="member-1"&&s.model.state.member?.phone=="+250780000816")
   val cached=SecureStore.records["records"]
   val payments=Transport.calls.count{it.path.contains("memberId=member-1")}
   s.detailMemberId="different-member";s.model.refresh();s.idle()
@@ -111,7 +111,7 @@ fun main()=runBlocking {
           cached!=null&&SecureStore.records["records"]==cached&&Transport.calls.count{it.path.contains("memberId=member-1")}==payments)
   s.detailMemberId="member-1";s.model.refresh();s.idle()
   ck("$role matching readback restores the original member without a command",
-      s.model.state.member?.id=="member-1"&&s.model.state.member?.balanceRwf==10000L&&
+      s.model.state.member?.id=="member-1"&&s.model.state.member?.phone=="+250780000816"&&
           !s.model.state.readbackRequired&&s.posts()==0&&s.journal()==null)
  }
  scenario{s->
@@ -323,7 +323,7 @@ fun main()=runBlocking {
   ck("transport rejection cannot revive actionable selection",s.model.state.sheet==null&&s.model.state.selectedMember==null&&s.posts()==1)
  }
  scenario{s->s.allocation();s.statusState="pending";s.statusEntered=CountDownLatch(1);s.releaseStatus=CountDownLatch(1)
-  s.model.allocate("Verified original identity");check(withContext(Dispatchers.IO){s.statusEntered!!.await(10,TimeUnit.SECONDS)})
+  s.model.allocate();check(withContext(Dispatchers.IO){s.statusEntered!!.await(10,TimeUnit.SECONDS)})
   val original=JSONObject(s.journal()!!);s.uiClockOffset=7200000;s.model.onForeground()
   withTimeout(10000){while(s.model.screenGate==ScreenGate.OPEN)delay(20)}
   s.releaseStatus!!.countDown();s.idle();delay(50)

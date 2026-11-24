@@ -7,7 +7,7 @@ class ApiClient(val installationId:String="installation-1"){
  var installationProfile:String?=null
  val calls=mutableListOf<Request>()
  var handler:(Request)->String={error("No API fixture")}
- fun call(method:String,path:String,token:String?=null,body:JSONObject?=null,csv:Boolean=false,recoveryOrigin:String?=null,contractContext:Map<String,Any?> = emptyMap()):String{
+ fun call(method:String,path:String,token:String?=null,body:JSONObject?=null,recoveryOrigin:String?=null,contractContext:Map<String,Any?> = emptyMap()):String{
   val req=Request(method,path,token,body,recoveryOrigin,contractContext);synchronized(calls){calls.add(req)};return handler(req)
  }
  internal fun validateCached(path:String,payload:String,context:Map<String,Any?>)=validateCachedPayload(installationId,path,payload,context)

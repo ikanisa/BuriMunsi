@@ -224,7 +224,16 @@ internal class NativeRecordData(
     }
     private fun decodeHome(j:JSONObject):Home{
         val a=j.getJSONArray("recentPayments")
-        return Home(j.amount("groupBalanceRwf"),j.amount("todayRwf"),j.getInt("memberCount"),j.getInt("unallocatedCount"),(0 until a.length()).map{decodePayment(a.getJSONObject(it))},j.getString("asOf"),if(j.has("unallocatedAmountRwf")&&!j.isNull("unallocatedAmountRwf"))j.amount("unallocatedAmountRwf")else null)
+        val paymentCount = if (j.has("paymentCount") && !j.isNull("paymentCount")) j.counter("paymentCount", Int.MAX_VALUE.toLong()).toInt() else null
+        val unallocated = j.counter("unallocatedCount", Int.MAX_VALUE.toLong()).toInt()
+        checkContract(paymentCount == null || (unallocated <= paymentCount && a.length() <= paymentCount), "invalid_api_response")
+        return Home(
+            paymentCount = paymentCount,
+            memberCount = j.counter("memberCount", Int.MAX_VALUE.toLong()).toInt(),
+            unallocatedCount = unallocated,
+            recent = (0 until a.length()).map { decodePayment(a.getJSONObject(it)) },
+            asOf = j.getString("asOf"),
+        )
     }
     /** Full-query export collectors use online reads with one immutable local
      * identity witness. Server cursors independently bind group/actor/query and
@@ -248,7 +257,7 @@ internal class NativeRecordData(
     }
     fun validateRecordReadScope(scope:RecordReadScope){scope.validate(recordReadOwner)}
     private fun listingRead(target:ListingTarget,path:String,scope:RecordReadScope?):String {
-        return scope?.read(recordReadOwner,path)?:if(target in setOf(ListingTarget.PAYMENTS,ListingTarget.MEMBERS,ListingTarget.LEDGER,ListingTarget.HISTORY))records(path)else sessions.request("GET",path)
+        return scope?.read(recordReadOwner,path)?:if(target==ListingTarget.PAYMENTS||target==ListingTarget.MEMBERS)records(path)else sessions.request("GET",path)
     }
     fun payments(listing:ListingQuery,cursor:String?=null,memberId:String?=null,scope:RecordReadScope?=null):Page<Payment> {
         if(scope==null)return paymentPage(listing,cursor,memberId).value
@@ -272,18 +281,12 @@ internal class NativeRecordData(
             mapOf("anchorId" to anchorId?.let(Values::id)))
         return page(listingRead(ListingTarget.MEMBERS, path, scope), ::decodeMember)
     }
-    fun ledger(id:String,listing:ListingQuery,cursor:String?=null,scope:RecordReadScope?=null):Page<LedgerRow> =
-        page(listingRead(ListingTarget.LEDGER,listingPath("/ledger",ListingTarget.LEDGER,listing,cursor,mapOf("memberId" to Values.id(id))),scope),::decodeLedger)
     fun sms(listing:ListingQuery,cursor:String?=null,scope:RecordReadScope?=null,limit:Int=100):Page<SmsRow> =
         page(listingRead(ListingTarget.SMS,listingPath("/sms",ListingTarget.SMS,listing,cursor,limit=limit),scope),::decodeSms)
     fun staff(listing:ListingQuery,cursor:String?=null,scope:RecordReadScope?=null):Page<StaffAccount> =
         page(listingRead(ListingTarget.STAFF,listingPath("/staff",ListingTarget.STAFF,listing,cursor),scope),::decodeStaff)
     fun audit(listing:ListingQuery,cursor:String?=null,scope:RecordReadScope?=null):Page<AuditRow> =
         page(listingRead(ListingTarget.AUDIT,listingPath("/audit",ListingTarget.AUDIT,listing,cursor),scope)){j->AuditRow(j.getString("id"),j.getString("action"),j.getString("at"))}
-    fun paymentHistory(id:String,listing:ListingQuery,cursor:String?=null,scope:RecordReadScope?=null):Page<PaymentEvent> {
-        val transactionId=Values.id(id)
-        return decodePaymentHistory(listingRead(ListingTarget.HISTORY,listingPath("/payments/$transactionId/history",ListingTarget.HISTORY,listing,cursor),scope),groupId,transactionId)
-    }
     fun payments(q:String="",filter:String="all",cursor:String?=null,memberId:String?=null):Page<Payment>{
         val member=memberId?.let(Values::id)
         val result=page(records("/payments"+query(mapOf("q" to q,"filter" to filter,"cursor" to cursor,"memberId" to member))),::decodePayment)
@@ -310,12 +313,7 @@ internal class NativeRecordData(
             member
         }
     }
-    fun ledger(id:String,cursor:String?=null)=page(records("/ledger"+query(mapOf("memberId" to Values.id(id),"cursor" to cursor))),::decodeLedger)
     fun sms(q:String="",cursor:String?=null,filter:String="all",limit:Int?=null)=page(sessions.request("GET","/sms"+query(mapOf("q" to q,"cursor" to cursor,"filter" to filter,"limit" to limit?.coerceIn(1,100)?.toString()))),::decodeSms)
     fun staff(cursor:String?=null)=page(sessions.request("GET","/staff"+query(mapOf("cursor" to cursor))),::decodeStaff)
     fun audit(cursor:String?=null)=page(sessions.request("GET","/audit"+query(mapOf("cursor" to cursor)))){j->AuditRow(j.getString("id"),j.getString("action"),j.getString("at"))}
-    fun paymentHistory(id:String,cursor:String?=null):Page<PaymentEvent> {
-        val transactionId=Values.id(id)
-        return decodePaymentHistory(records("/payments/$transactionId/history"+query(mapOf("cursor" to cursor))),groupId,transactionId)
-    }
 }

@@ -36,17 +36,13 @@ internal fun listingSortLabel(value:ListingSort)=when(value){
     ListingSort.AMOUNT_ASC->"Amount · low to high";ListingSort.AMOUNT_DESC->"Amount · high to low"
     ListingSort.NAME_ASC->"Name · A–Z";ListingSort.NAME_DESC->"Name · Z–A"
     ListingSort.PHONE_ASC->"Phone · ascending";ListingSort.PHONE_DESC->"Phone · descending"
-    ListingSort.BALANCE_ASC->"Balance · low to high";ListingSort.BALANCE_DESC->"Balance · high to low"
     ListingSort.ACTION_ASC->"Action · A–Z";ListingSort.ACTION_DESC->"Action · Z–A"
 }
 internal fun listingValueLabel(value:String)=when(value){
-    "all"->"All";"allocated"->"Allocated";"unallocated"->"Unallocated";"processing"->"Processing"
-    "recorded"->"Recorded";"posted","credited"->"Credited";"uncredited"->"Not credited"
-    "reversed","reversal"->"Reversed";"corrected"->"Corrected";"conflict"->"Conflict"
+    "all"->"All";"allocated"->"Allocated";"unallocated"->"Unallocated"
     "queued"->"Queued";"duplicate"->"Duplicates";"synced"->"Synced";"rejected"->"Rejected"
-    "transaction_recorded"->"Transaction recorded";"ledger_entry"->"Ledger entry recorded"
     "active"->"Active";"inactive"->"Inactive";"incoming"->"Incoming";"outgoing"->"Outgoing"
-    "successful"->"Successful";"failed"->"Failed";"pending"->"Pending";"unknown"->"Unknown";else->"Other"
+    else->"Other"
 }
 private fun dateText(value:String?,exclusive:Boolean=false):String=value?.let{runCatching{
     (if(exclusive)Instant.parse(it).minusNanos(1)else Instant.parse(it)).atZone(ListingZone).toLocalDate().toString()
@@ -64,11 +60,9 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
         if(query.q.isNotBlank())add(t("Search: %1\$s",query.q) to {model.applyListingQuery(query.copy(q=""))})
         if(query.filter!="all")add(t("Status: %1\$s",t(listingValueLabel(query.filter))) to {model.applyListingQuery(query.copy(filter="all"))})
         if(query.fromAt!=null||query.untilAt!=null)add(t("Date range") to {model.applyListingQuery(query.copy(fromAt=null,untilAt=null))})
-        if(query.minRwf!=null||query.maxRwf!=null)add(t(if(target==ListingTarget.MEMBERS)"Balance range"else "Amount range") to {model.applyListingQuery(query.copy(minRwf=null,maxRwf=null))})
+        if(query.minRwf!=null||query.maxRwf!=null)add(t("Amount range") to {model.applyListingQuery(query.copy(minRwf=null,maxRwf=null))})
         if(query.active!="all")add(t(listingValueLabel(query.active)) to {model.applyListingQuery(query.copy(active="all"))})
         if(query.direction!="all")add(t(listingValueLabel(query.direction)) to {model.applyListingQuery(query.copy(direction="all"))})
-        if(query.outcome!="all")add(t(listingValueLabel(query.outcome)) to {model.applyListingQuery(query.copy(outcome="all"))})
-        if(query.credit!="all")add(t(listingValueLabel(query.credit)) to {model.applyListingQuery(query.copy(credit="all"))})
         if(query.sort!=defaults.sort)add(t(listingSortLabel(query.sort)) to {model.applyListingQuery(query.copy(sort=defaults.sort))})
     }
     Column(Modifier.fillMaxWidth().padding(top=10.dp,bottom=10.dp).testTag("listing-tools:${target.name}")){
@@ -181,9 +175,7 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
         if(ListingQuery.filters(target).size>1)item{QueryChoice("Status",draft.filter,ListingQuery.filters(target).map{it to listingValueLabel(it)},enabled,if(target==ListingTarget.PAYMENTS)"payment-filter-select"else "listing-filter-select"){draft=draft.copy(filter=it)}}
         item{QueryChoice("Sort by",draft.sort.wire,ListingQuery.allowedSorts(target).map{it.wire to listingSortLabel(it)},enabled,"listing-sort-select"){wire->draft=draft.copy(sort=ListingSort.entries.first{it.wire==wire})}}
         if(ListingQuery.supportsActive(target))item{QueryChoice(if(target==ListingTarget.STAFF)"Access status"else "Membership status",draft.active,listOf("all","active","inactive").map{it to listingValueLabel(it)},enabled,"listing-active-select"){draft=draft.copy(active=it)}}
-        if(ListingQuery.supportsDirection(target))item{QueryChoice("Direction",draft.direction,listOf("all","incoming","outgoing","reversal","other").map{it to listingValueLabel(it)},enabled,"listing-direction-select"){draft=draft.copy(direction=it)}}
-        if(ListingQuery.supportsOutcome(target))item{QueryChoice("Outcome",draft.outcome,listOf("all","successful","failed","pending","unknown").map{it to listingValueLabel(it)},enabled,"listing-outcome-select"){draft=draft.copy(outcome=it)}}
-        if(ListingQuery.supportsCredit(target))item{QueryChoice("Member credit",draft.credit,listOf("all","credited","uncredited","reversed","corrected").map{it to listingValueLabel(it)},enabled,"listing-credit-select"){draft=draft.copy(credit=it)}}
+        if(ListingQuery.supportsDirection(target))item{QueryChoice("Direction",draft.direction,listOf("all","incoming","outgoing").map{it to listingValueLabel(it)},enabled,"listing-direction-select"){draft=draft.copy(direction=it)}}
         if(ListingQuery.supportsDates(target)){
             item{Text(t("Date range"),fontSize=20.sp,fontWeight=FontWeight.Medium);Text(t("Dates use Kigali time. End date is included."),fontSize=14.sp,lineHeight=22.sp,color=BuriTheme.Muted)}
             item{Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)){
@@ -193,7 +185,7 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
             item{QueryDate("Through date",until,enabled){until=it}}
         }
         if(ListingQuery.supportsAmount(target)){
-            item{Text(t(if(target==ListingTarget.MEMBERS)"Balance range"else "Amount range"),fontSize=20.sp,fontWeight=FontWeight.Medium);Text(t("Whole RWF values. Leave empty for no limit."),fontSize=14.sp,lineHeight=22.sp,color=BuriTheme.Muted)}
+            item{Text(t("Amount range"),fontSize=20.sp,fontWeight=FontWeight.Medium);Text(t("Whole RWF values. Leave empty for no limit."),fontSize=14.sp,lineHeight=22.sp,color=BuriTheme.Muted)}
             item{QueryNumber("Minimum RWF",minimum,enabled){minimum=it.take(18)}}
             item{QueryNumber("Maximum RWF",maximum,enabled){maximum=it.take(18)}}
         }
@@ -205,7 +197,7 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
 @Composable internal fun ListingExportSheet(model:BuriController,onPick:(ExportFormat)->Unit,onDismiss:()->Unit){
     val t=LocalUiText.current
     val target=model.listingTarget?:return
-    val formats=ExportFormat.entries.filter{it!=ExportFormat.CSV||(model.state.route==Route.MEMBER&&model.state.sheet==null)}
+    val formats=listOf(ExportFormat.XLSX to "Excel workbook (.xlsx)", ExportFormat.PDF to "PDF document (.pdf)")
     ModalBottomSheet(onDismissRequest=onDismiss,containerColor=BuriTheme.Surface,contentColor=BuriTheme.Text,
         shape=RoundedCornerShape(topStart=32.dp,topEnd=32.dp),scrimColor=Color.Black.copy(alpha=.62f)){
         Column(Modifier.fillMaxWidth().heightIn(max=LocalConfiguration.current.screenHeightDp.dp*.9f).verticalScroll(rememberScrollState()).padding(horizontal=24.dp).navigationBarsPadding().padding(bottom=24.dp).testTag("export-format-sheet").semantics{paneTitle=t("Export results")}){
@@ -213,10 +205,9 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
                 Text(t("Export results"),Modifier.weight(1f).semantics{heading()},fontSize=28.sp,lineHeight=36.sp,fontWeight=FontWeight.SemiBold)
                 IconButton(onDismiss,Modifier.size(48.dp)){Icon(painterResource(R.drawable.ic_close),t("Close"))}
             }
-            Text(t(if(model.state.route==Route.MEMBER&&model.state.sheet==null)"Excel and PDF use the selected transaction filters. CSV includes the full member ledger."else "Current filters and sort are included."),Modifier.padding(vertical=12.dp),fontSize=15.sp,lineHeight=23.sp,color=BuriTheme.Muted)
+            Text(t("Current filters and sort are included."),Modifier.padding(vertical=12.dp),fontSize=15.sp,lineHeight=23.sp,color=BuriTheme.Muted)
             if(target in setOf(ListingTarget.SMS,ListingTarget.OBSERVATIONS))Text(t("SMS exports contain authorized metadata only. Message content is excluded."),Modifier.padding(bottom=12.dp),fontSize=15.sp,lineHeight=23.sp,color=BuriTheme.Warn)
-            formats.forEach{format->
-                val label=when(format){ExportFormat.CSV->"Full member ledger (CSV)";ExportFormat.XLSX->"Excel workbook (.xlsx)";ExportFormat.PDF->"PDF document (.pdf)"}
+            formats.forEach{(format,label)->
                 OutlinedButton({onPick(format)},Modifier.fillMaxWidth().padding(vertical=5.dp).heightIn(min=60.dp).testTag("export-format:${format.name}"),enabled=model.canExportListing&&!model.state.busy&&!model.state.offline,shape=RoundedCornerShape(20.dp),colors=ButtonDefaults.outlinedButtonColors(contentColor=BuriTheme.Text)){
                     Icon(painterResource(R.drawable.ic_export),null,Modifier.size(24.dp));Spacer(Modifier.width(14.dp));Text(t(label),Modifier.weight(1f),fontSize=18.sp,lineHeight=26.sp)
                 }

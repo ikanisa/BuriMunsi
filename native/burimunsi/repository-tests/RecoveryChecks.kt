@@ -36,11 +36,11 @@ fun main(){
  }}
  SecureStore.reset();val repo=NativeRepository(Context(),api,"group-1")
  var payment=Payment("payment-1","Payer","+250780000816",10000,"at","ft-1","unallocated",1)
- val member=Member("member-1","Member","+250780000816",10000,true,1)
+ val member=Member("member-1","Member","+250780000816",true,1)
  fun login(){if(repo.current()!=null)repo.clearOperator();repo.login("0780000001","2468")}
  var receiptNumber=0
  fun nextReceipt():Payment {payment=payment.copy(id="payment-"+(++receiptNumber));return payment}
- fun createUnknown(){outcome="pending";mutateFailure=true;edit=null;deny=false;unsupported=false;login();runCatching{repo.allocate(nextReceipt(),member,"Verified identity note")};check(repo.pending()?.state==OperationState.UNKNOWN)}
+ fun createUnknown(){outcome="pending";mutateFailure=true;edit=null;deny=false;unsupported=false;login();runCatching{repo.allocate(nextReceipt(),member)};check(repo.pending()?.state==OperationState.UNKNOWN)}
  createUnknown();val original=repo.pending()!!;val originalBytes=SecureStore.records["pending-command"]
  repo.clearOperator();bearer=tokenB;login();val before=posts
  ck("pending preserves original session digest after new sign-in",repo.pending()?.requestId==original.requestId&&repo.pending()?.sessionScope==Values.sha256(tokenA))
@@ -70,7 +70,7 @@ fun main(){
  ck("older backend has no unsafe fallback",runCatching{repo.reconcilePending()}.isFailure&&repo.pending()?.requestId==id&&posts==beforeDeny)
  unsupported=false
  ck("explicit retry cannot resend dispatched request",runCatching{repo.retryPending()}.isFailure&&posts==beforeDeny)
- ck("identical new submission still refused",runCatching{repo.allocate(payment,member,"Verified identity note")}.isFailure&&posts==beforeDeny)
+ ck("identical new submission still refused",runCatching{repo.allocate(payment,member)}.isFailure&&posts==beforeDeny)
  outcome="committed";repo.reconcilePending()
  createUnknown();outcome="committed";val raceId=repo.pending()!!.requestId
  started=CountDownLatch(1);latch=CountDownLatch(1);var failure:Throwable?=null
@@ -85,7 +85,7 @@ fun main(){
  deny=false;operatorId="operator-1";login();outcome="committed";repo.reconcilePending()
  ck("returning admitted owner can check original request",repo.pending()==null)
  mutateFailure=false;outcome="committed";val beforeSuccess=posts;val lookupsBefore=lookups
- val result=repo.allocate(nextReceipt(),member,"A new explicit verified action")
+ val result=repo.allocate(nextReceipt(),member)
  ck("new action uses one POST plus proof read",posts==beforeSuccess+1&&lookups==lookupsBefore+1&&result.getString("state")=="committed"&&repo.pending()==null)
  // Storage failures are not permission to reopen the financial mutation gate.
  createUnknown();val cacheFailureId=repo.pending()!!.requestId;val cacheFailurePosts=posts
@@ -98,13 +98,13 @@ fun main(){
  createUnknown();val journalFailureId=repo.pending()!!.requestId;val journalFailurePosts=posts;outcome="committed"
  SecureStore.retainClear="pending-command"
  ck("silent journal removal failure remains unresolved",runCatching{repo.reconcilePending()}.isFailure&&repo.pending()?.requestId==journalFailureId)
- ck("retained terminal journal blocks a second action",runCatching{repo.allocate(payment,member,"Another explicit action")}.isFailure&&posts==journalFailurePosts)
+ ck("retained terminal journal blocks a second action",runCatching{repo.allocate(payment,member)}.isFailure&&posts==journalFailurePosts)
  SecureStore.retainClear=null;repo.reconcilePending()
  ck("journal cleanup recovery does not repeat POST",repo.pending()==null&&posts==journalFailurePosts)
  // The same invariant applies when the first POST and its outcome read succeed.
  mutateFailure=false;outcome="committed";SecureStore.records["records"]="old cached state";SecureStore.retainClear="records"
  val beforeCleanupPost=posts
- ck("POST success plus failed cleanup retains committed proof and gate",runCatching{repo.allocate(nextReceipt(),member,"Confirmed command cleanup test")}.isFailure&&repo.pending()?.state==OperationState.COMMITTED&&posts==beforeCleanupPost+1)
+ ck("POST success plus failed cleanup retains committed proof and gate",runCatching{repo.allocate(nextReceipt(),member)}.isFailure&&repo.pending()?.state==OperationState.COMMITTED&&posts==beforeCleanupPost+1)
  SecureStore.retainClear=null;repo.reconcilePending()
  ck("cleanup after POST success needs only result read",repo.pending()==null&&posts==beforeCleanupPost+1)
  println("RESULT: $checks owner-bound recovery checks passed; actual repository/DTO/journal with synthetic transport/storage, not Android or PostgreSQL.")

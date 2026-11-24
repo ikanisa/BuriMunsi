@@ -62,7 +62,7 @@ internal class SessionScenario {
                 request.path.endsWith("/session/login") || request.path.endsWith("/session") ->
                     JSONObject().put("profile", profile).put("token", token).put("groupId", group)
                         .put("expiresAt", sessionDeadline ?: (System.currentTimeMillis() + 3_600_000)).toString()
-                request.path.endsWith("/home") -> JSONObject().put("groupBalanceRwf", 0).put("todayRwf", 0)
+                request.path.endsWith("/home") -> JSONObject().put("paymentCount", 0)
                     .put("memberCount", 0).put("unallocatedCount", 0).put("recentPayments", JSONArray())
                     .put("asOf", "2026-11-20T00:00:00Z").toString()
                 request.path.contains("/staff?") -> JSONObject().put("items", JSONArray()).put("totalCount", 0)
@@ -301,16 +301,16 @@ private suspend fun bundledHomeRestores() {
     Transport.sessionHome = { request ->
         val session = Transport.handler(request.copy(path = "/v1/burimunsi/session"))
         val home = Transport.handler(request.copy(path = "/v1/burimunsi/home"))
-        JSONObject(session).put("home", JSONObject(home).put("groupBalanceRwf", 250L)).toString()
+        JSONObject(session).put("home", JSONObject(home).put("paymentCount", 250L)).toString()
     }
     val model = BuriViewModel(scenario.app)
     try {
         idle(model)
-        check(model.state.operator?.id == scenario.owner && model.state.home?.balanceRwf == 250L)
+        check(model.state.operator?.id == scenario.owner && model.state.home?.paymentCount == 250)
         check(Transport.calls.count { it.path.endsWith("/session?include=home") } == 1)
         check(Transport.calls.none { it.path.endsWith("/home") || it.path.endsWith("/session") })
         val saved = checkNotNull(NativeRecordCache(scenario.app).read("/home")).getJSONObject("entries").getJSONObject("/home")
-        check(JSONObject(saved.getString("payload")).getLong("groupBalanceRwf") == 250L)
+        check(JSONObject(saved.getString("payload")).getLong("paymentCount") == 250L)
     } finally {
         stop(model)
         Transport.sessionHome = null
@@ -385,7 +385,7 @@ private suspend fun loginHomeRequests(include: Boolean, oldServer: Boolean = fal
         if(oldServer)throw ApiFailure("invalid_query",400)
         val login = Transport.handler(request.copy(path = "/v1/burimunsi/session/login"))
         val home = if(include)JSONObject(Transport.handler(request.copy(path = "/v1/burimunsi/home")))
-            .put("groupBalanceRwf",300L) else JSONObject.NULL
+            .put("paymentCount",300L) else JSONObject.NULL
         JSONObject(login).put("home",home).toString()
     }
     val model=BuriViewModel(scenario.app)
@@ -401,7 +401,7 @@ private suspend fun loginHomeRequests(include: Boolean, oldServer: Boolean = fal
         }
         check(Transport.calls.map{it.path}==expected)
         if(uncertain)check(model.state.operator==null&&model.state.home==null)
-        else check(model.state.operator?.id==scenario.owner&&model.state.home?.balanceRwf==(if(include)300L else 0L))
+        else check(model.state.operator?.id==scenario.owner&&model.state.home?.paymentCount==(if(include)300 else 0))
     } finally {
         stop(model)
         Transport.loginHome=null
@@ -417,17 +417,17 @@ private suspend fun recentHomeStillReadsAuthorizedData() {
     Transport.sessionHome = { request ->
         val session = normal(request.copy(path = "/v1/burimunsi/session"))
         val home = normal(request.copy(path = "/v1/burimunsi/home"))
-        JSONObject(session).put("home", JSONObject(home).put("groupBalanceRwf", 50L)).toString()
+        JSONObject(session).put("home", JSONObject(home).put("paymentCount", 50L)).toString()
     }
     Transport.calls.clear()
     val model = BuriViewModel(scenario.app)
     try {
         idle(model)
-        check(model.state.home?.balanceRwf == 50L && !model.state.offline)
+        check(model.state.home?.paymentCount == 50 && !model.state.offline)
         check(Transport.calls.map { it.path } == listOf("/v1/burimunsi/session?include=home"))
         model.onFixtureMain { refresh() }
         idle(model)
-        check(model.state.home?.balanceRwf == 0L && Transport.calls.count { it.path == "/v1/burimunsi/home" } == 1)
+        check(model.state.home?.paymentCount == 0 && Transport.calls.count { it.path == "/v1/burimunsi/home" } == 1)
     } finally {
         stop(model)
         Transport.sessionHome = null
@@ -507,7 +507,7 @@ private fun olderQueuedHomeCannotOverwriteNewerLiveHome() {
     var balance=10L
     Transport.handler={ request ->
         val response=original(request)
-        if(request.path.endsWith("/home"))JSONObject(response).put("groupBalanceRwf",balance).toString() else response
+        if(request.path.endsWith("/home"))JSONObject(response).put("paymentCount",balance).toString() else response
     }
     val cache=NativeRecordCache(scenario.app)
     val held=CountDownLatch(1);val release=CountDownLatch(1)
@@ -517,14 +517,14 @@ private fun olderQueuedHomeCannotOverwriteNewerLiveHome() {
     }
     try {
         check(held.await(5,TimeUnit.SECONDS))
-        check(foreground.home().balanceRwf==10L)
+        check(foreground.home().paymentCount==10)
         val older=checkNotNull(foreground.lastReadSavedAt)
         while(System.currentTimeMillis()<=older)Thread.sleep(1)
         balance=20L
-        check(second.home().balanceRwf==20L && checkNotNull(second.lastReadSavedAt)>older)
+        check(second.home().paymentCount==20 && checkNotNull(second.lastReadSavedAt)>older)
     } finally { release.countDown() }
     val stored=checkNotNull(cache.read("/home")).getJSONObject("entries").getJSONObject("/home")
-    check(JSONObject(stored.getString("payload")).getLong("groupBalanceRwf")==20L)
+    check(JSONObject(stored.getString("payload")).getLong("paymentCount")==20L)
 }
 
 private fun invalidationRejectsOldRecordWrites() {

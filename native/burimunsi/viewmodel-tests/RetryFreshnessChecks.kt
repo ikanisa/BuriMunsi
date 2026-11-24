@@ -73,18 +73,7 @@ fun main()=runBlocking {
     cacheVm.viewModelScope.cancel()
 
     reset()
-    val parentVm=BuriViewModel(Application(),MemoryStore()){now};idle(parentVm)
-    parentVm.navigate(Route.PAYMENT,"tx-1");idle(parentVm);parentVm.openSheet(Sheet.HISTORY);idle(parentVm)
-    Fixture.historyRevision="changed";parentVm.more();idle(parentVm)
-    ck("invalid history clears route and panel copies",parentVm.state.history==null&&parentVm.state.payment==null&&parentVm.state.readbackRequired)
-    parentVm.closeSheet()
-    ck("closing panel cannot resurrect a quarantined parent",parentVm.state.sheet==null&&parentVm.state.payment==null&&parentVm.state.readbackRequired&&!parentVm.presentation.showRecords)
-    Fixture.historyRevision="history-v1";parentVm.refresh();idle(parentVm)
-    ck("readback recovers exact parent identity",parentVm.state.payment?.id=="tx-1"&&parentVm.presentation.showRecords)
-    parentVm.viewModelScope.cancel()
-
-    reset()
-    val home=Home(1,1,1,0,emptyList(),"at")
+    val home=Home(0,1,0,emptyList(),"at")
     val panelBase=UiState(operator=Fixture.operator(),route=Route.HOME,home=home,savedAt=now,
         sheet=Sheet.ALLOCATE,members=Fixture.page(listOf(Fixture.member)),panelSavedAt=now)
     for(timestamp in listOf<Long?>(null,now+1,now-SnapshotFreshness.TTL_MS-1)){
@@ -104,9 +93,7 @@ fun main()=runBlocking {
     val memberVm=BuriViewModel(Application(),MemoryStore()){now};idle(memberVm)
     memberVm.navigate(Route.MEMBER,"member-1");idle(memberVm)
     Fixture.recordSavedAt=now;memberVm.setMemberActive(false);idle(memberVm)
-    // A04 invalidates consumed financial views before optional readback. There is
-    // no retained ledger whose old clock can be renewed by this member-only read.
-    ck("membership update discards old transactions before publishing fresh member",memberVm.state.memberTransactions==null&&memberVm.state.savedAt==now&&memberVm.state.member?.id=="member-1")
+    ck("membership update publishes only the current member detail",memberVm.state.payments==null&&memberVm.state.savedAt==now&&memberVm.state.member?.id=="member-1")
     memberVm.viewModelScope.cancel()
     println("RESULT: $checks retry/freshness actual ViewModel checks passed; isolated repository and platform doubles only.")
 }

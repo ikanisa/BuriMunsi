@@ -171,8 +171,8 @@ class NativeUiContractTest {
         }
         panelButton("Add member","Add manually").performClick()
         field("MoMo name").assertExists();field("MoMo number").assertExists()
-        panelList("Add member").performScrollToNode(hasText("Eligible earlier MoMo payments may be matched and credited automatically after you add this member."))
-        ui.onNodeWithText("Eligible earlier MoMo payments may be matched and credited automatically after you add this member.").assertIsDisplayed()
+        panelList("Add member").performScrollToNode(hasText("Privacy notice and consent recorded"))
+        ui.onNodeWithText("Privacy notice and consent recorded").assertIsDisplayed()
         ui.onNodeWithText("Adding a member does not allocate previous payments.").assertDoesNotExist()
         panelButton("Add member","Save member").assertIsNotEnabled()
         ui.runOnIdle{c.onboardingOptions()}
@@ -254,30 +254,30 @@ class NativeUiContractTest {
             ui.onNodeWithContentDescription(selected).assertIsSelected().assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.Role,androidx.compose.ui.semantics.Role.Tab))
         }
     }
-    @Test fun originalHeadersExposeFiltersProfileHistoryAndExport(){
-        val c=FakeController(Route.PAYMENTS);var exports=0;show(c,onExport={exports++})
+    @Test fun memberLinkOpensTheCentralPaymentsScreen(){
+        val c=FakeController(Route.PAYMENTS);show(c)
         ui.onNodeWithContentDescription("Payment filters").performClick();ui.runOnIdle{check(c.state.sheet==Sheet.FILTERS)}
         ui.onNodeWithTag("panel-close").performClick();ui.onNodeWithContentDescription("Your profile").performClick();ui.runOnIdle{check(c.state.sheet==Sheet.PROFILE)}
-        ui.runOnIdle{c.state=c.state.copy(sheet=null,route=Route.PAYMENT)}
-        headerAction("Contribution history").assertIsDisplayed().performClick();ui.runOnIdle{check(c.state.sheet==Sheet.HISTORY)}
-        ui.runOnIdle{c.state=c.state.copy(sheet=null,route=Route.MEMBER)}
-        headerAction("Download transactions").performClick();ui.runOnIdle{check(exports==0)}
-        ui.onNodeWithTag("export-format:XLSX").performClick();ui.runOnIdle{check(exports==1)}
+        ui.runOnIdle{c.state=c.state.copy(sheet=null,route=Route.MEMBER,routeId="member-1")}
+        button("View payments").performClick()
+        ui.runOnIdle{check(c.state.route==Route.PAYMENTS&&c.lastNavigationId=="member-1")}
+        button("Clear member filter").performClick()
+        ui.runOnIdle{check(c.state.route==Route.PAYMENTS&&c.state.routeId==null)}
     }
-    @Test fun originalFiltersIncludeProcessingAndApplyOnlyTheSelectedStatus(){
+    @Test fun paymentFiltersUseOnlyTheAllocationStates(){
         val c=FakeController(Route.PAYMENTS);show(c);ui.onNodeWithContentDescription("Payment filters").performClick()
         ui.onNodeWithText("Filters").assertExists();ui.onNodeWithText("Status").assertExists();ui.onNodeWithTag("payment-filter-select").performClick()
-        ui.onNodeWithText("Processing").performClick();ui.runOnIdle{check(c.filterCalls==0)}
+        ui.onNodeWithText("Processing").assertDoesNotExist();ui.onNodeWithText("Unallocated").performClick();ui.runOnIdle{check(c.filterCalls==0)}
         val applyBounds=button("Apply").fetchSemanticsNode().boundsInRoot
         val resetBounds=button("Reset all").fetchSemanticsNode().boundsInRoot
         check(applyBounds.bottom<=resetBounds.top){"Filter Apply and Reset must have separate hit areas"}
-        button("Apply").performClick();ui.runOnIdle{check(c.filterCalls==1&&c.state.filter=="processing"&&c.state.sheet==null){"Expected processing applied once; actual sheet=${c.state.sheet}, filter=${c.state.filter}, applies=${c.filterCalls}"}}
+        button("Apply").performClick();ui.runOnIdle{check(c.filterCalls==1&&c.state.filter=="unallocated"&&c.state.sheet==null){"Expected Unallocated applied once; actual sheet=${c.state.sheet}, filter=${c.state.filter}, applies=${c.filterCalls}"}}
     }
-    @Test fun overviewKeepsAuthoritativeUnallocatedAmountAndAllPaymentsAction(){
-        val c=FakeController(Route.HOME);c.state=c.state.copy(home=c.state.home!!.copy(unallocatedCount=1,unallocatedAmountRwf=3000));show(c)
+    @Test fun overviewKeepsReportedUnallocatedCountAndAllPaymentsAction(){
+        val c=FakeController(Route.HOME);c.state=c.state.copy(home=c.state.home!!.copy(unallocatedCount=1));show(c)
         val list=ui.onNode(hasScrollToIndexAction())
         list.performScrollToNode(hasText("1 unallocated"))
-        ui.onNodeWithText("1 unallocated").assertExists();ui.onNodeWithText("RWF 3,000").assertExists()
+        ui.onNodeWithText("1 unallocated").assertExists()
         list.performScrollToNode(hasContentDescription("All payments"))
         val allPayments=ui.onNodeWithContentDescription("All payments").performScrollTo().assertIsDisplayed()
         val actionBounds=allPayments.fetchSemanticsNode().boundsInRoot
@@ -286,24 +286,24 @@ class NativeUiContractTest {
         allPayments.performClick()
         ui.runOnIdle{check(c.state.route==Route.PAYMENTS){"All payments opened ${c.state.route}"}}
     }
-    @Test fun homeOpensActualRecentTransactionsAndDoesNotClaimPendingCredit(){
+    @Test fun homeOpensActualRecentPaymentsAndShowsAllocationState(){
         val c=FakeController(Route.HOME,Role.STAFF)
         val home=c.state.home!!
         val original=c.state.payment!!
-        val pending=original.copy(id="pending-1",payerNameRaw="EXAMPLE PENDING",state="recorded",outcome="pending")
-        val outgoing=original.copy(id="outgoing-1",payerNameRaw="EXAMPLE OUTGOING",state="recorded",direction="outgoing")
+        val pending=original.copy(id="pending-1",payerNameRaw="EXAMPLE PENDING",state="unallocated",outcome="pending")
+        val outgoing=original.copy(id="outgoing-1",payerNameRaw="EXAMPLE OUTGOING",state="allocated",direction="outgoing")
         c.state=c.state.copy(home=home.copy(recent=emptyList()))
         show(c)
         val list=ui.onNode(hasScrollToIndexAction())
-        list.performScrollToNode(hasText("No recent transactions"))
-        ui.onNodeWithText("No recent transactions").assertIsDisplayed()
-        ui.runOnIdle{c.state=c.state.copy(home=home.copy(recent=listOf(pending,outgoing)))}
+        list.performScrollToNode(hasText("No recent payments"))
+        ui.onNodeWithText("No recent payments").assertIsDisplayed()
+        ui.runOnIdle{c.state=c.state.copy(home=home.copy(paymentCount=2,unallocatedCount=1,recent=listOf(pending,outgoing)))}
         list.performScrollToNode(hasContentDescription("EXAMPLE PENDING"))
         val pendingRow=ui.onNode(hasContentDescription("EXAMPLE PENDING") and hasClickAction())
-        pendingRow.assert(hasText("Pending")).assert(!hasText("Credited"))
+        pendingRow.assert(hasText("Unallocated"))
         list.performScrollToNode(hasContentDescription("EXAMPLE OUTGOING"))
         val outgoingRow=ui.onNode(hasContentDescription("EXAMPLE OUTGOING") and hasClickAction())
-        outgoingRow.assert(hasText("Outgoing")).performClick()
+        outgoingRow.assert(hasText("Outgoing") and hasText("Allocated")).performClick()
         ui.runOnIdle{check(c.state.route==Route.PAYMENT&&c.lastNavigationId==outgoing.id)}
     }
     @Test fun searchIsLiveAndHasNoAddedSubmitControl(){
@@ -331,19 +331,16 @@ class NativeUiContractTest {
         panelButton(panelTitle, "Save").assertIsEnabled().performClick()
         ui.runOnIdle { check(c.pinChangeCalls == 1) }
     }
-    @Test fun rawReceiptOpensDirectlyAndLinksToItsContribution(){
+    @Test fun rawReceiptOpensDirectlyAndLinksToItsPayment(){
         val c=FakeController(Route.PAYMENT);show(c)
         if(BuildConfig.IS_GATEWAY){
             ui.onNodeWithTag("payment-details-scroll").performScrollToNode(hasContentDescription("Original SMS"))
             ui.onNodeWithContentDescription("Original SMS").performClick()
             ui.onNodeWithText(c.receiptBody).performScrollTo().assertExists();ui.onNodeWithText("Review reason").assertDoesNotExist();ui.onNodeWithText("Reveal original SMS").assertDoesNotExist()
-            panelButton("M-Money","Open contribution").performClick();ui.runOnIdle{check(c.state.route==Route.PAYMENT&&c.lastNavigationId=="tx-1"&&c.rawCalls==1)}
+            panelButton("M-Money","Open payment").performClick();ui.runOnIdle{check(c.state.route==Route.PAYMENT&&c.lastNavigationId=="tx-1"&&c.rawCalls==1)}
         }else{
             assertReceiverControlsAbsent(c)
             ui.onNodeWithText(c.receiptBody).assertDoesNotExist()
-            ui.onNodeWithTag("payment-details-scroll").performScrollToNode(hasContentDescription("Member ledger"))
-            ui.onNodeWithContentDescription("Member ledger").assertExists()
-            headerAction("Contribution history").assertIsDisplayed()
         }
     }
     @Test fun backgroundPrivacyNeverExposesRawReceipt(){
@@ -360,13 +357,13 @@ class NativeUiContractTest {
             ui.onNodeWithContentDescription("10,000 RWF").assertExists();assertReceiverControlsAbsent(c)
         }
     }
-    @Test fun allOriginalFifteenPanelTitlesRemainReachable(){
+    @Test fun allCurrentPanelTitlesRemainReachable(){
         val c=FakeController(Route.HOME);show(c)
-        val titles=mapOf(Sheet.PROFILE to "Profile",Sheet.PIN to "Change passcode",Sheet.HELP to "Help",Sheet.ALLOCATE to "Allocate",Sheet.ENROLL to "Add member",Sheet.STAFF to "Staff access",Sheet.STAFF_EDIT to "Add staff",Sheet.REMOVE_STAFF to "Remove access?",Sheet.GATEWAY to "Gateway",Sheet.REPLACE_DEVICE to "Replace receiver",Sheet.RAW to "M-Money",Sheet.MEMBER_DETAILS to "Member details",Sheet.HISTORY to "Contribution history",Sheet.AUDIT to "Activity log",Sheet.FILTERS to "Filters")
-        check(titles.size==15)
+        val titles=mapOf(Sheet.PROFILE to "Profile",Sheet.PIN to "Change passcode",Sheet.HELP to "Help",Sheet.ALLOCATE to "Allocate",Sheet.ENROLL to "Add member",Sheet.STAFF to "Staff access",Sheet.STAFF_EDIT to "Add staff",Sheet.REMOVE_STAFF to "Remove access?",Sheet.GATEWAY to "Gateway",Sheet.REPLACE_DEVICE to "Replace receiver",Sheet.RAW to "M-Money",Sheet.MEMBER_DETAILS to "Member details",Sheet.AUDIT to "Activity log",Sheet.FILTERS to "Filters")
+        check(titles.size==14)
         val receiverPanels=setOf(Sheet.GATEWAY,Sheet.REPLACE_DEVICE,Sheet.RAW)
         val accessible=if(BuildConfig.IS_GATEWAY)titles else titles.filterKeys{it !in receiverPanels}
-        check(accessible.size==if(BuildConfig.IS_GATEWAY)15 else 12)
+        check(accessible.size==if(BuildConfig.IS_GATEWAY)14 else 11)
         for((sheet,title)in accessible){ui.runOnIdle{c.openSheet(sheet,if(sheet==Sheet.RAW)"sms-1"else null)};ui.onNode(hasText(title)and SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.Heading,Unit)).assertExists();ui.onNodeWithTag("panel-close").performClick();ui.runOnIdle{check(c.state.sheet==null)}}
         if(!BuildConfig.IS_GATEWAY){ui.runOnIdle{c.state=c.state.copy(route=Route.SETTINGS)};assertReceiverControlsAbsent(c)}
     }
@@ -533,7 +530,7 @@ class NativeUiContractTest {
         ui.runOnIdle{c.openSms(source)}
         ui.onNodeWithText("This message is unverified and has not been posted to the ledger.").assertDoesNotExist()
         ui.onNodeWithText("Reference shown in SMS").assertExists()
-        panelButton("M-Money","Open contribution").assertDoesNotExist()
+        panelButton("M-Money","Open payment").assertDoesNotExist()
         ui.runOnIdle{c.state=c.state.copy(raw=c.state.raw!!.copy(sender="Example provider"))}
         ui.onNode(hasText("Example provider") and SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.Heading,Unit)).assertExists()
         ui.runOnIdle{c.state=c.state.copy(raw=c.state.raw!!.copy(sender=""))}
@@ -632,23 +629,22 @@ class NativeUiContractTest {
         ui.runOnIdle{c.state=c.state.copy(queuedUnavailable=false)}
         ui.onNodeWithText("No messages").assertDoesNotExist();ui.onNodeWithText("Queue state unavailable").assertExists()
     }
-    @Test fun unknownFinancialOutcomeNeverShowsAllocationAction(){
+    @Test fun legacyNonAssignableStatesNeverOfferAllocate(){
         val c=FakeController(Route.PAYMENT);c.state=c.state.copy(payment=c.state.payment!!.copy(state="unknown"));show(c)
-        ui.onNodeWithText("Status unavailable").assertExists();button("Allocate").assertDoesNotExist()
+        ui.onNodeWithText("Unallocated").assertExists();button("Allocate").assertDoesNotExist()
         ui.runOnIdle{c.state=c.state.copy(payment=c.state.payment!!.copy(state="corrected"))}
-        ui.onNodeWithText("Corrected").assertExists()
-        ui.onNodeWithText("Amount on original receipt · member credit not confirmed.").assertExists()
+        ui.onNodeWithText("Unallocated").assertExists()
         button("Allocate").assertDoesNotExist()
     }
-    @Test fun automaticOutgoingTransactionShowsActualFieldsWithoutAllocating(){
+    @Test fun incompleteOutgoingPaymentKeepsActualFieldsAndBlocksAllocation(){
         val c=FakeController(Route.PAYMENT)
         c.state=c.state.copy(payment=c.state.payment!!.copy(payerNameRaw="",payerPhoneRaw="",amountRwf=null,ftId=null,
             state="recorded",memberId=null,memberPhone=null,sourceKind="observation",direction="outgoing",outcome="pending",
             feeRwf=25,walletBalanceAfterRwf=1900))
         show(c)
         ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Direction"))
-        ui.onNodeWithText("Outgoing").assertExists();ui.onAllNodesWithText("Pending").onFirst().assertExists()
-        ui.onNodeWithText("RWF 25").assertExists();ui.onNodeWithText("RWF 1,900").assertExists()
+        ui.onNodeWithText("Outgoing").assertExists();ui.onNodeWithText("Unallocated").assertExists()
+        ui.onNodeWithText("RWF 25").assertExists()
         ui.onNodeWithText("null").assertDoesNotExist()
         button("Allocate").assertDoesNotExist()
         if(BuildConfig.IS_GATEWAY){
@@ -672,10 +668,14 @@ class NativeUiContractTest {
         ui.onNodeWithText("FT-EXAMPLE").assertIsDisplayed()
     }
     @Test fun allocationActionStaysAboveNavigationAndHonorsAccessAndOfflineState(){
-        val c=FakeController(Route.PAYMENT);c.state=c.state.copy(payment=c.state.payment!!.copy(state="unallocated",memberId=null,memberPhone=null));show(c)
-        ui.onNodeWithTag("payment-details-scroll").performScrollToIndex(5)
+        val c=FakeController(Route.PAYMENT);c.state=c.state.copy(payment=c.state.payment!!.copy(state="unallocated",direction="outgoing",memberId=null,memberPhone=null));show(c)
+        ui.onNodeWithTag("payment-details-scroll").performScrollToNode(hasText("Direction"))
         ui.onNodeWithTag("payment-allocation-fixed").assertIsDisplayed().assertIsEnabled().performClick()
-        ui.runOnIdle{check(c.state.sheet==Sheet.ALLOCATE);c.state=c.state.copy(sheet=null,offline=true)}
+        ui.runOnIdle{check(c.state.sheet==Sheet.ALLOCATE)}
+        panelButton("Allocate","Allocate").assertIsNotEnabled()
+        ui.runOnIdle{c.state=c.state.copy(selectedMember=c.state.members!!.items.first())}
+        panelButton("Allocate","Allocate").assertIsEnabled().performClick()
+        ui.runOnIdle{check(c.allocateCalls==1);c.state=c.state.copy(sheet=null,offline=true)}
         ui.onNodeWithTag("payment-allocation-fixed").assertIsDisplayed().assertIsNotEnabled()
         ui.runOnIdle{c.state=c.state.copy(offline=false,operator=c.operator.copy(capabilities=setOf("records.read")))}
         ui.onNodeWithTag("payment-allocation-fixed").assertDoesNotExist()
@@ -710,8 +710,8 @@ class NativeUiContractTest {
         ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasContentDescription("10,000 RWF"))
         ui.onNodeWithContentDescription("10,000 RWF").assertExists();ui.onNodeWithContentDescription("EXAMPLE PERSON WITH A VERY LONG FULL NAME",substring=true).assertExists()
         ui.runOnIdle{c.state=c.state.copy(route=Route.MEMBERS,sheet=Sheet.ENROLL);c.onboardingManual()}
-        panelList("Add member").performScrollToNode(hasText("Eligible earlier MoMo payments may be matched and credited automatically after you add this member."))
-        ui.onNodeWithText("Eligible earlier MoMo payments may be matched and credited automatically after you add this member.").assertIsDisplayed()
+        panelList("Add member").performScrollToNode(hasText("Privacy notice and consent recorded"))
+        ui.onNodeWithText("Privacy notice and consent recorded").assertIsDisplayed()
         panelButton("Add member","Save member").assertIsDisplayed().assertIsNotEnabled()
     }
     @Test fun exportFormatsDispatchOnlyAfterAnExplicitContextualChoice(){
@@ -719,11 +719,7 @@ class NativeUiContractTest {
         ui.onNodeWithContentDescription("Export results").performScrollTo().performClick()
         ui.onNodeWithTag("export-format-sheet").assertIsDisplayed();ui.onNodeWithTag("export-format:CSV").assertDoesNotExist()
         ui.onNodeWithTag("export-format:PDF").assertExists();ui.runOnIdle{check(chosen.isEmpty())}
-        ui.onNodeWithTag("export-format:XLSX").performScrollTo().performClick();ui.runOnIdle{check(chosen==listOf(ExportFormat.XLSX));c.state=c.state.copy(route=Route.MEMBER)}
-        headerAction("Download transactions").performClick()
-        ui.onNodeWithText("Excel and PDF use the selected transaction filters. CSV includes the full member ledger.").assertExists()
-        ui.onNodeWithTag("export-format:CSV").performScrollTo().performClick()
-        ui.runOnIdle{check(chosen==listOf(ExportFormat.XLSX,ExportFormat.CSV))}
+        ui.onNodeWithTag("export-format:XLSX").performScrollTo().performClick();ui.runOnIdle{check(chosen==listOf(ExportFormat.XLSX))}
     }
     @Test fun refreshAndExportFeedbackNeverReplaceValidRecordsWithFakeSuccess(){
         val c=FakeController(Route.PAYMENTS);c.state=c.state.copy(busy=true);c.operation=UiOperation.REFRESH;show(c)
@@ -737,8 +733,8 @@ class NativeUiContractTest {
         ui.onNodeWithText("Saving file").assertExists();ui.onNodeWithText("File saved").assertDoesNotExist()
         ui.runOnIdle{c.state=c.state.copy(busy=false);c.operation=UiOperation.NONE;c.exportFeedback=c.exportFeedback!!.copy(phase=UiExportPhase.COMPLETE)}
         ui.onNodeWithText("File saved").assertExists()
-        ui.runOnIdle{c.openSheet(Sheet.HISTORY);c.state=c.state.copy(busy=true);c.operation=UiOperation.EXPORT;c.exportFeedback=UiExportFeedback(UiExportPhase.PREPARING,ExportFormat.PDF,canCancel=true)}
-        panelButton("Contribution history","Cancel export").assertIsDisplayed().performClick();ui.runOnIdle{check(c.cancelExportCalls==1)}
+        ui.runOnIdle{c.openSheet(Sheet.AUDIT);c.state=c.state.copy(busy=true);c.operation=UiOperation.EXPORT;c.exportFeedback=UiExportFeedback(UiExportPhase.PREPARING,ExportFormat.PDF,canCancel=true)}
+        panelButton("Activity log","Cancel export").assertIsDisplayed().performClick();ui.runOnIdle{check(c.cancelExportCalls==1)}
     }
     @Test fun initialLoadingSkeletonDoesNotClaimAnEmptyResult(){
         val c=FakeController(Route.PAYMENTS);c.state=c.state.copy(payments=null,busy=true);c.operation=UiOperation.INITIAL_READ;show(c)
@@ -763,17 +759,14 @@ class NativeUiContractTest {
         field("Minimum RWF").performTextClearance();field("Minimum RWF").performTextInput("0");button("Apply").performClick()
         ui.runOnIdle{check(c.filterCalls==1&&c.lastAppliedQuery?.fromAt=="2026-11-13T22:00:00Z"&&c.lastAppliedQuery?.untilAt=="2026-11-14T22:00:00Z"&&c.lastAppliedQuery?.minRwf==0L&&c.lastAppliedQuery?.maxRwf==100L&&c.state.sheet==null)}
     }
-    @Test fun typedFilterOverlayReturnsToItsPanelAndShowsActualSort(){
-        val c=FakeController(Route.PAYMENT);c.openSheet(Sheet.HISTORY);show(c)
-        ui.onNodeWithTag("listing-tools:HISTORY").assertExists();ui.onNodeWithText("Sorted by Oldest first").assertExists()
+    @Test fun typedFilterOverlayReturnsToItsStaffPanelAndRetainsTheSelection(){
+        val c=FakeController(Route.SETTINGS);c.openSheet(Sheet.STAFF);show(c)
+        ui.onNodeWithTag("listing-tools:STAFF").assertExists()
         ui.onNodeWithTag("listing-sort-menu").performClick();ui.onNodeWithText("Newest first").performClick()
-        ui.runOnIdle{check(c.state.sheet==Sheet.HISTORY&&c.lastAppliedQuery?.sort==ListingSort.NEWEST)}
-        button("Filters").performClick();ui.onNodeWithTag("listing-filter-select").performClick();ui.onNodeWithText("Ledger entry recorded").performClick()
-        ui.onNodeWithTag("listing-filter-select").assert(hasText("Ledger entry recorded"));button("Apply").performClick()
-        ui.runOnIdle{check(c.state.sheet==Sheet.HISTORY&&c.lastAppliedQuery?.filter=="ledger_entry"){"Expected HISTORY ledger_entry; actual sheet=${c.state.sheet}, query=${c.lastAppliedQuery}, applies=${c.filterCalls}"}}
-        for((sheet,target)in listOf(Sheet.STAFF to ListingTarget.STAFF,Sheet.AUDIT to ListingTarget.AUDIT)){
-            ui.runOnIdle{c.closeSheet();c.openSheet(sheet)};ui.onNodeWithTag("listing-tools:${target.name}").assertExists()
-        }
+        ui.runOnIdle{check(c.state.sheet==Sheet.STAFF&&c.lastAppliedQuery?.sort==ListingSort.NEWEST)}
+        button("Filters").performClick();ui.onNodeWithTag("listing-active-select").performClick();ui.onNodeWithText("Inactive").performClick()
+        ui.onNodeWithTag("listing-active-select").assert(hasText("Inactive"));button("Apply").performClick()
+        ui.runOnIdle{check(c.state.sheet==Sheet.STAFF&&c.lastAppliedQuery?.active=="inactive")}
     }
     @Test fun smsDownloadsStayMetadataOnlyAndRequireClearingBodySearch(){
         val c=FakeController(if(BuildConfig.IS_GATEWAY)Route.SMS else Route.SETTINGS);c.smsAccessGranted=true;show(c)
@@ -798,8 +791,8 @@ private class FakeController(route:Route,role:Role=Role.ADMIN):BuriController{
     private val snapshotAt=System.currentTimeMillis()
     val operator=Operator("operator-1","EXAMPLE STAFF","+250780000002",role,if(role==Role.ADMIN)Capability.values().map{it.key}.toSet()else setOf("records.read","members.enroll","payments.allocate"),Long.MAX_VALUE)
     val receiptBody="Synthetic M-Money receipt · no live SMS data"
-    private val person=Member("member-1","EXAMPLE PERSON WITH A VERY LONG FULL NAME","+250780000001",10000,true,1)
-    private val pay=Payment("tx-1",person.name,"*********816",10000,"2026-10-08 15:15:20","90000000001","posted",1,person.id,person.phone,"sms-1")
+    private val person=Member("member-1","EXAMPLE PERSON WITH A VERY LONG FULL NAME","+250780000001",true,1)
+    private val pay=Payment("tx-1",person.name,"*********816",10000,"2026-10-08 15:15:20","90000000001","allocated",1,person.id,person.phone,"sms-1")
     override var screenGate by mutableStateOf(ScreenGate.OPEN)
     override var notificationAccessGranted:Boolean? by mutableStateOf(null)
     override var continuousSyncRunning:Boolean? by mutableStateOf(true)
@@ -823,8 +816,8 @@ private class FakeController(route:Route,role:Role=Role.ADMIN):BuriController{
     var lastAppliedQuery:ListingQuery?=null
     fun seedQuery(query:ListingQuery,target:ListingTarget=listingTarget?:ListingTarget.PAYMENTS){queries[target]=query.validated(target)}
     override val listingTarget:ListingTarget? get()=if(state.sheet==Sheet.FILTERS)filterOrigin else when(state.sheet){
-        Sheet.STAFF->ListingTarget.STAFF;Sheet.AUDIT->ListingTarget.AUDIT;Sheet.HISTORY->ListingTarget.HISTORY
-        null->when(state.route){Route.PAYMENTS,Route.MEMBER->ListingTarget.PAYMENTS;Route.MEMBERS->ListingTarget.MEMBERS;Route.SMS->if(state.filter=="queued")ListingTarget.OBSERVATIONS else ListingTarget.SMS;else->null}
+        Sheet.STAFF->ListingTarget.STAFF;Sheet.AUDIT->ListingTarget.AUDIT
+        null->when(state.route){Route.PAYMENTS->ListingTarget.PAYMENTS;Route.MEMBERS->ListingTarget.MEMBERS;Route.SMS->if(state.filter=="queued")ListingTarget.OBSERVATIONS else ListingTarget.SMS;else->null}
         else->null
     }
     override val listingQuery get()=listingTarget?.let{queries[it]?:ListingQuery.defaultsFor(it)}?:ListingQuery()
@@ -846,9 +839,9 @@ private class FakeController(route:Route,role:Role=Role.ADMIN):BuriController{
     var loginCalls=0;var lastPhone="";var lastPin="";var searchCalls=0;var filterCalls=0;var pinChangeCalls=0;var rawCalls=0;var pairCalls=0;var replaceCalls=0;var syncCalls=0;var lastPairCode="";var lastNavigationId:String?=null
     var staffSaveCalls=0;var lastStaffPhone="";var lastStaffPin="";var moreCalls=0;var moreObservationCalls=0;var observationRetryCalls=0
     var deniedSheetRequests=0;var lastSheetRequest:Sheet?=null
-    override var state by mutableStateOf(UiState(operator=if(route==Route.LOGIN)null else operator,route=route,savedAt=snapshotAt,panelSavedAt=snapshotAt,historySavedAt=snapshotAt,
-        home=Home(10000,10000,1,0,listOf(pay),"2026-11-06T10:00:00Z",0),payments=Page(listOf(pay),null,1,"v1","now"),members=Page(listOf(person),null,1,"v1","now"),member=person,payment=pay,memberTransactions=Page(listOf(pay),null,1,"v1","now"),
-        gateway=if(role==Role.ADMIN)GatewayStatus(true,true,1,0,null,"09:42","09:42",null)else null,messages=Page(listOf(SmsRow("sms-1","M-Money",pay.atRaw,"Synthetic preview","synced","tx-1","SIM 1")),null,1,"v1","now"),staff=Page(emptyList(),null,0,"staff-v1","now"),audit=Page(emptyList(),null,0,"audit-v1","now"),history=Page(emptyList(),null,0,"history-v1","now")))
+    override var state by mutableStateOf(UiState(operator=if(route==Route.LOGIN)null else operator,route=route,savedAt=snapshotAt,panelSavedAt=snapshotAt,
+        home=Home(1,1,0,listOf(pay),"2026-11-06T10:00:00Z"),payments=Page(listOf(pay),null,1,"v1","now"),members=Page(listOf(person),null,1,"v1","now"),member=person,payment=pay,
+        gateway=if(role==Role.ADMIN)GatewayStatus(true,true,1,0,null,"09:42","09:42",null)else null,messages=Page(listOf(SmsRow("sms-1","M-Money",pay.atRaw,"Synthetic preview","synced","tx-1","SIM 1")),null,1,"v1","now"),staff=Page(emptyList(),null,0,"staff-v1","now"),audit=Page(emptyList(),null,0,"audit-v1","now")))
     override fun allows(capability:Capability)=screenGate==ScreenGate.OPEN&&Access.allows(state.operator,capability,System.currentTimeMillis(),BuildConfig.IS_GATEWAY)
     override fun login(phone:String,pin:String){loginCalls++;lastPhone=phone;lastPin=pin;if(simulatePendingSignIn){operation=UiOperation.SIGN_IN;state=state.copy(busy=true)}}
     override fun logout(){state=UiState()}
@@ -897,7 +890,8 @@ private class FakeController(route:Route,role:Role=Role.ADMIN):BuriController{
     override fun editDraft(key:String,value:String){state=state.copy(draft=state.draft+(key to value),draftDirty=true)}
     override fun selectMember(member:Member){state=state.copy(selectedMember=member)}
     override fun allocationSearch(q:String){}
-    override fun allocate(note:String){}
+    var allocateCalls=0
+    override fun allocate(){allocateCalls++}
     override fun enroll(name:String,phone:String){}
     override fun onboardingOptions(){state=state.copy(onboarding=SmartOnboardingState())}
     override fun onboardingManual(){state=state.copy(onboarding=SmartOnboardingState(step=SmartOnboardingStep.MEMBER))}

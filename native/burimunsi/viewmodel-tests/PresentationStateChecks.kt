@@ -154,8 +154,8 @@ fun main()=runBlocking {
     val who=Fixture.operator();val page=Fixture.page(listOf(Fixture.payment()))
     fun project(route:Route,requested:DisplayState):ScreenPresentation {
         val base=UiState(operator=if(route==Route.LOGIN)null else who,route=route,savedAt=now,
-            home=Home(1,1,1,0,emptyList(),"at"),payments=page,payment=Fixture.payment(),members=Fixture.page(listOf(Fixture.member)),
-            member=Fixture.member,memberTransactions=Page(emptyList(),null,0,"r","at"),messages=Fixture.page(listOf(SmsRow("s-1","M-Money","at","unchanged","queued",null))))
+            home=Home(0,1,0,emptyList(),"at"),payments=page,payment=Fixture.payment(),members=Fixture.page(listOf(Fixture.member)),
+            member=Fixture.member,messages=Fixture.page(listOf(SmsRow("s-1","M-Money","at","unchanged","queued",null))))
         val sample=when(requested){
             DisplayState.SIGN_IN->base.copy(operator=null)
             DisplayState.LOADING->base.copy(busy=true)

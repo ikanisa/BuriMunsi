@@ -25,7 +25,7 @@ fun main()=runBlocking{
         m.login("0780000001","2468");idle(m);ck("J01 login reaches canonical Home read boundary",m.state.route==Route.HOME&&m.state.home!=null)
     }
     journey("J02","Home and unallocated shortcut"){m->
-        ck("J02 dashboard uses repository values",m.state.home?.balanceRwf==10000L)
+        ck("J02 dashboard uses repository values",m.state.home?.paymentCount==10000)
         m.openUnallocated();idle(m);ck("J02 shortcut filters before read",m.state.route==Route.PAYMENTS&&m.state.filter=="unallocated"&&Fixture.lastFilter=="unallocated")
     }
     journey("J03","payment search pagination and return"){m->
@@ -34,17 +34,18 @@ fun main()=runBlocking{
         m.listPosition(Route.PAYMENTS,null,3,10);m.navigate(Route.PAYMENT,"tx-2");idle(m);m.back();idle(m)
         ck("J03 Back restores query filter and position",m.state.search=="Example"&&m.state.filter=="unallocated"&&m.state.listIndex==3&&m.state.listOffset==10)
     }
-    journey("J04","payment history and unaltered source evidence"){m->
-        val mutations=Fixture.mutations;m.navigate(Route.PAYMENT,"tx-1");idle(m);m.openSheet(Sheet.HISTORY);idle(m);m.more();idle(m)
-        ck("J04 history pagination remains transaction scoped",m.state.history?.items?.size==2&&m.state.historyPaymentId=="tx-1")
-        m.closeSheet();m.openSheet(Sheet.RAW,"sms-1");idle(m);m.revealRaw("Verified support request");idle(m);ck("J04 original receipt is unchanged",m.state.raw?.body=="unaltered"&&Fixture.mutations==mutations)
+    journey("J04","original SMS for a payment"){m->
+        val mutations=Fixture.mutations
+        m.navigate(Route.PAYMENT,"tx-1");idle(m);m.openSheet(Sheet.RAW,"sms-1");idle(m)
+        m.revealRaw("Synthetic support request");idle(m)
+        ck("J04 original receipt is unchanged",m.state.raw?.body=="unaltered"&&Fixture.mutations==mutations)
     }
     journey("J05","allocation and unresolved-action block"){m->
         val before=Fixture.mutations;m.navigate(Route.PAYMENT,"tx-1");idle(m);m.openSheet(Sheet.ALLOCATE);idle(m)
-        m.allocate("Verified identity");idle(m);ck("J05 no allocation without selected identity",Fixture.mutations==before)
-        m.selectMember(Fixture.member);Fixture.pendingFlag=true;m.refresh();idle(m);m.allocate("Verified identity");idle(m)
+        m.allocate();idle(m);ck("J05 no allocation without selected identity",Fixture.mutations==before)
+        m.selectMember(Fixture.member);Fixture.pendingFlag=true;m.refresh();idle(m);m.allocate();idle(m)
         ck("J05 unresolved action blocks repeat dispatch",Fixture.mutations==before&&m.state.pending)
-        Fixture.pendingFlag=false;m.refresh();idle(m);m.selectMember(Fixture.member);m.allocate("Verified identity");idle(m)
+        Fixture.pendingFlag=false;m.refresh();idle(m);m.selectMember(Fixture.member);m.allocate();idle(m)
         ck("J05 explicit allocation dispatches once and clears draft",Fixture.mutations==before+1&&m.state.sheet==null&&m.state.selectedMember==null)
     }
     journey("J06","member enrollment and unsaved changes"){m->
@@ -52,7 +53,7 @@ fun main()=runBlocking{
         m.keepDraft();ck("J06 keep editing preserves name",m.state.draft["name"]=="Example Member")
         val before=Fixture.enrollMutations;m.enroll("A","0780000001");idle(m);ck("J06 invalid name does not dispatch",Fixture.enrollMutations==before)
         m.enroll("Example Member","0780000001");idle(m);ck("J06 explicit save clears form",Fixture.enrollMutations==before+1&&m.state.draft.isEmpty()&&m.state.sheet==null)
-        ck("J06 saved member opens its freshly read transactions",m.state.route==Route.MEMBER&&m.state.routeId=="member-1"&&m.state.member?.id=="member-1"&&m.state.memberTransactions!=null)
+        ck("J06 saved member opens its fresh record",m.state.route==Route.MEMBER&&m.state.routeId=="member-1"&&m.state.member?.id=="member-1")
         m.back();idle(m);ck("J06 Back returns to the original route",m.state.route==Route.HOME)
         m.openSheet(Sheet.ENROLL);idle(m);Fixture.enrollResponseGroup="other-group"
         m.enroll("Example Member","0780000001");idle(m)
@@ -60,12 +61,15 @@ fun main()=runBlocking{
         Fixture.enrollResponseGroup=null;m.refresh();idle(m)
         m.openSheet(Sheet.ENROLL);idle(m);Fixture.memberReadFailure=ApiFailure("connection_unavailable",0)
         m.enroll("Example Member","0780000001");idle(m)
-        ck("J06 committed enrollment with failed ledger read stays on member without redispatch",m.state.route==Route.MEMBER&&m.state.routeId=="member-1"&&m.state.member==null&&Fixture.enrollMutations==before+3&&m.state.commandNotice!=null)
+        ck("J06 committed enrollment with failed member read stays on member without redispatch",m.state.route==Route.MEMBER&&m.state.routeId=="member-1"&&m.state.member==null&&Fixture.enrollMutations==before+3&&m.state.commandNotice!=null)
         Fixture.memberReadFailure=null;m.refresh();idle(m)
-        ck("J06 retry reads the saved transactions without another enrollment",m.state.member?.id=="member-1"&&m.state.memberTransactions!=null&&Fixture.enrollMutations==before+3)
+        ck("J06 retry reads the saved member without another enrollment",m.state.member?.id=="member-1"&&Fixture.enrollMutations==before+3)
     }
     journey("J07","member records and lifecycle"){m->
-        m.navigate(Route.MEMBER,"member-1");idle(m);ck("J07 member and transactions load together",m.state.member?.id=="member-1"&&m.state.memberTransactions!=null)
+        m.navigate(Route.MEMBER,"member-1");idle(m);ck("J07 member opens its own details",m.state.member?.id=="member-1")
+        m.navigate(Route.PAYMENTS,"member-1");idle(m)
+        ck("J07 member payments open the central list with the exact member scope",m.state.route==Route.PAYMENTS&&m.state.routeId=="member-1"&&m.state.payments?.items?.singleOrNull()?.memberId=="member-1")
+        m.back();idle(m);ck("J07 Back returns to the original member",m.state.route==Route.MEMBER&&m.state.member?.id=="member-1")
         val before=Fixture.lifecycleCalls;m.openSheet(Sheet.MEMBER_DETAILS);idle(m);m.setMemberActive(false);idle(m);ck("J07 lifecycle command remains explicit",Fixture.lifecycleCalls==before+1)
     }
     journey("J08","profile passcode and continued session"){m->
@@ -81,7 +85,7 @@ fun main()=runBlocking{
     }
     journey("J10","receiving-phone diagnostics and capture controls"){m->
         GatewayFixture.snapshot=GatewayStatus(true,false,1,2,null,null,null,"uploads_on_hold")
-        m.openSheet(Sheet.GATEWAY);idle(m);ck("J10 diagnostic separates receipt queue from member credit",GatewayHealth.describe(m.state.gateway).code=="hold"&&m.state.home?.balanceRwf==10000L)
+        m.openSheet(Sheet.GATEWAY);idle(m);ck("J10 diagnostic reports the current sync hold",GatewayHealth.describe(m.state.gateway).code=="hold"&&m.state.home?.paymentCount==10000)
         val before=GatewayFixture.changes;m.setPaused(false);idle(m);m.setPaused(true);idle(m)
         ck("J10 admin sync remains enabled and preserves retained receipts",GatewayFixture.changes==before+1&&m.state.gateway?.captureEnabled==true&&m.state.gateway?.pending==2&&m.state.error!=null)
     }

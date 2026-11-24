@@ -94,7 +94,7 @@ class ApiClient private constructor(origin: String, val installationId: String,
         if(phonePinProfile!=null&&this.origin.host.equals("rrlduytparvsjfmegalh.supabase.co",ignoreCase=true))
             require(it.isNotEmpty()) { "Supabase public project key required" }
     }
-    fun call(method: String, path: String, token: String? = null, body: JSONObject? = null, csv: Boolean = false, recoveryOrigin: String? = null, contractContext: Map<String, Any?> = emptyMap()): String {
+    fun call(method: String, path: String, token: String? = null, body: JSONObject? = null, recoveryOrigin: String? = null, contractContext: Map<String, Any?> = emptyMap()): String {
         require(path.startsWith("/v1/burimunsi/") && !path.contains("\\") && !path.contains("#"))
         val logicalPath=path.substringBefore('?')
         require(!logicalPath.contains('%') && logicalPath.split('/').none { it == "." || it == ".." })
@@ -104,7 +104,7 @@ class ApiClient private constructor(origin: String, val installationId: String,
         if(recoveryOrigin!=null){
             val read=method=="GET"&&body==null&&path.endsWith("/recovery")
             val resolution=method=="POST"&&body!=null&&path.endsWith("/staff-resolution")
-            require((read||resolution)&&!csv&&token!=null&&Regex("[a-f0-9]{64}").matches(token))
+            require((read||resolution)&&token!=null&&Regex("[a-f0-9]{64}").matches(token))
             require(Regex("[a-f0-9]{64}").matches(recoveryOrigin))
             require(Regex("/v1/burimunsi/operations/[a-f0-9-]{36}/(recovery|staff-resolution)").matches(path))
             Values.requestId(path.removePrefix("/v1/burimunsi/operations/").substringBefore('/'))
@@ -112,7 +112,7 @@ class ApiClient private constructor(origin: String, val installationId: String,
         val handoffFingerprint=contractContext["handoffFingerprint"] as? String
         if(handoffFingerprint!=null||Regex("/v1/burimunsi/gateway/replacements/[a-f0-9-]{36}/outcome").matches(path)){
             require(handoffFingerprint!=null)
-            require(phonePinProfile=="internal_receiver"&&method=="GET"&&body==null&&!csv&&token!=null)
+            require(phonePinProfile=="internal_receiver"&&method=="GET"&&body==null&&token!=null)
             require(Regex("[a-f0-9]{64}").matches(handoffFingerprint)&&Regex("[a-f0-9]{64}").matches(token))
             require(Regex("/v1/burimunsi/gateway/replacements/[a-f0-9-]{36}/outcome").matches(path))
             Values.requestId(path.removePrefix("/v1/burimunsi/gateway/replacements/").removeSuffix("/outcome"))
@@ -130,20 +130,20 @@ class ApiClient private constructor(origin: String, val installationId: String,
             val bootstrap=phonePinProfile!=null&&method=="POST"&&logicalPath=="/v1/burimunsi/session/login"
             val group=if(bootstrap)null else (contractContext["groupId"] as? String ?:throw ContractViolation("CONTRACT_CONTEXT"))
             if(group!=null)Values.id(group)
-            val route=if(csv)null else contract.route(method,path.removePrefix("/v1/burimunsi"))
-            val query=contract.query(if(csv)"csv" else route!!.first, path.substringAfter('?', ""))
+            val route=contract.route(method,path.removePrefix("/v1/burimunsi"))
+            val query=contract.query(route.first, path.substringAfter('?', ""))
             // Bind validation and response expectations to the exact JSON sent on the wire.
             val requestJson=body?.let { checkNotNull(it.toString()) }
             val requestData=StrictJson.parse(requestJson ?: "null",requestLimit)
-            if(route!=null)contract.validate(route.first+".request",requestData)
-            if(csv)require(method=="GET"&&body==null&&Regex("/v1/burimunsi/members/[A-Za-z0-9_-]+/ledger\\.csv").matches(path))
+            contract.validate(route.first+".request",requestData)
             val b=requestData as? Map<*, *>
             val expected=(if(bootstrap)contractContext-"groupId" else contractContext) + mapOf("installationId" to installationId,"generation" to generation,
-                "requestId" to correlation,"recordId" to route?.second,"now" to System.currentTimeMillis(),
+                "requestId" to correlation,"recordId" to route.second,"now" to System.currentTimeMillis(),
                 "includeHome" to (query["include"]=="home"),
                 "verifiedScope" to if(query["scope"]=="installation") "verified_installation" else "verified_collection") +
                 (b?.get("phone")?.let{mapOf("phone" to it)} ?: emptyMap()) +
                 (b?.get("memberId")?.let{mapOf("memberId" to it)} ?: emptyMap()) +
+                (b?.get("expectedVersion")?.let{mapOf("expectedVersion" to it)} ?: emptyMap()) +
                 (b?.get("id")?.let{mapOf("staffId" to it)} ?: emptyMap()) +
                 (b?.get("requestId")?.let{mapOf("commandRequestId" to it)} ?: emptyMap()) +
                 (b?.get("sourceIds")?.let{mapOf("sourceIds" to it)} ?: emptyMap()) +
@@ -175,12 +175,12 @@ class ApiClient private constructor(origin: String, val installationId: String,
             connection.connectTimeout=15_000
             connection.readTimeout=20_000
             connection.useCaches=false
-            connection.setRequestProperty("Accept",if(csv)"text/csv" else "application/json")
+            connection.setRequestProperty("Accept","application/json")
             connection.setRequestProperty("Accept-Encoding","identity")
             if(publicKey.isNotEmpty())connection.setRequestProperty("apikey",publicKey)
             connection.setRequestProperty("X-BuriMunsi-Installation",installationId)
             connection.setRequestProperty("X-BuriMunsi-Contract",BuriMunsiSchemas.VERSION)
-            if(route?.first=="payment")connection.setRequestProperty(PAYMENT_REFERENCE_VERSION_HEADER,"1")
+            if(route.first=="payment")connection.setRequestProperty(PAYMENT_REFERENCE_VERSION_HEADER,"1")
             connection.setRequestProperty("X-BuriMunsi-Request",correlation)
             connection.setRequestProperty("X-BuriMunsi-Generation",generation)
             // Business intent assertion only. Server independently resolves the
@@ -217,21 +217,17 @@ class ApiClient private constructor(origin: String, val installationId: String,
                 .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString()}
                 catch(_:Exception){throw ApiFailure("invalid_api_response",status,sent)}
             val mediaType=contentType.substringBefore(';').trim().lowercase()
-            if(csv&&status==200&&WireMediaType.isUtf8(contentType,"text/csv")&&connection.getHeaderField("X-BuriMunsi-Contract")==BuriMunsiSchemas.VERSION)return text
             if(mediaType!="application/json")throw ApiFailure("invalid_api_response",status,sent)
-            if(!csv){
-                var operation=route!!.first
-                if(status==200){
-                    val version=responseHeaders.entries.filter{it.key?.equals(PAYMENT_REFERENCE_VERSION_HEADER,ignoreCase=true)==true}
-                    if(version.isNotEmpty()){
-                        if(operation!="payment"||version.size!=1||version.single().value!=listOf("1"))
-                            throw ContractViolation("CONTRACT_VERSION")
-                        operation=PAYMENT_DETAIL_V1
-                    }
+            var operation=route.first
+            if(status==200){
+                val version=responseHeaders.entries.filter{it.key?.equals(PAYMENT_REFERENCE_VERSION_HEADER,ignoreCase=true)==true}
+                if(version.isNotEmpty()){
+                    if(operation!="payment"||version.size!=1||version.single().value!=listOf("1"))
+                        throw ContractViolation("CONTRACT_VERSION")
+                    operation=PAYMENT_DETAIL_V1
                 }
-                contract.decode(operation,status,contentType,text,expected)
             }
-            else if(status in 200..299)throw ContractViolation("CONTRACT_CONTENT_TYPE")
+            contract.decode(operation,status,contentType,text,expected)
             val response=try{JSONObject(text)}catch(_:Exception){throw ApiFailure("invalid_api_response",status,sent)}
             val success=if(response.has("ok"))response.get("ok") else null
             if(success !is Boolean)throw ApiFailure("invalid_api_response",status,sent)

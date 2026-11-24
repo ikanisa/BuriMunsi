@@ -85,7 +85,7 @@ import rw.ikanisa.burimunsi.core.*
                         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){SingleLineName(content?.sender?.ifBlank{t("SMS receipt")}?:t("SMS receipt"),Modifier.weight(1f));Spacer(Modifier.width(8.dp));Text(sms.at,fontSize=12.sp,color=BuriTheme.Muted)}
                         content?.body?.takeIf{it.isNotEmpty()}?.let{Spacer(Modifier.height(6.dp));Text(QueuedObservationPreview.from(it),fontSize=16.sp,color=BuriTheme.Muted,maxLines=2,overflow=TextOverflow.Ellipsis,lineHeight=24.sp)}
                         val delivery=Presentation.receipt(sms.state)
-                        Row(Modifier.padding(top=6.dp),verticalAlignment=Alignment.CenterVertically){Glyph(stateIcon(delivery.icon),delivery.meaning,stateTone(delivery.tone),15);Spacer(Modifier.width(6.dp));Text(t(delivery.label),fontSize=13.sp,color=stateTone(delivery.tone))}
+                        Row(Modifier.padding(top=6.dp),verticalAlignment=Alignment.CenterVertically){Glyph(stateIcon(delivery.icon),null,stateTone(delivery.tone),15);Spacer(Modifier.width(6.dp));Text(t(delivery.label),fontSize=13.sp,color=stateTone(delivery.tone))}
                     }
                 }
                 if(index<messages.lastIndex)HorizontalDivider(Modifier.align(Alignment.BottomCenter),color=Color.White.copy(alpha=.08f))
@@ -131,7 +131,7 @@ private fun observationProcessingLabel(value:ObservationProcessing?):String=when
     val t=LocalUiText.current;val raw=s.raw
     val source=s.rawSource as? SmsSourceRef.Observation
     val processing=source?.let{s.observationProcessing[it]}
-    Panel(footer=if(raw?.transactionId!=null&&s.rawDisclosure==RawDisclosureState.REVEALED){{Primary(t("Open contribution"),{m.navigate(Route.PAYMENT,raw.transactionId)},!s.busy)}}else null){
+    Panel(footer=if(raw?.transactionId!=null&&s.rawDisclosure==RawDisclosureState.REVEALED){{Primary(t("Open payment"),{m.navigate(Route.PAYMENT,raw.transactionId)},!s.busy)}}else null){
         if(source!=null){
             item{Column(verticalArrangement=Arrangement.spacedBy(8.dp)){
                 Text(t(observationProcessingLabel(processing)),fontSize=16.sp,color=if(processing?.status in setOf("needs_review","conflict"))BuriTheme.Warn else BuriTheme.Text)

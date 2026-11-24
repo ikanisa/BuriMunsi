@@ -77,19 +77,16 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         downloads.configure(directory, renderer)
 
     fun prepareDownload(format: ExportFormat) {
-        if (!canExportListing || format == ExportFormat.CSV && (state.route != Route.MEMBER || state.sheet != null)) return
-        val visibleTarget = listingTarget ?: return
-        val visibleQuery = listingQuery.validated(visibleTarget)
-        val target = if (format == ExportFormat.CSV) ListingTarget.LEDGER else visibleTarget
-        val query = if (format == ExportFormat.CSV) ListingQuery.defaultsFor(target) else visibleQuery
+        if (!canExportListing || format == ExportFormat.CSV) return
+        val target = listingTarget ?: return
+        val query = listingQuery.validated(target)
         val context = listings.context(state)
         val owner = state.operator?.id ?: return
-        val memberId = state.member?.id.takeIf { state.route == Route.MEMBER }
-        val paymentId = state.historyPaymentId ?: state.sheetId.takeIf { state.sheet == Sheet.HISTORY }
+        val memberId = state.routeId.takeIf { target == ListingTarget.PAYMENTS }
         downloads.prepare(
-            format, ListingExportSelection(target, query, memberId, paymentId),
+            format, ListingExportSelection(target, query, memberId),
             contextCurrent = { state.operator?.id == owner && listings.context(state) == context },
-            queryCurrent = { listingQuery == visibleQuery },
+            queryCurrent = { listingQuery == query },
         )
     }
 
@@ -331,13 +328,13 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     private fun drainChangedRecords(){
         if(!changedRecordsPending||!foreground||state.busy||state.operator==null||screenGate!=ScreenGate.OPEN||
             state.draftDirty||state.pending||!hasAccess(Capability.READ))return
-        if(state.sheet!=null&&state.sheet !in setOf(Sheet.HISTORY,Sheet.AUDIT))return
+        if(state.sheet!=null&&state.sheet!=Sheet.AUDIT)return
         if(state.route !in setOf(Route.HOME,Route.PAYMENTS,Route.PAYMENT,Route.MEMBERS,Route.MEMBER,Route.SMS))return
         changedRecordsPending=false
         work(kind=UiOperation.REFRESH,quietRefresh=true,preservePresentation=true){
             try {
                 refreshNow()
-                if(state.sheet in setOf(Sheet.HISTORY,Sheet.AUDIT))refreshPanelNow()
+                if(state.sheet==Sheet.AUDIT)refreshPanelNow()
                 if(state.offline)retryChangedRead() else changedReadFailures=0
             }catch(error:ApiFailure){
                 if(retryableSessionFailure(error))retryChangedRead()
@@ -376,9 +373,9 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             state.receiverRetirementPending||state.passcodeChangePending)return
         if(needsSessionCheck&&sessionRetryPending)return // Existing bounded authority-recovery loop owns this retry.
         val now=clock()
-        val passive=state.sheet==null||state.sheet in setOf(Sheet.STAFF,Sheet.AUDIT,Sheet.GATEWAY,Sheet.HISTORY)
+        val passive=state.sheet==null||state.sheet in setOf(Sheet.STAFF,Sheet.AUDIT,Sheet.GATEWAY)
         val visibleAt=listOfNotNull(if(state.route==Route.SETTINGS)state.panelSavedAt else state.savedAt,
-            if(state.sheet==Sheet.HISTORY)state.historySavedAt else if(state.sheet!=null&&passive)state.panelSavedAt else null).minOrNull()
+            if(state.sheet!=null&&passive)state.panelSavedAt else null).minOrNull()
         val cadenceDue=passive&&!state.draftDirty&&visibleAt!=null&&!SnapshotFreshness.recent(visibleAt,now)
         if(!force&&!cadenceDue&&!visibleExpired&&!state.readbackRequired&&!state.offline&&!visibleRecordsExpired(now))return
         if(lastAutomaticReadAt>0L&&now>=lastAutomaticReadAt&&now-lastAutomaticReadAt<10_000L)return
@@ -391,7 +388,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             Route.PAYMENTS->state.payments!=null
             Route.MEMBERS->state.members!=null
             Route.PAYMENT->state.payment!=null
-            Route.MEMBER->state.member!=null||state.memberTransactions!=null
+            Route.MEMBER->state.member!=null
             Route.SMS->state.messages!=null||state.observations!=null||state.queuedObservations!=null||state.observationUnavailable
             else->false
         }
@@ -404,8 +401,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             else->false
         }
         return VisibleDataFreshness.expired(base,state.savedAt,now)||
-            VisibleDataFreshness.expired(panel,state.panelSavedAt,now)||
-            VisibleDataFreshness.expired(state.sheet==Sheet.HISTORY&&state.history!=null,state.historySavedAt,now)
+            VisibleDataFreshness.expired(panel,state.panelSavedAt,now)
     }
     private fun hasAccess(capability:Capability)=Access.allows(state.operator,capability,clock(),BuildConfig.IS_GATEWAY)
 
@@ -442,9 +438,9 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             discardRequested=false,selectedMember=null,selectedStaff=null,raw=null,error=null,onboarding=SmartOnboardingState())
     }
     /** Clear records after a contradictory response while retaining context, drafts and journal warnings. */
-    private fun withoutRecords(value:UiState)=smsDisclosure.redact(value).copy(home=null,payments=null,members=null,ledger=null,memberTransactions=null,
-        payment=null,member=null,messages=null,observations=null,observationUnavailable=false,raw=null,rawSource=null,staff=null,selectedStaff=null,audit=null,history=null,
-        historyPaymentId=null,gateway=null,selectedMember=null,savedAt=null,panelSavedAt=null,historySavedAt=null,
+    private fun withoutRecords(value:UiState)=smsDisclosure.redact(value).copy(home=null,payments=null,members=null,
+        payment=null,member=null,messages=null,observations=null,observationUnavailable=false,raw=null,rawSource=null,staff=null,selectedStaff=null,audit=null,
+        gateway=null,selectedMember=null,savedAt=null,panelSavedAt=null,
         readbackRequired=true)
     private fun quarantineRecords(){
         views.invalidateRecords()
@@ -958,7 +954,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                 else refreshNow()
                 if(state.sheet!=null){
                     if(panelAllowed(state.sheet))refreshPanelNow()
-                    else{resetPanelInputs();state=state.copy(sheet=null,sheetId=null,raw=null,staff=null,audit=null,history=null,selectedStaff=null,selectedMember=null,draft=emptyMap(),draftDirty=false)}
+                    else{resetPanelInputs();state=state.copy(sheet=null,sheetId=null,raw=null,staff=null,audit=null,selectedStaff=null,selectedMember=null,draft=emptyMap(),draftDirty=false)}
                 }
                 sessionBootstrap.requireCurrent(grant)
                 // A successful profile request does not refresh any financial record by itself.
@@ -976,6 +972,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         if(screenGate!=ScreenGate.OPEN)return
         if(!Access.routeAllowed(state.operator,route,clock(),BuildConfig.IS_GATEWAY))return
         if(route in setOf(Route.PAYMENT,Route.MEMBER)&&id==null)return
+        if(route==Route.PAYMENTS&&id!=null&&runCatching{Values.id(id)}.isFailure)return
         if(state.busy){
             // Only quiet reads may queue navigation. Once a quiet Home
             // has verified the profile, either records tab can leave its pending read.
@@ -1013,8 +1010,10 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         val previous=views.previous()
         if(previous==null){
             // Process restoration deliberately has no serialized back stack or record snapshots.
-            val parent=when(state.route){Route.PAYMENT->Route.PAYMENTS;Route.MEMBER->Route.MEMBERS;else->Route.HOME}
-            work{resetPanelInputs();state=UiState(operator=state.operator,route=parent,busy=true,pending=state.pending);refreshNow()}
+            val parent=when(state.route){Route.PAYMENT->Route.PAYMENTS;Route.MEMBER->Route.MEMBERS
+                Route.PAYMENTS->if(state.routeId!=null)Route.MEMBER else Route.HOME;else->Route.HOME}
+            val parentId=state.routeId.takeIf{parent==Route.MEMBER}
+            work{resetPanelInputs();state=UiState(operator=state.operator,route=parent,routeId=parentId,busy=true,pending=state.pending);refreshNow()}
             return
         }
         if(!Access.routeAllowed(state.operator,previous.value.route,clock(),BuildConfig.IS_GATEWAY)){clearViews();navigate(Route.HOME);return}
@@ -1025,7 +1024,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             val restoredId=previous.value.sheetId
             state=(if(fresh)previous.value else rememberedContext(previous.value)).copy(
                 operator=state.operator,busy=true,error=null,pending=state.pending,failure=DisplayFailure.NONE,
-                sheet=null,sheetId=null,raw=null,staff=null,audit=null,history=null,
+                sheet=null,sheetId=null,raw=null,staff=null,audit=null,
                 selectedStaff=null,selectedMember=null,draft=emptyMap(),draftDirty=false,discardRequested=false)
             resetPanelInputs()
             if(!fresh||state.route==Route.HOME)refreshNow() else if(restoredSheet==null)refreshRememberedReceiverStatus()
@@ -1100,11 +1099,6 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             Sheet.AUDIT->{val v=io{repo().audit(queryFor(ListingTarget.AUDIT))};state=state.copy(audit=v,panelSavedAt=clock())}
             Sheet.GATEWAY,Sheet.REPLACE_DEVICE->{state=state.copy(gateway=null,panelSavedAt=null);refreshReceiverPanel()}
             Sheet.RAW->clearRawDisclosure(preserveSmsSearch=state.route==Route.SMS) // A refresh is never an audited disclosure.
-            Sheet.HISTORY->{
-                val id=state.sheetId?:state.payment?.id?:throw ApiFailure("record_unavailable")
-                val value=io{repo().paymentHistory(id,queryFor(ListingTarget.HISTORY))}
-                state=state.copy(history=value,historyPaymentId=id,historyOffline=repo().lastReadFromCache,historySavedAt=repo().lastReadSavedAt)
-            }
             Sheet.STAFF_EDIT,Sheet.REMOVE_STAFF->{
                 // A refreshed version must never be attached to an old editing draft.
                 // Reopen the account after refresh; the non-secret draft is retained for comparison.
@@ -1166,15 +1160,16 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             Route.PAYMENTS -> {
                 val request = pagedRestoration.request()
                 val listing = queryFor(ListingTarget.PAYMENTS)
-                val recent = if(allowRecentCache&&request.index==0)io{
+                val memberId = state.routeId
+                val recent = if(memberId==null&&allowRecentCache&&request.index==0)io{
                     // On a cache miss the live request can start without a separate journal read.
                     repo().recentPayments(listing)?.takeIf{journalKnowledge()==JournalKnowledge.CLEAR}
                 }else null
                 val cachedPage = recent?.takeIf{SnapshotFreshness.recent(it.second,clock())}
                     ?.let{NativePagedRestoration.Read(it.first,false,it.second)}
-                val first = cachedPage ?: pagedRestoration.readRecord(request) { it.paymentPage(listing) }
+                val first = cachedPage ?: pagedRestoration.readRecord(request) { it.paymentPage(listing, memberId = memberId) }
                 val restored = pagedRestoration.restore(request, first, Payment::id) { cursor ->
-                    pagedRestoration.readRecord(request) { it.paymentPage(listing, cursor) }
+                    pagedRestoration.readRecord(request) { it.paymentPage(listing, cursor, memberId) }
                 }
                 pagedRestoration.withCurrent(request) {
                     val (page, offline, savedAt) = restored.content
@@ -1241,20 +1236,10 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             Route.MEMBER -> {
                 val id = state.routeId ?: state.member?.id ?: return
                 val request = pagedRestoration.request()
-                val listing = queryFor(ListingTarget.PAYMENTS)
-                val member=pagedRestoration.readRecord(request){it.memberRecord(id)}
-                val payments=pagedRestoration.readRecord(request){it.paymentPage(listing,memberId=id)}
-                val first = payments.copy(offline = member.offline || payments.offline,
-                    savedAt = SnapshotFreshness.oldest(clock(), member.savedAt, payments.savedAt))
-                val restored = pagedRestoration.restore(request, first, Payment::id) { cursor ->
-                    pagedRestoration.readRecord(request) { it.paymentPage(listing,cursor=cursor,memberId=id) }
-                }
+                val member = pagedRestoration.readRecord(request) { it.memberRecord(id) }
                 pagedRestoration.withCurrent(request) {
-                    val (page, offline, savedAt) = restored.content
-                    val position = restored.decision
-                    state = it.copy(member = member.value, ledger = null, memberTransactions = page,
-                        offline = offline, savedAt = savedAt, readbackRequired = it.readbackRequired && offline,
-                        listIndex = position.index, listOffset = position.offset, listRestoration = position.stop)
+                    state = it.copy(member = member.value, offline = member.offline, savedAt = member.savedAt,
+                        readbackRequired = it.readbackRequired && member.offline)
                 }
             }
             Route.SETTINGS->{
@@ -1271,13 +1256,6 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         work(kind=UiOperation.LOAD_MORE){
         state=state.copy(listRestoration=null)
         when(state.sheet){
-            Sheet.HISTORY->{state.history?.let{old->old.nextCursor?.let{c->
-                val id=state.historyPaymentId?:throw ApiFailure("record_unavailable")
-                val next=io{repo().paymentHistory(id,queryFor(ListingTarget.HISTORY),c)}
-                state=state.copy(history=PageIntegrity.append(old,next){it.id},
-                    historyOffline=state.historyOffline||repo().lastReadFromCache,
-                    historySavedAt=SnapshotFreshness.oldest(clock(),state.historySavedAt,repo().lastReadSavedAt))
-            }};return@work}
             Sheet.STAFF->{state.staff?.let{old->old.nextCursor?.let{c->val next=io{repo().staff(queryFor(ListingTarget.STAFF),c)};checkContract(old.revision==next.revision,"cursor_stale");state=state.copy(staff=PageIntegrity.append(old,next){it.id})}};return@work}
             Sheet.AUDIT->{state.audit?.let{old->old.nextCursor?.let{c->val next=io{repo().audit(queryFor(ListingTarget.AUDIT),c)};checkContract(old.revision==next.revision,"cursor_stale");state=state.copy(audit=PageIntegrity.append(old,next){it.id})}};return@work}
             Sheet.ALLOCATE -> {
@@ -1288,7 +1266,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             else->Unit
         }
         when(state.route){
-            Route.PAYMENTS, Route.MEMBER -> morePayments()
+            Route.PAYMENTS -> morePayments()
             Route.MEMBERS -> {
                 val current = state.members ?: return@work
                 val cursor = current.nextCursor ?: return@work
@@ -1302,19 +1280,16 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         }
     }
     private suspend fun morePayments() {
-        val onMember = state.route == Route.MEMBER
-        val previous = (if (onMember) state.memberTransactions else state.payments) ?: return
+        val previous = state.payments ?: return
         val cursor = previous.nextCursor ?: return
-        val memberId = if (onMember) (state.routeId ?: throw ApiFailure("record_unavailable")) else null
-        if (onMember) checkContract(state.member?.id == memberId, "invalid_api_response")
+        val memberId = state.routeId
         val request = pagedRestoration.request()
         val listing = queryFor(ListingTarget.PAYMENTS)
         val current = NativePagedRestoration.Read(previous, state.offline, state.savedAt)
         val next = pagedRestoration.read(request) { it.payments(listing, cursor = cursor, memberId = memberId) }
         val (page, offline, savedAt) = pagedRestoration.append(current, next, Payment::id)
         pagedRestoration.withCurrent(request) {
-            state = if (onMember) it.copy(memberTransactions = page, offline = offline, savedAt = savedAt)
-                else it.copy(payments = page, offline = offline, savedAt = savedAt)
+            state = it.copy(payments = page, offline = offline, savedAt = savedAt)
         }
     }
     override fun moreObservations(){
@@ -1355,9 +1330,8 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         work(kind=UiOperation.INITIAL_READ){
             // The prototype replaces the current sheet; Close returns to the route.
             resetPanelInputs()
-            val panel=state.copy(sheet=sheet,sheetId=if(sheet==Sheet.HISTORY)id?:state.payment?.id else id,rawSource=source,observationRetryNotice=null,
+            val panel=state.copy(sheet=sheet,sheetId=id,rawSource=source,observationRetryNotice=null,
                 error=null,selectedMember=null,raw=null,panelSavedAt=state.panelSavedAt,
-                history=null,historyPaymentId=null,historyOffline=false,historySavedAt=null,
                 allocationQuery="",draft=emptyMap(),draftDirty=false,discardRequested=false,onboarding=SmartOnboardingState())
             state=if(sheet==Sheet.ALLOCATE)collectionPosting.startCandidateSearch(panel,"")else panel
             if(sheet==Sheet.STAFF_EDIT){
@@ -1369,7 +1343,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                     "allocate" to (selected?.capabilities?.contains(Capability.ALLOCATE.key)?:false).toString())
                 state=state.copy(selectedStaff=selected,draft=initialDraft)
             }
-            if(sheet==Sheet.RAW)loadRawForCurrentPanel("Review original SMS from the selected contribution or receipt")
+            if(sheet==Sheet.RAW)loadRawForCurrentPanel("Review original SMS for the selected payment or receipt")
             else refreshPanelNow()
         }
     }
@@ -1442,11 +1416,11 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         val read = io { collectionPosting.readPayment(operator, id, fromVersion) }
         state = collectionPosting.showPayment(state, operator, read)
     }
-    override fun allocate(note:String)=work{
+    override fun allocate()=work{
         requireNoUnresolvedCommand()
         if(!allows(Capability.ALLOCATE)||state.offline)throw ApiFailure("access_denied",403)
         val selection=collectionPosting.allocation(state)
-        command{collectionPosting.post(selection,note)}
+        command{collectionPosting.allocate(selection)}
         state=state.copy(allocatedFromVersion=selection.payment.version)
         refreshPayment(selection.payment.id)
     }
@@ -1456,7 +1430,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         checkContract(Presentation.validName(name),"invalid_name")
         val result=command{repo().enroll(name,phone)}
         // The command has already committed. Navigate only to the acknowledged
-        // member ID carried by its verified outcome, and re-read the ledger; never retry the
+        // member ID carried by its verified outcome, and re-read the member; never retry the
         // enrollment or infer an ID from the entered phone number.
         val memberId=memberRegistration.confirmedMemberId(result)
         if(memberId==null){
@@ -1743,9 +1717,8 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         code=="gateway_action_unavailable"->"Refresh the receiving-phone status and follow the displayed recovery steps."
         code=="fresh_records_required"->"These records have expired. Reconnect and refresh before continuing."
         code=="invalid_name"->"Use a name of 2–100 characters without control characters."
-        code=="invalid_note"->"Use an identification note of 8–500 characters without control characters."
-        code.startsWith("invalid_history")||code in setOf("invalid_page","invalid_api_response","invalid_member_payment_scope")->"Received inconsistent records. Refresh or contact support on WhatsApp at +250 788 767 816."
-        code=="history_limit"->"This history is too large for the phone. Contact an administrator for a full extract."
+        code=="allocation_unavailable"->"This payment is unavailable for allocation."
+        code in setOf("invalid_page","invalid_api_response","invalid_member_payment_scope")->"Received inconsistent records. Refresh or contact support on WhatsApp at +250 788 767 816."
         code=="record_unavailable"->"This record is unavailable. Go back or refresh."
         code=="invalid_credentials"->"Phone or passcode is incorrect."
         code=="invalid_current_pin"->"Current passcode is incorrect."
@@ -1762,8 +1735,8 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         code in setOf("invalid_recovery_response","invalid_recovery_proof","invalid_recovery_receipt")->"Recovery evidence is inconsistent. The action remains unresolved; contact the administrator."
         code in setOf("record_cache_unavailable","operation_store_unavailable")->"Local recovery storage is unavailable. Do not repeat the action or clear app data; contact the administrator."
         code=="pending_operation_requires_resolution"->"The previous action needs an authenticated outcome check. Sign in with the same operator on this phone and check it. Do not repeat the action."
-        code=="operation_financially_changed"->"The original action committed, but its financial effect changed. Review the current ledger; do not repeat the original action."
-        code=="recovery_check_in_progress"->"An outcome check is already running. Do not repeat the financial action."
+        code=="operation_financially_changed"->"This payment changed after the original action. Refresh it before continuing."
+        code=="recovery_check_in_progress"->"The previous action is being checked."
         code=="recovery_retry_backoff"->"The next outcome check is not due yet. The original action remains unresolved."
         code in setOf("recovery_retry_exhausted","recovery_retry_stopped","recovery_clock_invalid")->"Outcome checks have stopped. Do not repeat the action or clear app data; contact the administrator."
         code=="recovery_authentication_required"->"Sign in again to check the original action. Do not submit it again."

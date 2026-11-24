@@ -164,19 +164,28 @@ internal class NativeCommandRepository(
             checkContract(proof.optString("operation")==operationName(op),"invalid_api_response")
             return proof
         }
-        // Proof v1 authenticates the original command; status v2 reports its
-        // current economic effect. Neither substitutes for the other. These are
-        // separate primary snapshots, not an atomic cross-request transaction.
+        // Proof v1 authenticates the original command. Status v2 reads its outcome from the current record.
         val status=JSONObject(requestOwned(witness,"GET",path))
         return authority.withCurrent(witness){
             assertOutcomeReader(op,witness)
-            checkContract(status.keys().asSequence().toSet()==setOf("contractVersion","requestId","groupId","actorId","state","operation","financialState"),"invalid_api_response")
+            val fields = setOf("contractVersion","requestId","groupId","actorId","state","operation")
+            val keys = status.keys().asSequence().toSet()
+            val allocation = operationName(op) == "burimunsi.allocate"
+            val legacy = keys == fields + "financialState"
+            val canonical = keys == if (allocation) fields + "allocationState" else fields
+            checkContract(legacy || canonical, "invalid_api_response")
             checkContract(status.counter("contractVersion",2)==2L&&status.get("requestId")==op.requestId&&
                 status.get("groupId")==groupId&&status.get("actorId")==who.id&&status.get("state")=="committed"&&
                 status.get("operation")==operationName(op),"invalid_api_response")
-            val effect=status.get("financialState")
-            checkContract(if(operationName(op)=="burimunsi.allocate")effect in setOf("posted","reversed","corrected") else effect=="not_applicable","invalid_api_response")
-            proof.put("financialState",effect).put("operation",operationName(op)).put("contractVersion",2)
+            if (legacy) {
+                val effect = status.get("financialState")
+                checkContract(if (allocation) effect in setOf("posted","reversed","corrected") else effect == "not_applicable","invalid_api_response")
+                proof.put("financialState", effect)
+            } else if (allocation) {
+                checkContract(status.get("allocationState") == "allocated", "invalid_api_response")
+                proof.put("allocationState", "allocated")
+            }
+            proof.put("operation",operationName(op)).put("contractVersion",2)
         }
     }
     private fun finishCommittedCleanup(op:PendingOperation,proof:JSONObject)=journal.finishCleanup(op){
@@ -210,9 +219,8 @@ internal class NativeCommandRepository(
         val attempt=authority.withCurrent(witness){assertOutcomeReader(op,witness);journal.beginAttempt(op,op.sessionScope)}
         var submitted=false
         try{
-            // A successful transport/JSON response is not a canonical financial
-            // outcome. Check the retained server-side request receipt before
-            // marking a contribution, enrollment or staff change complete.
+            // Confirm the retained server-side request before marking an allocation,
+            // enrollment or staff change complete.
             val acknowledgement=JSONObject(requestOwned(witness,j.getString("method"),j.getString("path"),body))
             submitted=true
             return journal.withRecoveryRead(op){

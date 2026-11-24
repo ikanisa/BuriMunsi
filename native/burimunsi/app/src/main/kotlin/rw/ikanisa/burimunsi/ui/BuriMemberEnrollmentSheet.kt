@@ -83,7 +83,6 @@ import rw.ikanisa.burimunsi.core.*
             item{SmartConsent("Full number and phone ownership verified",o.verifiedOwnership,enabled){m.onboardingConsent("ownership",it,s.draft)}}
             item{SmartConsent("Member accepted the savings terms",o.acceptedTerms,enabled){m.onboardingConsent("terms",it,s.draft)}}
             item{SmartConsent("Privacy notice and consent recorded",o.consentRecorded,enabled){m.onboardingConsent("consent",it,s.draft)}}
-            item{Text(t("Eligible earlier MoMo payments may be matched and credited automatically after you add this member."),fontSize=14.sp,color=BuriTheme.Muted,lineHeight=21.sp)}
             item{TextButton(if(o.step==SmartOnboardingStep.IMPORT_MEMBER)m::onboardingImport else m::onboardingOptions,enabled=!s.busy){Text(t("Back"),color=BuriTheme.Blue)}}
         }
         SmartOnboardingStep.IMPORT->Panel(footer=if(verified.isNotEmpty()){{
@@ -91,7 +90,7 @@ import rw.ikanisa.burimunsi.core.*
         }}else null){
             if(!o.photoCaptureFlow&&o.sourceKind==null&&o.rows.isEmpty()){
                 item{Text(t("Import member list"),fontSize=23.sp,fontWeight=FontWeight.SemiBold)}
-                item{SmartOption("Suggested from transaction payments","Search unmatched payer names and last 3 digits",enabled){m.onboardingSuggestions()}}
+                item{SmartOption("Suggested from payments","Search unmatched payer names and last 3 digits",enabled){m.onboardingSuggestions()}}
                 item{SmartOption("Add manually","Enter a verified MoMo name and number",enabled,m::onboardingManual)}
                 item{SmartOption("Take a photo of the list","Taking a photo sends it to OpenAI for extraction. Review members before saving.",enabled){m.onboardingPhoto();onTakePhoto()}}
                 item{Primary(t("Choose a photo"),onPickPhoto,enabled,secondary=true)}

@@ -267,11 +267,18 @@ class WireContract(private val product: String, private val version: String,
                 rows(d["items"]); val items = arrayValue(d["items"])
                 if ((d["totalCount"] as Number).toLong() < items.size || (d["nextCursor"] != null && items.isEmpty())) reject("CONTRACT_PAGE")
             }
-            if (d.containsKey("recentPayments")) rows(d["recentPayments"])
+            fun home(snapshot: Map<String, Any?>) {
+                val recent = arrayValue(snapshot["recentPayments"])
+                rows(recent)
+                val total = (snapshot["paymentCount"] as? Number)?.toLong() ?: return
+                val unallocated = (snapshot["unallocatedCount"] as Number).toLong()
+                if (recent.size > total || unallocated > total) reject("CONTRACT_STATE")
+            }
+            if (operation == "home") home(d)
             if (operation == "session" || operation == "login") {
                 val included = d.containsKey("home")
                 if (included != (expected["includeHome"] == true)) reject("CONTRACT_CONTEXT")
-                d["home"]?.let { rows(objectValue(it)["recentPayments"]) }
+                d["home"]?.let { home(objectValue(it)) }
             }
             if (d.containsKey("groupId") && d["groupId"] != b["groupId"]) reject("CONTRACT_IDENTITY")
             if (operation in listOf("payment", "paymentDetailV1", "member", "rawSms") && d["id"] != expected["recordId"]) reject("CONTRACT_IDENTITY")
@@ -281,7 +288,18 @@ class WireContract(private val product: String, private val version: String,
                 if (expected.containsKey("phone") && profile["phone"] != expected["phone"]) reject("CONTRACT_IDENTITY")
                 if (expected["now"] is Number && (d["expiresAt"] as Number).toLong() <= (expected["now"] as Number).toLong()) reject("CONTRACT_EXPIRED")
             }
-            if (operation == "allocate" && (d["transactionId"] != expected["recordId"] || d["memberId"] != expected["memberId"])) reject("CONTRACT_IDENTITY")
+            if (operation == "allocate") {
+                if ((d["paymentId"] ?: d["transactionId"]) != expected["recordId"] || d["memberId"] != expected["memberId"])
+                    reject("CONTRACT_IDENTITY")
+                if (d.containsKey("paymentId")) {
+                    if (d.keys != setOf("paymentId", "memberId", "state", "version")) reject("CONTRACT_STATE")
+                    val previous = (expected["expectedVersion"] as? Number)?.toLong() ?: reject("CONTRACT_CONTEXT")
+                    val version = (d["version"] as? Number)?.toLong() ?: reject("CONTRACT_STATE")
+                    if (version <= previous || d["state"] != "allocated") reject("CONTRACT_STATE")
+                } else if (d.keys != setOf("transactionId", "memberId", "amountRwf", "currency", "ledgerEntryId", "memberBalanceRwf", "groupBalanceRwf")) {
+                    reject("CONTRACT_STATE")
+                }
+            }
             if (operation == "enroll" && d["phone"] != expected["phone"]) reject("CONTRACT_IDENTITY")
             if (operation == "onboardingSuggestions") for (v in arrayValue(d["items"])) {
                 val item=objectValue(v);if(item["id"]!=item["candidateId"])reject("CONTRACT_IDENTITY")
@@ -373,22 +391,26 @@ class WireContract(private val product: String, private val version: String,
             if (operation in listOf("operation", "recovery", "staffResolution") && d["requestId"] != expected["recordId"]) reject("CONTRACT_IDENTITY")
             if (operation == "operation") {
                 if(d["actorId"] != b["actorId"]) reject("CONTRACT_IDENTITY")
+                val legacy = d.containsKey("financialState")
+                val allocation = d.containsKey("allocationState")
+                if (legacy && allocation) reject("CONTRACT_STATE")
                 if(d["state"] == "pending") {
-                    if(d["financialState"] != "unresolved" || d.containsKey("operation")) reject("CONTRACT_STATE")
-                } else if(d["operation"] !is String || d["financialState"] == "unresolved" ||
-                    (d["operation"] == "burimunsi.allocate") == (d["financialState"] == "not_applicable")) reject("CONTRACT_STATE")
+                    if (d.containsKey("operation") || allocation || legacy && d["financialState"] != "unresolved")
+                        reject("CONTRACT_STATE")
+                } else {
+                    if (d["operation"] !is String) reject("CONTRACT_STATE")
+                    val allocate = d["operation"] == "burimunsi.allocate"
+                    if (legacy) {
+                        val states = if (allocate) setOf("posted","reversed","corrected") else setOf("not_applicable")
+                        if (d["financialState"] !in states) reject("CONTRACT_STATE")
+                    } else if (allocate != allocation || allocation && d["allocationState"] != "allocated") reject("CONTRACT_STATE")
+                }
             }
             if (operation in listOf("recovery", "staffResolution")) {
                 if (d["originDigest"] != expected["originDigest"] || d["actorId"] != b["actorId"] || d["installationId"] != b["installationId"]) reject("CONTRACT_IDENTITY")
                 if ((d["state"] == "cancelled") != d.containsKey("operation")) reject("CONTRACT_STATE")
                 if (operation == "staffResolution" && (d["state"] == "pending" ||
                     (d["state"] == "cancelled" && d["operation"] != expected["staffOperation"]))) reject("CONTRACT_STATE")
-            }
-            if (operation == "history") for (v in arrayValue(d["items"])) {
-                val row = objectValue(v)
-                if (row["transactionId"] != expected["recordId"]) reject("CONTRACT_IDENTITY")
-                if (if (row["kind"] == "transaction_recorded") row["id"] != "transaction:" + row["transactionId"] || row["amountRwf"] != null || row["memberId"] != null
-                    else !(row["id"] as String).startsWith("ledger:") || row["amountRwf"] == null || row["amountRwf"] == 0L || row["memberId"] == null) reject("CONTRACT_STATE")
             }
         }
     }

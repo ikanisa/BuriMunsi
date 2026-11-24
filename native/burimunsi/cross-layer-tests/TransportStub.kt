@@ -20,7 +20,7 @@ class ApiClient(origin:String,val installationId:String,token:()->String?,val in
  constructor(origin:String,id:String,provider:ManagedSessionTokenProvider,token:()->String?):this(origin,id,token)
  constructor(origin:String,id:String,prefix:String,token:()->String?):this(origin,id,token)
  constructor(origin:String,id:String,provider:ManagedSessionTokenProvider,prefix:String,token:()->String?):this(origin,id,provider,token)
- fun call(method:String,path:String,token:String?=null,body:JSONObject?=null,csv:Boolean=false,recoveryOrigin:String?=null,contractContext:Map<String,Any?> = emptyMap()):String {
+ fun call(method:String,path:String,token:String?=null,body:JSONObject?=null,recoveryOrigin:String?=null,contractContext:Map<String,Any?> = emptyMap()):String {
   val request=Request(method,path,token,body,recoveryOrigin,contractContext)
   Transport.calls.add(request)
   if(method=="GET"&&path=="/v1/burimunsi/session?include=home")

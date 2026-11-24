@@ -34,7 +34,6 @@ internal data class ListingExportSelection(
     val target: ListingTarget,
     val query: ListingQuery,
     val memberId: String?,
-    val paymentId: String?,
 )
 
 /** Owns the private file, its document picker, and the original listing authority until the save ends. */
@@ -109,7 +108,7 @@ internal class NativeListingDownloads(
                 val readScope = io { repository().recordReadScope() }
                 val snapshot = io {
                     ListingExportData(repository(), gateway).collect(
-                        selection.target, selection.query, selection.memberId, selection.paymentId,
+                        selection.target, selection.query, selection.memberId,
                         readScope, Instant.ofEpochMilli(clock()), zone, ::check,
                     ) { rows, total ->
                         scope.launch {

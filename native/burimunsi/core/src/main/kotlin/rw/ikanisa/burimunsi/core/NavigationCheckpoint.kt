@@ -23,8 +23,11 @@ data class NavigationCheckpoint(
         ownerId.length in 1..128 && groupId.length in 1..128 &&
         route != Route.LOGIN && query.length <= 80 && query.none { it.isISOControl() } &&
         index in 0..100_000 && offset in 0..100_000 &&
-        (if (route in setOf(Route.PAYMENT, Route.MEMBER))
-            routeId != null && Regex("[A-Za-z0-9_.:-]{1,128}").matches(routeId) else routeId == null) &&
+        (when (route) {
+            Route.PAYMENT, Route.MEMBER -> routeId != null && Regex("[A-Za-z0-9_.:-]{1,128}").matches(routeId)
+            Route.PAYMENTS -> routeId?.let { id -> runCatching { Values.id(id) }.isSuccess } ?: true
+            else -> routeId == null
+        }) &&
         filter in filters(route) &&
         (memberAnchorId?.let { anchor ->
             route == Route.MEMBERS && runCatching { Values.id(anchor) }.isSuccess
@@ -69,10 +72,15 @@ data class NavigationCheckpoint(
                     input.readUTF(), input.readInt(), input.readInt())
                 val value = if (version == 1) base else {
                     val anchor = input.readUTF().ifEmpty { null }
-                    val listing = if (input.readBoolean()) ListingQuery(q = base.query,
-                        sort = ListingSort.valueOf(input.readUTF()), active = input.readUTF(),
-                        minRwf = input.readLong().takeUnless { it == Long.MIN_VALUE },
-                        maxRwf = input.readLong().takeUnless { it == Long.MIN_VALUE }) else null
+                    val listing = if (input.readBoolean()) {
+                        val sortName = input.readUTF()
+                        val active = input.readUTF()
+                        input.readLong() // Old member amount bounds filtered balances.
+                        input.readLong()
+                        ListingQuery(q = base.query,
+                            sort = if (sortName in setOf("BALANCE_ASC", "BALANCE_DESC")) ListingSort.NEWEST else ListingSort.valueOf(sortName),
+                            active = active)
+                    } else null
                     base.copy(memberAnchorId = anchor, memberListing = listing)
                 }
                 require(input.available() == 0 && value.structurallyValid())

@@ -29,7 +29,7 @@ fun main(){
  val token="a".repeat(64)
  fun signedOut()=JSONObject().put("signedOut",true).toString()
  fun session(id:String="admin-1",t:String=token)=JSONObject().put("token",t).put("expiresAt",System.currentTimeMillis()+3600000).put("profile",profile(id)).toString()
- fun home()=JSONObject().put("groupBalanceRwf",17000).put("todayRwf",10000).put("memberCount",2).put("unallocatedCount",1).put("recentPayments",JSONArray()).put("asOf","2026-11-08T10:00:00Z").toString()
+ fun home()=JSONObject().put("paymentCount",17).put("memberCount",2).put("unallocatedCount",1).put("recentPayments",JSONArray()).put("asOf","2026-11-08T10:00:00Z").toString()
  fun pay()=JSONObject().put("id","tx-1").put("groupId","group-1").put("memberId",JSONObject.NULL).put("memberPhone",JSONObject.NULL).put("sourceId",JSONObject.NULL).put("payerNameRaw","Example payer").put("payerPhoneRaw","+250780000816").put("amountRwf",17000).put("atRaw","2026-11-08 12:00:00").put("ftId","10001").put("state","unallocated").put("version",1).toString()
  fun emptyPage()=JSONObject().put("items",JSONArray()).put("totalCount",0).put("nextCursor",JSONObject.NULL).put("revision","v1").put("asOf","2026-11-08T10:00:00Z").toString()
  fun recovered(req:Request,state:String,id:String=if(req.path.endsWith("/recovery"))req.path.substringBeforeLast('/').substringAfterLast('/') else req.path.substringAfterLast('/'))=if(!req.path.endsWith("/recovery")) JSONObject()
@@ -53,10 +53,10 @@ fun main(){
   otherScope.restore()==null&&repo.current()?.id=="admin-1"&&api.calls.size==beforeOtherScope&&
   SecureStore.records["session"]==originalScopeRecord)
  val count=api.calls.size;runCatching{repo.login("bad","2468")};ck("invalid login does not dispatch or replace operator",api.calls.size==count&&repo.current()?.id=="admin-1")
- ck("home reads authoritative balance",repo.home().balanceRwf==17000L)
+ ck("home reads the payment count",repo.home().paymentCount==17)
  ck("live read is not cached provenance",!repo.lastReadFromCache&&repo.lastReadSavedAt!=null)
  api.handler={throw ApiFailure("connection_unavailable",0)}
- ck("offline home reuses owner-bound cache",repo.home().balanceRwf==17000L&&repo.lastReadFromCache)
+ ck("offline home reuses owner-bound cache",repo.home().paymentCount==17&&repo.lastReadFromCache)
  api.handler={emptyPage()}
  repo.payments()
  val quietHomeStarted=CountDownLatch(1)
@@ -66,7 +66,7 @@ fun main(){
   if(request.path.endsWith("/home")){
    quietHomeStarted.countDown()
    check(releaseQuietHome.await(5,TimeUnit.SECONDS))
-   JSONObject(home()).put("groupBalanceRwf",18000).toString()
+   JSONObject(home()).put("paymentCount",18).toString()
   }else throw ApiFailure("connection_unavailable",0)
  }
  val quietHomeThread=thread{quietHomeResponse=runCatching{repo.readQuietHome()}}
@@ -78,7 +78,7 @@ fun main(){
   releaseQuietHome.countDown()
   quietHomeThread.join(3000)
   ck("late unpublished Home preserves offline Payments provenance and the protected cache",
-   !quietHomeThread.isAlive&&quietHomeResponse?.getOrThrow()?.payload?.getLong("groupBalanceRwf")==18000L&&
+   !quietHomeThread.isAlive&&quietHomeResponse?.getOrThrow()?.payload?.getInt("paymentCount")==18&&
     repo.lastReadFromCache&&repo.lastReadSavedAt==paymentSavedAt&&SecureStore.records["records"]==protectedCache)
  }finally{releaseQuietHome.countDown()}
  api.handler=happy;repo.sms();ck("successful noncached SMS clears stale cache flag",!repo.lastReadFromCache)
@@ -199,7 +199,7 @@ fun main(){
  check(renewalEntered.await(5,TimeUnit.SECONDS));repo.logout();releaseRenewal.countDown();renewalThread.join(6000)
  ck("late session renewal cannot undo explicit logout",!renewalThread.isAlive&&renewalFailure is ContractFailure&&repo.current()==null&&"session" !in SecureStore.records)
  api.handler=happy;repo.login("0780000001","2468")
- val p=decodePayment(JSONObject(pay()));val m=Member("member-1","Example Member","+250780000816",0,true,1)
+ val p=decodePayment(JSONObject(pay()));val m=Member("member-1","Example Member","+250780000816",true,1)
  val automatic=JSONObject(pay()).put("amountRwf",JSONObject.NULL).put("ftId",JSONObject.NULL).put("state","recorded")
   .put("direction","outgoing").put("outcome","pending").put("sourceKind","observation")
   .put("feeRwf",0).put("walletBalanceAfterRwf",1900)
@@ -210,7 +210,9 @@ fun main(){
  ck("automatic transaction rejects unknown direction",runCatching{decodePayment(JSONObject(automatic.toString()).put("direction","invented"))}.isFailure)
  ck("automatic transaction rejects fractional fees",runCatching{decodePayment(JSONObject(automatic.toString()).put("feeRwf",1.5))}.isFailure)
  api.handler={req->if(req.path.endsWith("/allocate"))throw ApiFailure("connection_unavailable",0,true) else happy(req)}
- runCatching{repo.allocate(p,m,"Verified full identity")}
+ runCatching{repo.allocate(p,m)}
+ ck("allocation dispatch records only the member and version with the request key",
+  api.calls.last().body?.keys()?.asSequence()?.toSet()==setOf("memberId","expectedVersion","requestId"))
  ck("uncertain allocation leaves durable UNKNOWN",repo.pending()?.state==OperationState.UNKNOWN)
  val request=repo.pending()!!.requestId
  repo.clearOperator();ck("sign-out preserves pending operation",repo.pending()?.requestId==request)
@@ -232,24 +234,24 @@ fun main(){
   req.path.contains("/operations/")->{if(req.path.endsWith("/recovery"))outcomeCalls++;recovered(req,requestedState)}
   else->happy(req)
  }}
- runCatching{repo.allocate(p.copy(id="payment-pending"),m,"Authenticated pending state test")}
+ runCatching{repo.allocate(p.copy(id="payment-pending"),m)}
  val unresolved=repo.pending()!!
  ck("uncertain first allocation remains UNKNOWN",unresolved.state==OperationState.UNKNOWN&&postCalls==1)
  val pendingResult=repo.reconcilePending()
  ck("authoritative pending is returned without new POST",pendingResult.getString("state")=="pending"&&postCalls==1&&outcomeCalls==1)
  ck("pending remains durable with original request ID",repo.pending()?.requestId==unresolved.requestId)
- ck("repeat tapping identical allocation is refused",runCatching{repo.allocate(p.copy(id="payment-pending"),m,"Authenticated pending state test")}.isFailure&&postCalls==1)
+ ck("repeat tapping identical allocation is refused",runCatching{repo.allocate(p.copy(id="payment-pending"),m)}.isFailure&&postCalls==1)
  ck("explicit retry cannot reissue UNKNOWN request",runCatching{repo.retryPending()}.isFailure&&postCalls==1)
  requestedState="committed";repo.reconcilePending()
  ck("only authenticated committed status terminates pending",repo.pending()==null&&postCalls==1&&outcomeCalls==2)
  forcedPostFailure=false;requestedState="pending";postCalls=0;outcomeCalls=0
- val uncertainSuccess=runCatching{repo.allocate(p.copy(id="payment-transport"),m,"Transport success without outcome")}.exceptionOrNull()
+ val uncertainSuccess=runCatching{repo.allocate(p.copy(id="payment-transport"),m)}.exceptionOrNull()
  ck("POST success plus pending status is NOT marked credited",uncertainSuccess is ApiFailure&&uncertainSuccess.uncertain&&repo.pending()?.state==OperationState.UNKNOWN&&postCalls==1&&outcomeCalls==1)
  requestedState="rejected";val rejected=runCatching{repo.reconcilePending()}
  ck("unsupported rejection cannot erase pending operation",rejected.isFailure&&repo.pending()!=null&&postCalls==1)
  requestedState="committed";repo.reconcilePending()
  forcedPostFailure=false;requestedState="committed";postCalls=0;outcomeCalls=0
- val resultVerified=repo.allocate(p.copy(id="payment-verified"),m,"Verified receipt after successful POST")
+ val resultVerified=repo.allocate(p.copy(id="payment-verified"),m)
  ck("success needs a matching retained command outcome",resultVerified.getString("state")=="committed"&&postCalls==1&&outcomeCalls==1&&repo.pending()==null)
  // The mutation may have committed before a status GET receives a 401.
  // It must remain UNKNOWN, not a definite rejected command.
@@ -259,7 +261,7 @@ fun main(){
   req.path.contains("/operations/")->{outcomeCalls++;throw ApiFailure("session_unavailable",401,false)}
   else->happy(req)
  }}
- runCatching{repo.allocate(p.copy(id="payment-auth"),m,"POST accepted but status 401")}
+ runCatching{repo.allocate(p.copy(id="payment-auth"),m)}
  ck("post-ack status 401 cannot erase possible commit",repo.pending()?.state==OperationState.UNKNOWN&&postCalls==1&&outcomeCalls==1)
  // Fresh explicit login is needed, and server-side operator-bound reconciliation
  // will require an approved principal-scoped journal before cross-token recovery.
@@ -269,7 +271,7 @@ fun main(){
 
  forcedPostFailure=false;requestedState="pending";postCalls=0;outcomeCalls=0
  api.handler={req->if(req.path.endsWith("/allocate")){postCalls++;"{}"}else if(req.path.contains("/operations/")){outcomeCalls++;JSONObject().put("requestId",req.path.substringAfterLast('/')).put("state","pending").toString()}else happy(req)}
- runCatching{repo.allocate(p.copy(id="payment-identity"),m,"Verify request identity before closing")}
+ runCatching{repo.allocate(p.copy(id="payment-identity"),m)}
  val identity=repo.pending()!!.requestId
  api.handler={req->if(req.path.contains("/operations/"))JSONObject().put("requestId","other-request").put("state","committed").toString() else happy(req)}
  ck("mismatched signed outcome cannot terminate operation",runCatching{repo.reconcilePending()}.isFailure&&repo.pending()?.requestId==identity)
@@ -281,7 +283,7 @@ fun main(){
   req.path.contains("/operations/")->{outcomeCalls++;JSONObject().put("requestId",req.path.substringAfterLast('/')).put("state","pending").toString()}
   else->happy(req)
  }}
- runCatching{repo.allocate(p.copy(id="payment-crossover"),m,"Session crossover protection")}
+ runCatching{repo.allocate(p.copy(id="payment-crossover"),m)}
  repo.clearOperator()
  api.handler={req->if(req.path.endsWith("/session/login"))session(t="b".repeat(64)) else if(req.path.contains("/operations/")){outcomeCalls++;JSONObject().put("requestId",req.path.substringAfterLast('/')).put("state","pending").toString()}else happy(req)}
  repo.login("0780000001","2468") // Same operator, new bearer.
@@ -592,41 +594,22 @@ fun main(){
  val reader=thread{try{repo.home()}catch(e:Throwable){failure=e}}
  check(sent.await(5,TimeUnit.SECONDS));repo.clearOperator();finish.countDown();reader.join(6000)
  ck("late read cannot restore signed-out records",failure is ContractFailure&&repo.current()==null&&!SecureStore.records.containsKey("records"))
- // History endpoint and precise DTO/page contracts. Synthetic JSON/storage, actual repository code.
+ // Page and dashboard projection validation using the real record decoder.
  api.handler=happy;repo.login("0780000001","2468")
- fun event(id:String="transaction:tx-1",kind:String="transaction_recorded",delta:Long?=null)=JSONObject()
-  .put("id",id).put("groupId","group-1").put("transactionId","tx-1").put("kind",kind)
-  .put("recordedAt","2026-11-08T10:00:00Z").put("amountRwf",delta?:JSONObject.NULL)
-  .put("memberId",if(kind=="ledger_entry")"member-1" else JSONObject.NULL)
- fun events(vararg rows:JSONObject)=JSONObject().put("items",JSONArray().also{a->rows.forEach{a.put(it)}})
-  .put("nextCursor",JSONObject.NULL).put("totalCount",rows.size).put("revision","history-v1").put("asOf","2026-11-08T10:00:02Z")
- val history=events(event(),event("ledger:l-1","ledger_entry",-17000)).toString()
- api.handler={r->if(r.path.contains("/history"))history else happy(r)}
- val result=repo.paymentHistory("tx-1")
- ck("history endpoint decodes signed canonical ledger changes",result.items[1].amountRwf==-17000L&&result.items[0].amountRwf==null)
- ck("history uses the scoped transaction URL",api.calls.last().path=="/v1/burimunsi/payments/tx-1/history?")
- api.handler={throw ApiFailure("connection_unavailable",0)}
- ck("history supports owner-bound offline cache",repo.paymentHistory("tx-1").items.size==2&&repo.lastReadFromCache)
- api.handler={r->if(r.path.contains("/history"))history else happy(r)};repo.paymentHistory("tx-1")
- ck("history fresh read clears saved-data flag",!repo.lastReadFromCache)
- fun invalid(label:String,row:JSONObject){ck(label,runCatching{decodePaymentHistory(events(row).toString(),"group-1","tx-1")}.isFailure)}
- invalid("history rejects foreign group",event().put("groupId","other"))
- invalid("history rejects foreign transaction",event().put("transactionId","other"))
- invalid("history rejects guessed stage",event().put("kind","confirmed"))
- invalid("history rejects invalid date",event().put("recordedAt","2026-02-30T10:00:00Z"))
- invalid("history rejects timezone-free date",event().put("recordedAt","2026-11-08 10:00:00"))
- invalid("history observation cannot imply credit",event().put("amountRwf",10000))
- invalid("history requires a member on ledger entries",event("ledger:l-1","ledger_entry",17000).put("memberId",JSONObject.NULL))
- invalid("history rejects zero-value ledger entries",event("ledger:l-1","ledger_entry",0))
- invalid("history rejects mismatched event source",event("transaction:other"))
- ck("history rejects duplicate event IDs",runCatching{decodePaymentHistory(events(event(),event()).toString(),"group-1","tx-1")}.isFailure)
+ fun pageWith(vararg rows:JSONObject)=JSONObject().put("items",JSONArray().also{a->rows.forEach{a.put(it)}})
+  .put("nextCursor",JSONObject.NULL).put("totalCount",rows.size).put("revision","payments-v1").put("asOf","2026-11-08T10:00:02Z")
+ val canonical = JSONObject(pay())
+ api.handler={r->if(r.path.endsWith("/home"))JSONObject(home()).also{it.remove("paymentCount")}.toString() else happy(r)}
+ ck("predecessor Home without a count does not invent one",repo.home().paymentCount==null)
+ api.handler={r->if(r.path.endsWith("/home"))JSONObject(home()).put("paymentCount",0).toString() else happy(r)}
+ ck("inconsistent payment counts are rejected",runCatching{repo.home()}.isFailure)
  for((label,value) in listOf("fractional" to 1.5,"negative" to -1,"overflow" to 2147483648L,"coerced string" to "1")){
-  ck("page refuses $label count",runCatching{page(events(event()).put("totalCount",value).toString()){it.getString("id")}}.isFailure)
+  ck("page refuses $label count",runCatching{page(pageWith(canonical).put("totalCount",value).toString()){it.getString("id")}}.isFailure)
  }
- ck("page refuses empty continuation",runCatching{page(events().put("nextCursor","cursor").toString()){it.getString("id")}}.isFailure)
- ck("page refuses blank revision",runCatching{page(events(event()).put("revision","").toString()){it.getString("id")}}.isFailure)
- ck("page refuses count smaller than its rows",runCatching{page(events(event()).put("totalCount",0).toString()){it.getString("id")}}.isFailure)
- ck("page refuses oversized cursor",runCatching{page(events(event()).put("nextCursor","c".repeat(8193)).toString()){it.getString("id")}}.isFailure)
+ ck("page refuses empty continuation",runCatching{page(pageWith().put("nextCursor","cursor").toString()){it.getString("id")}}.isFailure)
+ ck("page refuses blank revision",runCatching{page(pageWith(canonical).put("revision","").toString()){it.getString("id")}}.isFailure)
+ ck("page refuses count smaller than its rows",runCatching{page(pageWith(canonical).put("totalCount",0).toString()){it.getString("id")}}.isFailure)
+ ck("page refuses oversized cursor",runCatching{page(pageWith(canonical).put("nextCursor","c".repeat(8193)).toString()){it.getString("id")}}.isFailure)
  api.handler=happy
  val sourceBody="M-Money: amafaranga 10,000 RWF; inyemezabwishyu 🧾"
  val reviewReason="  Gusuzuma inyemezabwishyu y’umunyamuryango 🧾  "
@@ -646,7 +629,7 @@ fun main(){
  val lostCalls=api.calls.size
  ck("unknown disclosure never reads cache or creates a replay journal",runCatching{repo.raw("sms-1",reviewReason)}.exceptionOrNull() is ApiFailure&&api.calls.size==lostCalls+1&&repo.pending()==null&&SecureStore.records==storageBefore)
  api.handler={r->if(r.path.endsWith("/allocate"))throw ApiFailure("connection_unavailable",0,true) else happy(r)}
- runCatching{repo.allocate(p.copy(id="payment-membership"),m,"Verified original membership")}
+ runCatching{repo.allocate(p.copy(id="payment-membership"),m)}
  val originalPending=repo.pending()!!;val originalJournal=SecureStore.records["pending-command"]
  api.handler={r->if(r.path.endsWith("/reveal"))rawResult else happy(r)}
  repo.raw("sms-1",reviewReason)
