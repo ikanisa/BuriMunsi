@@ -9,7 +9,8 @@ import {safePaymentListReturn} from '../../src/features/operations/paymentLocati
 import coreFixture from '../core/canonical-core-fixtures.json';
 import reconciliationFixture from '../core/canonical-reconciliation-fixture.json';
 
-const mock = vi.hoisted(() => ({request:vi.fn(), permissions:[] as string[], status:'authenticated', role:'admin'}));
+const mock = vi.hoisted(() => ({request:vi.fn(), permissions:[] as string[], status:'authenticated', role:'admin',
+  authMethod:'phone_passcode' as AdminUser['authMethod']}));
 const currentActor = reconciliationFixture.detail.current_actor_id;
 const momoId = '11111111-1111-4111-8111-111111111111';
 const accountId = '22222222-2222-4222-8222-222222222222';
@@ -26,7 +27,7 @@ const emptyOperations = {rows:[],total:0};
 const emptyReconciliation = {...reconciliationFixture.queue, rows:[], total:0, next_offset:null};
 const sessionUser = () => ({id:currentActor,sessionId:'fixture-session',email:'fixture@example.test',role:mock.role as AdminUser['role'],
   permissions:mock.permissions,principalId:reconciliationFixture.detail.current_principal_id,assuranceLevel:1,mfaAt:null,emailVerifiedAt:null,
-  expiresAt:'2030-01-01T00:00:00Z',financialModel:'canonical_evidence_ledger',authMethod:'phone_passcode'} satisfies AdminUser);
+  expiresAt:'2030-01-01T00:00:00Z',financialModel:'canonical_evidence_ledger',authMethod:mock.authMethod} satisfies AdminUser);
 vi.mock('../../src/session/SessionProvider',async original => ({
   ...await original<typeof import('../../src/session/SessionProvider')>(),
   useSession:() => ({status:mock.status,epoch:1,user:sessionUser(),request:mock.request,isCurrentAuthority:() => true}),
@@ -46,7 +47,7 @@ const visit = (path: string, permissions: string[], role = 'admin') => {
 };
 const location = () => screen.getByLabelText('Current location');
 const called = (prefix: string) => mock.request.mock.calls.filter(([path]) => path.startsWith(prefix));
-afterEach(() => {mock.request.mockReset();mock.status='authenticated';mock.role='admin';});
+afterEach(() => {mock.request.mockReset();mock.status='authenticated';mock.role='admin';mock.authMethod='phone_passcode';});
 
 describe('consolidated Payments routes',()=>{
   it('makes the old payment list a guarded alias and returns through the new list with search preserved',async()=>{
@@ -115,6 +116,7 @@ describe('consolidated Payments routes',()=>{
     expect(called('momo/observations/collections')).toHaveLength(1);
     expect(called('gateway/receipts')).toHaveLength(0);
     sms.unmount();
+    mock.authMethod = undefined;
     mock.request.mockClear().mockResolvedValue(emptyOperations);
     const payments=visit('/admin/payments?view=sms',['payments.read','sms.read'],'staff');
     expect(await screen.findByText('No records found')).toBeVisible();
@@ -124,11 +126,42 @@ describe('consolidated Payments routes',()=>{
     expect(screen.queryByRole('link',{name:'Android receiver'})).not.toBeInTheDocument();
     expect(screen.queryByRole('link',{name:'App uploads'})).not.toBeInTheDocument();
     expect(called('momo/observations')).toHaveLength(0);
+    expect(canOpenAdminPath('/admin/member-receipts',sessionUser())).toBe(true);
+    expect(canOpenAdminPath('/admin/member-receipts/'+momoId,sessionUser())).toBe(true);
     payments.unmount();
     mock.request.mockClear();
     visit('/admin/payments?view=sms&source=android',['payments.read','sms.read'],'staff');
     expect(await screen.findByText('Access unavailable')).toBeVisible();
     expect(mock.request).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {role:'staff', permissions:['payments.read'], allowed:false},
+    {role:'staff', permissions:['payments.read','sms.read'], allowed:false},
+    {role:'admin', permissions:['payments.read'], allowed:false},
+    {role:'admin', permissions:['payments.read','sms.read'], allowed:true},
+  ])('aligns phone $role receipt links and deep links with the server ($permissions)', async ({role,permissions,allowed}) => {
+    mock.request.mockResolvedValue({...coreFixture.transactions,rows:[payment]});
+    const recorded=visit('/admin/payments',permissions,role);
+    expect(await screen.findByRole('link',{name:paymentRef})).toBeVisible();
+    expect(screen.queryByRole('link',{name:'Member receipts'})).not.toBeInTheDocument();
+    expect(Boolean(screen.queryByRole('link',{name:'SMS & receipts'}))).toBe(allowed);
+    recorded.unmount();
+    mock.request.mockClear().mockResolvedValue(emptyOperations);
+    const compact=visit('/admin/payments?view=sms&source=member',permissions,role);
+    expect(await screen.findByText(allowed ? 'No records found' : 'Access unavailable')).toBeVisible();
+    expect(called('gateway/receipts')).toHaveLength(allowed ? 1 : 0);
+    compact.unmount();
+    const bookmarks=['/admin/member-receipts','/admin/member-receipts/'+momoId];
+    for (const path of bookmarks) {
+      expect(canOpenAdminPath(path,sessionUser())).toBe(allowed);
+      if (allowed) continue;
+      mock.request.mockClear();
+      const bookmark=visit(path,permissions,role);
+      expect(screen.getByText('Direct route denied')).toBeVisible();
+      expect(mock.request).not.toHaveBeenCalled();
+      bookmark.unmount();
+    }
   });
 
   it('opens one source at a time and restores the upload search across ordinary Back',async()=>{

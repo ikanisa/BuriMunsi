@@ -1,6 +1,6 @@
 import {lazy} from 'react';
 import {Navigate, useLocation, useNavigate} from 'react-router';
-import {paymentViewLocation} from '../../features/operations/paymentLocations';
+import {canReadMemberReceipts, paymentViewLocation} from '../../features/operations/paymentLocations';
 import {OverviewPage} from '../../features/overview/OverviewPage';
 import {canReadRequestHistory} from '../../features/requests/permissions';
 import {hasScopedAdminAuthority} from '../../session/ownerIdentity';
@@ -74,8 +74,8 @@ export const operatorRoutes = [
   workspaceRoute('gateway/receiver-grants', <ReceiverGrantsPage />, canReadGateway),
   workspaceRoute('gateway/receiver-grants/:id', <ReceiverGrantDetailPage />, canReadGateway),
   workspaceRoute('gateway/:id', <GatewayDeviceDetailPage />, canReadGateway),
-  workspaceRoute('member-receipts', <MemberReceiptsPage />, canReadPayments),
-  workspaceRoute('member-receipts/:id', <MemberReceiptDetailPage />, canReadPayments),
+  workspaceRoute('member-receipts', <MemberReceiptsPage />, canReadMemberReceipts),
+  workspaceRoute('member-receipts/:id', <MemberReceiptDetailPage />, canReadMemberReceipts),
   workspaceRoute('email', <EmailEventsPage />, requiresPermissions('email.read')),
   workspaceRoute('momo-receipts', <LegacyMomoReceiptsRoute />, user => canReadSmsEvidence(user) || canReadPayments(user)),
   workspaceRoute('notification-operator', <AssistedSmsRoute />, requiresAdminRole('assisted_sms.read')),
