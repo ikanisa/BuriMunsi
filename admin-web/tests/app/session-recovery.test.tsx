@@ -44,6 +44,23 @@ afterEach(() => {
 });
 
 describe('Admin session recovery through the router', () => {
+  it('keeps a waiting PWA update out of the signed-in workspace', async () => {
+    const scriptURL = new URL('/custom-sw.js', location.origin).href;
+    const active = Object.assign(new EventTarget(), {scriptURL, state: 'activated'});
+    const waiting = Object.assign(new EventTarget(), {scriptURL, state: 'installed'});
+    const registration = Object.assign(new EventTarget(), {active, waiting, installing: null, scope: location.origin + '/'});
+    const serviceWorker = Object.assign(new EventTarget(), {controller: active, ready: Promise.resolve(registration)});
+    vi.stubGlobal('isSecureContext', true);
+    vi.stubGlobal('navigator', Object.create(navigator, {serviceWorker: {value: serviceWorker}}));
+    try {
+      openAdmin('/admin/licenses');
+      expect(await screen.findByRole('heading', {name: 'Open-source licenses'})).toBeVisible();
+      expect(screen.queryByText(/Admin update ready/i)).not.toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it.each([
     ['supabase', 'authenticator', 'verify-email', 'Verify your email'],
     ['cloudflare', 'verify-email', 'authenticator', 'Authenticator'],
@@ -88,19 +105,17 @@ describe('Admin session recovery through the router', () => {
 });
 
 describe('Admin navigation for the current session', () => {
-  it('keeps distinct member and person reads in one directory and respects the existing access guard', async () => {
-    const {requests} = openAdmin('/admin/members', {session: {user: {...account, permissions: ['users.read']}}});
+  it('takes old People list bookmarks to the same filtered member roster', async () => {
+    const {requests} = openAdmin('/admin/users?search=Group+One&sort=public_id_asc&status=suspended&unknown=drop', {session: {user: {...account, permissions: ['users.read']}}});
     await screen.findByRole('heading', {name: 'Members'});
-    const views = within(screen.getByRole('navigation', {name: 'Member directory views'}));
-    expect(views.getByRole('link', {name: 'Group members'})).toHaveAttribute('aria-current', 'page');
-    expect(views.getByRole('link', {name: 'All people'})).toHaveAttribute('href', '#/admin/users');
-    await waitFor(() => expect(requests).toContain('/api/admin/core/members'));
+    expect(router.state.location.pathname + router.state.location.search).toBe('/admin/members?search=Group+One&sort=public_id_asc');
+    expect(screen.getByRole('textbox', {name: 'Search Members'})).toHaveValue('Group One');
+    expect(within(screen.getByRole('combobox', {name: 'Status'})).getAllByRole('option').map(option => option.textContent)).toEqual(['All statuses', 'Active', 'Inactive']);
+    expect(screen.queryByRole('link', {name: 'All people'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', {name: 'Group members'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', {name: 'Add member'})).not.toBeInTheDocument();
+    expect(requests).toContain('/api/admin/core/members');
     expect(requests).not.toContain('/api/admin/core/users');
-    fireEvent.click(views.getByRole('link', {name: 'All people'}));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/admin/users'));
-    expect(screen.getByRole('heading', {name: 'Members'})).toBeVisible();
-    expect(screen.getByRole('link', {name: 'All people'})).toHaveAttribute('aria-current', 'page');
-    await waitFor(() => expect(requests).toContain('/api/admin/core/users'));
   });
 
   it('does not read directory records or expose directory views without user permission', async () => {
