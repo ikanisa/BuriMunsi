@@ -1,6 +1,5 @@
 import {lazy, type ReactElement} from 'react';
-import {Link, Navigate, useLocation, useNavigate, useParams} from 'react-router';
-import {Button} from '../../ui';
+import {Link, Navigate, useLocation, useParams} from 'react-router';
 import {canOpenPaymentView, paymentViews, paymentsPath} from '../../features/operations/paymentLocations';
 import {CORE_PERMISSIONS, type CoreArea} from '../../features/core/types';
 import {useSession} from '../../session/SessionProvider';
@@ -169,15 +168,15 @@ const records: Record<CoreArea, RecordRoutes> = {
 export const recordRoutes = [
   workspaceRoute('payments', <PaymentsRoute />, user => paymentViews.some(({id}) => canOpenPaymentView(id, user.permissions))),
   ...(Object.keys(CORE_PERMISSIONS) as CoreArea[]).flatMap(area => {
-  const {list, create, edit} = records[area];
-  const canRead = area === 'payees' ? canReadReceivingAccounts : canReadCoreArea(area);
-  return [
-    workspaceRoute(area, list ?? <CoreListRoute area={area} />, canRead),
-    workspaceRoute(area + '/new', create.element, user => canRead(user) && create.access(user)),
-    workspaceRoute(area + '/:id/edit', edit.element, user => canRead(user) && edit.access(user)),
-    workspaceRoute(area + '/:id', <CoreDetailRoute area={area} />, canRead),
-  ];
-}),
+    const {list, create, edit} = records[area];
+    const canRead = area === 'payees' ? canReadReceivingAccounts : canReadCoreArea(area);
+    return [
+      workspaceRoute(area, list ?? <CoreListRoute area={area} />, canRead),
+      workspaceRoute(area + '/new', create.element, user => canRead(user) && create.access(user)),
+      workspaceRoute(area + '/:id/edit', edit.element, user => canRead(user) && edit.access(user)),
+      workspaceRoute(area + '/:id', <CoreDetailRoute area={area} />, canRead),
+    ];
+  }),
 ];
 
 const canManageMemberships = requiresPermissions('collections.read', 'users.manage');

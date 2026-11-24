@@ -21,6 +21,7 @@ export const adminAccountNavigation: readonly AccountNavigationItem[] = [
   {label: 'Open-source notices', path: '/admin/licenses', icon: 'file', group: 'help'},
   {label: 'Receiving accounts', path: '/admin/payees', group: 'advanced', contextualPath: '/admin/groups'},
   {label: 'Profile access', path: '/admin/burimunsi', group: 'advanced', contextualPath: '/admin/admin-users'},
+  {label: 'Ledger history', path: '/admin/ledgers', group: 'advanced', contextualPath: '/admin/transactions'},
   {label: 'Legacy gateway devices', path: '/admin/gateway', group: 'advanced'},
   {label: 'Assisted SMS', path: '/admin/notification-operator', group: 'advanced'},
   {label: 'SMS controls', path: '/admin/notification-settings', group: 'advanced'},
