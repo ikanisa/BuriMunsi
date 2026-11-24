@@ -89,12 +89,15 @@ export function verifyInventory({policyBytes,expectedPolicySha256,referenceBytes
     readbackBytesVerified:false, operationalStorageRecoveryVerified:false, migrationAuthorized:false};
 }
 
-async function readBounded(path,cap) {
+async function readBounded(path,cap,differentFrom) {
   requireThat(typeof path==='string' && isAbsolute(path) && normalize(path)===path,'INPUT_PATH_INVALID');
   requireThat(await realpath(path)===path,'INPUT_PATH_INVALID');
   const fd=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
   try {
     const pre=await fd.stat({bigint:true});
+    const identity={device:pre.dev,inode:pre.ino};
+    requireThat(!differentFrom || identity.device!==differentFrom.device ||
+      identity.inode!==differentFrom.inode,'INPUT_FILE_ALIAS');
     requireThat(pre.isFile() && pre.uid===BigInt(process.getuid()) && (pre.mode&0o777n)===0o600n &&
       pre.nlink===1n,'INPUT_FILE_INVALID');
     requireThat(pre.size>0n && pre.size<=BigInt(cap),'INPUT_BYTES_BOUND');
@@ -108,20 +111,21 @@ async function readBounded(path,cap) {
     const post=await fd.stat({bigint:true});
     requireThat(position===size && pre.size===post.size && pre.mtimeNs===post.mtimeNs &&
       pre.ctimeNs===post.ctimeNs && pre.nlink===post.nlink,'INPUT_FILE_CHANGED');
-    return bytes.subarray(0,size);
+    return {bytes:bytes.subarray(0,size),identity};
   } finally { await fd.close(); }
 }
 
 async function main(args) {
   requireThat(args.length===4 && isHash(args[0]),'USAGE_INVALID');
   const [expectedPolicySha256,policyPath,referencePath,observedPath]=args;
-  const policyBytes=await readBounded(policyPath,HARD.policyBytes);
+  requireThat(referencePath!==observedPath,'INPUT_FILE_ALIAS');
+  const {bytes:policyBytes}=await readBounded(policyPath,HARD.policyBytes);
   const p=policy(policyBytes,expectedPolicySha256);
-  const referenceBytes=await readBounded(referencePath,HARD.inventoryBytes);
+  const {bytes:referenceBytes,identity}=await readBounded(referencePath,HARD.inventoryBytes);
   // Verify the approved baseline before opening the candidate manifest.
   requireThat(hash(referenceBytes)===p.referenceSha256,'REFERENCE_PIN_MISMATCH');
   inventory(referenceBytes,p);
-  const observedBytes=await readBounded(observedPath,HARD.inventoryBytes);
+  const {bytes:observedBytes}=await readBounded(observedPath,HARD.inventoryBytes,identity);
   return verifyInventory({policyBytes,expectedPolicySha256,referenceBytes,observedBytes});
 }
 if (process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {

@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
-import {chmod,mkdtemp,realpath,rm,symlink,writeFile} from 'node:fs/promises';
+import {chmod,link,mkdtemp,realpath,rm,symlink,unlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -102,6 +102,15 @@ test('CLI opens only private bounded regular files, rejects symlinks, and hides 
   };
   try {
     await Promise.all(paths.map((path,i)=>writeFile(path,[fixtureInput.policyBytes,fixtureInput.referenceBytes,fixtureInput.observedBytes][i],{mode:0o600})));
+    assert.equal(call().objectCount,61);
+    assert.equal(call(paths[1]).reason,'INPUT_FILE_ALIAS');
+    const hardlink=join(directory,'synthetic-hardlink');
+    await link(paths[1],hardlink);
+    // Refuse before consuming a file with multiple names. The original is now
+    // multiply linked as well, so its existing one-link fence fires first.
+    assert.equal(call(hardlink).reason,'INPUT_FILE_INVALID');
+    await unlink(hardlink);
+    await writeFile(paths[2],fixtureInput.referenceBytes);
     assert.equal(call().objectCount,61);
     const symbolic=join(directory,'synthetic-link');await symlink(paths[2],symbolic);
     assert.equal(call(symbolic).reason,'INPUT_PATH_INVALID');
