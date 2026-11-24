@@ -37,6 +37,10 @@ WITH scope AS (
   JOIN app.momo_transactions t ON t.id = f.transaction_id
   WHERE t.event_kind = 'incoming_receipt' AND t.provider_transaction_id IS NOT NULL
   GROUP BY t.receiving_account_id, t.provider_transaction_id
+), receipt_senders AS (
+  SELECT count(*)::int AS ready_senders, max(last_seen_at) AS last_sender_heartbeat
+  FROM collect_sms.devices
+  WHERE ready = 1 AND revoked_at IS NULL AND allowed_kinds::jsonb ? 'receipt'
 )
 SELECT f.project_ref AS project, statement_timestamp() AS observed_at, f.epoch,
   f.mode AS release_state, c.enabled AND j.active AS scheduler_active, j.schedule,
@@ -57,10 +61,10 @@ SELECT f.project_ref AS project, statement_timestamp() AS observed_at, f.epoch,
     AND EXISTS (SELECT 1 FROM collect_sms.attempt_evidence a WHERE a.message_id = sent.message_id
       AND a.parts_total > 0 AND a.delivered_count = a.parts_total)) AS payer_confirmed_all_parts,
   (SELECT count(*)::int FROM private.burimunsi_inbox_checks x WHERE x.collection_id = s.id) AS recorded_handset_checks,
-  (SELECT count(*)::int FROM collect_sms.devices WHERE ready = 1 AND revoked_at IS NULL) AS ready_senders,
-  (SELECT max(last_seen_at) FROM collect_sms.devices WHERE ready = 1 AND revoked_at IS NULL) AS last_sender_heartbeat
+  senders.ready_senders, senders.last_sender_heartbeat
 FROM private.collect_fence_control f JOIN collect_ops.jobs_config c USING (singleton)
-JOIN cron.job j ON j.jobid = c.cron_job_id CROSS JOIN scope s WHERE f.singleton`;
+JOIN cron.job j ON j.jobid = c.cron_job_id CROSS JOIN scope s
+CROSS JOIN receipt_senders senders WHERE f.singleton`;
 
 const response = await management('database/query', {
   method: 'POST',
