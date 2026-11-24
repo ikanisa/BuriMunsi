@@ -173,7 +173,7 @@ class NativeUiContractTest {
         field("MoMo name").assertExists();field("MoMo number").assertExists()
         panelList("Add member").performScrollToNode(hasText("Privacy notice and consent recorded"))
         ui.onNodeWithText("Privacy notice and consent recorded").assertIsDisplayed()
-        ui.onNodeWithText("Adding a member does not allocate previous payments.").assertDoesNotExist()
+        ui.onNodeWithText("Eligible earlier MoMo payments may be matched and credited automatically after you add this member.").assertDoesNotExist()
         panelButton("Add member","Save member").assertIsNotEnabled()
         ui.runOnIdle{c.onboardingOptions()}
         panelList("Add member").performScrollToNode(hasText("Take a photo of the list"))
@@ -208,8 +208,8 @@ class NativeUiContractTest {
         ui.onNodeWithText("Choose a file").assertExists()
         ui.onNodeWithText("Choose a file, review the extracted rows and register only verified members.").assertDoesNotExist()
         ui.onNodeWithText("CSV is available. Image, PDF and spreadsheet import require the document service.").assertDoesNotExist()
-        panelList("Add member").performScrollToNode(hasText("Suggested from transaction payments"))
-        panelButton("Add member","Suggested from transaction payments").performClick()
+        panelList("Add member").performScrollToNode(hasText("Suggested from payments"))
+        panelButton("Add member","Suggested from payments").performClick()
         ui.onNodeWithText("Suggested members").assertExists()
         ui.runOnIdle{c.onboardingImport()}
         panelList("Add member").performScrollToNode(hasText("Add manually"))
@@ -222,7 +222,7 @@ class NativeUiContractTest {
         ui.runOnIdle{check(captures==2&&c.state.onboarding.photoCaptureFlow)}
         ui.runOnIdle{c.state=c.state.copy(onboarding=SmartOnboardingState(step=SmartOnboardingStep.IMPORT,sourceKind="csv",
             rows=listOf(SmartImportRow(1,"Reviewed Member","+250780000001","ready",verifiedOwnership=true,acceptedTerms=true,consentRecorded=true))))}
-        ui.onNodeWithText("Suggested from transaction payments").assertDoesNotExist()
+        ui.onNodeWithText("Suggested from payments").assertDoesNotExist()
         ui.onNodeWithText("Add manually").assertDoesNotExist()
         ui.onNodeWithText("Take a photo of the list").assertDoesNotExist()
     }
@@ -234,7 +234,12 @@ class NativeUiContractTest {
             panelList("Andika umunyamuryango").performScrollToNode(hasText(label));ui.onNodeWithText(label).assertExists()
         }
         ui.runOnIdle{c.onboardingManual()}
-        ui.onNodeWithText("Nyuma yo kongeramo uyu munyamuryango, ubwishyu bwa MoMo bwabanje bujuje ibisabwa bushobora guhuzwa na we maze imisanzu ye ikandikwa mu buryo bwikora.").performScrollTo().assertIsDisplayed()
+        for(label in listOf("Izina rya MoMo","Nimero ya MoMo")){
+            panelList("Andika umunyamuryango").performScrollToNode(hasContentDescription(label));field(label).assertIsDisplayed()
+        }
+        val consent="Ubutumwa bw’ibanga n’ubwumvikane byanditswe"
+        panelList("Andika umunyamuryango").performScrollToNode(hasText(consent))
+        ui.onNodeWithText(consent).assertIsDisplayed()
     }
     @Test fun privacyGateDisposesCredentialsAndRecordsWithinOriginalRoute(){
         val c=FakeController(Route.LOGIN);show(c);field("Passcode").performScrollTo().performTextInput("2468")
@@ -452,8 +457,9 @@ class NativeUiContractTest {
         panelButton("Add member","Add manually").performClick()
         ui.onNodeWithText("Registered full name",useUnmergedTree=true).assertExists()
         ui.runOnIdle{c.state=c.state.copy(sheet=Sheet.ALLOCATE,sheetId=null)}
-        panelList("Allocate").performScrollToNode(hasText("How was the member confirmed?"))
-        ui.onNodeWithText("How was the member confirmed?",useUnmergedTree=true).assertExists()
+        panelList("Allocate").performScrollToNode(hasContentDescription("Find member"))
+        field("Find member").assertIsDisplayed()
+        ui.onNodeWithText("How was the member confirmed?",useUnmergedTree=true).assertDoesNotExist()
         ui.runOnIdle{c.state=c.state.copy(sheet=Sheet.STAFF_EDIT,sheetId=null,selectedStaff=null,draft=emptyMap())}
         ui.onNodeWithText("Full name",useUnmergedTree=true).assertExists()
         val account=StaffAccount("staff-1","Example Staff","+250780000001",true,1,setOf("records.read"))
