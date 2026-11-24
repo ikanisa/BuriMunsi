@@ -10,6 +10,8 @@ import {CONTRACT_VERSION} from '../../functions/_shared/domain/burimunsi/wire/na
 import {createPhonePinRequestGate, phonePinReadSelector} from '../../functions/_shared/domain/burimunsi/phone-pin-request.js';
 import {PostgresDatabase} from '../../functions/_shared/postgres.js';
 import {lockCollectMutation} from '../../functions/_shared/postgres-mutation-lock.js';
+import {drainNativeAutoTransactions} from '../../functions/_shared/domain/burimunsi/postgres-native-auto-worker.js';
+import {drainNativeSmsLedger} from '../../functions/_shared/domain/burimunsi/postgres-native-sms-ledger.js';
 import {PostgresNativeAuthStore} from '../../functions/_shared/domain/burimunsi/postgres-auth-store.js';
 import {PostgresPhonePinSessions} from '../../functions/_shared/domain/burimunsi/postgres-phone-pin-sessions.js';
 import {PostgresOperatorDirectory} from '../../functions/_shared/domain/burimunsi/postgres-operator-directory.js';
@@ -47,6 +49,28 @@ export async function qualifyNativeReads({pool, admissionPool, businessStatement
       assert.equal((await admission.finish({failed})).state, 'settled');
     }
   }
+
+  // Both scheduler lanes used to wait on this mutex for five seconds each
+  // before discovering an empty queue. Keep the writer alive through both calls.
+  const writer = await admissionPool.reserve();
+  try {
+    await writer.unsafe('BEGIN');
+    await lockCollectMutation(writer);
+    await admitted(async db => {
+      const env = {DB:db, BURIMUNSI_NATIVE_AUTO_TRANSACTIONS_ENABLED:'true', MOMO_AI_ENABLED:'true',
+        MOMO_AI_MODEL:'fixture-model', OPENAI_API_KEY:'fixture', AI:{run:unused}};
+      const expected = {status:'complete',processed:0,results:[]};
+      assert.deepEqual(await drainNativeAutoTransactions(env,{limit:1}),expected);
+      assert.deepEqual(await drainNativeSmsLedger(env,{limit:4}),expected);
+    },'jobs');
+    await admitted(db=>assert.rejects(db.transaction(async tx=>{
+      await db.context(tx);
+      await tx.unsafe("SELECT private.burimunsi_native_job_candidates('post',4)");
+    }),{code:'42501'}));
+  } finally {
+    await writer.unsafe('ROLLBACK');writer.release();
+  }
+  console.log('PASS pinned jobs alone discover empty queues under a concurrent writer without provider or financial work');
 
   async function issue(account, ttl) {
     const actor = {...account, session:randomUUID(), installation:randomUUID(), device:token(), bearer:token()};

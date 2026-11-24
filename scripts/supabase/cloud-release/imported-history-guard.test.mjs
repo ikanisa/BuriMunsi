@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {createRequire} from 'node:module';
+import {verifyIdleNativeJobs} from './fixtures/burimunsi-idle-jobs.mjs';
 import {startOwnedPg17} from '../current-pg-transfer/test-support/owned-pg17.mjs';
 import {verifyBinaryPins,verifyEnvironment,BIN} from '../managed-identity-provider-compat/fixture-safety.mjs';
 const {Client}=createRequire(import.meta.url)('pg');
@@ -164,6 +165,7 @@ try{
  assert.equal((await root.query("SELECT count(*)::int n FROM app.ledger_entries WHERE id='partial-credit'")).rows[0].n,0);checks++;
  assert.equal((await root.query("SELECT count(*)::int n FROM app.ledger_entries WHERE id='already-imported'")).rows[0].n,1);checks++;
  assert.equal((await root.query("SELECT count(*)::int n FROM app.ledger_entries WHERE id='ledger-import-together'")).rows[0].n,1);checks++;
+ await verifyIdleNativeJobs({owner,root,read,extract});
  console.log(JSON.stringify({status:'PASS',checks,fixture:'owned-socket-only-pg17',actualPinnedFunctions:true,productionDispatched:false}));
 }finally{
  await Promise.allSettled(clients.map(c=>c.end()));
