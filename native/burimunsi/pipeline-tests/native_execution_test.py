@@ -113,6 +113,7 @@ EXPECTED_RECEIVER_ONLY_CASES = {
         'observationProfileAndConsentAreEncryptedAndAccountScoped',
         'observationPauseIsEncryptedAndSurvivesAnotherAccount',
         'pduCorrelationEvidenceIsEncryptedAndNeverPosts',
+        'foregroundRecordsSignalRequiresTheTargetSignatureAndContainsNoData',
         'offlineSandboxCannotCaptureObservations',
         'offlineSandboxCannotScanSmsInbox',
         'continuousSupervisorRemainsOfflineInQualificationSandbox',
