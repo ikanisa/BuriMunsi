@@ -5,7 +5,7 @@ import {OperationsLiveContext, operationsStreams} from '../../src/features/opera
 import {SUPABASE_PROJECT_ORIGIN} from '../../src/config';
 import {MemoryRouter} from 'react-router';
 import {describe,expect,it,vi} from 'vitest';
-import {MomoReceiptsPage} from '../../src/features/operations/MomoReceiptsPage';
+import {ReceiverSmsPanel} from '../../src/features/operations/ReceiverSmsPanel';
 import {receiverPage} from '../../src/features/operations/receiverSmsContract';
 
 const fixture=vi.hoisted(()=>({request:vi.fn()}));
@@ -17,7 +17,7 @@ const page={contractVersion:1,collectionId:group,asOf:time,nextCursor:null,inbox
 describe('BuriMunsi receiver observations',()=>{
   it('opens the receiver collection for a phone-passcode operator and displays source, credit, payer and completeness outcomes',async()=>{
     fixture.request.mockImplementation(async path=>path==='momo/observations/collections'?{contractVersion:1,asOf:time,items:[{collectionId:group,label:'Test group'}]}:{...page,asOf:'2026-11-22T10:05:01.000Z'});
-    render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
+    render(<MemoryRouter><ReceiverSmsPanel /></MemoryRouter>);
     const records=await screen.findByRole('region',{name:'Android receiver observations'});
     expect(within(records).getByText('Credited')).toBeVisible();expect(within(records).getByText('100000000172')).toBeVisible();
     expect(within(records).getByText('Reported delivered')).toBeVisible();expect(screen.getByText(/Inbox match is out of date/i)).toBeVisible();
@@ -32,7 +32,7 @@ describe('BuriMunsi receiver observations',()=>{
     let currentPage={...page,asOf};
     fixture.request.mockReset().mockImplementation(async path=>path==='momo/observations/collections'
       ? {contractVersion:1,asOf,items:[{collectionId:group,label:'Test group'}]} : currentPage);
-    const view=render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
+    const view=render(<MemoryRouter><ReceiverSmsPanel /></MemoryRouter>);
     const proof=()=>within(screen.getByRole('region',{name:'Inbox completeness'}));
     try {
       await act(async()=>{});
@@ -61,7 +61,7 @@ describe('BuriMunsi receiver observations',()=>{
   ])('does not report a current match for %o',async(inboxCheck,message)=>{
     fixture.request.mockReset().mockImplementation(async path=>path==='momo/observations/collections'
       ? {contractVersion:1,asOf:time,items:[{collectionId:group,label:'Test group'}]} : {...page,inboxCheck});
-    render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
+    render(<MemoryRouter><ReceiverSmsPanel /></MemoryRouter>);
     const proof=within(await screen.findByRole('region',{name:'Inbox completeness'}));
     expect(proof.getByRole('status')).toHaveTextContent(message);
     expect(proof.getByRole('status')).not.toHaveTextContent('Admin phone inboxes matched at the last check.');
@@ -77,7 +77,7 @@ describe('BuriMunsi receiver observations',()=>{
       if(reads===2)return new Promise<typeof page>(done=>{finish=done;});
       return page;
     });
-    render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
+    render(<MemoryRouter><ReceiverSmsPanel /></MemoryRouter>);
     const next=await screen.findByRole('button',{name:'Next'});
     await act(async()=>next.click());
     await screen.findByText('Reported delivered');
@@ -113,7 +113,7 @@ describe('BuriMunsi receiver observations',()=>{
         payload:{type:'broadcast',event:'operations_changed',payload:{changed:true,id:crypto.randomUUID()}}})));
     }));
     const streams=operationsStreams({origin:SUPABASE_PROJECT_ORIGIN,publishableKey:'sb_publishable_synthetic_test_only',request:fixture.request});
-    const view=render(<OperationsLiveContext.Provider value={streams}><MemoryRouter><MomoReceiptsPage /></MemoryRouter></OperationsLiveContext.Provider>);
+    const view=render(<OperationsLiveContext.Provider value={streams}><MemoryRouter><ReceiverSmsPanel /></MemoryRouter></OperationsLiveContext.Provider>);
     try{
       await screen.findByText('Pending');await waitFor(()=>expect(reads).toBeGreaterThanOrEqual(2));
       expect(issued).toHaveBeenCalledExactlyOnceWith({collectionId:group});expect(server.clients.size).toBe(1);

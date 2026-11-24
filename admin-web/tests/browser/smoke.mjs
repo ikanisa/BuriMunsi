@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { installLocalNetworkFence } from './local-network-fence.cjs';
 import { qualifyPhoneTeam } from './phone-team.mjs';
-import { fixtureMember, fixtureMomoRecord, fixtureSmsEvidenceId } from './operator-read-fixture.mjs';
+import { fixtureMember, fixtureMomoPaymentsOnlyDetail, fixtureMomoRecord, fixtureSmsEvidenceId } from './operator-read-fixture.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const artifact = resolve(root, process.argv[2] ?? process.env.ADMIN_PWA_BUILD_DIR ?? 'build/admin-web-fixture');
@@ -241,6 +241,18 @@ try {
     [fixtureSmsEvidenceId, 'Accepted', 'Accepted', fixtureMomoRecord.receipt_facts.parser_version]);
   await paymentDetail.getByText('Parsing does not confirm provider API settlement.', {exact: true}).waitFor();
   await paymentDetail.getByRole('button', {name: 'Close', exact: true}).click();
+  await paymentDetail.waitFor({state: 'hidden'});
+  const selectedMomo = requestUrl => requestUrl.origin === origin && requestUrl.pathname === '/api/admin/momo/transactions/' + fixtureMomoRecord.id;
+  await page.route(selectedMomo, route => route.fulfill({json: fixtureMomoPaymentsOnlyDetail}), {times: 1});
+  await chosenPayment.click();
+  await paymentDetail.getByText(fixtureMomoRecord.provider_transaction_id, {exact: true}).waitFor();
+  await paymentDetail.getByText('RWF 5,000', {exact: true}).waitFor();
+  assert.equal(await sourceHistory.count(), 0);
+  assert.equal(await paymentDetail.getByText(fixtureSmsEvidenceId, {exact: true}).count(), 0);
+  await page.setViewportSize({width: 320, height: 640});
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  await paymentDetail.getByRole('button', {name: 'Close', exact: true}).click();
+  await page.setViewportSize({width: 1440, height: 900});
   await nav.getByRole('link', {name: 'Home', exact: true}).click();
   await overview.waitFor();
 
@@ -385,7 +397,7 @@ try {
   assert.deepEqual(denied, []);
   assert.deepEqual(unexpectedAuth, []);
   assert.deepEqual(incorrectIdentityHeaders, []);
-  const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'retired_passcode_bookmark_returns_to_overview', 'three_daily_links_and_no_redundant_sidebar_search', 'canonical_payments_views_and_390px_reflow', 'protected_sms_deep_link', 'filtered_member_detail_and_return', 'recorded_momo_sms_source_history_without_settlement', 'sms_read_failure_retry',
+  const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'retired_passcode_bookmark_returns_to_overview', 'three_daily_links_and_no_redundant_sidebar_search', 'canonical_payments_views_and_390px_reflow', 'protected_sms_deep_link', 'filtered_member_detail_and_return', 'recorded_momo_sms_source_history_without_settlement', 'momo_payments_only_detail_and_320px_reflow', 'sms_read_failure_retry',
       'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
       'retired_authenticator_bookmark_preserves_safe_destination', 'missing_scoped_admin_identity_removes_controls', 'session_failure_and_recovery_require_server_authority', 'expired_request_and_history_return_require_sign_in',
       'mobile_drawer_traps_and_restores_focus_and_reflows', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, 'no_unexpected_auth_request', 'identity_version_only_on_session_exchanges'];

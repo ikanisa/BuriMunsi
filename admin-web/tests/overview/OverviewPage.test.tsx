@@ -7,9 +7,19 @@ import {canonicalFixture} from './fixtures';
 
 const wrapper = MemoryRouter;
 const admin = ['overview.read', 'payments.read', 'reconciliations.read', 'users.read'];
-const base = {financialModel: 'canonical_evidence_ledger', authorityKey: 'session-a'} as const;
+const base = {role: 'admin', financialModel: 'canonical_evidence_ledger', authorityKey: 'session-a'} as const;
 
 describe('compact Admin home', () => {
+  it('shows Staff workspace totals without loading SMS health for a retained grant', async () => {
+    const request = vi.fn<AdminRequest>(async () => canonicalFixture());
+    render(<OverviewPage {...base} role="staff" request={request} permissions={[...admin, 'system_health.read', 'sms.read']}
+      preferSmsHealth />, {wrapper});
+    expect(await screen.findByRole('region', {name: 'Workspace snapshot'})).toBeVisible();
+    expect(screen.getByRole('link', {name: 'Open payments'})).toBeVisible();
+    expect(screen.queryByRole('region', {name: 'SMS processing status'})).not.toBeInTheDocument();
+    expect(request.mock.calls.map(([path]) => path)).toEqual(['core/overview']);
+  });
+
   it('shows no more than three measured metrics, not the raw evidence, and formats Kigali rollover', async () => {
     const request = vi.fn(async () => canonicalFixture());
     render(<OverviewPage {...base} request={request} permissions={admin} />, {wrapper});

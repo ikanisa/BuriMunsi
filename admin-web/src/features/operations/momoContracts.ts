@@ -27,6 +27,7 @@ const commonTransaction = {
 const managedTransaction = z.object({
   ...commonTransaction,
   native_group_id: z.null().optional(), receipt_facts: z.object({kind: z.literal('validated_momo_extraction')}).optional(),
+  source_history_available: z.literal(false).optional(),
   receiving_account_id: uuid, provider_transaction_id: text, recipient_name: text, public_code: text,
   amount_minor: amount, currency: z.literal('RWF'),
   status: z.enum(['needs_allocation', 'awaiting_review', 'credited', 'needs_review', 'reversed']),
@@ -40,24 +41,44 @@ const nativeFields = {
   event_kind: z.enum(['incoming_receipt', 'outgoing', 'reversal', 'failed', 'pending', 'other', 'unknown']),
   transaction_at: timestamp.nullable(), payer_name: text.nullable(), payer_last3: lastThree.nullable(),
 };
-const nativeTransaction = z.object({
+const nativeTransactionFields = {
   ...commonTransaction, ...nativeFields, ...financialAssertions,
-  native_group_id: nativeGroup, group_id: nativeGroup, parse_attempt_id: uuid,
+  native_group_id: nativeGroup, group_id: nativeGroup,
   receiving_account_id: z.null(), public_code: z.null(), recipient_name: z.null(),
-  status: z.enum(['recorded', 'credited', 'reversed']),
-  allocation_state: z.enum(['unallocated', 'linked', 'needs_review', 'not_applicable']),
+  status: z.enum(['recorded', 'credited', 'reversed'] as const),
+  allocation_state: z.enum(['unallocated', 'linked', 'needs_review', 'not_applicable'] as const),
   receiving_context: z.object({
     basis: z.literal('unestablished'), account_id: z.null(), identifier_raw: z.null(),
     identifier_kind: z.null(), recipient_name: z.null(),
   }),
+};
+const nativeFactFields = {
+  ...nativeFields, ...financialAssertions,
+  contract_version: z.literal(1), kind: z.literal('automatic_momo_extraction'), transaction_id: uuid,
+};
+const nativeTransactionWithHistory = z.object({
+  ...nativeTransactionFields, source_history_available: z.undefined().optional(), parse_attempt_id: uuid,
   receipt_facts: z.object({
-    ...nativeFields, ...financialAssertions, contract_version: z.literal(1), kind: z.literal('automatic_momo_extraction'),
-    transaction_id: uuid, parse_attempt_id: uuid, capture_id: uuid, source_body_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    ...nativeFactFields, parse_attempt_id: uuid, capture_id: uuid, source_body_sha256: z.string().regex(/^[a-f0-9]{64}$/),
     parser_version: text, profile_version: text, parsed_at: timestamp,
   }),
-}).refine(row => {
+});
+const nativeTransactionWithoutHistory = z.object({
+  ...nativeTransactionFields, source_history_available: z.literal(false), parse_attempt_id: z.undefined().optional(),
+  receipt_facts: z.strictObject({
+    ...nativeFactFields, provider: z.enum(['mtn_momo', 'airtel_money']),
+    fee_minor: nonNegative.nullable(), wallet_balance_after_minor: nonNegative.nullable(),
+    normalization_timezone: text.max(200),
+    transaction_time_source: z.enum(['missing_provider_time', 'sms_body_and_provider_profile', 'sms_body_explicit_offset_and_provider_profile']),
+    public_reference: z.null(),
+  }),
+});
+const nativeTransaction = z.union([nativeTransactionWithHistory, nativeTransactionWithoutHistory]).refine(row => {
   const facts = row.receipt_facts;
-  return row.group_id === row.native_group_id && facts.transaction_id === row.id && facts.parse_attempt_id === row.parse_attempt_id &&
+  const historyConsistent = row.source_history_available === false
+    ? (row.transaction_at === null) === (row.receipt_facts.transaction_time_source === 'missing_provider_time')
+    : row.receipt_facts.parse_attempt_id === row.parse_attempt_id;
+  return historyConsistent && row.group_id === row.native_group_id && facts.transaction_id === row.id &&
     facts.amount_minor === row.amount_minor && facts.currency === row.currency && facts.currency_scale === row.currency_scale &&
     (row.currency === null) === (row.currency_scale === null) &&
     facts.provider_transaction_id === row.provider_transaction_id && facts.event_kind === row.event_kind &&
@@ -86,12 +107,16 @@ export function parseMomoPage(value: unknown, offset: number, filters: MomoFilte
   return {rows: data.rows, total: data.total, limit: data.limit, offset, totals: data.totals, asOf: data.as_of};
 }
 const source = z.object({raw_sms_id: uuid, attempt_id: uuid.optional(), relation: z.enum(['accepted', 'duplicate', 'conflict']), outcome: text, parser_version: text, created_at: timestamp});
-const detail = z.object({transaction, sources: z.array(source).max(100), conflicting_attempt_ids: z.array(uuid).max(101).optional()});
+const detail = z.object({transaction, sources: z.array(source).max(100), conflicting_attempt_ids: z.array(uuid).max(101).optional(),
+  conflict_reviews: z.unknown().optional()});
 export type MomoDetail = z.infer<typeof detail>;
 export function parseMomoDetail(value: unknown, id: string): MomoDetail {
   const data = detail.parse(value);
   if (data.transaction.id !== id || data.conflicting_attempt_ids && new Set(data.conflicting_attempt_ids).size !== data.conflicting_attempt_ids.length) fail();
-  if (data.transaction.native_group_id != null) {
+  if (data.transaction.source_history_available === false) {
+    if (data.sources.length || data.conflicting_attempt_ids?.length ||
+        data.conflict_reviews !== undefined && (!Array.isArray(data.conflict_reviews) || data.conflict_reviews.length)) fail();
+  } else if (data.transaction.native_group_id != null) {
     const facts = data.transaction.receipt_facts;
     const original = data.sources.find(row => row.attempt_id === facts.parse_attempt_id);
     // The API returns the latest 100 sources. Only a complete history must contain the original.

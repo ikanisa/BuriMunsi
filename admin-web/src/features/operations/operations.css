@@ -41,7 +41,6 @@
   .operations-receipt-table tbody td { min-width: 0; padding: 0; border-bottom: 0; overflow-wrap: anywhere; }
   .operations-receipt-field { display: block; margin-bottom: 4px; color: var(--admin-muted); font-size: .75rem; font-weight: 650; }
 }
-.momo-views { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
 button.operations-link { padding: 0; border: 0; background: none; cursor: pointer; text-align: left; font: inherit; color: var(--admin-accent-ink); font-weight: 650; }
 .momo-assignment { margin: 20px 0; padding: 16px; border: 1px solid var(--admin-line); border-radius: 10px; }
 .momo-assignment h3 { margin-top: 0; }

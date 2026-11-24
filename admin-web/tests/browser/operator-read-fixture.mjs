@@ -35,6 +35,18 @@ export const fixtureMomoDetail = {
     parser_version: fixtureMomoRecord.receipt_facts.parser_version, created_at: time}],
 };
 
+const {parse_attempt_id: _attemptId, receipt_facts: _fullFacts, ...paymentRow} = fixtureMomoRecord;
+export const fixtureMomoPaymentsOnlyDetail = {
+  transaction: {...paymentRow, source_history_available: false, receipt_facts: {
+    ...providerFacts, ...assertions, contract_version: 1, kind: 'automatic_momo_extraction', transaction_id: transactionId,
+    provider: 'mtn_momo', fee_minor: null, wallet_balance_after_minor: null, normalization_timezone: 'Africa/Kigali',
+    transaction_time_source: 'sms_body_and_provider_profile', public_reference: null,
+  }},
+  sources: [],
+  conflicting_attempt_ids: [],
+  conflict_reviews: [],
+};
+
 export function readMemberList(params) {
   const search = (params.get('search') ?? '').toLowerCase(), status = params.get('status') ?? '';
   const offset = Number(params.get('offset') ?? 0);

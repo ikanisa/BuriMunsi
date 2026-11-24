@@ -46,7 +46,7 @@ const visit = (path: string, permissions: string[], role = 'admin') => {
 };
 const location = () => screen.getByLabelText('Current location');
 const called = (prefix: string) => mock.request.mock.calls.filter(([path]) => path.startsWith(prefix));
-afterEach(() => {mock.request.mockReset();mock.status='authenticated';});
+afterEach(() => {mock.request.mockReset();mock.status='authenticated';mock.role='admin';});
 
 describe('consolidated Payments routes',()=>{
   it('makes the old payment list a guarded alias and returns through the new list with search preserved',async()=>{
@@ -116,15 +116,17 @@ describe('consolidated Payments routes',()=>{
     expect(called('gateway/receipts')).toHaveLength(0);
     sms.unmount();
     mock.request.mockClear().mockResolvedValue(emptyOperations);
-    const payments=visit('/admin/payments?view=sms',['payments.read'],'staff');
+    const payments=visit('/admin/payments?view=sms',['payments.read','sms.read'],'staff');
     expect(await screen.findByText('No records found')).toBeVisible();
     expect(called('gateway/receipts')).toHaveLength(1);
+    expect(screen.getByRole('link',{name:'Member receipts'})).toHaveAttribute('aria-current','page');
+    expect(screen.queryByRole('link',{name:'SMS & receipts'})).not.toBeInTheDocument();
     expect(screen.queryByRole('link',{name:'Android receiver'})).not.toBeInTheDocument();
     expect(screen.queryByRole('link',{name:'App uploads'})).not.toBeInTheDocument();
     expect(called('momo/observations')).toHaveLength(0);
     payments.unmount();
     mock.request.mockClear();
-    visit('/admin/payments?view=sms&source=android',['payments.read'],'staff');
+    visit('/admin/payments?view=sms&source=android',['payments.read','sms.read'],'staff');
     expect(await screen.findByText('Access unavailable')).toBeVisible();
     expect(mock.request).not.toHaveBeenCalled();
   });
@@ -186,6 +188,22 @@ describe('consolidated Payments routes',()=>{
     for (const target of ['/admin/payments?view=sms&source=member','/admin/payments?view=sms&source=app&source=member',
       '/admin/payments?view=sms&source=app&returnTo=%2Felsewhere','//admin.invalid/admin/payments?view=sms&source=app']) {
       expect(safePaymentListReturn(target,'sms','app')).toBeNull();
+    }
+  });
+  it('keeps Staff financial details while hiding lineage from a retained full response',async()=>{
+    const smsId='33333333-3333-4333-8333-333333333333';
+    mock.request.mockImplementation(async (path: string) => path.startsWith('momo/transactions?') ? momoPage :
+      {transaction:momo,sources:[{raw_sms_id:smsId,relation:'accepted',outcome:'accepted',parser_version:'synthetic.v1',created_at:time}]});
+    visit('/admin/payments?dataset=momo',['payments.read','sms.read','gateway.read','assisted_sms.read'],'staff');
+    fireEvent.click(await screen.findByRole('button',{name:momoRef}));
+    const detail = within(await screen.findByRole('dialog',{name:'Transaction details'}));
+    await detail.findByText(momoRef);
+    expect(detail.getByText('RWF 5,000')).toBeVisible();
+    expect(detail.queryByText(smsId)).not.toBeInTheDocument();
+    expect(detail.queryByRole('heading',{name:'Source and processing history'})).not.toBeInTheDocument();
+    expect(called('momo/transactions/')[0][0]).toBe('momo/transactions/'+momo.id);
+    for (const path of ['/admin/sms-receipts','/admin/sms-receipts/capture/'+smsId,'/admin/gateway','/admin/notification-operator']) {
+      expect(canOpenAdminPath(path,sessionUser())).toBe(false);
     }
   });
   it('fences a direct workspace with no relevant permission without fetching records',async()=>{

@@ -72,6 +72,7 @@ export async function qualifyPhoneTeam({admin, origin, open, legacySessions}) {
     await staffPage.goto(origin + '/admin');
     await signIn(staffPage, fixtureInitialPasscode);
     await heading(staffPage, 'Home').waitFor();
+    assert.equal(await staffPage.getByRole('region', {name: 'SMS processing status'}).count(), 0);
     await staffPage.goto(teamUrl);
     await heading(staffPage, 'Access unavailable').waitFor();
     assert.equal(await button(staffPage, 'Create account').count(), 0);

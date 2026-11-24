@@ -72,9 +72,9 @@ export async function packagePwa(inputDirectory, outputDirectory, { publicBuild 
     description: brand.description, display: 'standalone',
     start_url: '.', scope: '.', background_color: '#ffffff', theme_color: '#171b20',
     shortcuts: [
-      { name: 'Operations overview', short_name: 'Overview', url: './#/admin' },
-      { name: 'SMS receipts', short_name: 'Receipts', url: './#/admin/sms-receipts' },
-      { name: 'Reconciliations', short_name: 'Reconcile', url: './#/admin/reconciliations' },
+      { name: 'Home', url: './#/admin' },
+      { name: 'Members', url: './#/admin/members' },
+      { name: 'Payments', url: './#/admin/payments' },
     ],
     icons: [{ src: `./${assetPrefix}${brand.icon}`, sizes: brand.iconSize,
       type: 'image/png', purpose: brand.iconPurpose }],

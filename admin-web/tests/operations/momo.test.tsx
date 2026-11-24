@@ -7,9 +7,17 @@ import { AdminRequestError } from '../../src/api/client';
 import { parseMomoDetail, parseMomoMemberChecks, parseMomoPage, parseMomoSources, type MomoFilters } from '../../src/features/operations/momoContracts';
 import { formatMomoAmount } from '../../src/features/operations/MomoRecordViews';
 
-const mock = vi.hoisted(() => ({request: vi.fn(), session: {status: 'authenticated', epoch: 1, isCurrentAuthority: vi.fn(() => true), user: {id: '11111111-1111-1111-1111-111111111111', sessionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', role: 'admin', permissions: ['payments.read'] as string[]}}}));
+const mock = vi.hoisted(() => ({request: vi.fn(), session: {status: 'authenticated', epoch: 1, isCurrentAuthority: vi.fn(() => true), user: {id: '11111111-1111-1111-1111-111111111111', sessionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', role: 'admin', financialModel: 'canonical_evidence_ledger', permissions: ['payments.read'] as string[]}}}));
 vi.mock('../../src/session/SessionProvider', async (importOriginal) => ({...await importOriginal<typeof import('../../src/session/SessionProvider')>(), useSession: () => ({...mock.session, request: mock.request})}));
-import { MomoReceiptsPage } from '../../src/features/operations/MomoReceiptsPage';
+import { WorkspaceMomoTransactionList } from '../../src/features/operations/MomoTransactionList';
+import { UploadedSms } from '../../src/features/operations/UploadedSms';
+import { PaymentsWorkArea } from '../../src/features/operations/PaymentsWorkArea';
+import { useAccess } from '../../src/app/workspace/access';
+
+function PaymentsWorkspace() {
+  const access = useAccess();
+  return <PaymentsWorkArea {...access} />;
+}
 
 const id = '11111111-1111-4111-8111-111111111111', account = '22222222-2222-4222-8222-222222222222', smsId = '66666666-6666-4666-8666-666666666666';
 const time = '2026-10-18T08:00:00.000Z';
@@ -44,7 +52,7 @@ describe('incoming SMS refresh', () => {
     let finish!: (value: typeof emptyPage) => void;
     mock.session.user.permissions = ['sms.read'];
     mock.request.mockImplementationOnce(() => new Promise(done => {finish = done;})).mockResolvedValue(emptyPage);
-    const view = render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
+    const view = render(<MemoryRouter><UploadedSms /></MemoryRouter>);
     try {
       await act(async () => vi.advanceTimersByTimeAsync(30_000));
       await act(async () => vi.advanceTimersByTimeAsync(30_000));
@@ -62,7 +70,7 @@ describe('incoming SMS refresh', () => {
     const connected = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
     mock.session.user.permissions = ['sms.read', 'payments.read'];
     mock.request.mockImplementation(async (path: string) => path.startsWith('sms/receipts?') ? emptyPage : page);
-    const view = render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
+    const view = render(<MemoryRouter initialEntries={['/admin/payments?view=sms&source=app']}><PaymentsWorkspace /></MemoryRouter>);
     try {
       await act(async () => {});
       visible.mockReturnValue('hidden');
@@ -78,7 +86,8 @@ describe('incoming SMS refresh', () => {
       expect(mock.request).toHaveBeenCalledTimes(2);
       await act(async () => vi.advanceTimersByTimeAsync(30_000));
       expect(mock.request).toHaveBeenCalledTimes(3);
-      await act(async () => screen.getByRole('button', {name: 'Transactions'}).click());
+      await act(async () => screen.getByRole('link', {name: 'Recorded'}).click());
+      await act(async () => screen.getByRole('link', {name: 'MoMo transactions'}).click());
       await act(async () => {window.dispatchEvent(new Event('online')); await vi.advanceTimersByTimeAsync(15_000);});
       expect(mock.request.mock.calls.filter(([path]) => path.startsWith('sms/receipts?'))).toHaveLength(3);
       expect(mock.request.mock.calls.filter(([path]) => path.startsWith('momo/transactions?'))).toHaveLength(1);
@@ -131,6 +140,30 @@ describe('MoMo read contracts', () => {
     expect(() => parseMomoPage({...page, rows: [{...tx, transaction_at: '2026-02-30T08:00:00.000Z'}]}, 0, filters)).toThrow();
     expect(() => parseMomoPage({...page, rows: [{...tx, status: 'credited'}]}, 0, filters)).toThrow();
   });
+  it('accepts an explicit payments-only native projection and rejects restricted lineage', () => {
+    const {parse_attempt_id: internalAttempt, receipt_facts: fullFacts, ...publicRow} = nativeTx;
+    const financials = {...nativeFacts, provider_transaction_id: 'MOMO-REDACTED-001', event_kind: 'incoming_receipt',
+      amount_minor: 5000, currency: 'RWF', currency_scale: 0, transaction_at: time};
+    const receipt_facts = {...financials, provider: 'mtn_momo', contract_version: 1, kind: 'automatic_momo_extraction',
+      transaction_id: nativeId, fee_minor: 0, wallet_balance_after_minor: null, normalization_timezone: 'Africa/Kigali',
+      transaction_time_source: 'sms_body_and_provider_profile', public_reference: null,
+      provider_confirmation: false, settlement_status: 'not_asserted'};
+    const transaction = {...publicRow, ...financials, source_history_available: false, receipt_facts};
+    const redacted = {transaction, sources: [], conflicting_attempt_ids: [], conflict_reviews: []};
+    expect(parseMomoPage({...page, rows: [transaction]}, 0, filters).rows[0]).toMatchObject({
+      provider_transaction_id: 'MOMO-REDACTED-001', amount_minor: 5000, source_history_available: false,
+    });
+    expect(parseMomoDetail(redacted, nativeId).sources).toEqual([]);
+    for (const bad of [
+      {...redacted, sources: [nativeSource]},
+      {...redacted, conflicting_attempt_ids: [internalAttempt]},
+      {...redacted, conflict_reviews: [{}]},
+      {...redacted, transaction: {...transaction, receipt_facts: {...receipt_facts, capture_id: fullFacts.capture_id}}},
+      {...redacted, transaction: {...transaction, parse_attempt_id: internalAttempt}},
+      {...redacted, transaction: {...transaction, amount_minor: 999}},
+    ]) expect(() => parseMomoDetail(bad, nativeId)).toThrow();
+    expect(() => parseMomoDetail({...redacted, transaction: {...transaction, source_history_available: undefined}}, nativeId)).toThrow();
+  });
   it('verifies transaction detail and keeps source jobs distinct from payments', () => {
     expect(parseMomoDetail(detail, id).sources[0].raw_sms_id).toBe(smsId);
     expect(() => parseMomoDetail(detail, account)).toThrow();
@@ -145,7 +178,7 @@ describe('MoMo read contracts', () => {
   });
 });
 
-describe('MoMo receipts page', () => {
+describe('compact MoMo transactions', () => {
   it('opens a native transaction without a provider reference and shows its recorded source and missing facts', async () => {
     mock.session.user.permissions = ['payments.read', 'sms.read', 'payments.write'];
     mock.request.mockImplementation(async (path: string) => {
@@ -155,17 +188,16 @@ describe('MoMo receipts page', () => {
       throw new Error('Unexpected read');
     });
     const user = userEvent.setup();
-    render(<MemoryRouter><MomoReceiptsPage allowActions allowRecovery /></MemoryRouter>);
-    await user.click(await screen.findByRole('button', {name: 'Transactions'}));
+    render(<MemoryRouter><WorkspaceMomoTransactionList allowActions allowRecovery /></MemoryRouter>);
     const open = await screen.findByRole('button', {name: `View transaction ${nativeId}`});
     const row = within(open.closest('tr')!);
-    expect(row.getByText('Outgoing')).toBeVisible();
     expect(row.getByText('Recorded')).toBeVisible();
     expect(row.queryByText('RWF 0')).not.toBeInTheDocument();
     expect(screen.getByRole('button', {name: tx.provider_transaction_id})).toBeVisible();
     await user.click(open);
     const dialog = within(screen.getByRole('dialog', {name: 'Transaction details'}));
     expect(await dialog.findByText(smsId)).toBeVisible();
+    expect(dialog.getByText('Outgoing')).toBeVisible();
     expect(dialog.getByText('Amount').nextElementSibling).toHaveTextContent('Not recorded');
     expect(dialog.getByText('MoMo TX ID').nextElementSibling).toHaveTextContent('Not recorded');
     expect(dialog.getByText('Receiving account').nextElementSibling).toHaveTextContent('Not recorded');
@@ -175,7 +207,7 @@ describe('MoMo receipts page', () => {
   it('retries one transient service error on the same authorized list read', async () => {
     const transient = new AdminRequestError('Unavailable', {statusCode: 503, code: 'service_unavailable'});
     mock.request.mockRejectedValueOnce(transient).mockResolvedValue(page);
-    render(<StrictMode><MemoryRouter><MomoReceiptsPage /></MemoryRouter></StrictMode>);
+    render(<StrictMode><MemoryRouter><WorkspaceMomoTransactionList /></MemoryRouter></StrictMode>);
     expect(await screen.findByRole('button', {name: tx.provider_transaction_id})).toBeVisible();
     expect(mock.request).toHaveBeenCalledTimes(2);
     const [path, options] = mock.request.mock.calls[0];
@@ -191,14 +223,14 @@ describe('MoMo receipts page', () => {
     [new AdminRequestError('Unavailable', {statusCode: 503, code: 'service_unavailable'}), true, 2],
   ] as const)('bounds repeated reads for %s with current authority %s', async (error, current, attempts) => {
     mock.request.mockRejectedValue(error); mock.session.isCurrentAuthority.mockReturnValue(current);
-    render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
+    render(<MemoryRouter><WorkspaceMomoTransactionList /></MemoryRouter>);
     expect(await screen.findByText(error.message)).toBeVisible();
     expect(mock.request).toHaveBeenCalledTimes(attempts);
   });
   it('does not retry after the operator leaves the list during a transient failure', async () => {
     let rejectRead!: (error: Error) => void;
     mock.request.mockImplementationOnce(() => new Promise((_, reject) => {rejectRead = reject;}));
-    const view = render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
+    const view = render(<MemoryRouter><WorkspaceMomoTransactionList /></MemoryRouter>);
     view.unmount();
     await act(async () => rejectRead(new AdminRequestError('Unavailable', {statusCode: 503, code: 'service_unavailable'})));
     expect(mock.request).toHaveBeenCalledTimes(1);
@@ -210,7 +242,7 @@ describe('MoMo receipts page', () => {
         secondSignal = signal;
         signal.addEventListener('abort', () => reject(signal.reason), {once: true});
       })).mockResolvedValueOnce(page);
-    const view = render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
+    const view = render(<MemoryRouter><WorkspaceMomoTransactionList /></MemoryRouter>);
     await vi.waitFor(() => expect(secondSignal?.aborted).toBe(false));
     if (action === 'unmount') view.unmount();
     else {
@@ -223,31 +255,29 @@ describe('MoMo receipts page', () => {
   it('discards an earlier transient failure when a manual refresh has started', async () => {
     let failFirst!: (error: Error) => void;
     mock.request.mockImplementationOnce(() => new Promise((_, reject) => {failFirst = reject;})).mockResolvedValue(page);
-    render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
+    render(<MemoryRouter><WorkspaceMomoTransactionList /></MemoryRouter>);
     await userEvent.setup().click(screen.getByRole('button', {name: 'Refresh'}));
     expect(await screen.findByRole('button', {name: tx.provider_transaction_id})).toBeVisible();
     await act(async () => failFirst(new AdminRequestError('Unavailable', {statusCode: 503, code: 'service_unavailable'})));
     expect(mock.request).toHaveBeenCalledTimes(2);
   });
-  it('can open the transaction view first and can restrict the route to transactions', async () => {
+  it('opens the compact recorded dataset without loading SMS for an operator with both grants', async () => {
     mock.session.user.permissions = ['payments.read', 'sms.read']; mock.request.mockResolvedValue(page);
-    const view = render(<MemoryRouter><MomoReceiptsPage initialView="transactions" transactionsOnly /></MemoryRouter>);
+    render(<MemoryRouter initialEntries={['/admin/payments?dataset=momo']}><PaymentsWorkspace /></MemoryRouter>);
     expect(await screen.findByText('MOMO-SYNTHETIC-001')).toBeVisible();
-    expect(screen.queryByRole('button', {name: 'Incoming SMS'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', {name: 'App uploads'})).not.toBeInTheDocument();
     expect(mock.request.mock.calls.every(([path]) => typeof path === 'string' && path.startsWith('momo/transactions?'))).toBe(true);
-    view.unmount(); mock.request.mockClear();
-    render(<MemoryRouter><MomoReceiptsPage initialView="transactions" /></MemoryRouter>);
-    expect(await screen.findByText('MOMO-SYNTHETIC-001')).toBeVisible(); expect(screen.getByRole('button', {name: 'Incoming SMS'})).toBeVisible();
   });
   it('does not fall back to SMS when a transactions-only route lacks payment permission', () => {
-    mock.session.user.permissions = ['sms.read']; render(<MemoryRouter><MomoReceiptsPage initialView="transactions" transactionsOnly /></MemoryRouter>);
+    mock.session.user.permissions = ['sms.read']; render(<MemoryRouter><WorkspaceMomoTransactionList /></MemoryRouter>);
     expect(screen.getByText('Your current account cannot open these records.')).toBeVisible();
     expect(screen.queryByRole('button', {name: 'Incoming SMS'})).not.toBeInTheDocument(); expect(mock.request).not.toHaveBeenCalled();
   });
   it('reads only permitted transactions, shows measured totals and opens verified source history', async () => {
     const user = userEvent.setup();
+    mock.session.user.permissions = ['payments.read', 'sms.read'];
     mock.request.mockImplementation(async (path: string) => path.startsWith('momo/transactions?') ? page : detail);
-    render(<StrictMode><MemoryRouter><MomoReceiptsPage /></MemoryRouter></StrictMode>);
+    render(<StrictMode><MemoryRouter><WorkspaceMomoTransactionList /></MemoryRouter></StrictMode>);
     expect(await screen.findByText('MOMO-SYNTHETIC-001')).toBeVisible();
     expect(screen.getByText(/Provider confirmation and settlement are not asserted/)).toBeVisible();
     expect(mock.request).toHaveBeenCalledTimes(1);
@@ -262,13 +292,13 @@ describe('MoMo receipts page', () => {
   });
   it('never requests payments without permission or renders invalid data', async () => {
     mock.session.user.permissions = [];
-    const {unmount} = render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
+    const {unmount} = render(<MemoryRouter><WorkspaceMomoTransactionList /></MemoryRouter>);
     expect(screen.getByText('Your current account cannot open these records.')).toBeVisible();
     expect(mock.request).not.toHaveBeenCalled();
     unmount();
     mock.session.user.permissions = ['payments.read'];
     mock.request.mockResolvedValue({...page, rows: [{...tx, has_conflict: 3}]});
-    render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
+    render(<MemoryRouter><WorkspaceMomoTransactionList /></MemoryRouter>);
     expect(await screen.findByText('The MoMo records could not be verified.')).toBeVisible();
     expect(mock.request).toHaveBeenCalledTimes(1);
     expect(screen.queryByText('MOMO-SYNTHETIC-001')).not.toBeInTheDocument();
@@ -285,9 +315,9 @@ describe('MoMo receipts page', () => {
       provider_confirmation: false, settlement_status: 'not_asserted', timezone_known: false, payer_last3_known: false, source_content_reveal_required: true,
       received_at_device: '2026-11-16T10:00:00+02:00'};
     mock.request.mockResolvedValue({rows: [capture], total: 1, limit: 25, offset: 0, next_offset: null});
-    render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
+    render(<MemoryRouter><UploadedSms /></MemoryRouter>);
     const link = await screen.findByRole('link', {name: 'App user'});
-    expect(link).toHaveAttribute('href', `/admin/sms-receipts/capture/${id}?returnTo=%2Fadmin%2Fmomo-receipts`);
+    expect(link).toHaveAttribute('href', `/admin/sms-receipts/capture/${id}?returnTo=%2Fadmin%2Fpayments%3Fview%3Dsms%26source%3Dapp`);
     expect(screen.queryByRole('button', {name: 'Transactions'})).not.toBeInTheDocument();
     expect(mock.request.mock.calls.every(([path]) => typeof path === 'string' && path.startsWith('sms/receipts?'))).toBe(true);
   });
@@ -295,10 +325,7 @@ describe('MoMo receipts page', () => {
     const user = userEvent.setup();
     mock.session.user.permissions = ['payments.read', 'sms.read'];
     mock.request.mockImplementation(async (path: string) => path.startsWith('sms/receipts?') ? {rows: [], total: 0, offset: 0, limit: 25, next_offset: null} : path.startsWith('momo/transactions?') ? page : {rows: [job], total: 1, limit: 25, offset: 0});
-    render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
-    expect(await screen.findByText('No matching records')).toBeVisible();
-    expect(mock.request.mock.calls[0][0]).toContain('source_kind=capture');
-    await user.click(screen.getByRole('button', {name: 'Transactions'}));
+    render(<MemoryRouter><WorkspaceMomoTransactionList /></MemoryRouter>);
     expect(await screen.findByText('MOMO-SYNTHETIC-001')).toBeVisible();
     await user.selectOptions(screen.getByLabelText('Payment status'), 'needs_attention');
     await user.click(screen.getByRole('button', {name: 'Apply filters'}));
@@ -316,7 +343,7 @@ describe('MoMo receipts page', () => {
     const user = userEvent.setup();
     mock.session.user.permissions = ['payments.read', 'users.read', 'collections.read'];
     mock.request.mockImplementation(async (path: string) => path.startsWith('momo/transactions/payment-checks?') ? checks : page);
-    render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
+    render(<MemoryRouter><WorkspaceMomoTransactionList /></MemoryRouter>);
     await screen.findByText('MOMO-SYNTHETIC-001');
     await user.click(screen.getByRole('button', {name: 'Member checks'}));
     const dialog = await screen.findByRole('dialog', {name: 'Member payment checks'});
@@ -331,7 +358,7 @@ describe('MoMo receipts page', () => {
   it('applies inclusive Kigali date boundaries to the transaction endpoint', async () => {
     const user = userEvent.setup();
     mock.request.mockResolvedValue(page);
-    render(<MemoryRouter><MomoReceiptsPage /></MemoryRouter>);
+    render(<MemoryRouter><WorkspaceMomoTransactionList /></MemoryRouter>);
     await screen.findByText('MOMO-SYNTHETIC-001');
     await user.type(screen.getByLabelText('From · Kigali'), '2026-10-18');
     await user.type(screen.getByLabelText('To · Kigali'), '2026-10-18');

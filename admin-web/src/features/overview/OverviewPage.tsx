@@ -2,7 +2,8 @@ import {useEffect, useState, useSyncExternalStore} from 'react';
 import {Link} from 'react-router';
 import type {AdminRequest} from '../../api/client';
 import {Button, ErrorState, Icon, LoadingState, PageHeader} from '../../ui';
-import type {FinancialModel} from '../core/types';
+import {canReadSmsEvidence} from '../../session/sessionContext';
+import type {FeatureAccess, FinancialModel} from '../core/types';
 import {formatOverviewValue, parseOverview, type OverviewData, type OverviewMetric} from './overview';
 import {SmsOversight} from './SmsOversight';
 import {kigaliDate, kigaliTime} from './kigaliTime';
@@ -27,8 +28,8 @@ function SummaryMetric({metric, label, large, link}: {metric: OverviewMetric; la
   </div>;
 }
 
-export function OverviewPage({request, permissions, financialModel, authorityKey, preferSmsHealth}: {
-  request: AdminRequest; permissions: readonly string[]; financialModel: FinancialModel; authorityKey: string; preferSmsHealth?: boolean;
+export function OverviewPage({request, permissions, role, financialModel, authorityKey, preferSmsHealth}: {
+  request: AdminRequest; permissions: readonly string[]; role: FeatureAccess['role']; financialModel: FinancialModel; authorityKey: string; preferSmsHealth?: boolean;
 }) {
   const [result, setResult] = useState<{scope: string; data: OverviewData | null; error: string} | null>(null);
   const [generation, setGeneration] = useState(0);
@@ -37,8 +38,8 @@ export function OverviewPage({request, permissions, financialModel, authorityKey
   const canReadPayments = permissions.includes('payments.read');
   const canReadReconciliation = permissions.includes('reconciliations.read');
   const canReadPeople = permissions.includes('users.read');
-  const canReadSms = permissions.includes('sms.read');
-  const hasHealth = permissions.includes('system_health.read');
+  const canReadSms = canReadSmsEvidence({role, permissions});
+  const hasHealth = role !== 'staff' && permissions.includes('system_health.read');
   const scope = JSON.stringify([authorityKey, financialModel, generation, canReadPayments, canReadReconciliation, canReadPeople, canReadSms, allowed]);
   const current = result?.scope === scope ? result : null;
   const loading = allowed && current === null;
@@ -79,6 +80,6 @@ export function OverviewPage({request, permissions, financialModel, authorityKey
         </dl>
         {contributions && <p className="overview-measured">Cumulative records, not provider settlement.</p>}
       </section>}
-    <SmsOversight request={request} permissions={permissions} authorityKey={authorityKey} preferSmsHealth={preferSmsHealth} refreshGeneration={generation} />
+    {hasHealth && <SmsOversight request={request} permissions={permissions} authorityKey={authorityKey} preferSmsHealth={preferSmsHealth} refreshGeneration={generation} />}
   </>;
 }

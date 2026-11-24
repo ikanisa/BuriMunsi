@@ -2,7 +2,7 @@ import {createContext, useContext, useEffect, useMemo, useState, useSyncExternal
 import type {AdminClientConfig} from '../api/client';
 import {OperationsLiveContext, operationsStreams} from '../features/operations/operationsLiveContext';
 import {AdminSessionController} from './AdminSessionController';
-import type {SessionContextValue} from './sessionContext';
+import {canReadSmsEvidence, type SessionContextValue} from './sessionContext';
 
 export {AdminSessionController} from './AdminSessionController';
 export {parseAdminUser} from './sessionResponses';
@@ -22,8 +22,9 @@ export function SessionProvider({config, children}: {config: AdminClientConfig; 
     void controller.refresh().catch(() => undefined);
     return () => controller.stop();
   }, [controller]);
-  const liveAuthority = snapshot.status === 'authenticated' && snapshot.user?.permissions.includes('sms.read')
-    ? JSON.stringify([snapshot.epoch, snapshot.user.id, snapshot.user.sessionId]) : null;
+  const user = snapshot.user;
+  const liveAuthority = snapshot.status === 'authenticated' && user && canReadSmsEvidence(user)
+    ? JSON.stringify([snapshot.epoch, user.id, user.sessionId]) : null;
   const live = useMemo(() => liveAuthority && config.backend === 'supabase' && config.supabaseProjectOrigin && config.publishableKey
     ? operationsStreams({request:controller.request, origin:config.supabaseProjectOrigin, publishableKey:config.publishableKey}) : null,
   [liveAuthority, config.backend, config.supabaseProjectOrigin, config.publishableKey, controller]);

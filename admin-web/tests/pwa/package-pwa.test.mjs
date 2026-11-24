@@ -46,10 +46,11 @@ test('packages exact versioned assets with a static-only, unqualified worker', a
   assert.equal(manifest.scope, '.');
   assert.equal(manifest.start_url, '.');
   const manifestEntry = 'https://admin.example.test/manifest.json';
+  assert.deepEqual(manifest.shortcuts.map(shortcut => shortcut.name), ['Home', 'Members', 'Payments']);
   assert.deepEqual(manifest.shortcuts.map(shortcut => new URL(shortcut.url, manifestEntry).href), [
     'https://admin.example.test/#/admin',
-    'https://admin.example.test/#/admin/sms-receipts',
-    'https://admin.example.test/#/admin/reconciliations',
+    'https://admin.example.test/#/admin/members',
+    'https://admin.example.test/#/admin/payments',
   ]);
   assert.equal(manifest.icons[0].src, `./_build/${result.assetId}/icons/burimunsi-432.png`);
   const worker = await fs.readFile(path.join(output, 'custom-sw.js'), 'utf8');

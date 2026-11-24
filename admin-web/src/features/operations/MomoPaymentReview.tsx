@@ -2,7 +2,7 @@
 import {useCallback, useState} from 'react';
 import {Link} from 'react-router';
 import {useSession} from '../../session/SessionProvider';
-import {canDisplaySessionRecords} from '../../session/sessionContext';
+import {canDisplaySessionRecords, canReadSmsEvidence} from '../../session/sessionContext';
 import {Button, Dialog} from '../../ui';
 import {isValidId, type Page} from './contracts';
 import {parseMomoDetail, parseMomoMemberChecks, type MomoDetail, type MomoMemberCheck} from './momoContracts';
@@ -27,7 +27,9 @@ export function MomoPaymentDetail({id, allowActions, allowRecovery, onClose}: {i
   const session = useSession(), request = session.request;
   const load = useCallback(async (signal: AbortSignal) => parseMomoDetail(await request(`momo/transactions/${id}`, {signal}), id), [id, request]);
   const {result, retry} = useOperationRead(`${session.epoch}:momo-detail:${id}`, canDisplaySessionRecords(session) && !!session.user?.permissions.includes('payments.read') && isValidId(id), load, momoReadOptions);
-  return <Dialog open title="Transaction details" onClose={onClose} footer={<Button onClick={onClose}>Close</Button>}><MomoResult result={result} retry={retry} empty={() => false}>{(detail: MomoDetail) => <><Facts items={[
+  return <Dialog open title="Transaction details" onClose={onClose} footer={<Button onClick={onClose}>Close</Button>}><MomoResult result={result} retry={retry} empty={() => false}>{(detail: MomoDetail) => {
+    const showHistory = canReadSmsEvidence(session.user) && detail.transaction.source_history_available !== false;
+    return <><Facts items={[
     ['Amount', formatMomoAmount(detail.transaction.amount_minor, detail.transaction.currency)], ['Status', formatStatus(detail.transaction.status)],
     ['Type', detail.transaction.event_kind && formatStatus(detail.transaction.event_kind)], ['MoMo TX ID', detail.transaction.provider_transaction_id],
     ['Receiving account', detail.transaction.recipient_name], ['MoMo code', detail.transaction.public_code],
@@ -37,7 +39,11 @@ export function MomoPaymentDetail({id, allowActions, allowRecovery, onClose}: {i
   ]} />
   {detail.transaction.has_conflict === 1 && <p role="status">Conflicting payment evidence requires review. The recorded financial status is preserved.</p>}
   {detail.transaction.payment_id && session.user?.permissions.includes('reconciliations.read') && <p><Link className="operations-link" to={`/admin/reconciliations/${detail.transaction.payment_id}`}>Open financial review</Link></p>}
-  {allowRecovery && detail.transaction.native_group_id == null && <><MomoAssignmentPanel key={`${session.epoch}:${id}`} detail={detail} enabled={allowActions} onUpdated={retry} />
+  {showHistory && allowRecovery && detail.transaction.native_group_id == null && <><MomoAssignmentPanel key={`${session.epoch}:${id}`} detail={detail} enabled={allowActions} onUpdated={retry} />
   <MomoConflictReviewPanel key={`${session.epoch}:${id}:conflict`} detail={detail} enabled={allowActions} onUpdated={retry} /></>}
-  <h3>Source and processing history</h3><p>Parsing does not confirm provider API settlement.</p>{detail.sources.length ? <MomoTable name="Payment source and processing history" headings={['Source reference', 'Relationship', 'Outcome', 'Parser', 'Recorded · Kigali']}>{detail.sources.map((source, index) => <tr key={`${source.raw_sms_id}:${index}`}><td>{source.raw_sms_id}</td><td>{formatStatus(source.relation)}</td><td>{formatStatus(source.outcome)}</td><td>{source.parser_version}</td><td>{formatTime(source.created_at)}</td></tr>)}</MomoTable> : <p>No source history recorded.</p>}</>}</MomoResult></Dialog>;
+  {showHistory && <><h3>Source and processing history</h3><p>Parsing does not confirm provider API settlement.</p>
+    {detail.sources.length ? <MomoTable name="Payment source and processing history" headings={['Source reference', 'Relationship', 'Outcome', 'Parser', 'Recorded · Kigali']}>
+      {detail.sources.map((source, index) => <tr key={`${source.raw_sms_id}:${index}`}><td>{source.raw_sms_id}</td><td>{formatStatus(source.relation)}</td><td>{formatStatus(source.outcome)}</td><td>{source.parser_version}</td><td>{formatTime(source.created_at)}</td></tr>)}
+    </MomoTable> : <p>No source history recorded.</p>}</>}</>;
+  }}</MomoResult></Dialog>;
 }

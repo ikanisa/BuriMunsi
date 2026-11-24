@@ -130,13 +130,14 @@ describe('Admin navigation for the current session', () => {
 
   it.each([
     {permissions: ['ledger.read'], route: '/admin/licenses', fallback: true, contextual: false},
-    {permissions: ['ledger.read', 'sms.read'], route: '/admin/payments?view=sms', fallback: true, contextual: false},
+    {permissions: ['ledger.read', 'sms.read'], route: '/admin/payments?view=sms', fallback: true, contextual: false, denied: true},
     {permissions: ['ledger.read', 'reconciliations.read'], route: '/admin/payments?view=attention', fallback: true, contextual: false},
     {permissions: ['ledger.read', 'payments.read'], route: '/admin/payments', fallback: false, contextual: true},
     {permissions: ['payments.read'], route: '/admin/payments', fallback: false, contextual: false},
-  ])('keeps ledger history discoverable with its own permission ($permissions)', async ({permissions, route, fallback, contextual}) => {
+  ])('keeps ledger history discoverable with its own permission ($permissions)', async ({permissions, route, fallback, contextual, denied}) => {
     const {requests} = openAdmin(route, {session: {user: {...account, permissions}}});
-    await screen.findByRole('heading', {name: route === '/admin/licenses' ? 'Open-source licenses' : 'Payments'});
+    const heading = denied ? 'Access unavailable' : route === '/admin/licenses' ? 'Open-source licenses' : 'Payments';
+    await screen.findByRole('heading', {name: heading});
     const inRecorded = screen.queryByRole('link', {name: 'Ledger and reversals history'});
     expect(Boolean(inRecorded)).toBe(contextual);
     if (inRecorded) expect(inRecorded).toHaveAttribute('href', '#/admin/ledgers');
