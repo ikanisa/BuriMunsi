@@ -11,6 +11,7 @@ const accounts = z.object({contractVersion: z.literal(1), asOf: instant, items: 
 const inbox = z.object({state: z.enum(['unknown','checking','incomplete','verified']),checkedAt: instant.nullable(),candidateCount: count.nullable(),
   missingCount: count.nullable(),pendingCount: count.nullable(),headsMatch: z.boolean().nullable()}).strict().refine(check => check.state !== 'verified' ||
     (check.checkedAt !== null && check.candidateCount !== null && check.missingCount === 0 && check.pendingCount === 0 && check.headsMatch === true));
+export type ReceiverInboxCheck = z.infer<typeof inbox>;
 const row = z.object({requestId: z.uuid(),sourceId: z.uuid(),admittedAt: instant,retentionState: z.enum(['retained','unresolved']),bodySha256: hash.nullable(),
   processing: z.enum(Object.keys(processingLabels) as (keyof typeof processingLabels)[]),paymentReference: z.string().regex(/^\d{12}$/).nullable(),
   payerStatus: z.enum(Object.keys(receiptLabels) as (keyof typeof receiptLabels)[]).nullable(),payerReason: z.enum(Object.keys(reasonLabels) as (keyof typeof reasonLabels)[]).nullable()}).strict();
