@@ -123,7 +123,7 @@ try {
   page.on('request', recordLogin);
   const firstOverview = page.waitForResponse(response => new URL(response.url()).pathname === '/api/admin/core/overview' && response.ok());
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  const overview = page.getByRole('heading', { name: 'Operations overview' });
+  const overview = page.getByRole('heading', { name: 'Home' });
   await overview.waitFor();
   await firstOverview;
   page.off('request', recordLogin);
@@ -168,7 +168,7 @@ try {
     });
     await stepUp.page.getByLabel('Four-digit passcode', {exact: true}).fill('0123');
     await stepUp.page.getByRole('button', {name: 'Verify passcode', exact: true}).click();
-    await stepUp.page.getByRole('heading', {name: 'Operations overview'}).waitFor();
+    await stepUp.page.getByRole('heading', {name: 'Home'}).waitFor();
     assert.deepEqual(verificationRequests, legacySessions ? [verifyPasscodePath, sessionPath] : [verifyPasscodePath]);
   } finally {
     await stepUp.context.close();
@@ -178,12 +178,10 @@ try {
   await page.route(receipts, route => route.fulfill({
     status: 503, contentType: 'application/json', body: JSON.stringify({ error: { code: 'service_unavailable' } }),
   }), { times: 1 });
-  const search = page.getByRole('searchbox', {name: 'Search admin sections'});
-  await search.fill('SMS receipts');
-  await search.press('ArrowDown');
-  const receiptDestination = page.getByRole('link', {name: 'SMS receipts', exact: true});
-  assert.equal(await receiptDestination.evaluate(link => link === document.activeElement), true);
-  await page.keyboard.press('Enter');
+  const nav = page.getByRole('navigation', {name: 'Admin sections'});
+  assert.equal(await page.getByRole('searchbox', {name: 'Search admin sections'}).count(), 0);
+  assert.equal(await nav.getByRole('link', {name: 'SMS receipts', exact: true}).count(), 0);
+  await page.goto(origin + '/#/admin/sms-receipts');
   await page.getByRole('heading', { name: 'SMS receipts', level: 1, exact: true }).waitFor();
   await page.getByRole('button', { name: /retry|try again/i }).click();
   const receiptRow = page.getByRole('table').getByRole('row').nth(1);
@@ -241,7 +239,8 @@ try {
   await sessionPage.getByRole('heading', { name: 'Open-source licenses' }).waitFor();
   // Advance only wall time, as on tab resume before the browser runs due timers.
   await sessionPage.clock.setSystemTime(new Date(Date.parse(expiresAt) + 1));
-  await sessionPage.getByRole('link', { name: 'Groups', exact: true }).click();
+  await sessionPage.getByRole('button', {name: /^Account:/}).click();
+  await sessionPage.getByRole('link', {name: 'Workspace', exact: true}).click();
   await sessionPage.getByRole('heading', { name: 'Welcome to BuriMunsi' }).waitFor();
   assert.equal(new URL(sessionPage.url()).hash, '#/admin/login?returnTo=%2Fadmin%2Fgroups');
   await sessionPage.goBack();
@@ -318,7 +317,7 @@ try {
   assert.deepEqual(denied, []);
   assert.deepEqual(unexpectedAuth, []);
   assert.deepEqual(incorrectIdentityHeaders, []);
-  const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'retired_passcode_bookmark_returns_to_overview', 'keyboard_receipt_navigation', 'sms_read_failure_retry',
+  const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'retired_passcode_bookmark_returns_to_overview', 'protected_sms_deep_link_and_no_redundant_sidebar_search', 'sms_read_failure_retry',
       'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
       'retired_authenticator_bookmark_preserves_safe_destination', 'missing_scoped_admin_identity_removes_controls', 'session_failure_and_recovery_require_server_authority', 'expired_request_and_history_return_require_sign_in',
       'mobile_drawer_traps_and_restores_focus_and_reflows', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, 'no_unexpected_auth_request', 'identity_version_only_on_session_exchanges'];

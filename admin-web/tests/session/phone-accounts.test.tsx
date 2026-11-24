@@ -88,6 +88,8 @@ describe('dedicated phone accounts', () => {
     expect(screen.queryByText('another-group')).toBeNull();
     expect(fetchImpl.mock.calls.some(([path]) => String(path).includes('collectionId=another-group'))).toBe(false);
     expect(screen.queryByText('Owner verification')).toBeNull();
+    fireEvent.click(screen.getByRole('button', {name: /^Account:/}));
+    fireEvent.click(screen.getByText('Advanced', {selector: 'summary'}));
     fireEvent.click(screen.getByRole('link', {name: 'SMS controls'}));
     await waitFor(() => expect(fetchImpl.mock.calls.some(([path]) => path === '/api/admin/notification-operator/access')).toBe(true), {timeout: 5000});
     expect(screen.queryByText(/Verify your passcode to open these controls/)).toBeNull();

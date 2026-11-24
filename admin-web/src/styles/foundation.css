@@ -28,7 +28,7 @@
   --admin-focus: #3656fd;
   --admin-shadow: 0 5px 22px rgb(23 32 54 / 4%);
   --admin-radius: 15px;
-  --admin-rail: 255px;
+  --admin-rail: 192px;
 }
 
 :root[data-theme='dark'] {

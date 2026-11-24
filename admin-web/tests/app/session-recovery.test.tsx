@@ -68,7 +68,8 @@ describe('Admin session recovery through the router', () => {
     const elapsed = Date.parse(expiresAt) - now() + 1;
     vi.spyOn(Date, 'now').mockImplementation(() => now() + elapsed);
 
-    fireEvent.click(screen.getByRole('link', {name: 'Groups'}));
+    fireEvent.click(screen.getByRole('button', {name: /^Account:/}));
+    fireEvent.click(screen.getByRole('link', {name: 'Workspace'}));
     await screen.findByRole('heading', {name: 'Welcome to BuriMunsi'}, {timeout: 4_000});
     expect(router.state.location.pathname).toBe('/admin/login');
     expect(new URLSearchParams(router.state.location.search).get('returnTo')).toBe('/admin/groups');
@@ -87,6 +88,29 @@ describe('Admin session recovery through the router', () => {
 });
 
 describe('Admin navigation for the current session', () => {
+  it('keeps distinct member and person reads in one directory and respects the existing access guard', async () => {
+    const {requests} = openAdmin('/admin/members', {session: {user: {...account, permissions: ['users.read']}}});
+    await screen.findByRole('heading', {name: 'Members'});
+    const views = within(screen.getByRole('navigation', {name: 'Member directory views'}));
+    expect(views.getByRole('link', {name: 'Group members'})).toHaveAttribute('aria-current', 'page');
+    expect(views.getByRole('link', {name: 'All people'})).toHaveAttribute('href', '#/admin/users');
+    await waitFor(() => expect(requests).toContain('/api/admin/core/members'));
+    expect(requests).not.toContain('/api/admin/core/users');
+    fireEvent.click(views.getByRole('link', {name: 'All people'}));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/admin/users'));
+    expect(screen.getByRole('heading', {name: 'Members'})).toBeVisible();
+    expect(screen.getByRole('link', {name: 'All people'})).toHaveAttribute('aria-current', 'page');
+    await waitFor(() => expect(requests).toContain('/api/admin/core/users'));
+  });
+
+  it('does not read directory records or expose directory views without user permission', async () => {
+    const {requests} = openAdmin('/admin/users', {session: {user: account}});
+    await screen.findByRole('heading', {name: 'Access unavailable'});
+    expect(screen.queryByRole('navigation', {name: 'Member directory views'})).toBeNull();
+    expect(screen.queryByRole('link', {name: 'Members'})).toBeNull();
+    expect(requests.filter(path => path.startsWith('/api/admin/core/'))).toEqual([]);
+  });
+
   it.each([
     {description: 'managed staff', role: 'staff', model: 'canonical_evidence_ledger', attested: false, accountAccess: false, smsControls: false, requests: false, buri: false},
     {description: 'unattested managed owner', role: 'owner', model: 'canonical_evidence_ledger', attested: false, accountAccess: true, smsControls: true, requests: true, buri: false},
@@ -104,10 +128,16 @@ describe('Admin navigation for the current session', () => {
     openAdmin('/admin/licenses', {session});
     await screen.findByRole('heading', {name: 'Open-source licenses'});
     const links = within(screen.getByRole('navigation', {name: 'Admin sections'}));
-    expect(links.getByRole('link', {name: 'MoMo receipts'})).toHaveAttribute('href', '#/admin/momo-receipts');
+    expect(links.getByRole('link', {name: 'Home'})).toHaveAttribute('href', '#/admin');
+    expect(links.queryByRole('link', {name: 'MoMo receipts'})).toBeNull();
     expect(links.queryByRole('link', {name: 'SMS receipts'})).toBeNull();
-    expect(Boolean(links.queryByRole('link', {name: 'SMS controls'}))).toBe(smsControls);
-    expect(Boolean(links.queryByRole('link', {name: 'Request history'}))).toBe(requests);
-    expect(Boolean(links.queryByRole('link', {name: 'BuriMunsi access'}))).toBe(buri);
+    expect(links.queryByRole('link', {name: 'SMS controls'})).toBeNull();
+    fireEvent.click(screen.getByRole('button', {name: /^Account:/}));
+    expect(Boolean(screen.queryByRole('link', {name: 'Account security'}))).toBe(accountAccess);
+    expect(Boolean(screen.queryByRole('link', {name: 'Activity'}))).toBe(requests);
+    const advanced = screen.queryByText('Advanced', {selector: 'summary'});
+    if (advanced) fireEvent.click(advanced);
+    expect(Boolean(screen.queryByRole('link', {name: 'SMS controls'}))).toBe(smsControls);
+    expect(Boolean(screen.queryByRole('link', {name: 'Operator access'}))).toBe(buri);
   });
 });

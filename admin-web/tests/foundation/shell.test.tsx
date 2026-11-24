@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -6,62 +6,31 @@ import { AdminShell } from '../../src/layout/AdminShell';
 import { Button, Dialog } from '../../src/ui';
 
 const navigation = [
-  { label: 'Overview', path: '/admin', section: 'Workspace', icon: 'home' },
-  { label: 'Groups', path: '/admin/groups', section: 'Workspace', icon: 'users' },
-  { label: 'Users', path: '/admin/users', section: 'People', icon: 'user' },
+  {label: 'Home', path: '/admin', icon: 'home'},
+  {label: 'Members', path: '/admin/members', icon: 'users', relatedPaths: ['/admin/users']},
+  {label: 'Payments', path: '/admin/payments', relatedPaths: ['/admin/transactions', '/admin/sms-receipts']},
 ];
 
 describe('Admin shell', () => {
-  it('shows supplied destinations, the current section and the signed-in operator', () => {
-    const signOut = vi.fn();
-    render(<AdminShell navigation={navigation} currentPath="/admin/groups/record" identity={{ name: 'Operator', role: 'Staff' }} onSignOut={signOut}><h1>Group detail</h1></AdminShell>);
-    expect(screen.getByRole('link', { name: 'Groups' })).toHaveAttribute('aria-current', 'location');
-    expect(screen.getByRole('link', { name: 'Groups' })).toHaveAttribute('href', '#/admin/groups');
-    expect(screen.getByRole('heading', { name: 'Group detail' })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Account: Operator' })).toBeVisible();
-    fireEvent.click(screen.getByRole('button', {name: 'Account: Operator'}));
-    const help = screen.getByRole('link', {name: 'WhatsApp support · +250 788 767 816'});
-    expect(help).toHaveAttribute('href', 'https://wa.me/250788767816');
-    expect(help).toHaveAttribute('rel', 'noopener noreferrer');
-    expect(signOut).not.toHaveBeenCalled();
+  it('only shows daily destinations and marks legacy locations without changing their targets', () => {
+    render(<AdminShell navigation={navigation} currentPath="/admin/users/record?returnTo=members"
+      identity={{name: 'Operator', role: 'Staff'}}><h1>Member detail</h1></AdminShell>);
+    const nav = within(screen.getByRole('navigation', {name: 'Admin sections'}));
+    expect(nav.getAllByRole('link').map(link => link.textContent)).toEqual(['Home', 'Members', 'Payments']);
+    expect(nav.getByRole('link', {name: 'Members'})).toHaveAttribute('aria-current', 'location');
+    expect(nav.getByRole('link', {name: 'Members'})).toHaveAttribute('href', '#/admin/members');
+    expect(screen.getByRole('heading', {name: 'Member detail'})).toBeVisible();
+    expect(screen.queryByRole('searchbox')).not.toBeInTheDocument();
   });
 
-  it('filters only supplied navigation and supports the search shortcut', async () => {
-    const user = userEvent.setup();
-    render(<AdminShell navigation={navigation} currentPath="/admin"><p>Overview</p></AdminShell>);
-    fireEvent.keyDown(document, { key: 'k', ctrlKey: true });
-    const search = screen.getByRole('searchbox', { name: 'Search admin sections' });
-    expect(search).toHaveFocus();
-    await user.type(search, 'users');
-    const nav = screen.getByRole('navigation', { name: 'Admin sections' });
-    expect(within(nav).getByRole('link', { name: 'Users' })).toBeVisible();
-    expect(within(nav).queryByRole('link', { name: 'Groups' })).not.toBeInTheDocument();
-    await user.keyboard('{Escape}');
-    expect(within(nav).getByRole('link', { name: 'Groups' })).toBeVisible();
+  it.each(['/admin/transactions/123', '/admin/sms-receipts/capture/456'])('marks Payments active on %s', path => {
+    render(<AdminShell navigation={navigation} currentPath={path}><p>Records</p></AdminShell>);
+    expect(screen.getByRole('link', {name: 'Payments'})).toHaveAttribute('aria-current', 'location');
   });
 
-  it('opens only the selected match when keyboard navigation offers multiple sections', async () => {
-    const original = window.location.href;
-    window.history.replaceState(null, '', '#/admin');
-    try {
-      const user = userEvent.setup();
-      const receipts = [
-        {label: 'SMS receipts', path: '/admin/sms-receipts', section: 'Communications'},
-        {label: 'MoMo receipts', path: '/admin/momo-receipts', section: 'Communications'},
-      ];
-      render(<AdminShell navigation={receipts} currentPath="/admin"><p>Overview</p></AdminShell>);
-      const search = screen.getByRole('searchbox', {name: 'Search admin sections'});
-      await user.type(search, 'receipts{Enter}');
-      expect(window.location.hash).toBe('#/admin');
-      await user.keyboard('{ArrowDown}');
-      expect(screen.getByRole('link', {name: 'SMS receipts'})).toHaveFocus();
-      await user.keyboard('{ArrowDown}');
-      expect(screen.getByRole('link', {name: 'MoMo receipts'})).toHaveFocus();
-      await user.keyboard('{Enter}');
-      await waitFor(() => expect(window.location.hash).toBe('#/admin/momo-receipts'));
-    } finally {
-      window.history.replaceState(null, '', original);
-    }
+  it('does not treat alias lookalikes as primary sections', () => {
+    render(<AdminShell navigation={navigation} currentPath="/admin/transactions-archive"><p>Records</p></AdminShell>);
+    expect(screen.getByRole('link', {name: 'Payments'})).not.toHaveAttribute('aria-current');
   });
 
   it('exposes mobile navigation state and closes it with Escape', async () => {
@@ -76,35 +45,30 @@ describe('Admin shell', () => {
     expect(menu).toHaveFocus();
   });
 
-  it('returns keyboard focus to the account trigger when its disclosure closes', async () => {
+  it('gates account link presentation and restores keyboard focus on Escape', async () => {
     const user = userEvent.setup(), signOut = vi.fn();
-    render(<AdminShell navigation={navigation} currentPath="/admin" identity={{name: 'Operator'}} onSignOut={signOut}>
-      <p>Overview</p>
-    </AdminShell>);
+    render(<AdminShell navigation={navigation} currentPath="/admin" identity={{name: 'Operator'}}
+      accountNavigation={[{label: 'Workspace', path: '/admin/groups'}, {label: 'SMS controls', path: '/admin/notification-settings', group: 'advanced'}]}
+      onSignOut={signOut}><p>Overview</p></AdminShell>);
     const trigger = screen.getByRole('button', {name: 'Account: Operator'});
     await user.click(trigger);
     await user.tab();
-    expect(screen.getByRole('link', {name: 'WhatsApp support · +250 788 767 816'})).toHaveFocus();
-    await user.tab();
-    expect(screen.getByRole('button', {name: 'Sign out'})).toHaveFocus();
+    expect(screen.getByRole('link', {name: 'Workspace'})).toHaveFocus();
+    expect(screen.getByRole('link', {name: 'SMS controls'})).not.toBeVisible();
+    expect(screen.queryByRole('link', {name: 'Privacy requests'})).not.toBeInTheDocument();
+    await user.click(screen.getByText('Help', {selector: 'summary'}));
+    const help = screen.getByRole('link', {name: 'WhatsApp support · +250 788 767 816'});
+    expect(help).toHaveAttribute('href', 'https://wa.me/250788767816');
+    expect(help).toHaveAttribute('rel', 'noopener noreferrer');
+    await user.click(screen.getByText('Advanced', {selector: 'summary'}));
+    expect(screen.getByRole('link', {name: 'SMS controls'})).toHaveAttribute('href', '#/admin/notification-settings');
+    screen.getByRole('link', {name: 'SMS controls'}).focus();
     await user.keyboard('{Escape}');
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
     expect(trigger).toHaveFocus();
     expect(signOut).not.toHaveBeenCalled();
   });
 
-  it('opens matching navigation after searching on a small screen', async () => {
-    const previous = window.matchMedia;
-    window.matchMedia = vi.fn().mockReturnValue({matches: true});
-    try {
-      const user = userEvent.setup();
-      render(<AdminShell navigation={navigation} currentPath="/admin"><p>Overview</p></AdminShell>);
-      const search = screen.getByRole('searchbox', { name: 'Search admin sections' });
-      await user.type(search, 'users{Enter}');
-      expect(screen.getByRole('button', { name: 'Open navigation' })).toHaveAttribute('aria-expanded', 'true');
-      expect(within(screen.getByRole('navigation', { name: 'Admin sections' })).getByRole('link', { name: 'Users' })).toBeVisible();
-    } finally {window.matchMedia = previous;}
-  });
 });
 
 function DialogExample() {

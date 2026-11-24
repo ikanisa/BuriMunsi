@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Button, Card, EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge } from '../../ui';
 import { containsControl, formatField, formatMoney, label, parseCorePage, paymentReference, STATUSES } from './contracts';
 import { coreListAction } from './coreRecordActions';
+import {MemberDirectoryViews} from './MemberDirectory';
 import type { CoreArea, CorePage, DataRow, FeatureAccess, FinancialModel } from './types';
 import { AREA_TITLES, CORE_PERMISSIONS } from './types';
 import './core.css';
@@ -10,8 +11,8 @@ type ListProps = FeatureAccess & { area: CoreArea; locationSearch?: string; allo
 
 const PAGE_SIZE = 25;
 const descriptions: Record<CoreArea, string> = {
-  groups: 'Explore group records and membership.', users: 'Review user records and account status.',
-  members: 'Review members and their group affiliations.', payees: 'Review group payment receivers.',
+  groups: 'Explore group records and membership.', users: 'Find people with or without a group membership.',
+  members: 'Find people with a group membership.', payees: 'Review group payment receivers.',
   transactions: 'Review recorded payment evidence and its status.', ledgers: 'Review contribution records and ledger status.',
 };
 
@@ -118,15 +119,18 @@ export function CoreListPage({ area, request, permissions, actorId, role, author
 
   const update = (changes: Partial<Filters>) => navigate(listLocation(area, { ...filter, ...changes }));
   const tableColumns = columns(area, financialModel);
+  const memberDirectory = area === 'members' || area === 'users';
+  const title = memberDirectory ? 'Members' : AREA_TITLES[area];
   const action = coreListAction({area, role, permissions, financialModel, allowed, allowMutations});
   return <>
-    <PageHeader title={AREA_TITLES[area]} subtitle={descriptions[area]} actions={action ? <Button type="button" onClick={() => navigate(action.path)}>{action.label}</Button> : undefined} />
+    <PageHeader title={title} subtitle={descriptions[area]} actions={action ? <Button type="button" onClick={() => navigate(action.path)}>{action.label}</Button> : undefined} />
+    {allowed && (area === 'members' || area === 'users') && <MemberDirectoryViews area={area} />}
     {!allowed ? <ErrorState title="Access unavailable" message="Your account does not have permission to view this page." /> : <Card>
       <div className="core-toolbar">
-        <div><h2>{AREA_TITLES[area]} list</h2><p>Search and review records</p></div>
+        {!memberDirectory && <div><h2>{AREA_TITLES[area]} list</h2><p>Search and review records</p></div>}
         <form className="core-search" onSubmit={event => { event.preventDefault(); const value = draft.trim(); if (value.length <= 200 && !containsControl(value)) update({ search: value, page: 1 }); }}>
           <label className="core-visually-hidden" htmlFor={`search-${area}`}>Search {AREA_TITLES[area]}</label>
-          <input id={`search-${area}`} className="admin-input" value={draft} onChange={event => setDraftState({ base: filter.search, value: event.target.value })} maxLength={200} placeholder="Search records" />
+          <input id={`search-${area}`} className="admin-input" value={draft} onChange={event => setDraftState({ base: filter.search, value: event.target.value })} maxLength={200} placeholder={memberDirectory ? 'Search by name or ID' : 'Search records'} />
           <Button type="submit">Search</Button>
           <Button type="button" onClick={() => { setDraftState({ base: '', value: '' }); update({ search: '', status: '', sort: 'created_at_desc', page: 1 }); }}>Clear</Button>
         </form>
