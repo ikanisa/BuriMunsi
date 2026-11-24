@@ -38,13 +38,13 @@ EXPECTED_STAFF_CASES = {
     'rw.ikanisa.burimunsi.NativeSandboxContractTest#memberPhotoPreparationResizesRotatesAndWipesInput',
     'rw.ikanisa.burimunsi.NativeSandboxContractTest#savedSessionCanBeReopenedAndExplicitlyCleared',
     'rw.ikanisa.burimunsi.NativeSandboxContractTest#setupUsesTheExistingPersistedInstallationIdentity',
-    'rw.ikanisa.burimunsi.NativeUiContractTest#allOriginalFifteenPanelTitlesRemainReachable',
+    'rw.ikanisa.burimunsi.NativeUiContractTest#allCurrentPanelTitlesRemainReachable',
     'rw.ikanisa.burimunsi.NativeUiContractTest#allSmsDoesNotClaimEmptyWhileTheLocalQueueIsUnknown',
     'rw.ikanisa.burimunsi.NativeUiContractTest#allSmsIncludesOwnQueuedRowsWithoutMergingUncertainSources',
     'rw.ikanisa.burimunsi.NativeUiContractTest#allocationActionStaysAboveNavigationAndHonorsAccessAndOfflineState',
     'rw.ikanisa.burimunsi.NativeUiContractTest#paymentReferenceAndProviderIdDisplayIndependently',
     'rw.ikanisa.burimunsi.NativeUiContractTest#auditedSmsPreviewsSearchBothTypedStreamsAndMarkPartial',
-    'rw.ikanisa.burimunsi.NativeUiContractTest#automaticOutgoingTransactionShowsActualFieldsWithoutAllocating',
+    'rw.ikanisa.burimunsi.NativeUiContractTest#incompleteOutgoingPaymentKeepsActualFieldsAndBlocksAllocation',
     'rw.ikanisa.burimunsi.NativeUiContractTest#backgroundPrivacyNeverExposesRawReceipt',
     'rw.ikanisa.burimunsi.NativeUiContractTest#bottomNavigationCoversEverySignedInRouteAndMapsDetailSelection',
     'rw.ikanisa.burimunsi.NativeUiContractTest#configurationBlockDoesNotPretendSignInIsRunning',
@@ -55,14 +55,15 @@ EXPECTED_STAFF_CASES = {
     'rw.ikanisa.burimunsi.NativeUiContractTest#gatewayShowsOnlyThePairedReceivingCodeSnapshot',
     'rw.ikanisa.burimunsi.NativeUiContractTest#gatewayUsesSmsPermissionWithoutPairingCode',
     'rw.ikanisa.burimunsi.NativeUiContractTest#homeOmitsGatewayControlForAllRolesAndSettingsKeepsRecovery',
+    'rw.ikanisa.burimunsi.NativeUiContractTest#homeOpensActualRecentPaymentsAndShowsAllocationState',
     'rw.ikanisa.burimunsi.NativeUiContractTest#initialLoadingSkeletonDoesNotClaimAnEmptyResult',
     'rw.ikanisa.burimunsi.NativeUiContractTest#invalidPhoneNeverEnablesSignIn',
     'rw.ikanisa.burimunsi.NativeUiContractTest#navigationUsesControllerReadPolicyAndAlwaysHonorsClosedAccessGate',
     'rw.ikanisa.burimunsi.NativeUiContractTest#observationStatusAndRetryReflectAdminProcessingAuthority',
-    'rw.ikanisa.burimunsi.NativeUiContractTest#originalFiltersIncludeProcessingAndApplyOnlyTheSelectedStatus',
+    'rw.ikanisa.burimunsi.NativeUiContractTest#paymentFiltersUseOnlyTheAllocationStates',
     'rw.ikanisa.burimunsi.NativeUiContractTest#originalFormPlaceholdersDescribeExpectedInputs',
-    'rw.ikanisa.burimunsi.NativeUiContractTest#originalHeadersExposeFiltersProfileHistoryAndExport',
-    'rw.ikanisa.burimunsi.NativeUiContractTest#overviewKeepsAuthoritativeUnallocatedAmountAndAllPaymentsAction',
+    'rw.ikanisa.burimunsi.NativeUiContractTest#memberLinkOpensTheCentralPaymentsScreen',
+    'rw.ikanisa.burimunsi.NativeUiContractTest#overviewKeepsReportedUnallocatedCountAndAllPaymentsAction',
     'rw.ikanisa.burimunsi.NativeUiContractTest#paginationFailureRequiresExplicitRetryInsteadOfAnAutomaticLoop',
     'rw.ikanisa.burimunsi.NativeUiContractTest#pairedReceiverCanRequestMissingSmsPermissionWithoutPausing',
     'rw.ikanisa.burimunsi.NativeUiContractTest#parsedSmsUsesExistingScreensWithoutManualVerification',
@@ -71,7 +72,7 @@ EXPECTED_STAFF_CASES = {
     'rw.ikanisa.burimunsi.NativeUiContractTest#privacyGateDisposesCredentialsAndRecordsWithinOriginalRoute',
     'rw.ikanisa.burimunsi.NativeUiContractTest#profileToPasscodeReplacesSheetAndCloseReturnsToRoute',
     'rw.ikanisa.burimunsi.NativeUiContractTest#queuedSmsMetadataShowsQueuedAndIsPermissionGated',
-    'rw.ikanisa.burimunsi.NativeUiContractTest#rawReceiptOpensDirectlyAndLinksToItsContribution',
+    'rw.ikanisa.burimunsi.NativeUiContractTest#rawReceiptOpensDirectlyAndLinksToItsPayment',
     'rw.ikanisa.burimunsi.NativeUiContractTest#reducedMotionKeepsLoadingMeaningWithStaticRendering',
     'rw.ikanisa.burimunsi.NativeUiContractTest#refreshAndExportFeedbackNeverReplaceValidRecordsWithFakeSuccess',
     'rw.ikanisa.burimunsi.NativeUiContractTest#searchIsLiveAndHasNoAddedSubmitControl',
@@ -85,9 +86,9 @@ EXPECTED_STAFF_CASES = {
     'rw.ikanisa.burimunsi.NativeUiContractTest#supportUsesThePublishedWhatsAppNumberFromHelpAndSignIn',
     'rw.ikanisa.burimunsi.NativeUiContractTest#syncPolicySettingsStayInTheReceiverAdminRole',
     'rw.ikanisa.burimunsi.NativeUiContractTest#twoHundredPercentTypePreservesCompleteMoneyAndAccessibleIdentity',
-    'rw.ikanisa.burimunsi.NativeUiContractTest#typedFilterOverlayReturnsToItsPanelAndShowsActualSort',
+    'rw.ikanisa.burimunsi.NativeUiContractTest#typedFilterOverlayReturnsToItsStaffPanelAndRetainsTheSelection',
     'rw.ikanisa.burimunsi.NativeUiContractTest#typedFiltersValidateAmountsAndPreserveInclusiveKigaliDates',
-    'rw.ikanisa.burimunsi.NativeUiContractTest#unknownFinancialOutcomeNeverShowsAllocationAction',
+    'rw.ikanisa.burimunsi.NativeUiContractTest#legacyNonAssignableStatesNeverOfferAllocate',
     'rw.ikanisa.burimunsi.StaffPackageIsolationTest#installedPackageEnforcesRoleBoundary',
     'rw.ikanisa.burimunsi.export.ExportRenderingTest#nativePdfCancellationAndOutputFailureNeverCloseTheCallerOrReturnSuccess',
     'rw.ikanisa.burimunsi.export.ExportRenderingTest#nativePdfOpensAndRendersEveryPageWithoutLosingTheSuppliedRowCount',
@@ -170,11 +171,13 @@ class ListingHeaderContract(unittest.TestCase):
         screens = n.ROOT / 'app/src/main/kotlin/rw/ikanisa/burimunsi/ui'
         restoration = (n.ROOT / 'core/src/main/kotlin/rw/ikanisa/burimunsi/core/PagedRestoration.kt').read_text()
         for screen, route in [('PaymentsScreen', 'PAYMENTS'), ('MembersScreen', 'MEMBERS'),
-                              ('MemberScreen', 'MEMBER'), ('SmsScreen', 'SMS')]:
+                              ('SmsScreen', 'SMS')]:
             with self.subTest(route=route):
                 owner = 'BuriSmsScreen.kt' if route == 'SMS' else 'BuriRecordsScreens.kt'
                 source = (screens / owner).read_text()
-                before_rows = source.split('fun ' + screen + '(', 1)[1].split('itemsIndexed(', 1)[0]
+                component = source.split('fun ' + screen + '(', 1)[1]
+                before_rows, record_iterator, _ = component.partition('itemsIndexed(')
+                self.assertTrue(record_iterator, f'{screen} no longer exposes its expected paged record iterator')
                 fixed = len(re.findall(r'^\s*item\s*(?:\([^)]*\)\s*)?\{', before_rows, re.MULTILINE))
                 self.assertRegex(restoration, rf'Route\.{route} -> {fixed}\b')
                 if route == 'SMS':
@@ -186,6 +189,18 @@ class ListingHeaderContract(unittest.TestCase):
                     scroll = components.split('fun routeList(', 1)[1].split('@Composable', 1)[0]
                     self.assertRegex(scroll, r'remember\s*\(revision\)')
                     self.assertRegex(scroll, r'm\.memberListPosition\s*\(')
+
+    def test_member_detail_reads_single_record_and_opens_the_member_scoped_payments_list(self):
+        screens = n.ROOT / 'app/src/main/kotlin/rw/ikanisa/burimunsi/ui'
+        records = (screens / 'BuriRecordsScreens.kt').read_text()
+        detail = records.split('fun MemberScreen(', 1)[1].split('@Composable', 1)[0]
+        self.assertNotRegex(detail, r'items(?:Indexed)?\s*\(|moreButton\s*\(')
+        self.assertIn('m.navigate(Route.PAYMENTS,member.id)', detail)
+        vm = (screens / 'BuriViewModel.kt').read_text()
+        self.assertRegex(vm, r'Route\.MEMBER\s*->\s*\{\s*val id = state\.routeId \?: state\.member\?\.id \?: return'
+                             r'\s*val request = pagedRestoration\.request\(\)'
+                             r'\s*val member = pagedRestoration\.readRecord\(request\) \{ it\.memberRecord\(id\) \}')
+
 
 class NativePlan(unittest.TestCase):
     def test_eight_distinct_artifacts(self):
