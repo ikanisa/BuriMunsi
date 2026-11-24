@@ -1,4 +1,4 @@
-import {useCallback, useState, useSyncExternalStore} from 'react';
+import {useCallback, useState} from 'react';
 import {useSession} from '../../session/SessionProvider';
 import {canDisplaySessionRecords, canReadSmsEvidence} from '../../session/sessionContext';
 import {Button, Card, ErrorState, LoadingState} from '../../ui';
@@ -8,12 +8,15 @@ import {MomoSourceRevealPanel} from './MomoSourceRevealPanel';
 import {formatTime} from './OperationsRecords';
 import {receiverCollections, receiverPage, processingLabels, type ReceiverInboxCheck} from './receiverSmsContract';
 import {useOperationRead} from './useOperationRead';
+import {inboxReadClock,useInboxFreshness} from './inboxFreshness';
 
 export function ReceiverSmsPanel({simplePayments = false}: {simplePayments?: boolean} = {}) {
   const session = useSession(), request = session.request;
   const enabled = canDisplaySessionRecords(session) && canReadSmsEvidence(session.user);
   const load = useCallback(async (signal: AbortSignal) => receiverCollections(await request('momo/observations/collections', {signal})), [request]);
   const {result, retry} = useOperationRead(String(session.epoch), enabled, load, {...momoReadOptions, live:false});
+  const authority=JSON.stringify([session.epoch,session.status,session.user?.id,session.user?.sessionId,session.user?.role,
+    [...(session.user?.permissions ?? [])].sort()]);
   const [selection, setSelection] = useState('');
   if (!enabled) return null;
   if (!result) return <LoadingState label="Loading receiver collections" />;
@@ -22,7 +25,7 @@ export function ReceiverSmsPanel({simplePayments = false}: {simplePayments?: boo
   if (!group) return <Card><p>No receiver collections are available for this account.</p></Card>;
   return <Card className="operations-records">{groups.length > 1 && <label>Collection <select className="admin-input" value={group.collectionId} onChange={event => setSelection(event.target.value)}>
     {groups.map(item => <option key={item.collectionId} value={item.collectionId}>{item.label}</option>)}</select></label>}
-    <CollectionReceipts key={JSON.stringify([session.epoch, group.collectionId])} group={group.collectionId} simplePayments={simplePayments} />
+    <CollectionReceipts key={JSON.stringify([authority, group.collectionId])} group={group.collectionId} simplePayments={simplePayments} />
   </Card>;
 }
 
@@ -33,18 +36,22 @@ function CollectionReceipts({group, simplePayments}: {group: string; simplePayme
   const load = useCallback(async (signal: AbortSignal) => {
     const query = new URLSearchParams({collectionId: group, limit: '25', includeProcessing: '1'});
     if (cursor) query.set('cursor', cursor);
-    return receiverPage(await request('momo/observations?' + query, {signal}), group);
+    const started=inboxReadClock();
+    const page=receiverPage(await request('momo/observations?' + query, {signal}), group);
+    return {page,started};
   }, [request, group, cursor]);
   const {result, retry} = useOperationRead(JSON.stringify([session.epoch, group, cursor, permissions]), true, load, {...momoReadOptions, pollMs: 5000, collectionId: group});
+  const sample=session.status==='authenticated' && result?.status==='success' ? {check:result.value.page.inboxCheck,asOf:result.value.page.asOf,started:result.value.started} : null;
+  const {fresh}=useInboxFreshness(sample);
   const refresh = () => {setSource(null); setCursors([null]); retry();};
   if (!result) return <LoadingState label="Loading receiver SMS" />;
   if (result.status === 'error') return <ErrorState message={result.message} onRetry={refresh} />;
-  const page = result.value, check = page.inboxCheck, selected = page.items.find(item => item.sourceId === source);
+  const page = result.value.page, check = page.inboxCheck, selected = page.items.find(item => item.sourceId === source);
   const canReveal = permissions.includes('sms.reveal'), financial = permissions.includes('payments.read'), showReference = financial && !simplePayments;
   const headings = ['Received by server · Kigali', 'Processing', ...(showReference ? ['Payment reference'] : []), ...(financial ? ['Payer SMS'] : []),
     ...(canReveal ? ['Source'] : [])];
   return <><div className="operations-toolbar"><h2>{simplePayments ? 'M-Money SMS' : 'Receiver SMS'}</h2><Button icon="refresh" onClick={refresh}>Refresh receiver</Button></div>
-    <InboxCompleteness key={JSON.stringify([check.state, check.checkedAt])} check={check} asOf={page.asOf} receivedAt={result.receivedAt} simplePayments={simplePayments} />
+    <InboxCompleteness check={check} fresh={fresh} simplePayments={simplePayments} />
     {page.items.length ? <MomoTable name="Android receiver observations" headings={headings} compact>{page.items.map(item => <tr key={item.sourceId} role="row">
       <MomoCell label="Received by server · Kigali">{formatTime(item.admittedAt)}</MomoCell><MomoCell label="Processing">
         {simplePayments && ['posted', 'reversed', 'unmatched'].includes(item.processing) ? 'Parsed' : processingLabels[item.processing]}
@@ -59,38 +66,7 @@ function CollectionReceipts({group, simplePayments}: {group: string; simplePayme
   </>;
 }
 
-// Match the Android receiver's five-minute positive-proof window. Use the
-// server timestamps to calculate the report's age when the page was generated.
-const INBOX_PROOF_MAX_AGE_MS = 5 * 60 * 1000;
-
-function InboxCompleteness({check, asOf, receivedAt, simplePayments}: {check: ReceiverInboxCheck; asOf: string; receivedAt: number; simplePayments: boolean}) {
-  const age = check.checkedAt === null ? NaN : Date.parse(asOf) - Date.parse(check.checkedAt);
-  const responseDeadline = check.state === 'verified' && age >= 0 && age < INBOX_PROOF_MAX_AGE_MS
-    ? Math.round(receivedAt * 1000) + INBOX_PROOF_MAX_AGE_MS - age : null;
-  // Polling or replaying the same proof must not reset its initial window.
-  const [firstDeadline] = useState(responseDeadline);
-  const deadline = responseDeadline === null || firstDeadline === null ? null : Math.min(firstDeadline, responseDeadline);
-  const subscribe = useCallback((changed: () => void) => {
-    if (deadline === null) return () => {};
-    let timer: number | undefined;
-    const sync = () => {
-      if (timer !== undefined) window.clearTimeout(timer);
-      const remaining = deadline - Date.now();
-      if (remaining > 0) timer = window.setTimeout(sync, remaining);
-      changed();
-    };
-    sync();
-    document.addEventListener('visibilitychange', sync);
-    window.addEventListener('focus', sync);
-    window.addEventListener('pageshow', sync);
-    return () => {
-      if (timer !== undefined) window.clearTimeout(timer);
-      document.removeEventListener('visibilitychange', sync);
-      window.removeEventListener('focus', sync);
-      window.removeEventListener('pageshow', sync);
-    };
-  }, [deadline]);
-  const fresh = useSyncExternalStore(subscribe, () => deadline !== null && Date.now() < deadline);
+function InboxCompleteness({check,fresh,simplePayments}: {check:ReceiverInboxCheck;fresh:boolean;simplePayments:boolean}) {
   const historical = check.state === 'verified' && !fresh;
   const label = check.state === 'verified'
     ? historical ? 'Last inbox match is out of date. A new inbox check is needed.' : 'Admin phone inboxes matched at the last check.'

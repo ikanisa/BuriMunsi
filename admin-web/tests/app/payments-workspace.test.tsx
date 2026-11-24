@@ -7,6 +7,7 @@ import {workspaceRoutes} from '../../src/app/WorkspaceRoutes';
 import {canOpenAdminPath} from '../../src/app/route-access';
 import {safePaymentListReturn} from '../../src/features/operations/paymentLocations';
 import {AdminTransportError} from '../../src/api/contracts';
+import {BuriMunsiHome} from '../../src/features/overview/BuriMunsiHome';
 import {analyzeCanonicalPaymentRows, type PaymentAnalysisQuery} from '../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
 import coreFixture from '../core/canonical-core-fixtures.json';
 import reconciliationFixture from '../core/canonical-reconciliation-fixture.json';
@@ -328,6 +329,73 @@ describe('BuriMunsi phone Payments', () => {
       inboxCheck:{state:'verified',checkedAt:time,candidateCount:0,missingCount:0,pendingCount:0,headsMatch:true}}));
     expect(screen.getByText('Last inbox check matched')).toBeVisible();
     expect(screen.getByRole('link',{name:'M-Money SMS'})).toHaveAttribute('href','/admin/payments?view=sms');
+  });
+
+  it('ages Home inbox proof from server time and request start, preserves prior time on failure, and rejects replay', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-18T07:15:00.000Z')); // Browser intentionally differs from server.
+    mock.authMethod='phone_passcode'; mock.scoped=true; mock.permissions=['overview.read','payments.read','sms.read'];
+    const base={contractVersion:1,collectionId:'fixture-group',nextCursor:null,asOf:'2026-10-18T08:04:58.000Z',items:[],
+      inboxCheck:{state:'verified',checkedAt:time,candidateCount:0,missingCount:0,pendingCount:0,headsMatch:true}};
+    let resolveOld!:(value:unknown)=>void;
+    let response:()=>Promise<unknown>=()=>new Promise(resolve=>{resolveOld=resolve;});
+    const home={paymentCount:1,memberCount:5,unallocatedCount:1,recentPayments:[buriPayment],asOf:time};
+    mock.request.mockImplementation((path:string)=>path==='burimunsi/home' ? Promise.resolve(home):response());
+    const view=render(<MemoryRouter><BuriMunsiHome /></MemoryRouter>);
+    const refresh=()=>act(async()=>fireEvent.click(screen.getByRole('button',{name:'Refresh Home'})));
+    try {
+      await act(async()=>{});
+      expect(screen.getByText('Checking sync')).toBeVisible();
+      await act(async()=>{await vi.advanceTimersByTimeAsync(2000);resolveOld(base);});
+      expect(screen.getByText('Last inbox check is out of date')).toBeVisible();
+      expect(view.container.querySelector('time')).toHaveAttribute('dateTime',time);
+      expect(screen.queryByText('Last inbox check matched')).not.toBeInTheDocument();
+
+      response=async()=>{throw new AdminTransportError('Network interruption');};
+      await refresh();
+      expect(screen.getByText('Inbox status unavailable')).toBeVisible();
+      expect(view.container.querySelector('time')).toHaveAttribute('dateTime',time);
+
+      response=async()=>({...base,asOf:time}); // Same proof must not be renewed after failure.
+      await refresh();
+      expect(screen.getByText('Last inbox check is out of date')).toBeVisible();
+      expect(screen.queryByText('Last inbox check matched')).not.toBeInTheDocument();
+
+      const next='2026-10-18T08:05:01.000Z';
+      response=async()=>({...base,asOf:next,inboxCheck:{...base.inboxCheck,checkedAt:next}});
+      await refresh();
+      expect(screen.getByText('Last inbox check matched')).toBeVisible();
+      expect(view.container.querySelector('time')).toHaveAttribute('dateTime',next);
+      // Simulate a browser which resumes before its scheduled timeout fires.
+      vi.setSystemTime(Date.now()+300_000);
+      await act(async()=>window.dispatchEvent(new Event('pageshow')));
+      expect(screen.getByText('Last inbox check is out of date')).toBeVisible();
+      expect(screen.getByRole('status')).not.toHaveTextContent(/offline/i);
+      vi.setSystemTime(Date.now()-300_000);
+      await act(async()=>window.dispatchEvent(new Event('focus')));
+      expect(screen.getByText('Last inbox check is out of date')).toBeVisible();
+    } finally {view.unmount();vi.useRealTimers();}
+  });
+
+  it('hides Home SMS health immediately on permission loss and waits for a new read on regrant', async () => {
+    mock.authMethod='phone_passcode'; mock.scoped=true; mock.permissions=['overview.read','payments.read','sms.read'];
+    const base={contractVersion:1,collectionId:'fixture-group',nextCursor:null,asOf:time,items:[],
+      inboxCheck:{state:'verified',checkedAt:time,candidateCount:0,missingCount:0,pendingCount:0,headsMatch:true}};
+    let finish!:(value:unknown)=>void, healthReads=0;
+    mock.request.mockImplementation(async(path:string)=>path==='burimunsi/home' ?
+      {paymentCount:1,memberCount:5,unallocatedCount:1,recentPayments:[buriPayment],asOf:time} :
+      ++healthReads===1 ? base : new Promise(resolve=>{finish=resolve;}));
+    const view=render(<MemoryRouter><BuriMunsiHome /></MemoryRouter>);
+    expect(await screen.findByText('Last inbox check matched')).toBeVisible();
+    mock.permissions=['overview.read','payments.read'];
+    view.rerender(<MemoryRouter><BuriMunsiHome /></MemoryRouter>);
+    expect(screen.queryByRole('link',{name:'M-Money SMS'})).not.toBeInTheDocument();
+    mock.permissions=['overview.read','payments.read','sms.read'];
+    view.rerender(<MemoryRouter><BuriMunsiHome /></MemoryRouter>);
+    expect(screen.getByText('Checking sync')).toBeVisible();
+    expect(screen.queryByText('Last inbox check matched')).not.toBeInTheDocument();
+    await act(async()=>finish({...base,inboxCheck:{state:'unknown',checkedAt:null,candidateCount:null,missingCount:null,pendingCount:null,headsMatch:null}}));
+    expect(screen.getByText('Inbox status unknown')).toBeVisible();
   });
 
   const evidencePath = (id:string) => 'burimunsi/payments/'+id+'/sms-evidence';

@@ -1,4 +1,4 @@
-import {useCallback} from 'react';
+import {useCallback,useState} from 'react';
 import {Link} from 'react-router';
 import {z} from 'zod';
 import {useSession} from '../../session/SessionProvider';
@@ -6,6 +6,8 @@ import {hasScopedAdminAuthority} from '../../session/ownerIdentity';
 import {canDisplaySessionRecords, canReadSmsEvidence} from '../../session/sessionContext';
 import {Button, Card, EmptyState, ErrorState, LoadingState, PageHeader} from '../../ui';
 import {BuriMunsiPaymentRows, buriMunsiPayment, buriMunsiPaymentsPath, buriMunsiSmsPath} from '../operations/BuriMunsiPayments';
+import {paymentTime} from '../operations/canonicalPaymentAnalysis';
+import {inboxReadClock,useInboxFreshness} from '../operations/inboxFreshness';
 import {receiverPage} from '../operations/receiverSmsContract';
 import {useOperationRead} from '../operations/useOperationRead';
 import './overview.css';
@@ -34,17 +36,11 @@ export function BuriMunsiHome() {
   const load = useCallback(async (signal: AbortSignal) => snapshot.parse(await request('burimunsi/home', {signal})), [request]);
   const {result, retry} = useOperationRead(`${epoch}:burimunsi-home`, visible, load);
   const collection = visible && user && canReadSmsEvidence(user) && hasScopedAdminAuthority(user) ? user.adminIdentity?.collectionId : undefined;
-  const loadSmsHealth = useCallback(async (signal: AbortSignal) => {
-    if (!collection) throw new Error('SMS scope is unavailable.');
-    const query = new URLSearchParams({collectionId: collection, limit: '1', includeProcessing: '1'});
-    return receiverPage(await request(`momo/observations?${query}`, {signal}), collection).inboxCheck;
-  }, [collection, request]);
-  const {result: health, retry: retryHealth} = useOperationRead(`${epoch}:burimunsi-sms-health:${collection}`, !!collection, loadSmsHealth);
-  const smsHealth = health?.status === 'success' ? smsHealthLabels[health.value.state] :
-    health?.status === 'error' ? 'Status unavailable' : 'Checking sync';
-  return <><PageHeader title="Home" actions={<Button icon="refresh" aria-label="Refresh Home" onClick={() => {retry(); if (collection) retryHealth();}} />} />
-    {collection && <p className="operations-note"><Link className="operations-link" to={buriMunsiSmsPath}>M-Money SMS</Link>
-      {' · '}<span role="status">{smsHealth}</span></p>}
+  const authority=JSON.stringify([epoch,user?.id,user?.sessionId,user?.role,collection,[...(user?.permissions ?? [])].sort()]);
+  const showInbox=!!collection && session.status==='authenticated';
+  const [inboxRefresh,setInboxRefresh]=useState(0);
+  return <><PageHeader title="Home" actions={<Button icon="refresh" aria-label="Refresh Home" onClick={()=>{retry();setInboxRefresh(value=>value+1);}} />} />
+    {showInbox && <HomeInboxStatus key={authority} collection={collection} refresh={inboxRefresh} />}
     {!visible ? <ErrorState title="Access unavailable" message="Your account cannot view the group snapshot." /> : !result ? <LoadingState label="Loading Home" /> :
       result.status === 'error' ? <ErrorState message={result.message} onRetry={retry} /> : <>
         <section className="overview-summary" aria-label="Group snapshot">
@@ -61,4 +57,22 @@ export function BuriMunsiHome() {
         </Card>}
       </>}
   </>;
+}
+
+function HomeInboxStatus({collection,refresh}: {collection:string;refresh:number}) {
+  const {request}=useSession();
+  const load=useCallback(async(signal:AbortSignal)=>{
+    const query=new URLSearchParams({collectionId:collection,limit:'1',includeProcessing:'1'});
+    const started=inboxReadClock();
+    const {inboxCheck:check,asOf}=receiverPage(await request(`momo/observations?${query}`,{signal}),collection);
+    return {check,asOf,started};
+  },[collection,request]);
+  const {result}=useOperationRead(`burimunsi-inbox-health:${refresh}`,true,load);
+  const sample=result?.status==='success' ? result.value : null;
+  const {fresh,lastVerified}=useInboxFreshness(sample);
+  const label=sample?.check.state==='verified' && !fresh ? 'Last inbox check is out of date' :
+    sample ? smsHealthLabels[sample.check.state] : result?.status==='error' ? 'Inbox status unavailable' : 'Checking sync';
+  return <p className="operations-note"><Link className="operations-link" to={buriMunsiSmsPath}>M-Money SMS</Link>
+    {' · '}<span role="status"><span>{label}</span>{lastVerified && <>{' · Last verified: '}<time dateTime={lastVerified}>{paymentTime(lastVerified)} Kigali</time></>}</span>
+  </p>;
 }
