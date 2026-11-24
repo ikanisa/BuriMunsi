@@ -7,7 +7,10 @@ SET LOCAL statement_timeout='30s';
 DO $preflight$
 BEGIN
  PERFORM private._collect_fence_require_operator();
- IF NOT EXISTS (SELECT 1 FROM private.collect_fence_control WHERE singleton AND mode='fenced') THEN
+ PERFORM pg_advisory_xact_lock(7346371,1);
+ PERFORM pg_advisory_xact_lock(7346371,2);
+ PERFORM 1 FROM private.collect_fence_control WHERE singleton AND mode='fenced' FOR UPDATE;
+ IF NOT FOUND THEN
   RAISE EXCEPTION 'burimunsi_read_admission_requires_fence';
  END IF;
  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE oid='private.collect_fence_register(uuid,text,text)'::regprocedure
