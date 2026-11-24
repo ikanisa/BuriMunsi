@@ -11,7 +11,7 @@ import {startPayerFixture} from './fixtures/burimunsi-payer-postgres.mjs';
 import {openFixturePayerWorker} from './fixtures/burimunsi-payer-delivery.mjs';
 import pg from '../node_modules/pg/lib/index.js';
 import {installNativeChain,installHandsetInventory,nativeRuntime,nativeActor,uuid,sha,testProfile} from './fixtures/burimunsi-native-chain.mjs';
-import {assignPayment,readPaymentAnalysisRows,PAYMENT_ANALYSIS_LIMIT} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-payments.js';
+import {assignPayment,readPaymentsHome,readPaymentAnalysisRows,PAYMENT_ANALYSIS_LIMIT} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-payments.js';
 import {lockCollectMutation} from '../../../supabase/functions/_shared/postgres-mutation-lock.js';
 import {body as stripFraming} from './migrations.mjs';
 import {readPaymentSmsEvidence} from '../../../supabase/functions/_shared/domain/admin_burimunsi_observations.js';
@@ -558,6 +558,40 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
  await f.client.query("BEGIN; SET LOCAL ROLE collect_runtime; SET LOCAL burimunsi.collection_id='another-group'");
  assert.equal((await f.client.query('SELECT count(*)::int n FROM burimunsi.raw_sms')).rows[0].n,0);
  await f.client.query('ROLLBACK');
+ await t.test('Home opt-in reads exact recorded outgoing principal only and never claims wallet balance',async()=>{
+  const run=runtime.run('http_collect',{readOnly:true}),asOf=new Date().toISOString();
+  const lookup=(tx,id=group)=>readPaymentsHome(tx,id,asOf,{showSms:false},{includeSavings:true});
+  const warm=await run(tx=>lookup(tx)); // Own outgoing plus its duplicate source count once.
+  assert.equal(warm.recordedOutgoingRwf,250);
+  assert.ok(warm.recentPayments.every(row=>row.sourceId===null));
+  const plain=await run(tx=>readPaymentsHome(tx,group,asOf,{showSms:false}));
+  const {recordedOutgoingRwf,...same}=warm;
+  assert.deepEqual(same,plain);
+  const before=(await f.client.query('SELECT count(*) AS n FROM app.ledger_entries')).rows[0];
+  const insert=(db,id,groupId,amount)=>db.query(
+   `INSERT INTO burimunsi.payments(id,collection_id,receiving_account_id,provider,direction,amount_rwf)
+     VALUES($1,$2,'wallet','mtn_momo','outgoing',$3::bigint)`,[id,groupId,amount]);
+  const peer=new pg.Client({host:f.cluster.socket,port:f.cluster.port,database:'postgres',user:f.cluster.initialUser});
+  await peer.connect();
+  try{
+   await peer.query('SET ROLE postgres');
+   const other='home-savings-foreign';
+   await peer.query("INSERT INTO private.burimunsi_scopes VALUES($1,'wallet',NULL)",[other]);
+   await insert(peer,'home-savings-foreign-payment',other,'75');
+   const outside=await run(tx=>lookup(tx,other));assert.equal(outside.paymentCount,0);assert.equal(outside.recordedOutgoingRwf,null);
+   await run(async tx=>{
+    const old=await lookup(tx);
+    await insert(peer,'home-savings-overflow',group,'9007199254740991');
+    assert.deepEqual(await lookup(tx),old); // Same snapshot as Home counts and recent.
+   });
+   const overflow=await run(tx=>lookup(tx));
+   assert.equal(overflow.paymentCount,warm.paymentCount+1);
+   assert.equal(overflow.recordedOutgoingRwf,null);
+   await peer.query("DELETE FROM burimunsi.payments WHERE id IN ('home-savings-overflow','home-savings-foreign-payment')");
+   await peer.query('DELETE FROM private.burimunsi_scopes WHERE collection_id=$1',[other]);
+  } finally {await peer.end();}
+  assert.deepEqual((await f.client.query('SELECT count(*) AS n FROM app.ledger_entries')).rows[0],before);
+ });
  await t.test('scoped analysis SQL masks SMS and bounds scans before matching, preserving each exact integer',async()=>{
   const foreign='analysis-other-group';
   await f.client.query("INSERT INTO private.burimunsi_scopes VALUES($1,'wallet',NULL)",[foreign]);

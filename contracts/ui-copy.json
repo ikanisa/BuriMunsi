@@ -2855,6 +2855,46 @@
       "key": "ui_payment_action_checking",
       "en": "The previous action is being checked.",
       "rw": "Igikorwa cyabanje kirimo kugenzurwa."
+    },
+    {
+      "key": "ui_home_lifetime_contributions",
+      "en": "Lifetime member contributions",
+      "rw": "Imisanzu yose abanyamuryango batanze"
+    },
+    {
+      "key": "ui_home_outgoing_total",
+      "en": "Total outgoing payments",
+      "rw": "Igiteranyo cy’amafaranga yishyuwe"
+    },
+    {
+      "key": "ui_home_wallet_last_sms",
+      "en": "MoMo balance · last SMS",
+      "rw": "Amafaranga asigaye kuri MoMo · SMS ya nyuma"
+    },
+    {
+      "key": "ui_home_savings_unavailable",
+      "en": "Savings figures unavailable.",
+      "rw": "Imibare y’ubwizigame ntiboneka."
+    },
+    {
+      "key": "ui_home_savings_mismatch",
+      "en": "Contributions less outgoing payments differ from the last MoMo balance.",
+      "rw": "Imisanzu ukuyemo amafaranga yishyuwe ntihwanye n’amafaranga asigaye kuri MoMo nk’uko SMS ya nyuma ibigaragaza."
+    },
+    {
+      "key": "ui_home_wallet_check_unavailable",
+      "en": "Reconciliation unavailable from the verified records.",
+      "rw": "Amakuru yemejwe ntahagije kugira ngo iyi mibare igereranywe."
+    },
+    {
+      "key": "ui_home_recorded_outgoing",
+      "en": "Recorded outgoing payments",
+      "rw": "Amafaranga yishyuwe yanditswe"
+    },
+    {
+      "key": "ui_home_recorded_outgoing_only",
+      "en": "Outgoing shows recorded payments only. Reconciliation is unavailable.",
+      "rw": "Hagaragazwa gusa amafaranga yishyuwe yanditswe. Kugereranya imibare ntibishoboka."
     }
   ]
 }

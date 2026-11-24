@@ -574,4 +574,12 @@ internal val UiStringIds:Map<String,Int> = mapOf(
     "Recipient" to R.string.ui_payment_recipient,
     "This payment is unavailable for allocation." to R.string.ui_payment_allocation_unavailable,
     "The previous action is being checked." to R.string.ui_payment_action_checking,
+    "Lifetime member contributions" to R.string.ui_home_lifetime_contributions,
+    "Total outgoing payments" to R.string.ui_home_outgoing_total,
+    "MoMo balance · last SMS" to R.string.ui_home_wallet_last_sms,
+    "Savings figures unavailable." to R.string.ui_home_savings_unavailable,
+    "Contributions less outgoing payments differ from the last MoMo balance." to R.string.ui_home_savings_mismatch,
+    "Reconciliation unavailable from the verified records." to R.string.ui_home_wallet_check_unavailable,
+    "Recorded outgoing payments" to R.string.ui_home_recorded_outgoing,
+    "Outgoing shows recorded payments only. Reconciliation is unavailable." to R.string.ui_home_recorded_outgoing_only,
 )

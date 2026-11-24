@@ -234,6 +234,7 @@
     "logout",
     "passcode",
     "home",
+    "homeSavings",
     "payment",
     "member",
     "rawSms",

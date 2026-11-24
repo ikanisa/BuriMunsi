@@ -65,6 +65,7 @@ private class Scenario(private val role: String = "admin") {
       if (effect in setOf("reversed","corrected")) it.put("financialState",effect)
      }.toString()
    }
+   r.path.endsWith("/home?include=savings")->throw ApiFailure("contract_query",400)
    else->{recordReads++;if(recordFailure)throw ApiFailure("connection_unavailable",0)
     when {
      r.path.endsWith("/home")->JSONObject().put("paymentCount",1).put("memberCount",1).put("unallocatedCount",1)

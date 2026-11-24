@@ -279,7 +279,32 @@ class NativeUiContractTest {
         button("Apply").performClick();ui.runOnIdle{check(c.filterCalls==1&&c.state.filter=="unallocated"&&c.state.sheet==null){"Expected Unallocated applied once; actual sheet=${c.state.sheet}, filter=${c.state.filter}, applies=${c.filterCalls}"}}
     }
     @Test fun overviewKeepsReportedUnallocatedCountAndAllPaymentsAction(){
-        val c=FakeController(Route.HOME);c.state=c.state.copy(home=c.state.home!!.copy(unallocatedCount=1));show(c)
+        val c=FakeController(Route.HOME,Role.STAFF)
+        val initial=c.state.home!!.copy(unallocatedCount=1)
+        fun useSavings(savings:HomeSavings?){c.state=c.state.copy(home=initial.copy(savings=savings))}
+        val reconciled=HomeSavings(lifetimeContributionsRwf=10000,outgoingPaymentsRwf=2500,
+            latestWalletBalanceRwf=7500,reconciliationStatus="reconciled")
+        useSavings(reconciled)
+        show(c)
+        ui.onNodeWithContentDescription("Lifetime member contributions · 10,000 RWF").assertIsDisplayed()
+        ui.onNodeWithContentDescription("Total outgoing payments · 2,500 RWF").assertIsDisplayed()
+        ui.onNodeWithContentDescription("MoMo balance · last SMS · 7,500 RWF").assertIsDisplayed()
+        ui.onNodeWithText("Lifetime member contributions").assertDoesNotExist()
+        ui.onNodeWithText("Total outgoing payments").assertDoesNotExist()
+        ui.runOnIdle{useSavings(reconciled.copy(latestWalletBalanceRwf=7413,reconciliationStatus="mismatch"))}
+        ui.onNodeWithContentDescription("MoMo balance · last SMS · 7,413 RWF").assertIsDisplayed()
+        ui.onNodeWithContentDescription("MoMo balance · last SMS · 7,500 RWF").assertDoesNotExist()
+        ui.onNodeWithText("Contributions less outgoing payments differ from the last MoMo balance.").assertExists()
+        ui.runOnIdle{useSavings(reconciled.copy(lifetimeContributionsRwf=null,latestWalletBalanceRwf=null,reconciliationStatus="unavailable"))}
+        ui.onNodeWithContentDescription("Lifetime member contributions · Unavailable").assertIsDisplayed()
+        ui.onNodeWithContentDescription("MoMo balance · last SMS · Unavailable").assertIsDisplayed()
+        ui.onNodeWithContentDescription("Recorded outgoing payments · 2,500 RWF").assertIsDisplayed()
+        ui.onNodeWithContentDescription("Total outgoing payments · 2,500 RWF").assertDoesNotExist()
+        ui.onNodeWithText("Outgoing shows recorded payments only. Reconciliation is unavailable.").assertExists()
+        ui.runOnIdle{useSavings(null)}
+        ui.onNodeWithContentDescription("Lifetime member contributions · Unavailable").assertIsDisplayed()
+        ui.onNodeWithContentDescription("Total outgoing payments · Unavailable").assertIsDisplayed()
+        ui.onNodeWithContentDescription("MoMo balance · last SMS · Unavailable").assertIsDisplayed()
         val list=ui.onNode(hasScrollToIndexAction())
         list.performScrollToNode(hasText("1 unallocated"))
         ui.onNodeWithText("1 unallocated").assertExists()

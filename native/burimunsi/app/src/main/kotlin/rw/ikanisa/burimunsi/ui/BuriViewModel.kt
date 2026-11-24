@@ -142,6 +142,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     private var visibleExpired by mutableStateOf(false)
     private var resumeQueued=false
     private var resumeMayReuseRecords=false
+    private var profileOnlyResume=false
     private var restoreRetryPending=false
     private var sessionRetryPending=false
     private var lastRestoreAttemptAt=0L
@@ -353,11 +354,13 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     private fun drainResumeCheck(){
         if(!foreground||!resumeQueued||state.busy)return
         val allowRecent=resumeMayReuseRecords
+        val profileOnly=profileOnlyResume
+        profileOnlyResume=false
         resumeQueued=false
         resumeMayReuseRecords=false
         if(repository==null){needsSessionCheck=false;return}
         if(state.operator==null&&restoreRetryPending)retrySavedSession()
-        else if(BuildConfig.IS_GATEWAY||state.operator!=null)refreshSession(allowRecentVisible=allowRecent) else needsSessionCheck=false
+        else if(BuildConfig.IS_GATEWAY||state.operator!=null)refreshSession(allowRecentVisible=allowRecent,allowBundledHome=!profileOnly) else needsSessionCheck=false
     }
     /** Evaluated while resumed, also synchronously before accepting any user action. */
     fun checkVisibleFreshness(){
@@ -448,6 +451,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     }
     private fun key(route:Route=state.route,id:String?=state.routeId)=route.name+":"+(id?:"")
     private fun clearViews(){
+        profileOnlyResume=false
         changedRecordsPending=false;changedReadFailures=0;changedReadRetry?.cancel();changedReadRetry=null
         pendingFreshDraw=null
         queuedNavigation=null;receiverStatus.invalidate();receiverQueue.invalidate()
@@ -602,7 +606,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             try{
                 val home=restored.home
                 if(home!=null&&SnapshotFreshness.reusable(restored.homeSavedAt,clock())){
-                    sessionBootstrap.withCurrent(grant){ showHome(home,false,restored.homeSavedAt) }
+                    showBundledHome(grant,home,restored.homeSavedAt)
                     receiverStatus.startReceiver()
                 }else loadSessionRecords(grant)
             }catch(e:ApiFailure){
@@ -836,7 +840,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         sessionBootstrap.withCurrent(grant){state=UiState(operator=grant.operator,route=Route.HOME,busy=true,pending=state.pending)}
         val home=grant.home
         if(home!=null&&SnapshotFreshness.reusable(grant.homeSavedAt,clock())){
-            sessionBootstrap.withCurrent(grant){showHome(home,false,grant.homeSavedAt)}
+            showBundledHome(grant,home,grant.homeSavedAt)
             receiverStatus.startReceiver()
         }else loadSessionRecords(grant)
         visibleExpired=false;if(!resumeQueued)needsSessionCheck=false
@@ -902,7 +906,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         }
     }
 
-    fun refreshSession(quiet:Boolean=false,allowRecentVisible:Boolean=false){
+    fun refreshSession(quiet:Boolean=false,allowRecentVisible:Boolean=false,allowBundledHome:Boolean=true){
         clearRawDisclosure()
         if(!quiet)needsSessionCheck=true
         if(state.busy){resumeQueued=true;return}
@@ -921,7 +925,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                 val passive=quiet&&state.sheet==null&&!state.draftDirty&&!state.pending&&
                     !state.offline&&!state.readbackRequired&&screenGate==ScreenGate.OPEN&&!visibleRecordsExpired(clock())
                 val yieldHome=loadHome&&passive
-                val grant=io{if(loadHome&&!yieldHome&&!reusable)sessionBootstrap.refreshHome()else sessionBootstrap.refresh()}
+                val grant=io{if(allowBundledHome&&loadHome&&!yieldHome&&!reusable)sessionBootstrap.refreshHome()else sessionBootstrap.refresh()}
                 val current=grant.operator
                 val sameAccess=previous.hasSameAccess(current)
                 if(!sameAccess){
@@ -949,7 +953,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                         return@work
                     }
                 }else if(state.route==Route.HOME&&home!=null&&SnapshotFreshness.reusable(grant.homeSavedAt,clock())){
-                    sessionBootstrap.withCurrent(grant){showHome(home,false,grant.homeSavedAt)}
+                    showBundledHome(grant,home,grant.homeSavedAt)
                 }else if(recent&&recentPassiveRecords())refreshRememberedReceiverStatus()
                 else refreshNow()
                 if(state.sheet!=null){
@@ -1141,6 +1145,58 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     private fun refreshSettingsDiagnostics() {
         receiverStatus.refreshVisible(Route.SETTINGS, publish = ::showReceiverPanelStatus)
         receiverStatus.refreshHealth()
+    }
+
+    /** Bundled session Home remains the fast initial draw with the old schema.
+     * Optional metrics load separately and may not own a later route/session. */
+    private fun showBundledHome(grant: NativeSessionBootstrap.Grant, base: Home, savedAt: Long?) {
+        sessionBootstrap.withCurrent(grant) { showHome(base,false,savedAt) }
+        fun stillShowingBase() = foreground && !state.offline && SnapshotFreshness.reusable(savedAt,clock()) &&
+            state.route == Route.HOME && state.sheet == null &&
+            state.home === base && state.operator === grant.operator && hasAccess(Capability.READ) &&
+            (queuedNavigation == null || queuedNavigation?.first == Route.HOME)
+        if (!stillShowingBase()) return
+        val records = repo()
+        viewModelScope.launch {
+            try {
+                val enhanced = io { records.readHomeEnhancement(grant.operator) } ?: return@launch
+                if (!stillShowingBase()) return@launch
+                sessionBootstrap.withCurrent(grant) {
+                    // Do not change shared cache/repository provenance or extend base freshness.
+                    if (stillShowingBase()) state = state.copy(home = enhanced)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: ApiFailure) {
+                // callOwned alone decides whether the 401 proves revocation.
+                // Only redact the still-displayed owner after its local session was cleared.
+                if (error.status == 401 && !error.uncertain && state.operator === grant.operator && records.current() == null) {
+                    generation++
+                    actionJob?.cancel()
+                    restoreRetryPending=false;sessionRetryPending=false;needsSessionCheck=false;resumeQueued=false
+                    operation=UiOperation.NONE;operationLabel=null;quietRefreshInFlight=false
+                    clearViews()
+                    state=UiState(error="Sign in again.",pending=state.pending)
+                } else if (error.status == 403 && error.code == "access_denied" && !error.uncertain &&
+                    state.operator === grant.operator && state.route == Route.HOME && state.home === base) {
+                    // The profile still exists, but the later authenticated records read was denied.
+                    // Hide the old Home and discard its owner's cache before ordinary profile validation.
+                    pendingFreshDraw=null
+                    views.invalidateRecords()
+                    state=state.copy(home=null,gateway=null,savedAt=null,readbackRequired=true)
+                    visibleExpired=true;needsSessionCheck=true
+                    val discarded=try { io { records.discardDisplayedRecordsFor(grant.operator) };true }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { false }
+                    if(discarded && state.operator===grant.operator) {
+                        profileOnlyResume=true;resumeMayReuseRecords=false;resumeQueued=true
+                        drainResumeCheck()
+                    }
+                }
+            } catch (_: Exception) {
+                // An optional read must not hide the confirmed base Home or invent values.
+            }
+        }
     }
 
     private fun showHome(home:Home,cached:Boolean,savedAt:Long?) {

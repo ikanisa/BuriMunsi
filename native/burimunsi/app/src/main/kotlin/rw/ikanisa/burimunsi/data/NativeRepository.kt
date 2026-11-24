@@ -95,6 +95,8 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
 
     fun home(): Home = homeSnapshot().value
     internal fun homeSnapshot(): RecordSnapshot<Home> = records.home()
+    internal fun readHomeEnhancement(owner: Operator): Home? = records.readHomeEnhancement(owner)
+    internal fun discardDisplayedRecordsFor(owner: Operator) = withCurrentProfile(owner){_,_->cacheStore.clear(verify=true)}
 
     /** A quiet Home read can finish after the screen has left. No cache or
      * shared read provenance is written until the controller accepts it. */

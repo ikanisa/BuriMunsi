@@ -109,6 +109,45 @@ test('strict native Home, member and member-payment responses carry a posted SMS
  tx.canonicalHome=()=>assert.fail('revoked actor reached bundled Home');
  assert.equal((await fn(get('/session?include=home'))).status,401);
 });
+test('separate standalone Home savings selector preserves legacy schemas and rechecks scope',async()=>{
+ const {data,tx}=records(),installation='22222222-2222-4222-8222-222222222222',
+  requestId='11111111-1111-4111-8111-111111111111',origin='https://native.example.test';
+ data.actor={...data.actor,role:'staff',sessionId:requestId,installationId:installation,name:'Synthetic operator'};
+ let authenticated=0,reads=0;
+ tx.loadBinding=()=>assert.fail('ordinary Savings attempted an SMS binding lookup');
+ tx.canonicalHome=async(groupId,{includeSavings})=>{
+  assert.equal(groupId,'group-1');reads++;
+  return {paymentCount:1,memberCount:1,unallocatedCount:1,asOf:'2026-11-06T10:00:00Z',recentPayments:[],
+   ...(includeSavings?{recordedOutgoingRwf:250}:{}),unrelated:'never-return'};
+ };
+ const svc=new RecordsService({store:{withReadSnapshot:fn=>fn(tx)},groupId:'group-1',
+  cursor:new ScopedCursor(new Uint8Array(32).fill(8)),clock:()=>CLOCK,paymentsOnly:true});
+ const noop=async()=>({});
+ const run=createNativeHandler({auth:{login:noop,authenticate:async()=>{authenticated++;return data.actor;},logout:noop,
+   changePasscode:noop,manageStaff:noop},records:svc,contributions:{allocate:noop},members:{enroll:noop,setActive:noop},
+   gateway:{status:noop,replace:noop},strictContract:true,groupId:'group-1',paymentsOnly:true,origin,networkBucket:noop});
+ const get=path=>new Request(origin+'/v1/burimunsi'+path,{headers:{
+  'x-burimunsi-installation':installation,'x-burimunsi-contract':'burimunsi.native.v1','x-burimunsi-request':requestId,
+  'x-burimunsi-generation':'1',authorization:'Bearer '+'a'.repeat(64)}});
+ const ordinary=await run(get('/home'));assert.equal(ordinary.status,200);
+ const plain=(await ordinary.json()).data;
+ assert.equal(Object.hasOwn(plain,'savings'),false);
+ const added=await run(get('/home?include=savings'));assert.equal(added.status,200);
+ assert.equal(added.headers.get('cache-control'),'no-store');
+ assert.deepEqual((await added.json()).data,{...plain,savings:{lifetimeContributionsRwf:null,
+  outgoingPaymentsRwf:250,latestWalletBalanceRwf:null,reconciliationStatus:'unavailable'}});
+ const session=await run(get('/session?include=home'));assert.equal(session.status,200);
+ assert.deepEqual((await session.json()).data.home,plain);
+ const before=[authenticated,reads];
+ for(const path of ['/home?include=savings&include=savings','/home?include=foo','/home?include=savings&q=foo','/session?include=savings']){
+  const denied=await run(get(path));assert.equal(denied.status,400,path);
+  assert.ok(['contract_query','contract_query_duplicate'].includes((await denied.json()).error.code));
+ }
+ assert.deepEqual([authenticated,reads],before);
+ tx.reloadActor=async()=>null;
+ assert.equal((await run(get('/home?include=savings'))).status,401);
+ assert.equal(reads,before[1]);
+});
 test('verified PIN record selector still requires a matching actor in the records snapshot',async()=>{
  const {svc,data,tx}=records(),installation='22222222-2222-4222-8222-222222222222',requestId='11111111-1111-4111-8111-111111111111';
  data.actor={...data.actor,sessionId:requestId,installationId:installation,name:'Synthetic operator'};

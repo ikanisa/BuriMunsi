@@ -64,20 +64,26 @@ export class RecordsService {
     },true);
   }
 
-  home(actor) {
-    return this.within(actor,'records.read',tx=>this.#home(tx));
+  home(actor,{includeSavings=false}={}) {
+    requireThat(!includeSavings||this.paymentsOnly,'invalid_query',400);
+    return this.within(actor,'records.read',tx=>this.#home(tx,includeSavings));
   }
   sessionHome(actor) {
     return this.within(actor,'records.read',async(tx,current)=>({current,home:await this.#home(tx)}));
   }
-  async #home(tx) {
+  async #home(tx,includeSavings=false) {
     requirePort(tx,['canonicalHome']);
-    const value=await tx.canonicalHome(this.groupId);
+    const value=await tx.canonicalHome(this.groupId,{includeSavings});
     if(this.paymentsOnly){
       requireThat(value&&[value.paymentCount,value.memberCount,value.unallocatedCount].every(n=>Number.isSafeInteger(n)&&n>=0)&&
         typeof value.asOf==='string','invalid_snapshot',503);
-      return {paymentCount:value.paymentCount,memberCount:value.memberCount,unallocatedCount:value.unallocatedCount,
+      const home={paymentCount:value.paymentCount,memberCount:value.memberCount,unallocatedCount:value.unallocatedCount,
         asOf:value.asOf,recentPayments:this.projectRows(value.recentPayments,'payments')};
+      if(!includeSavings)return home;
+      requireThat(value.recordedOutgoingRwf===null||Number.isSafeInteger(value.recordedOutgoingRwf)&&value.recordedOutgoingRwf>=0,
+        'invalid_snapshot',503);
+      return {...home,savings:{lifetimeContributionsRwf:null,outgoingPaymentsRwf:value.recordedOutgoingRwf,
+        latestWalletBalanceRwf:null,reconciliationStatus:'unavailable'}};
     }
     requireThat(value && Number.isSafeInteger(value.groupBalanceRwf)&&Number.isSafeInteger(value.todayRwf)&&Number.isSafeInteger(value.memberCount)&&Number.isSafeInteger(value.unallocatedCount)&&typeof value.asOf==='string','invalid_snapshot',503);
     if(value.unallocatedAmountRwf!==undefined)requireThat(Number.isSafeInteger(value.unallocatedAmountRwf),'invalid_snapshot',503);

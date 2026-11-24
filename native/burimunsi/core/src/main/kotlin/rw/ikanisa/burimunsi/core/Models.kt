@@ -21,7 +21,13 @@ data class RawSms(val id: String, val sender: String, val at: String, val body: 
 data class StaffAccount(val id: String, val name: String, val phone: String, val active: Boolean, val version: Long, val capabilities: Set<String>)
 data class AuditRow(val id: String, val action: String, val at: String)
 data class Page<T>(val items: List<T>, val nextCursor: String?, val totalCount: Int, val revision: String, val asOf: String)
-data class Home(val paymentCount: Int?, val memberCount: Int, val unallocatedCount: Int, val recent: List<Payment>, val asOf: String)
+data class Home(val paymentCount: Int?, val memberCount: Int, val unallocatedCount: Int, val recent: List<Payment>, val asOf: String, val savings: HomeSavings? = null)
+data class HomeSavings(
+    val lifetimeContributionsRwf: Long?,
+    val outgoingPaymentsRwf: Long?,
+    val latestWalletBalanceRwf: Long?,
+    val reconciliationStatus: String,
+)
 data class GatewayStatus(val authorized: Boolean, val captureEnabled: Boolean, val subscriptionId: Int?, val pending: Int, val oldest: String?, val lastCapture: String?, val lastUpload: String?, val problem: String?,
     /** Public receiving code from this installation's scoped pairing snapshot, if supplied. */
     val pairedReceivingCode:String?=null,

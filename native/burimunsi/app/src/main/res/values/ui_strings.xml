@@ -570,4 +570,12 @@
     <string name="ui_payment_recipient">Recipient</string>
     <string name="ui_payment_allocation_unavailable">This payment is unavailable for allocation.</string>
     <string name="ui_payment_action_checking">The previous action is being checked.</string>
+    <string name="ui_home_lifetime_contributions">Lifetime member contributions</string>
+    <string name="ui_home_outgoing_total">Total outgoing payments</string>
+    <string name="ui_home_wallet_last_sms">MoMo balance · last SMS</string>
+    <string name="ui_home_savings_unavailable">Savings figures unavailable.</string>
+    <string name="ui_home_savings_mismatch">Contributions less outgoing payments differ from the last MoMo balance.</string>
+    <string name="ui_home_wallet_check_unavailable">Reconciliation unavailable from the verified records.</string>
+    <string name="ui_home_recorded_outgoing">Recorded outgoing payments</string>
+    <string name="ui_home_recorded_outgoing_only">Outgoing shows recorded payments only. Reconciliation is unavailable.</string>
 </resources>

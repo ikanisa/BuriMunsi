@@ -1119,6 +1119,143 @@
       ],
       "additionalProperties": false
     },
+    "home.savings": {
+      "type": "object",
+      "properties": {
+        "lifetimeContributionsRwf": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "x-code": "CONTRACT_AMOUNT"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outgoingPaymentsRwf": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "x-code": "CONTRACT_AMOUNT"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "latestWalletBalanceRwf": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "x-code": "CONTRACT_AMOUNT"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reconciliationStatus": {
+          "type": "string",
+          "enum": [
+            "reconciled",
+            "mismatch",
+            "unavailable"
+          ]
+        }
+      },
+      "required": [
+        "lifetimeContributionsRwf",
+        "outgoingPaymentsRwf",
+        "latestWalletBalanceRwf",
+        "reconciliationStatus"
+      ],
+      "additionalProperties": false
+    },
+    "homeSavings.data": {
+      "type": "object",
+      "properties": {
+        "memberCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "unallocatedCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "asOf": {
+          "type": "string",
+          "minLength": 20,
+          "maxLength": 40,
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})(?![\\s\\S])",
+          "format": "date-time"
+        },
+        "recentPayments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/payment"
+          },
+          "minItems": 0,
+          "maxItems": 100
+        },
+        "paymentCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "savings": {
+          "$ref": "#/$defs/home.savings"
+        }
+      },
+      "required": [
+        "memberCount",
+        "unallocatedCount",
+        "asOf",
+        "recentPayments",
+        "paymentCount",
+        "savings"
+      ],
+      "additionalProperties": false
+    },
+    "homeSavings.request": {
+      "type": "null"
+    },
+    "homeSavings.response": {
+      "type": "object",
+      "properties": {
+        "contractVersion": {
+          "type": "string",
+          "const": "burimunsi.native.v1",
+          "x-code": "CONTRACT_VERSION"
+        },
+        "ok": {
+          "type": "boolean",
+          "const": true,
+          "x-code": "CONTRACT_VALUE"
+        },
+        "binding": {
+          "$ref": "#/$defs/binding"
+        },
+        "data": {
+          "$ref": "#/$defs/homeSavings.data"
+        }
+      },
+      "required": [
+        "contractVersion",
+        "ok",
+        "binding",
+        "data"
+      ],
+      "additionalProperties": false
+    },
     "payment.data": {
       "$ref": "#/$defs/payment"
     },
@@ -2855,8 +2992,24 @@
     },
     "home.query": {
       "type": "object",
-      "properties": {},
+      "properties": {
+        "include": {
+          "type": "string",
+          "const": "savings"
+        }
+      },
       "required": [],
+      "additionalProperties": false
+    },
+    "homeSavings.query": {
+      "type": "object",
+      "properties": {
+        "include": {
+          "type": "string",
+          "const": "savings"
+        }
+      },
+      "required": ["include"],
       "additionalProperties": false
     },
     "payment.query": {

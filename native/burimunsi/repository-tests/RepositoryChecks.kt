@@ -37,8 +37,12 @@ fun main(){
   .put("state",state).put("operation","burimunsi.allocate").put("allocationState","allocated").toString() else JSONObject()
   .put("protocol","burimunsi.operation-recovery.v1").put("requestId",id).put("state",state)
   .put("originDigest",req.recoveryOrigin).put("groupId","group-1").put("actorId","admin-1").put("installationId","installation-1").toString()
+ val enhancedPath="/v1/burimunsi/home?include=savings"
+ fun enhancedHome(savings:JSONObject)=JSONObject(home()).put("savings",savings).toString()
+ fun savings()=JSONObject().put("lifetimeContributionsRwf",12000L).put("outgoingPaymentsRwf",0L)
+  .put("latestWalletBalanceRwf",JSONObject.NULL).put("reconciliationStatus","unavailable")
  val api=ApiClient()
- api.handler={r->when{r.path.endsWith("/session/login")||r.path.endsWith("/session")->session();r.path.endsWith("/logout")->signedOut();r.path.endsWith("/home")->home();r.path.endsWith("/payments/tx-1")->pay();r.path.contains("/sms?")||r.path.contains("/staff?")->emptyPage();else->"{}"}}
+ api.handler={r->when{r.path==enhancedPath->throw ApiFailure("contract_query",400);r.path.endsWith("/session/login")||r.path.endsWith("/session")->session();r.path.endsWith("/logout")->signedOut();r.path.endsWith("/home")->home();r.path.endsWith("/payments/tx-1")->pay();r.path.contains("/sms?")||r.path.contains("/staff?")->emptyPage();else->"{}"}}
  val happy=api.handler
  SecureStore.reset();val repo=NativeRepository(Context(),api,"group-1")
  ck("empty store restores no session",repo.restore()==null)
@@ -55,6 +59,31 @@ fun main(){
  val count=api.calls.size;runCatching{repo.login("bad","2468")};ck("invalid login does not dispatch or replace operator",api.calls.size==count&&repo.current()?.id=="admin-1")
  ck("home reads the payment count",repo.home().paymentCount==17)
  ck("live read is not cached provenance",!repo.lastReadFromCache&&repo.lastReadSavedAt!=null)
+ ck("only explicit legacy selector rejection negotiates the original Home",api.calls.takeLast(2).map{it.path}==
+  listOf(enhancedPath,"/v1/burimunsi/home"))
+ ck("legacy Home never manufactures a savings model",repo.home().savings==null)
+ api.handler={r->if(r.path==enhancedPath)enhancedHome(savings()) else happy(r)}
+ var cursor=api.calls.size
+ ck("negotiated Home retains exact reported zero but leaves absent balance unavailable",
+  repo.home().savings==HomeSavings(12000L,0L,null,"unavailable"))
+ ck("negotiated Home GET keeps the original authenticated owner scope",
+  api.calls.drop(cursor).single().let{it.method=="GET"&&it.path==enhancedPath&&it.token==token&&
+   it.contractContext["groupId"]=="group-1"&&it.contractContext["actorId"]=="admin-1"})
+ api.handler={throw ApiFailure("connection_unavailable",0)}
+ cursor=api.calls.size
+ ck("offline enhanced Home keeps the scoped snapshot and does not try a legacy request",
+  repo.home().savings==HomeSavings(12000L,0L,null,"unavailable")&&repo.lastReadFromCache&&
+   api.calls.drop(cursor).single().path==enhancedPath)
+ api.handler={r->if(r.path==enhancedPath)enhancedHome(savings().put("outgoingPaymentsRwf","0")) else happy(r)}
+ cursor=api.calls.size
+ ck("malformed negotiated Home is refused, without cache or legacy fallback",
+  runCatching{repo.home()}.exceptionOrNull() is ContractFailure&&api.calls.drop(cursor).single().path==enhancedPath)
+ api.handler={r->if(r.path==enhancedPath)throw ApiFailure("forbidden",403) else happy(r)}
+ cursor=api.calls.size
+ ck("negotiated Home denial does not fall back or leak a cached snapshot",
+  (runCatching{repo.home()}.exceptionOrNull() as? ApiFailure)?.status==403&&api.calls.drop(cursor).single().path==enhancedPath)
+ api.handler=happy
+ ck("fresh legacy snapshot replaces enhanced savings, rather than lending it unproven facts",repo.home().savings==null)
  api.handler={throw ApiFailure("connection_unavailable",0)}
  ck("offline home reuses owner-bound cache",repo.home().paymentCount==17&&repo.lastReadFromCache)
  api.handler={emptyPage()}
@@ -63,6 +92,7 @@ fun main(){
  val releaseQuietHome=CountDownLatch(1)
  var quietHomeResponse:Result<NativeRepository.QuietHome>?=null
  api.handler={request->
+  if(request.path==enhancedPath)throw ApiFailure("contract_query",400)
   if(request.path.endsWith("/home")){
    quietHomeStarted.countDown()
    check(releaseQuietHome.await(5,TimeUnit.SECONDS))

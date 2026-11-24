@@ -90,14 +90,7 @@ import rw.ikanisa.burimunsi.core.*
     val t=LocalUiText.current;val home=s.home
     LazyColumn(Modifier.fillMaxSize(),state=routeList(s,m),contentPadding=PaddingValues(20.dp,12.dp,20.dp,22.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
         if(home==null){item{if(s.busy){BuriInlineLoading("Loading records");BuriSkeletonRows()}else Empty(t("No records available"))};return@LazyColumn}
-        item{Column(Modifier.fillMaxWidth(),horizontalAlignment=Alignment.CenterHorizontally){
-            Text(t("Payments"),Modifier.semantics{heading()},style=MaterialTheme.typography.titleSmall,color=BuriTheme.Muted,textAlign=TextAlign.Center)
-            Text(home.paymentCount?.let{money(it.toLong(),t.locale)}?:t("Unavailable"),
-                style=MaterialTheme.typography.displayMedium,textAlign=TextAlign.Center)
-            ExactDisplay.timestamp(home.asOf,t.locale.toLanguageTag())?.let{
-                Text(t("As of %1\$s",it),style=MaterialTheme.typography.bodySmall,color=BuriTheme.Muted,textAlign=TextAlign.Center)
-            }
-        }}
+        item{HomeSavingsOverview(home.savings)}
         item{Row(Modifier.fillMaxWidth().padding(vertical=5.dp),horizontalArrangement=Arrangement.SpaceEvenly){
             RoundAction(R.drawable.ic_activity,t("Open payments"),{m.navigate(Route.PAYMENTS)},!s.busy,52)
             RoundAction(R.drawable.ic_members,t("Open members"),{m.navigate(Route.MEMBERS)},!s.busy,52)
@@ -105,6 +98,10 @@ import rw.ikanisa.burimunsi.core.*
             if(m.allows(Capability.SMS))RoundAction(R.drawable.ic_sms,t("Messages"),{m.navigate(Route.SMS)},!s.busy,52)
         }}
         item{HomeMetrics(home)}
+        ExactDisplay.timestamp(home.asOf,t.locale.toLanguageTag())?.let{
+            item{Text(t("As of %1\$s",it),Modifier.fillMaxWidth(),style=MaterialTheme.typography.bodySmall,
+                color=BuriTheme.Muted,textAlign=TextAlign.Center)}
+        }
         if(home.unallocatedCount>0)item{Row(Modifier.fillMaxWidth().background(BuriTheme.Warn.copy(alpha=.075f),RoundedCornerShape(22.dp)).clickable(enabled=!s.busy){m.openUnallocated()}.padding(horizontal=16.dp,vertical=13.dp),verticalAlignment=Alignment.CenterVertically){
             Glyph(R.drawable.ic_link,null,BuriTheme.Warn,24);Spacer(Modifier.width(12.dp))
             Text(t("%1\$d unallocated",home.unallocatedCount),Modifier.weight(1f),fontSize=18.sp,color=BuriTheme.Warn)

@@ -274,7 +274,13 @@ class WireContract(private val product: String, private val version: String,
                 val unallocated = (snapshot["unallocatedCount"] as Number).toLong()
                 if (recent.size > total || unallocated > total) reject("CONTRACT_STATE")
             }
-            if (operation == "home") home(d)
+            if (operation in setOf("home", "homeSavings")) home(d)
+            if (operation == "homeSavings") {
+                val savings = objectValue(d["savings"])
+                if (savings["reconciliationStatus"] != "unavailable" &&
+                    listOf("lifetimeContributionsRwf", "outgoingPaymentsRwf", "latestWalletBalanceRwf").any { savings[it] == null })
+                    reject("CONTRACT_STATE")
+            }
             if (operation == "session" || operation == "login") {
                 val included = d.containsKey("home")
                 if (included != (expected["includeHome"] == true)) reject("CONTRACT_CONTEXT")
@@ -436,7 +442,9 @@ class WireContract(private val product: String, private val version: String,
         for (entry in routes) {
             if (entry[0] != method) continue
             val match = pattern(entry[1]).matchEntire(logicalPath) ?: continue
-            return entry[2] to if (match.groups.size > 1) match.groups[1]?.value else null
+            val operation = if (entry[2] == "home" && method == "GET" &&
+                runCatching { query("homeSavings", path.substringAfter('?', "")) }.isSuccess) "homeSavings" else entry[2]
+            return operation to if (match.groups.size > 1) match.groups[1]?.value else null
         }
         reject("CONTRACT_OPERATION")
     }

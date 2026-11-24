@@ -26,14 +26,22 @@ export function paymentRecord(row,{showSms=false}={}) {
   };
 }
 
-export async function readPaymentsHome(sql,groupId,asOf,projection) {
+export async function readPaymentsHome(sql,groupId,asOf,projection,{includeSavings=false}={}) {
   const [totals]=await sql.unsafe(`SELECT count(*) AS payments,
     count(*) FILTER (WHERE allocation_state='unallocated') AS unallocated,
     (SELECT count(*) FROM app.memberships WHERE collection_id=$1 AND active=1) AS members
+    ${includeSavings?", (sum(amount_rwf) FILTER (WHERE direction='outgoing'))::text AS outgoing":""}
     FROM burimunsi.payments WHERE collection_id=$1`,[groupId]);
   const rows=await sql.unsafe(display+newest+' LIMIT 3',[groupId]);
-  return {paymentCount:pgInteger(totals.payments),memberCount:pgInteger(totals.members),
+  const home={paymentCount:pgInteger(totals.payments),memberCount:pgInteger(totals.members),
     unallocatedCount:pgInteger(totals.unallocated),recentPayments:rows.map(row=>paymentRecord(row,projection)),asOf};
+  if(!includeSavings)return home;
+  // PostgreSQL sums bigint principal to numeric. Do not round in JS, invent a
+  // zero when no outgoing is recorded, or imply all wallet activity is covered.
+  const outgoing=totals.outgoing;
+  requireThat(outgoing===null||typeof outgoing==='string'&&/^[0-9]{1,38}$/.test(outgoing),'invalid_snapshot',503);
+  const exact=outgoing===null?null:BigInt(outgoing);
+  return {...home,recordedOutgoingRwf:exact===null||exact>BigInt(Number.MAX_SAFE_INTEGER)?null:Number(exact)};
 }
 
 export async function readPayment(sql,groupId,id,projection) {

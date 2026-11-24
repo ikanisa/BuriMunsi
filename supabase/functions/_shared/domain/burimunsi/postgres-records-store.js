@@ -73,8 +73,8 @@ export class PostgresRecordsStore {
             WHERE s.collection_id=$1 AND c.installation_id=$2`,[g,installationId]))[0];
           return r?{id:r.id,groupId:g,installationId:r.installation_id,active:r.enabled&&r.status==='active'&&!r.revoked_at&&pgInteger(r.version)===pgInteger(r.binding_version)}:null;
         },
-        canonicalHome:async g=>{
-          scope(g);return this.paymentsOnly?readPaymentsHome(sql,g,at,projection()):readCanonicalHome(sql,g,at,auto);
+        canonicalHome:async(g,{includeSavings=false}={})=>{
+          scope(g);return this.paymentsOnly?readPaymentsHome(sql,g,at,projection(),{includeSavings}):readCanonicalHome(sql,g,at,auto);
         },
         memberListingRevision:async g=>{
           scope(g);

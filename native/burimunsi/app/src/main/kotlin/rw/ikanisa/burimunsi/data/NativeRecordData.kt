@@ -142,14 +142,17 @@ internal class NativeRecordData(
     private fun records(path:String):String = records(path){value,_->value}
     private fun <T> records(path:String,read:(String,Operator)->T):T = snapshot(path,read=read).value
 
-    private fun <T> snapshot(path:String,firstDisplay:Boolean=false,read:(String,Operator)->T):RecordSnapshot<T> {
+    private fun <T> snapshot(path:String,firstDisplay:Boolean=false,
+        fetch:(SessionWitness)->String={witness->requestOwned(witness,"GET",path)},
+        read:(String,Operator)->T,
+    ):RecordSnapshot<T> {
         val witness=ownedSession()
         val (who,group)=authority.withCurrent(witness){(operator?:throw ApiFailure("session_unavailable",401)) to groupId}
         if(System.currentTimeMillis()>=who.expiresAt)throw ApiFailure("session_unavailable",401)
         val sessionScope=Values.sha256(witness.token)
         val revision=cacheStore.revision()
         try {
-            val value=requestOwned(witness,"GET",path)
+            val value=fetch(witness)
             val verified=authority.withCurrent(witness){
                 val now=System.currentTimeMillis()
                 checkContract(now<who.expiresAt,"session_unavailable")
@@ -216,12 +219,24 @@ internal class NativeRecordData(
         }
     }
 
-    fun home():RecordSnapshot<Home> = snapshot("/home",firstDisplay=true){value,_->decodeHome(JSONObject(value))}
+    fun home():RecordSnapshot<Home> = snapshot("/home",firstDisplay=true,fetch={sessions.requestHome(it)}){value,_->decodeHome(JSONObject(value))}
 
     fun readQuietHome(): JSONObject {
-        val scope = recordReadScope { witness, _ -> sessions.requestUnpublishedHome(witness) }
+        val scope = recordReadScope { witness, _ -> sessions.requestHome(witness) }
         return JSONObject(scope.read(recordReadOwner, "/home"))
     }
+    fun readHomeEnhancement(owner: Operator): Home? {
+        val scope = recordReadScope(expectedOwner=owner) { witness, _ -> sessions.requestHome(witness, allowLegacy = false) }
+        return try {
+            decodeHome(JSONObject(scope.read(recordReadOwner, HOME_SAVINGS_PATH))).also {
+                checkContract(it.savings != null,"invalid_api_response")
+            }
+        } catch (error: ApiFailure) {
+            if (!error.isLegacyHomeSelectorRejection()) throw error
+            null
+        }
+    }
+
     private fun decodeHome(j:JSONObject):Home{
         val a=j.getJSONArray("recentPayments")
         val paymentCount = if (j.has("paymentCount") && !j.isNull("paymentCount")) j.counter("paymentCount", Int.MAX_VALUE.toLong()).toInt() else null
@@ -233,7 +248,18 @@ internal class NativeRecordData(
             unallocatedCount = unallocated,
             recent = (0 until a.length()).map { decodePayment(a.getJSONObject(it)) },
             asOf = j.getString("asOf"),
+            savings = if (j.has("savings")) decodeHomeSavings(j.getJSONObject("savings")) else null,
         )
+    }
+    private fun decodeHomeSavings(j: JSONObject): HomeSavings {
+        val status = j.get("reconciliationStatus")
+        checkContract(status is String && status in setOf("reconciled","mismatch","unavailable"),"invalid_api_response")
+        fun amount(name: String): Long? {
+            checkContract(j.has(name),"invalid_api_response")
+            return if (j.isNull(name)) null else j.counter(name,9_007_199_254_740_991L)
+        }
+        return HomeSavings(amount("lifetimeContributionsRwf"),amount("outgoingPaymentsRwf"),
+            amount("latestWalletBalanceRwf"),status as String)
     }
     /** Full-query export collectors use online reads with one immutable local
      * identity witness. Server cursors independently bind group/actor/query and
@@ -241,16 +267,17 @@ internal class NativeRecordData(
     fun recordReadScope():RecordReadScope =
         recordReadScope { witness, path -> requestOwned(witness, "GET", path) }
 
-    private fun recordReadScope(read: (SessionWitness, String) -> String):RecordReadScope {
+    private fun recordReadScope(expectedOwner: Operator?=null, read: (SessionWitness, String) -> String):RecordReadScope {
         val witness=ownedSession()
         val captured=authority.withCurrent(witness){
             val who=operator?:throw ApiFailure("session_unavailable",401)
+            checkContract(expectedOwner==null || who===expectedOwner && Capability.READ.key in who.capabilities,"session_changed")
             checkContract(System.currentTimeMillis()<who.expiresAt&&!sessions.hasInflightPasscode(witness),"session_unavailable")
             Triple(groupId,who.id,who.role to who.capabilities.toSet())
         }
         val verify={authority.withCurrent(witness){
             val who=operator?:throw ApiFailure("session_unavailable",401)
-            checkContract(groupId==captured.first&&who.id==captured.second&&who.role==captured.third.first&&
+            checkContract((expectedOwner==null || who===expectedOwner) && groupId==captured.first&&who.id==captured.second&&who.role==captured.third.first&&
                 who.capabilities==captured.third.second&&System.currentTimeMillis()<who.expiresAt&&!sessions.hasInflightPasscode(witness),"session_changed")
         }}
         return RecordReadScope(recordReadOwner,verify){path->verify();read(witness,path)}

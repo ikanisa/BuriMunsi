@@ -62,6 +62,7 @@ internal class SessionScenario {
                 request.path.endsWith("/session/login") || request.path.endsWith("/session") ->
                     JSONObject().put("profile", profile).put("token", token).put("groupId", group)
                         .put("expiresAt", sessionDeadline ?: (System.currentTimeMillis() + 3_600_000)).toString()
+                request.path.endsWith("/home?include=savings") -> throw ApiFailure("contract_query", 400)
                 request.path.endsWith("/home") -> JSONObject().put("paymentCount", 0)
                     .put("memberCount", 0).put("unallocatedCount", 0).put("recentPayments", JSONArray())
                     .put("asOf", "2026-11-20T00:00:00Z").toString()
@@ -76,6 +77,8 @@ internal class SessionScenario {
     fun repository() = NativeRepository(app, ApiClient.phonePin("https://offline.test", "fixture-device", flavor, "") { "fixture" })
     fun signIn(repository: NativeRepository) = repository.login("0780000001", "2468")
 }
+
+private const val SAVINGS_HOME_PATH="/v1/burimunsi/home?include=savings"
 
 private fun SessionScenario.held() = HeldCheckpoint(NavigationCheckpoint(owner, group, System.currentTimeMillis(), Route.SETTINGS))
 
@@ -344,7 +347,7 @@ private suspend fun freshRowsPublishWhileRecordCacheIsBlocked() {
     try {
         check(entered.await(5,TimeUnit.SECONDS))
         withTimeout(2_000){while(model.state.busy || model.state.home==null)delay(2)}
-        check(Transport.calls.map { it.path }==listOf("/v1/burimunsi/session?include=home"))
+        check(Transport.calls.filterNot { it.path==SAVINGS_HOME_PATH }.map { it.path }==listOf("/v1/burimunsi/session?include=home"))
         val lookup=java.util.concurrent.CompletableFuture.supplyAsync { NativeRecordCache(scenario.app).read("/home") }
         check(runCatching { lookup.get(250,TimeUnit.MILLISECONDS) }.exceptionOrNull() is java.util.concurrent.TimeoutException)
         release.countDown()
@@ -499,13 +502,138 @@ private suspend fun loginHomeRequests(include: Boolean, oldServer: Boolean = fal
             oldServer->listOf(bundled,"/v1/burimunsi/session/login","/v1/burimunsi/home")
             else->listOf(bundled,"/v1/burimunsi/home")
         }
-        check(Transport.calls.map{it.path}==expected)
+        check(Transport.calls.filterNot{it.path==SAVINGS_HOME_PATH}.map{it.path}==expected)
         if(uncertain)check(model.state.operator==null&&model.state.home==null)
         else check(model.state.operator?.id==scenario.owner&&model.state.home?.paymentCount==(if(include)300 else 0))
     } finally {
         stop(model)
         Transport.loginHome=null
     }
+}
+
+private suspend fun bundledHomeEnhancementCannotBlockOrCrossSignOut(signOut:Boolean) {
+    val scenario = SessionScenario()
+    val normal = Transport.handler
+    val entered = CountDownLatch(1)
+    val release = CountDownLatch(1)
+    Transport.loginHome = { request ->
+        val base = normal(request.copy(path="/v1/burimunsi/home"))
+        val login = normal(request.copy(path="/v1/burimunsi/session/login"))
+        JSONObject(login).put("home",JSONObject(base)).toString()
+    }
+    Transport.handler = { request ->
+        if(request.path != SAVINGS_HOME_PATH) normal(request)
+        else {
+            entered.countDown()
+            check(release.await(5,TimeUnit.SECONDS))
+            val base = normal(request.copy(path="/v1/burimunsi/home"))
+            JSONObject(base).put("savings",JSONObject().put("lifetimeContributionsRwf",8425L)
+                .put("outgoingPaymentsRwf",JSONObject.NULL).put("latestWalletBalanceRwf",JSONObject.NULL)
+                .put("reconciliationStatus","unavailable")).toString()
+        }
+    }
+    val model = BuriViewModel(scenario.app)
+    try {
+        idle(model)
+        model.onFixtureMain { login("0780000001","2468") }
+        check(entered.await(4,TimeUnit.SECONDS))
+        idle(model)
+        check(model.state.operator?.id == scenario.owner && model.state.home?.paymentCount == 0 &&
+            model.state.home?.savings == null)
+        val originalSavedAt = model.state.savedAt
+        if(signOut) {
+            model.onFixtureMain { logout() }
+            idle(model)
+            check(model.state.operator == null && model.state.home == null)
+        }
+        release.countDown()
+        if(signOut) {
+            stop(model)
+            check(model.state.operator==null && model.state.home==null && "records" !in SecureStore.records)
+        } else {
+            withTimeout(4_000) { while(model.state.home?.savings==null) delay(2) }
+            check(model.state.home?.savings==HomeSavings(8425L,null,null,"unavailable"))
+            check(model.state.savedAt==originalSavedAt)
+        }
+        check(Transport.calls.count{it.path==SAVINGS_HOME_PATH}==1)
+        check(Transport.calls.none{it.path=="/v1/burimunsi/home"})
+    } finally {
+        release.countDown()
+        stop(model)
+        Transport.loginHome=null
+    }
+}
+
+private suspend fun bundledHomeEnhancementOnlyRedactsConfirmedDenial(confirmed:Boolean) {
+    val scenario=SessionScenario()
+    val original=Transport.handler
+    Transport.loginHome = { request ->
+        val home=original(request.copy(path="/v1/burimunsi/home"))
+        val login=original(request.copy(path="/v1/burimunsi/session/login"))
+        JSONObject(login).put("home",JSONObject(home)).toString()
+    }
+    Transport.handler={ request ->
+        if(request.path==SAVINGS_HOME_PATH) throw ApiFailure(
+            if(confirmed) "invalid_session" else "gateway_temporarily_unavailable",401)
+        original(request)
+    }
+    val model=BuriViewModel(scenario.app)
+    try {
+        idle(model)
+        model.onFixtureMain {login("0780000001","2468")}
+        idle(model)
+        withTimeout(4_000){while(Transport.calls.none{it.path==SAVINGS_HOME_PATH})delay(2)}
+        if(confirmed){
+            withTimeout(4_000){while(model.state.operator!=null)delay(2)}
+            check(model.state.home==null && model.state.error=="Sign in again.")
+        } else {
+            stop(model)
+            check(model.state.operator?.id==scenario.owner && model.state.home?.savings==null)
+        }
+    } finally {stop(model);Transport.loginHome=null}
+}
+
+private suspend fun bundledHomeDenialRevalidatesOnlyWhenConfirmed(confirmed:Boolean) {
+    val scenario=SessionScenario()
+    val original=Transport.handler
+    val revalidationEntered=CountDownLatch(1)
+    val revalidationRelease=CountDownLatch(1)
+    Transport.loginHome = { request ->
+        val home=original(request.copy(path="/v1/burimunsi/home"))
+        val login=original(request.copy(path="/v1/burimunsi/session/login"))
+        JSONObject(login).put("home",JSONObject(home)).toString()
+    }
+    Transport.handler={ request ->
+        if(request.path==SAVINGS_HOME_PATH) throw ApiFailure(
+            if(confirmed) "access_denied" else "gateway_temporarily_unavailable",403)
+        if(request.path=="/v1/burimunsi/session"){
+            revalidationEntered.countDown()
+            check(revalidationRelease.await(5,TimeUnit.SECONDS))
+            throw ApiFailure("session_revalidation_unavailable",503)
+        }
+        original(request)
+    }
+    val model=BuriViewModel(scenario.app)
+    try {
+        idle(model)
+        model.onFixtureMain {login("0780000001","2468")}
+        withTimeout(4_000){while(Transport.calls.none{it.path==SAVINGS_HOME_PATH})delay(2)}
+        if(confirmed){
+            check(revalidationEntered.await(4,TimeUnit.SECONDS))
+            check(model.state.operator?.id==scenario.owner && model.state.home==null && model.state.readbackRequired)
+            check("records" !in SecureStore.records)
+            check(Transport.calls.map{it.path}==
+                listOf("/v1/burimunsi/session/login?include=home",SAVINGS_HOME_PATH,"/v1/burimunsi/session"))
+            revalidationRelease.countDown()
+            idle(model)
+            check(model.state.operator?.id==scenario.owner && model.state.home==null)
+        } else {
+            idle(model)
+            stop(model)
+            check(model.state.operator?.id==scenario.owner && model.state.home?.paymentCount==0)
+            check(Transport.calls.none{it.path.startsWith("/v1/burimunsi/session?")||it.path=="/v1/burimunsi/session"})
+        }
+    } finally {revalidationRelease.countDown();stop(model);Transport.loginHome=null}
 }
 
 private suspend fun recentHomeStillReadsAuthorizedData() {
@@ -524,7 +652,7 @@ private suspend fun recentHomeStillReadsAuthorizedData() {
     try {
         idle(model)
         check(model.state.home?.paymentCount == 50 && !model.state.offline)
-        check(Transport.calls.map { it.path } == listOf("/v1/burimunsi/session?include=home"))
+        check(Transport.calls.filterNot { it.path==SAVINGS_HOME_PATH }.map { it.path } == listOf("/v1/burimunsi/session?include=home"))
         model.onFixtureMain { refresh() }
         idle(model)
         check(model.state.home?.paymentCount == 0 && Transport.calls.count { it.path == "/v1/burimunsi/home" } == 1)
@@ -540,7 +668,7 @@ private suspend fun recentHomeStillReadsAuthorizedData() {
     try {
         idle(changed)
         check(changed.state.home != null && changed.allows(flag))
-        check(Transport.calls.map { it.path } ==
+        check(Transport.calls.filterNot { it.path==SAVINGS_HOME_PATH }.map { it.path } ==
             listOf("/v1/burimunsi/session?include=home", "/v1/burimunsi/session", "/v1/burimunsi/home"))
     } finally { stop(changed) }
 }
@@ -677,7 +805,13 @@ fun main() = runBlocking {
         "fresh Home and Payments publish while protected record cache writes are blocked" to suspend { freshRowsPublishWhileRecordCacheIsBlocked() },
         "a paired session and Home response restores and caches the authorized snapshot" to suspend { bundledHomeRestores() },
         "a restored Settings destination never requests unused Home records" to suspend { settingsRestoreSkipsUnusedHome() },
-        "bundled sign-in displays the confirmed Home without another request" to suspend { loginHomeRequests(include=true) },
+        "bundled sign-in displays the confirmed base without repeating login or plain Home" to suspend { loginHomeRequests(include=true) },
+        "negotiated savings load without blocking bundled sign-in" to suspend { bundledHomeEnhancementCannotBlockOrCrossSignOut(false) },
+        "confirmed enhanced Home revocation redacts the visible profile" to suspend { bundledHomeEnhancementOnlyRedactsConfirmedDenial(true) },
+        "unconfirmed enhanced Home gateway response retains confirmed base" to suspend { bundledHomeEnhancementOnlyRedactsConfirmedDenial(false) },
+        "confirmed records denial suppresses Home and revalidates the existing profile" to suspend { bundledHomeDenialRevalidatesOnlyWhenConfirmed(true) },
+        "unrelated HTTP 403 does not suppress confirmed Home or revalidate" to suspend { bundledHomeDenialRevalidatesOnlyWhenConfirmed(false) },
+        "delayed negotiated savings cannot cross sign-out" to suspend { bundledHomeEnhancementCannotBlockOrCrossSignOut(true) },
         "a committed sign-in without its optional Home fetches only Home" to suspend { loginHomeRequests(include=false) },
         "an older server can reject the optional sign-in query before authentication" to suspend { loginHomeRequests(include=false,oldServer=true) },
         "an uncertain bundled sign-in never repeats a credential request" to suspend { loginHomeRequests(include=false,uncertain=true) },
