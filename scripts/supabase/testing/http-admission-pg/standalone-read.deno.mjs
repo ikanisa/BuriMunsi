@@ -97,6 +97,10 @@ const open = (backend, id = randomUUID(), extra = {}) =>
 const stored = async (id) =>
   (await owner`SELECT state,reason FROM private.collect_fence_admissions WHERE admission_id=${id}::uuid`)[0];
 const check = await prepareDeploymentCheck(env, group);
+function readBackend(business, control, verify, fast, signal = new AbortController().signal) {
+  return sqlFenceBackend(business, control, verify, signal, fast);
+}
+
 const pending = () => {
   let resolve;
   const promise = new Promise((value) => {
@@ -127,57 +131,79 @@ async function denyWithoutRegistration(backend) {
   assert.equal(await stored(id), undefined);
 }
 
-// Leave six registered operations outstanding and race two native reads with
-// an ordinary jobs request for exactly two remaining admission slots.
+// Keep six original rows active and one protected screen open. Eighteen more
+// screens must observe a genuine PG capacity refusal while a jobs request uses slot eight.
 async function contention(fast) {
-  const lanes = await Promise.all(Array.from({length:4}, () => clients(db.socketPath)));
-  const backend = (client, native = false) => sqlFenceBackend(client.business, client.control, check, native);
-  const existing = backend(lanes[0]), holders = [], granted = [];
-  const ids = lanes.slice(1).map(() => randomUUID());
-  const finishGranted = async () => {
-    for (const work of granted.splice(0)) await work.finish();
-  };
+  const clientsForBurst = await Promise.all(Array.from({length:20}, () => clients(db.socketPath)));
+  const ordinary=sqlFenceBackend(clientsForBurst[0].business,clientsForBurst[0].control,check);
+  const holders=[], waits=[], controllers=[], cleanup=[];
+  let screen,job;
   try {
-    for (let i = 0; i < 6; i++) {
-      const id = randomUUID();
-      const row = await existing.register(id, source, kind);
-      holders.push({id, epoch:row.epoch});
+    for(let i=0;i<6;i++) {
+      const id=randomUUID(),row=await ordinary.register(id,source,kind);
+      holders.push({id,epoch:row.epoch});
     }
-    const attempts = [
-      open(backend(lanes[1], fast), ids[0]),
-      open(backend(lanes[2], fast), ids[1]),
-      open(backend(lanes[3]), ids[2], {kind:'jobs'}),
-    ];
-    const outcomes = await Promise.allSettled(attempts);
-    for (const outcome of outcomes) {
-      if (outcome.status === 'fulfilled') granted.push(outcome.value);
-      else assert.equal(outcome.reason.code, 'application_fence_unavailable');
+    const first=clientsForBurst[0];
+    screen=await open(readBackend(first.business,first.control,check,fast));
+    const started=clientsForBurst.slice(1,19).map((client,index)=>{
+      const controller=new AbortController(), id=randomUUID(), rejected=pending();
+      controllers.push(controller);
+      // Record the server's exact exception before the runtime decides to retry.
+      const business={begin:(...args)=>client.business.begin(...args).catch(error=>{
+        if(error.code==='55000' && error.message==='burimunsi_read_capacity') rejected.resolve();
+        throw error;
+      })};
+      const isAdmin=index%2===1;
+      const back=readBackend(business,client.control,check,fast&&!isAdmin,controller.signal);
+      const attempt=open(back,id,{kind:isAdmin?'http_admin':'http_collect',signal:controller.signal})
+        .then(async work=>{await work.finish();return 'served';},error=>{
+          assert.equal(error.code,'application_fence_unavailable');return 'denied';});
+      waits.push(attempt);
+      return {id, rejected:rejected.promise};
+    });
+    let timer;
+    try {
+      await Promise.race([Promise.all(started.map(x=>x.rejected)),
+        new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Missing protected read capacity refusal')),4500);})]);
+    }finally{clearTimeout(timer);}
+    const last=clientsForBurst[19];
+    job=await open(sqlFenceBackend(last.business,last.control,check),randomUUID(),{kind:'jobs'});
+    const [total]=await owner`SELECT count(*)::int AS n FROM private.collect_fence_admissions WHERE state='active'`;
+    assert.equal(total.n,8);
+    for(const {id} of started)assert.equal(await stored(id),undefined);
+    // Cancel all but one waiting read. That original request must retry successfully
+    // after the job and the first screen settle, with no extra durable admissions.
+    for(const c of controllers.slice(1))c.abort();
+    await job.finish(); job=undefined;
+    await screen.finish(); screen=undefined;
+    assert.deepEqual(await Promise.all(waits),['served',...new Array(17).fill('denied')]);
+    for(const [index,item] of started.entries()){
+      assert.equal((await stored(item.id))?.state,index===0?'settled':undefined);
     }
-    assert.equal(granted.length, 2);
-    const [total] = await owner`SELECT count(*)::int AS n FROM private.collect_fence_admissions WHERE state='active'`;
-    assert.equal(total.n, 8);
-    for (const id of ids) {
-      const registered = await stored(id);
-      assert.equal(registered?.state, granted.some(work => work.id === id) ? 'active' : undefined);
-    }
-    await finishGranted();
-    const next = await open(backend(lanes[1], fast));
-    await next.finish();
-    console.log('PASS six occupied admissions, concurrent native reads and jobs, clean denial and recovery; optimized=' + fast);
-  } finally {
-    await finishGranted();
-    for (const {id,epoch} of holders) {
-      assert.equal((await stored(id)).state, 'active');
-      await existing.close(id, epoch, source, 'settled', 'cancelled_before_work', 0, 0);
-    }
-    await Promise.all(lanes.map(lane => lane.close()));
+    for(const {id} of holders) assert.equal((await stored(id)).state,'active');
+    console.log('PASS six occupied plus 20 overlapping Staff/Admin read and jobs requests: exact read-capacity denial, slot eight belongs to jobs, cancellation leaves no row and the original read recovers; fast='+fast);
+  }finally{
+    for(const c of controllers)c.abort();
+    await Promise.allSettled(waits);
+    if(job)cleanup.push(job.finish());
+    if(screen)cleanup.push(screen.finish());
+    await Promise.all(cleanup);
+    for(const {id,epoch} of holders) await ordinary.close(id,epoch,source,'settled','cancelled_before_work',0,0);
+    await Promise.all(clientsForBurst.map(client=>client.close()));
   }
 }
-
 async function regressions() {
   const c = await clients(db.socketPath);
   try {
-    const base = sqlFenceBackend(c.business, c.control, check, true);
+    const base = readBackend(c.business, c.control, check, true);
+    const unmarkedId=randomUUID();
+    const unmarked=await c.business.begin('ISOLATION LEVEL READ COMMITTED',async tx=>{
+      await tx.unsafe("SET LOCAL ROLE collect_runtime; SELECT pg_catalog.set_config('collect.edge_verified','true',true)");
+      return check(tx,{id:unmarkedId,source,kind});
+    });
+    assert.equal(unmarked,null);
+    assert.equal(await stored(unmarkedId),undefined);
+    console.log('PASS a missing protected-read marker cannot register through the combined query');
     const success = await open(base);
     const lockAvailable = async () =>
       (await owner`SELECT pg_try_advisory_xact_lock(7346371,1) AS available`)[0].available;
@@ -186,7 +212,7 @@ async function regressions() {
     assert.equal(await lockAvailable(), true);
     assert.equal((await stored(success.id)).state, 'settled');
     const bad = await prepareDeploymentCheck(env, 'another-group');
-    await denyWithoutRegistration(sqlFenceBackend(c.business, c.control, bad, true));
+    await denyWithoutRegistration(readBackend(c.business, c.control, bad, true));
     await owner`INSERT INTO app.collections(id) VALUES ('extra-group')`;
     await denyWithoutRegistration(base);
     await owner`DELETE FROM app.collections`;
@@ -197,13 +223,13 @@ async function regressions() {
       COLLECT_DEPLOYMENT_PROFILE: otherProfile,
       COLLECT_DEPLOYMENT_PROFILE_SHA256: createHash('sha256').update(otherProfile).digest('hex'),
     }, group);
-    await denyWithoutRegistration(sqlFenceBackend(c.business, c.control, other, true));
+    await denyWithoutRegistration(readBackend(c.business, c.control, other, true));
     const wrongId = randomUUID();
     await assert.rejects(open(base, wrongId, { sourceSha256: 'b'.repeat(64) }));
     assert.equal(await stored(wrongId), undefined);
     const denied = await clients(db.socketPath, 'burimunsi_admission_denied');
     try {
-      await denyWithoutRegistration(sqlFenceBackend(denied.business, denied.control, check, true));
+      await denyWithoutRegistration(readBackend(denied.business, denied.control, check, true));
     } finally {
       await denied.close();
     }
@@ -217,7 +243,7 @@ async function regressions() {
     await held.finish();
     for (const scenario of ['cancel', 'lost']) {
       const id = randomUUID(), control = new AbortController(), f = pauseCommit(c.business);
-      const b = sqlFenceBackend(f.business, c.control, check, true);
+      const b = readBackend(f.business, c.control, check, true, control.signal);
       const opening = open(b, id, { signal: control.signal }).then(() => {
         throw Error('unexpected work');
       }, (e) => e);
@@ -233,7 +259,7 @@ async function regressions() {
     const late = randomUUID(), f = pauseCommit(c.business), holds = [], prior = globalThis.EdgeRuntime;
     globalThis.EdgeRuntime = { waitUntil: (promise) => holds.push(promise) };
     try {
-      const opening = open(sqlFenceBackend(f.business, c.control, check, true), late).then(() => {
+      const opening = open(readBackend(f.business, c.control, check, true), late).then(() => {
         throw Error('unexpected timeout success');
       }, (e) => e);
       await f.committed.promise;
@@ -269,7 +295,7 @@ async function regressions() {
       },
     };
     const request = randomUUID();
-    await assert.rejects(open(sqlFenceBackend(c.business, failedControl, check, true), request));
+    await assert.rejects(open(readBackend(c.business, failedControl, check, true), request));
     assert.equal(checkout.rollbacks, 1);
     assert.equal(checkout.assertions, 0);
     assert.equal(checkout.releaseAck, undefined);
@@ -292,7 +318,7 @@ async function benchmark(oneWayMs, count = 9) {
     for (let i = -2; i < count; i++) {
       const visit = i % 2 === 0 ? modes : [...modes].reverse();
       for (const fast of visit) {
-        const backend = sqlFenceBackend(business, control, check, fast),
+        const backend = readBackend(business, control, check, fast),
           start = performance.now(),
           first = commands.length;
         const work = await open(backend);
@@ -338,6 +364,12 @@ try {
   // The fixture seeds the immutable public identity under its own cluster owner.
   await owner`INSERT INTO private.collect_deployment_identity(operation_id,profile_raw,profile_sha256) VALUES (${randomUUID()}::uuid,${profile},${digest})`;
   await owner`INSERT INTO app.collections(id) VALUES (${group})`;
+  const [state]=await owner`SELECT epoch,source_sha256 FROM private.collect_fence_control WHERE singleton`;
+  const fenceId=randomUUID();
+  await owner`SELECT private.collect_fence_begin_quiesce(${fenceId}::uuid,${state.epoch}::bigint,${state.source_sha256}::text)`;
+  await owner`SELECT private.collect_fence_drain(${fenceId}::uuid,${state.epoch}::bigint,${state.source_sha256}::text)`;
+  await owner.unsafe(await readFile(new URL('../../../../supabase/migrations/20261124080000_burimunsi_read_admission.sql',import.meta.url),'utf8'));
+  await owner`SELECT private.collect_fence_release(${randomUUID()}::uuid,${state.epoch}::bigint,${state.source_sha256}::text)`;
   await contention(false);
   await contention(true);
   await regressions();

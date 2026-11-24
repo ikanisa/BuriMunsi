@@ -13,7 +13,7 @@ const mock={
  './deployment-database.js':`export const assertRuntimeDeployment=async()=>{globalThis.__directIngressTest.events.push('schema')};export const prepareDeploymentCheck=async()=>async()=>{globalThis.__directIngressTest.events.push('schema')};`,
  './postgres-connections.js':`export const connection=()=>{globalThis.__directIngressTest.events.push('database');return {}};export const fenceConnection=()=>({});`,
  './postgres.js':`export class PostgresDatabase{constructor(){this.sql={}}setApplicationWork(work){this.applicationWork=work}}`,
- './application-fence.js':`export const sqlFenceBackend=(sql,control,beforeRegister,standaloneRead)=>{globalThis.__directIngressTest.readModes.push(standaloneRead);return {beforeRegister}};export const openApplicationWork=async({backend})=>{await backend?.beforeRegister?.();globalThis.__directIngressTest.events.push('fence');return {finish:async()=>{},waitUntil:p=>p}};`,
+ './application-fence.js':`export const sqlFenceBackend=(sql,control,beforeRegister,readCapacitySignal,standaloneRead)=>{globalThis.__directIngressTest.readModes.push({protected:readCapacitySignal instanceof AbortSignal,fast:standaloneRead});return {beforeRegister}};export const openApplicationWork=async({backend})=>{await backend?.beforeRegister?.();globalThis.__directIngressTest.events.push('fence');return {finish:async()=>{},waitUntil:p=>p}};`,
  './adapters.js':`export class SupabaseObjectBucket{constructor(){}}export const providerAdapters=()=>({});`,
  './domain/index.js':`export default {fetch:async(request,env)=>{const s=globalThis.__directIngressTest;s.events.push('dispatch');s.buckets.push(await env.__network(request));s.authority.push([request.headers.get('authorization'),request.headers.get('cookie'),request.headers.get('x-forwarded-for')]);return Response.json({fixture:true})}};`,
  './domain/core.js':`export const json=(v,status=200,headers={})=>Response.json(v,{status,headers});`,
@@ -80,8 +80,12 @@ test('dedicated fresh PIN read verifies the database at admission and returns bo
    {headers:{'X-BuriMunsi-Auth':'phone_pin'}}));
   assert.equal(response.status,200);
   assert.deepEqual(state.events,['database','schema','fence','native','dispatch']);
-  assert.deepEqual(state.readModes,[timed]);
+  assert.deepEqual(state.readModes,[{protected:true,fast:timed}]);
   if(timed)assert.match(response.headers.get('Server-Timing'),/^admission;dur=\d+, records;dur=\d+$/);
   else assert.equal(response.headers.get('Server-Timing'),null);
  }
+ reset();
+ await handler(new Request(project+'/functions/v1/collect-api/v1/burimunsi/session/login',
+  {method:'POST',headers:{'content-type':'application/json','X-BuriMunsi-Auth':'phone_pin'},body:'{}'}));
+ assert.deepEqual(state.readModes,[{protected:false,fast:false}]);
 });

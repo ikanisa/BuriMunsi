@@ -19,7 +19,8 @@ export async function prepareDeploymentCheck(env, standaloneCollectionId) {
           (SELECT count(*) = 1 AND bool_and(id = ${standaloneCollectionId})
            FROM (SELECT id FROM app.collections LIMIT 2) AS visible) AS scope_matches
       )
-      SELECT allowed, scope_matches, CASE WHEN allowed AND scope_matches THEN
+      SELECT allowed, scope_matches, CASE WHEN allowed AND scope_matches
+        AND pg_catalog.current_setting('burimunsi.read_admission',true) = '1' THEN
         private.collect_fence_register(${registration.id}::uuid, ${registration.source}::text, ${registration.kind}::text)
       END AS result FROM authorized`;
       if (rows.length !== 1 || rows[0].allowed !== true) throw new Error('deployment_identity_mismatch');

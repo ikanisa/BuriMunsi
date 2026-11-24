@@ -72,7 +72,7 @@ test('a phone read binds the checked deployment, sole group and original admissi
   const read=check(async(parts,...parameters)=>{
    const sql=parts.join('?');
    assert.match(sql,/WITH authorized AS MATERIALIZED/);
-   assert.match(sql,/CASE WHEN allowed AND scope_matches THEN\s+private\.collect_fence_register/);
+   assert.match(sql,/CASE WHEN allowed AND scope_matches\s+AND pg_catalog\.current_setting\('burimunsi\.read_admission',true\) = '1' THEN\s+private\.collect_fence_register/);
    assert.match(sql,/SELECT id FROM app\.collections LIMIT 2/);
    assert.deepEqual(parameters,[input.COLLECT_DEPLOYMENT_PROFILE_SHA256,group,reg.id,reg.source,reg.kind]);
    return [proof];

@@ -59,7 +59,7 @@ full application migration chain.
 
 ## BuriMunsi native read admission
 
-The wire qualification runs the production admission adapter and postgres.js 3.4.7 against an owned PostgreSQL 17 Unix socket. It exercises the original fence migration, the deployment identity function, collection scope, work-lock lifetime, cancellation and late or lost acknowledgements. Its two warm-connection measurements alternate the sequential and combined paths. The latency proxy adds 0 or 30 ms of round-trip latency. With six slots already occupied, the fixture also races two native reads and an ordinary jobs request for the remaining two slots and checks recovery. These figures cover admission through the lease proof. The application handler and the handset run outside the measurement.
+The wire qualification runs the production admission adapter and postgres.js 3.4.7 against an owned PostgreSQL 17 Unix socket. It exercises the original fence migration, the deployment identity function, collection scope, work-lock lifetime, cancellation and late or lost acknowledgements. Its two warm-connection measurements alternate the sequential and combined paths. The latency proxy adds 0 or 30 ms of round-trip latency. With six slots already occupied, the fixture exercises 19 Staff/Admin screen reads and an ordinary jobs request, checks the protected eighth slot and verifies cancellation and recovery. These figures cover admission through the lease proof. The application handler and the handset run outside the measurement.
 
 From the repository root, use the same three fixture environment variables shown above and the pinned Deno lock.
 

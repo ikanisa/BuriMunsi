@@ -40,33 +40,65 @@ export async function reserveDatabaseConnection(sql){
  try{return await bounded(pending);}catch(error){void pending.then(async late=>{try{await late?.release();}catch{}},()=>{});throw fenceFailure(error);}
 }
 const runtimeRoleSql = "SET LOCAL ROLE collect_runtime; SELECT pg_catalog.set_config('collect.edge_verified','true',true)";
+const readRegistrationSql = runtimeRoleSql + "; SET LOCAL burimunsi.read_admission='1'";
 const leaseSetupSql = "SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout='5s'; " +
  runtimeRoleSql + '; SELECT pg_catalog.pg_advisory_xact_lock_shared(7346371,1)';
-async function runtimeRole(tx){await tx.unsafe(runtimeRoleSql);}
+async function runtimeRole(tx,settings=runtimeRoleSql){await tx.unsafe(settings);}
 async function result(tx,name,values){const rows=await tx.unsafe('SELECT '+signatures[name]+' AS result',values);need(rows.length===1&&rows[0].result&&typeof rows[0].result==='object');return rows[0].result;}
-/** @param {(tx: import('npm:postgres@3.4.7').TransactionSql, registration?: {id:string,source:string,kind:string}) => unknown} [verifyAdmission] */
-export function sqlFenceBackend(businessSql,controlSql,verifyAdmission=undefined,standaloneRead=false){
+// An explicit PostgreSQL capacity rejection rolls the registration transaction
+// back before there is any application work. A lost acknowledgement is ambiguous.
+const readCapacityDelaysMs = [180, 600, 1500, 1500];
+async function registerWhenAvailable(register, signal) {
+ const deadline = performance.now() + FENCE_IO_TIMEOUT_MS;
+ for (let attempt = 0; ; attempt++) {
+  if (signal.aborted || performance.now() >= deadline) throw unavailable();
+  try {
+   return await register();
+  } catch (error) {
+   const delay = readCapacityDelaysMs[attempt];
+   if (error?.code !== '55000' || error.message !== 'burimunsi_read_capacity' || delay === undefined) throw error;
+   const waitMs = delay * (1 + Math.random() / 4);
+   if (signal.aborted || performance.now() + waitMs >= deadline) throw error;
+   await new Promise(resolve => {
+    const complete = () => {
+     clearTimeout(timer);
+     signal.removeEventListener('abort', complete);
+     resolve(undefined);
+    };
+    const timer = setTimeout(complete, waitMs);
+    signal.addEventListener('abort', complete, {once:true});
+   });
+  }
+ }
+}
+/**
+ * @param {(tx: import('npm:postgres@3.4.7').TransactionSql, registration?: {id:string,source:string,kind:string}) => unknown} [verifyAdmission]
+ * @param {AbortSignal} [readCapacitySignal]
+ */
+export function sqlFenceBackend(businessSql,controlSql,verifyAdmission=undefined,readCapacitySignal=undefined,standaloneRead=false){
  need(typeof businessSql?.begin==='function'&&typeof controlSql?.reserve==='function');
  need(verifyAdmission===undefined||typeof verifyAdmission==='function');
- need(!standaloneRead||typeof verifyAdmission==='function');
+ need(!standaloneRead||(typeof verifyAdmission==='function'&&readCapacitySignal));
  const rawCall=(name,values)=>businessSql.begin('ISOLATION LEVEL READ COMMITTED',async tx=>{
-  await runtimeRole(tx);
+  if(name==='register'&&standaloneRead){
+   const [id,source,kind]=values;
+   need(kind==='http_collect');
+   // One transaction owns both statements. The SELECT can register only if it
+   // observes this transaction's protected-read marker, deployment and collection.
+   const [,row]=await Promise.all([runtimeRole(tx,readRegistrationSql),verifyAdmission(tx,{id,source,kind})]);
+   need(row&&typeof row==='object');
+   return row;
+  }
+  if(name==='register'&&readCapacitySignal)await tx.unsafe(readRegistrationSql);
+  else await runtimeRole(tx);
   if(name==='register'&&verifyAdmission)await verifyAdmission(tx);
   return result(tx,name,values);
  });
  const call=(name,values)=>bounded(rawCall(name,values));
- function register(id,source,kind) {
-  if(!standaloneRead)return observeFenceRegistration(rawCall('register',[id,source,kind]));
-  need(kind==='http_collect');
-  const original=businessSql.begin('ISOLATION LEVEL READ COMMITTED',async tx=>{
-   // postgres.js executes these in submission order on this one transaction.
-   // A setup error aborts it. The checked SQL itself gates the registration.
-   const [,row]=await Promise.all([runtimeRole(tx),verifyAdmission(tx,{id,source,kind})]);
-   need(row&&typeof row==='object');
-   return row;
-  });
-  return observeFenceRegistration(original);
- }
+ const register=(id,source,kind)=>{
+  const attempt=()=>rawCall('register',[id,source,kind]);
+  return observeFenceRegistration(readCapacitySignal ? registerWhenAvailable(attempt,readCapacitySignal) : attempt());
+ };
  return Object.freeze({register,close:(id,epoch,source,outcome,reason,dispatches,uncertain)=>call('close',[id,epoch,source,outcome,reason,dispatches,uncertain]),status:id=>call('status',[id]),
   async lease(id,epoch,source){
    const tx=await reserveDatabaseConnection(controlSql);let beginDispatched=false,released=false,cleanup=null,reusable=false;
@@ -90,12 +122,7 @@ export function sqlFenceBackend(businessSql,controlSql,verifyAdmission=undefined
    try{beginDispatched=true;
     const begin='BEGIN ISOLATION LEVEL READ COMMITTED';
     if(standaloneRead)await tx.unsafe(begin+'; '+leaseSetupSql);
-    else {
-     await tx.unsafe(begin);
-     await tx.unsafe(leaseSetupSql);
-    }
-    // The role, limits and transaction-owned WORK lock must all acknowledge
-    // before the separately bound assertion and before any handler work.
+    else {await tx.unsafe(begin);await tx.unsafe(leaseSetupSql);}
     const row=await result(tx,'assert',[id,epoch,source]);
     reusable=active(row,id,source,epoch).mode==='open';
     return {row,async assert(){
@@ -141,7 +168,7 @@ export async function openApplicationWork({backend,sourceSha256,kind,id=crypto.r
  catch(error){
   const original=observation&&registrationCompletions.get(observation);
   if(original)retainLateRegistration(backend,original,id,sourceSha256,kind);
-  throw fenceFailure(error); // Rejected/unknown registration is never retried.
+  throw fenceFailure(error); // Unknown registration outcomes stay with their original observation.
  }
  if(signal?.aborted){try{await closeBeforeWork(backend,row,id,sourceSha256);}catch{}throw unavailable();}
  try{const pending=Promise.resolve().then(()=>backend.lease(id,row.epoch,sourceSha256));

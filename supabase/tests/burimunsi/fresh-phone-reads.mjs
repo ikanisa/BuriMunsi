@@ -34,7 +34,7 @@ export async function qualifyNativeReads({pool, admissionPool, inspect, source})
   const check = await prepareDeploymentCheck({COLLECT_DEPLOYMENT_PROFILE:deployment.profile_raw,
     COLLECT_DEPLOYMENT_PROFILE_SHA256:deployment.profile_sha256}, group);
   const regular = sqlFenceBackend(admissionPool, admissionPool, check);
-  const nativeRead = sqlFenceBackend(admissionPool, admissionPool, check, true);
+  const nativeRead = sqlFenceBackend(admissionPool, admissionPool, check, new AbortController().signal, true);
   async function admitted(fn, kind = 'http_collect', backend = regular) {
     const admission = await openApplicationWork({backend, sourceSha256:source, kind});
     let failed = true;
