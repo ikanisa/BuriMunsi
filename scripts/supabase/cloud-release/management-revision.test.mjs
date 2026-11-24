@@ -10,10 +10,13 @@ const approval = (source, approvalSha256) => JSON.stringify({
   format: 'collect.sms.gateway-source-approval.v1', gatewayReleaseSha256: gateway,
 });
 const preimages = {BURIMUNSI_PRODUCT_MODE: sha('standalone'), BURIMUNSI_COLLECTION_ID: sha('synthetic-collection')};
+const widePreimages = {...preimages, ...Object.fromEntries(
+  Array.from({length: 11}, (_, i) => ['SYNTHETIC_SETTING_' + i, sha('value-' + i)]))};
 const owner = {session_user: 'postgres', current_user: 'postgres', current_database: 'postgres',
   version: 170006, isolation: 'read committed', project: PROJECT};
 
-function fixture({identity = owner, unknownQuiesce = false, sms = false, binaryChanged = false, migrations = []} = {}) {
+function fixture({identity = owner, unknownQuiesce = false, sms = false, binaryChanged = false,
+  migrations = [], settings = preimages} = {}) {
   const queries = [], records = [];
   let current = {mode: 'open', epoch: '10', operation_id: null, source_sha256: previous};
   let functions = ['collect-api', 'admin-api', 'collect-jobs'].map((slug, i) => ({
@@ -33,7 +36,7 @@ function fixture({identity = owner, unknownQuiesce = false, sms = false, binaryC
   }
   const input = {label: 'fixture-revision', testEvidence: {passed: true, sourceSha256: next},
     expectedBefore: {mode: 'open', epoch: 10, source_sha256: previous},
-    expectedFunctions: functions, expectedSecretPreimages: preimages, requireChangedBundles: true,
+    expectedFunctions: functions, expectedSecretPreimages: settings, requireChangedBundles: true,
     ...(sms ? {smsBinding: {gatewayReleaseSha256: gateway, previousApprovalSha256: previousApproval,
       candidateApprovalSha256: candidateApproval}} : {})};
   const migrationHistory = migrations.length
@@ -70,7 +73,7 @@ function fixture({identity = owner, unknownQuiesce = false, sms = false, binaryC
           assert.deepEqual(changes, expected);
           sourceSecret = next;
         }
-        return result(Object.entries({...preimages, ...smsSettings, BUILD_SOURCE_ID: sha(sourceSecret)})
+        return result(Object.entries({...settings, ...smsSettings, BUILD_SOURCE_ID: sha(sourceSecret)})
           .map(([name, value]) => ({name, value})));
       }
       if (path === 'functions') return result(functions);
@@ -201,12 +204,50 @@ test('an uncertain fence write is sent once and stops at its existing intent', a
 });
 
 
-test('An acknowledged source update preserves the active SMS gateway across a global version bump', async () => {
-  const f = fixture({sms: true});
+test('An acknowledged source update preserves 13 caller settings and five SMS settings across a global version bump', async () => {
+  const f = fixture({sms: true, settings: widePreimages});
   const completed = await reviseRuntimeViaManagement(f.input, f.dependencies);
   assert.equal(completed.status, 'revision_deployed_live');
   assert.ok(f.records.includes('revision-fixture-revision-ancillary-refreshed.json'));
   assert.equal(f.records.at(-1), 'revision-fixture-revision-complete.json');
+});
+
+test('Shared preimages may protect matching stable SMS settings, but reject conflicts before fencing', async () => {
+  const stable = fixture({sms: true, settings: {...widePreimages, COLLECT_SMS_ENABLED: sha('true')}});
+  assert.equal((await reviseRuntimeViaManagement(stable.input, stable.dependencies)).status, 'revision_deployed_live');
+
+  for (const conflict of [{COLLECT_SMS_ENABLED: sha('false')}, {COLLECT_SMS_CORE_SOURCE_SHA256: sha(previous)}]) {
+    const f = fixture({sms: true, settings: {...widePreimages, ...conflict}});
+    await assert.rejects(reviseRuntimeViaManagement(f.input, f.dependencies), /runtime_revision_secret_preimage_changed/);
+    assert.deepEqual(f.records, []);
+    assert.deepEqual(f.queries, []);
+  }
+});
+
+test('A caller preimage set still has its own sixteen-setting limit', async () => {
+  const extras = Object.fromEntries(Array.from({length: 4}, (_, i) => ['EXTRA_SETTING_' + i, sha('extra-' + i)]));
+  const f = fixture({sms: true, settings: {...widePreimages, ...extras}});
+  await assert.rejects(reviseRuntimeViaManagement(f.input, f.dependencies), /runtime_revision_secret_preimage_invalid/);
+  assert.deepEqual(f.records, []);
+  assert.deepEqual(f.queries, []);
+});
+
+test('Late caller or SMS setting drift prevents the source secret write', async () => {
+  for (const name of ['SYNTHETIC_SETTING_0', 'COLLECT_SMS_ENABLED']) {
+    const f = fixture({sms: true, settings: widePreimages});
+    const original = f.dependencies.api;
+    f.dependencies.api = async (path, options) => {
+      if (path === 'secrets' && options?.method === 'POST') assert.fail('protected settings drift was not detected');
+      const response = await original(path, options);
+      if (path === 'secrets' && f.records.at(-1) === 'revision-fixture-revision-source-secret-attempt.json') {
+        return {...response, json: () => response.json().map(row =>
+          row.name === name ? {...row, value: sha('changed')} : row)};
+      }
+      return response;
+    };
+    await assert.rejects(reviseRuntimeViaManagement(f.input, f.dependencies), /runtime_revision_secret_preimage_changed/);
+    assert.equal(f.records.at(-1), 'revision-fixture-revision-source-secret-attempt.json');
+  }
 });
 
 test('SMS cannot be rebound without proven prior approval or with a changed ancillary bundle', async () => {
@@ -222,8 +263,8 @@ test('SMS cannot be rebound without proven prior approval or with a changed anci
 });
 
 test('a lost source-setting HTTP reply resolves only from two matching provider activations under the same fence',async()=>{
- for(const scenario of ['settled','partial','stale','different_bundle','different_activation']){
-  const f=fixture({sms:true,binaryChanged:scenario==='different_bundle'});
+ for(const scenario of ['settled','partial','stale','different_bundle','different_activation','caller_drift','sms_drift']){
+  const f=fixture({sms:true,binaryChanged:scenario==='different_bundle',settings:widePreimages});
   const original=f.dependencies.api;
   let writes=0,reads=0,stamp;
   f.dependencies.api=async(path,options)=>{
@@ -236,6 +277,8 @@ test('a lost source-setting HTTP reply resolves only from two matching provider 
    if(path==='secrets'&&writes){
     const n=++reads;
     return {...response,json:()=>response.json().map(row=>{
+     if((scenario==='caller_drift'&&row.name==='SYNTHETIC_SETTING_0')||
+        (scenario==='sms_drift'&&row.name==='COLLECT_SMS_DISPATCH_PAUSED'))return {...row,value:sha('changed')};
      if(!['BUILD_SOURCE_ID','COLLECT_SMS_CORE_SOURCE_SHA256','COLLECT_SMS_SOURCE_APPROVAL'].includes(row.name))return row;
      const updated_at=scenario==='stale'?new Date(Date.now()-60000).toISOString():
       scenario==='different_activation'&&n===2?new Date(Date.parse(stamp)+1).toISOString():stamp;
