@@ -1,4 +1,4 @@
-import {act, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
+import {act, cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
 import {Suspense} from 'react';
 import {MemoryRouter, useLocation, useNavigate, useRoutes} from 'react-router';
 import {afterEach, describe, expect, it, vi} from 'vitest';
@@ -115,7 +115,7 @@ describe('consolidated Payments routes',()=>{
   it('preserves separate SMS and payment permissions, including direct URL source selection',async()=>{
     mock.authMethod = 'phone_passcode';
     mock.request.mockResolvedValue({contractVersion:1,asOf:time,items:[]});
-    const sms=visit('/admin/momo-receipts',['sms.read']);
+    const sms=visit('/admin/payments?view=sms&source=android',['sms.read']);
     expect(await screen.findByText('No receiver collections are available for this account.')).toBeVisible();
     expect(screen.queryByRole('link',{name:'Member submitted'})).not.toBeInTheDocument();
     expect(screen.queryByRole('link',{name:'MoMo transactions'})).not.toBeInTheDocument();

@@ -1,7 +1,7 @@
 import {z} from 'zod';
 import {reasonLabels, receiptLabels} from '../overview/smsOversightContract';
 
-export const processingLabels = {pending: 'Awaiting processing', held: 'Held for review', historical: 'Historical import', retrying: 'Retrying', blocked: 'Needs review', duplicate: 'Duplicate receipt',
+export const processingLabels = {pending: 'Awaiting processing', parsed: 'Parsed', held: 'Held for review', historical: 'Historical import', retrying: 'Retrying', blocked: 'Needs review', duplicate: 'Duplicate receipt',
   excluded: 'Excluded message', reversed: 'Credit reversed', posted: 'Credited', non_payment: 'Non-payment', unmatched: 'Unmatched payer'} as const;
 const groupId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/);
 const instant = z.iso.datetime();

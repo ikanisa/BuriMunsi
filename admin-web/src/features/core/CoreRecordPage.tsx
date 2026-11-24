@@ -1,9 +1,10 @@
+import {listLocation, readFilters} from './coreListFilters';
 import {safePaymentListReturn} from '../operations/paymentLocations';
 import { useEffect, useState } from 'react';
 import { Button, Card, ErrorState, LoadingState, PageHeader } from '../../ui';
 import { LegacyTransactionActions } from '../legacy-transactions/LegacyTransactionActions';
 import { OperatorNotes } from '../notes/OperatorNotes';
-import { containsControl, formatField, isId, isObject, parseCoreRow, paymentReference } from './contracts';
+import { containsControl, formatField, isId, isObject, parseCoreRow, paymentReference, validateMemberStatus } from './contracts';
 import { coreRecordActions } from './coreRecordActions';
 import { CoreRelatedSection, MembershipRecoveries } from './CoreRelatedRecords';
 import type { PendingIdentity } from './pendingAttempt';
@@ -12,36 +13,41 @@ import type { CoreArea, FeatureAccess } from './types';
 import { AREA_TITLES, CORE_PERMISSIONS } from './types';
 import './core.css';
 
-type RecordProps = FeatureAccess & { area: CoreArea; id: string; returnTo?: string | null; allowMutations?: boolean; identity?: PendingIdentity; isCurrent?: () => boolean; simplePayments?: boolean };
+type RecordProps = FeatureAccess & { area: CoreArea; id: string; returnTo?: string | null; allowMutations?: boolean; identity?: PendingIdentity;
+  isCurrent?: () => boolean; simplePayments?: boolean; scopedMember?: boolean };
 
 const fields: Record<CoreArea, readonly [string, string][]> = {
   groups: [['title', 'Group'], ['slug', 'Slug'], ['collection_type', 'Type'], ['purpose_label', 'Purpose'], ['visibility', 'Visibility'], ['active_members', 'Members'], ['status', 'Status'], ['created_at', 'Created']],
-  users: [['public_id', 'Collect ID'], ['display_name', 'Name on MoMo'], ['member_type', 'Type'], ['whatsapp_number', 'Mobile number'], ['email', 'Email'], ['momo_provider', 'MoMo provider'], ['momo_number', 'MoMo number'], ['momo_pay_code', 'MoMo code'], ['total_contributed_rwf', 'Recorded contributions'], ['status', 'Status']],
+  users: [['public_id', 'Collect ID'], ['display_name', 'Name on MoMo'], ['member_type', 'Type'], ['whatsapp_number', 'Mobile number'], ['momo_provider', 'MoMo provider'], ['momo_number', 'MoMo number'], ['momo_pay_code', 'MoMo code'], ['total_contributed_rwf', 'Recorded contributions'], ['status', 'Status']],
   members: [['public_id', 'Collect ID'], ['display_name', 'Name on MoMo'], ['member_type', 'Type'], ['whatsapp_number', 'Mobile number'], ['momo_provider', 'MoMo provider'], ['momo_number', 'MoMo number'], ['momo_pay_code', 'MoMo code'], ['total_contributed_rwf', 'Recorded contributions'], ['status', 'Status']],
   payees: [['title', 'Payee'], ['group_name', 'Group'], ['network', 'Provider'], ['momo_number_or_code', 'MoMo number / code'], ['status', 'Status']],
   transactions: [['title', 'Reference'], ['group_name', 'Group'], ['payee_label', 'Receiver'], ['amount_rwf', 'Recorded amount'], ['allocated_amount_rwf', 'Allocated amount'], ['status', 'Evidence status'], ['settlement_status', 'Settlement'], ['observed_at', 'Observed']],
   ledgers: [['title', 'Record'], ['group_name', 'Group'], ['signed_amount_rwf', 'Signed amount'], ['debit_rwf', 'Debit'], ['credit_rwf', 'Credit'], ['status', 'Status'], ['created_at', 'Created']],
 };
 
-function safeReturn(area: CoreArea, raw?: string | null): string {
-  if (!raw || raw.length > 2000 || containsControl(raw, true) || raw.includes('\\') || raw.includes('#') || !raw.startsWith('/') || raw.startsWith('//')) return `/admin/${area}`;
+function safeReturn(area: CoreArea, financialModel: FeatureAccess['financialModel'], scopedMember: boolean, raw?: string | null): string {
+  const directory = scopedMember && financialModel === 'canonical_evidence_ledger' && (area === 'users' || area === 'members');
+  const fallback = directory ? '/admin/members' : `/admin/${area}`;
+  if (!raw || raw.length > 2000 || containsControl(raw, true) || raw.includes('\\') || raw.includes('#') || !raw.startsWith('/') || raw.startsWith('//')) return fallback;
   try {
     const url = new URL(raw, 'https://collect.invalid');
-    if (url.origin !== 'https://collect.invalid' || url.pathname !== `/admin/${area}` || url.hash) return `/admin/${area}`;
+    const expected = directory ? ['/admin/members', '/admin/users'].includes(url.pathname) : url.pathname === fallback;
+    if (url.origin !== 'https://collect.invalid' || !expected || url.hash) return fallback;
     const keys = [...url.searchParams.keys()];
-    if (keys.some(key => !['search', 'status', 'sort', 'page'].includes(key)) || new Set(keys).size !== keys.length) return `/admin/${area}`;
-    return `${url.pathname}${url.search}`;
-  } catch { return `/admin/${area}`; }
+    if (keys.some(key => !['search', 'status', 'sort', 'page'].includes(key)) || new Set(keys).size !== keys.length) return fallback;
+    return directory ? listLocation('members', readFilters(url.search, 'members', financialModel, true)) : `${url.pathname}${url.search}`;
+  } catch { return fallback; }
 }
 
-export function CoreRecordPage({ area, id, request, permissions, actorId, principalId, role, authorityKey, financialModel, navigate, returnTo, allowMutations = false, identity, isCurrent, simplePayments = false }: RecordProps) {
+export function CoreRecordPage({ area, id, request, permissions, actorId, principalId, role, authorityKey, financialModel, navigate,
+  returnTo, allowMutations = false, identity, isCurrent, simplePayments = false, scopedMember = false }: RecordProps) {
   const allowed = permissions.includes(CORE_PERMISSIONS[area]);
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
   const [detailScope, setDetailScope] = useState('');
-  const currentScope = JSON.stringify([authorityKey, area, financialModel, id]);
+  const currentScope = JSON.stringify([authorityKey, area, financialModel, id, scopedMember]);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [retry, setRetry] = useState(0);
-  const resource = area === 'members' ? 'users' : area === 'ledgers' && financialModel === 'transaction_journals' ? 'journals' : area;
+  const resource = area === 'members' && (!scopedMember || financialModel !== 'canonical_evidence_ledger') ? 'users' : area === 'ledgers' && financialModel === 'transaction_journals' ? 'journals' : area;
   useEffect(() => {
     if (!allowed || !isId(id)) return;
     const controller = new AbortController(); let active = true;
@@ -49,7 +55,8 @@ export function CoreRecordPage({ area, id, request, permissions, actorId, princi
       if (data.resource_type !== resource || data.current_actor_id !== actorId || typeof data.can_manage !== 'boolean' || !isObject(data.resource) || !isObject(data.related)) throw new Error('Invalid detail');
       if (financialModel === 'canonical_evidence_ledger') {
         if (data.contract_version !== 2 || data.model !== financialModel) throw new Error('Invalid model');
-        parseCoreRow(area === 'members' ? 'users' : area, financialModel, data.resource);
+        const row = parseCoreRow(area === 'members' ? 'users' : area, financialModel, data.resource);
+        if (resource === 'members') validateMemberStatus(row);
       } else if (data.contract_version !== undefined || data.model !== undefined || (data.resource.id !== id && !(resource === 'users' && data.resource.operator_admin_id === id))) throw new Error('Invalid detail');
       if (data.resource.id !== id && !(resource === 'users' && data.resource.operator_admin_id === id)) throw new Error('Invalid identity');
       validateRelated(data, resource);
@@ -58,7 +65,7 @@ export function CoreRecordPage({ area, id, request, permissions, actorId, princi
     return () => { active = false; controller.abort(); };
   }, [allowed, id, resource, request, actorId, authorityKey, financialModel, area, currentScope, retry]);
   const paymentsReturn = area === 'transactions' ? safePaymentListReturn(returnTo, 'recorded') : null;
-  const back = paymentsReturn ?? safeReturn(area, returnTo);
+  const back = paymentsReturn ?? safeReturn(area, financialModel, scopedMember, returnTo);
   const {actions, membershipRecovery, membershipWrite, journalRecovery, journalWrite} = coreRecordActions({
     area, role, permissions: simplePayments ? permissions.filter(value => !['receivers.manage', 'ledger.read', 'ledger.manage', 'payments.manage', 'payments.reconcile'].includes(value)) : permissions,
     financialModel, allowMutations, actorId, id, resource,
@@ -66,8 +73,8 @@ export function CoreRecordPage({ area, id, request, permissions, actorId, princi
   });
   const reload = () => {setState('loading'); setRetry(value => value + 1);};
   return <>
-    <PageHeader title={AREA_TITLES[area]} subtitle="Review this record and its related information." actions={<>
-      <Button type="button" onClick={() => navigate(back)}>Back to {paymentsReturn ? 'payments' : AREA_TITLES[area].toLowerCase()}</Button>
+    <PageHeader title={area === 'users' ? 'Person' : AREA_TITLES[area]} subtitle="Review this record and its related information." actions={<>
+      <Button type="button" onClick={() => navigate(back)}>Back to {paymentsReturn ? 'payments' : scopedMember && area === 'users' ? 'members' : AREA_TITLES[area].toLowerCase()}</Button>
       {actions.map(action => <Button key={action.path} type="button" variant={action.variant} onClick={() => navigate(action.path)}>{action.label}</Button>)}
     </>} />
     {!allowed ? <ErrorState title="Access unavailable" message="Your account does not have permission to view this record." /> :
@@ -75,7 +82,7 @@ export function CoreRecordPage({ area, id, request, permissions, actorId, princi
       state === 'loading' || detailScope !== currentScope ? <LoadingState label="Loading record" /> :
       state === 'error' || !detail ? <ErrorState message="The record could not be verified or the service is unavailable." onRetry={reload} /> : <>
         <Card><div className="core-detail"><h2>Record details</h2><dl>{fields[area].filter(([key]) => (!simplePayments || key !== 'total_contributed_rwf') &&
-          (detail.resource as Record<string, unknown>)[key] !== undefined).map(([key, title]) => <div key={key}><dt>{title}</dt><dd>{area === 'transactions' && financialModel === 'canonical_evidence_ledger' && key === 'title' ? paymentReference(detail.resource as Record<string, unknown>) : formatField(key, (detail.resource as Record<string, unknown>)[key])}</dd></div>)}</dl></div></Card>
+          (detail.resource as Record<string, unknown>)[key] !== undefined).map(([key, title]) => <div key={key}><dt>{title}</dt><dd>{area === 'transactions' && financialModel === 'canonical_evidence_ledger' && key === 'title' ? paymentReference(detail.resource as Record<string, unknown>) : formatField(key, (detail.resource as Record<string, unknown>)[resource === 'members' && key === 'status' ? 'membership_status' : key])}</dd></div>)}</dl></div></Card>
         {area === 'transactions' && <p className="core-note">Recorded evidence does not establish provider settlement.</p>}
         {area === 'transactions' && financialModel === 'transaction_journals' && identity && identity.id === actorId && identity.role === role && isCurrent &&
           (['add', 'review'] as const).map(mode => <LegacyTransactionActions key={`${currentScope}:${mode}`} id={id} mode={mode} request={request} identity={identity}

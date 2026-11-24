@@ -21,6 +21,9 @@ import {adminBuriMunsiNativeWork} from './admin_burimunsi_native_work.js';
 import {adminBuriMunsiProvisioning} from './admin_burimunsi_provisioning.js';
 import {operatingRead,adminOperationWrite} from './admin_operations.js';
 import {adminReconciliationRoute} from './admin_reconciliation.js';
+import {BURIMUNSI_PRODUCT_MODE} from '../burimunsi-standalone.js';
+
+const retiredStandalonePayments = /^\/api\/admin\/(?:reconciliations|momo\/(?:transactions|sources)|gateway\/receipts|core\/(?:overview|transactions|ledgers|payment-activity)|operations\/(?:transactions|ledgers|payment-activity)|notifications?)(?:\/|$)/;
 
 // The platform-sponsored group fixture compiles these production operations.
 export {genericMutation} from './admin_record_mutations.js';
@@ -70,8 +73,8 @@ export async function handleAdmin(request,env,ctx){
  const path=new URL(request.url).pathname;if(path!=='/api/admin'&&!path.startsWith('/api/admin/'))return null;
  try{
   const account=await handleAdminAccounts(request,env,ctx);if(account)return account;
-  const standalone=env.BURIMUNSI_PRODUCT_MODE==='standalone';
-  if(standalone&&/^\/api\/admin\/(?:reconciliations|momo\/transactions|core\/(?:transactions|ledgers|payment-activity)|operations\/(?:transactions|ledgers|payment-activity)|notifications?)(?:\/|$)/.test(path))
+  const standalone=env.BURIMUNSI_PRODUCT_MODE===BURIMUNSI_PRODUCT_MODE;
+  if(standalone&&retiredStandalonePayments.test(path))
    fail(404,'not_found','This Payments action does not exist.');
   return await adminBuriMunsiPayments(request,env)??await adminBuriMunsiAccess(request,env)??await adminBuriMunsiOperators(request,env)??await adminBuriMunsiMemberEnrollment(request,env)??
     (standalone?null:await adminBuriMunsiNativeWork(request,env))??await adminBuriMunsiProvisioning(request,env)??

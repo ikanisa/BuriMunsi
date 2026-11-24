@@ -88,6 +88,11 @@ export async function verifyAdminHandsets({owner,admin,database,fixtureRoot}){
   });
  }
  const sign=async device=>{const v=await native(device,'/session/login',{phone:device.number,pin});device.token=v.token;return v;};
+ // Each scenario begins with a fresh allowance in this disposable fixture.
+ // Preserve historical rows in a window earlier than every existing bucket.
+ const freshLoginWindow=()=>admin.query(`WITH previous AS (SELECT min(window_start)-900000 AS stamp FROM private.burimunsi_pin_login_limits)
+  UPDATE private.burimunsi_pin_login_limits SET window_start=previous.stamp FROM previous
+  WHERE window_start=(floor(extract(epoch FROM clock_timestamp())*1000)::bigint/900000)*900000`);
  const consent=device=>native(device,'/sms/observation-consent',null,'SELECT private.burimunsi_observation_consent_current() v');
  const treasury=async()=>{await owner.query('BEGIN');try{await owner.query("SELECT set_config('burimunsi.collection_id',$1,true)",[group]);
   return (await owner.query('SELECT collection_id,receiving_account_id,enabled,active_binding_id,binding_version,version FROM private.burimunsi_scopes ORDER BY collection_id')).rows;
@@ -157,7 +162,7 @@ export async function verifyAdminHandsets({owner,admin,database,fixtureRoot}){
   }
   // Start the independently tested account-switch scenarios in a fresh budget
   // window. All subsequent PIN attempts still pass the ordinary rate limits.
-  await admin.query('UPDATE private.burimunsi_pin_login_limits SET window_start=window_start-900000 WHERE window_start=(floor(extract(epoch FROM clock_timestamp())*1000)::bigint/900000)*900000');
+  await freshLoginWindow();
   const shared={...A,number:'+250780000031'},staffOnFirst={...A,number:staff.number};
   // Both old PIN sessions were genuinely created through password verification;
   // the old issue clock can legally coincide on the same physical installation.
@@ -177,6 +182,8 @@ export async function verifyAdminHandsets({owner,admin,database,fixtureRoot}){
     FROM (VALUES ('verified',299999),('verified',300000),('checking',86399999),('checking',86400000),
       ('checking',-1),('verified',-1)) cases(state,age)`)).rows;
   assert.deepEqual(freshness.map(r=>r.fresh),[true,false,true,false,false,false]);
+  const monitorPreimage = (await admin.query(`SELECT to_regnamespace('collect_ops') IS NOT NULL AS ops,
+   to_regclass('collect_ops.jobs_config') IS NOT NULL AS config, to_regclass('collect_ops.jobs_dispatches') IS NOT NULL AS dispatches`)).rows[0];
   await admin.query(`CREATE SCHEMA IF NOT EXISTS collect_ops;CREATE SCHEMA IF NOT EXISTS cron;
    CREATE TABLE IF NOT EXISTS cron.job(jobid bigint PRIMARY KEY,active boolean,jobname text,schedule text,command text,database text);
    CREATE TABLE IF NOT EXISTS collect_ops.jobs_config(singleton boolean,enabled boolean,cron_job_id bigint);
@@ -272,7 +279,30 @@ export async function verifyAdminHandsets({owner,admin,database,fixtureRoot}){
   assert.equal(off.data.applied,true);await assert.rejects(()=>dashboard(fresh,page,[group]),denied);
   assert.equal((await dashboard(ownerLogin,list))[0].collectionId,group);
   assert.equal(ownerSession.data.user.role,'admin');
+  // The historic secondary Admins above have now both been disabled via Team.
+  // Apply the production singleton and use the one remaining account on two new phones.
+  const activeAdmins = await admin.query(
+   "SELECT principal_user_id FROM private.burimunsi_accounts WHERE collection_id=$1 AND role='admin' AND active AND NOT removed", [group]);
+  assert.deepEqual(activeAdmins.rows, [{principal_user_id:'synthetic-primary'}]);
+  // Restore these socket-only monitor fixtures before qualifying a real fence transition.
+  if (!monitorPreimage.dispatches) await admin.query('DROP TABLE collect_ops.jobs_dispatches');
+  if (!monitorPreimage.config) await admin.query('DROP TABLE collect_ops.jobs_config');
+  if (!monitorPreimage.ops) await admin.query('DROP SCHEMA collect_ops');
+  await migrate(['20261123061132_burimunsi_single_admin.sql']);
+  await freshLoginWindow();
+  const first = newPhone(shared.number), second = newPhone(shared.number);
+  const firstLogin = await sign(first), secondLogin = await sign(second);
+  assert.equal(firstLogin.profile.id, secondLogin.profile.id);
+  assert.equal(firstLogin.profile.role, 'admin');
+  for (const handset of [first, second]) {
+   assert.deepEqual(await consent(handset), {enabled:true,generation:1});
+   await emptySweep(handset, 1);
+  }
+  assert.notEqual((await inventory(first)).revision, (await inventory(second)).revision);
+  assert.equal((await dashboard(ownerLogin,'SELECT private.burimunsi_observation_admin_inbox_check($1) v',[group])).state,'verified');
+  await sign(staff);
+  await assert.rejects(()=>consent(staff),e=>e.code==='42501'||e.status===403);
   assert.deepEqual(await treasury(),before);
-  return {arbitraryAdminInstalls:2,normalPhonePinSessions:true,staffDenied:true,revokedAdminDenied:true,scopedInventory:true,explicitRefusalPreserved:true,sharedAndTeamAdmin:true,switchedHandsetCountedOnce:true,legacyTieUnknown:true,upstreamSuspensionExcluded:true,teamScopedDashboard:true,censusDriver,independentSensitiveAndFinancialGrants:true,treasuryUnchanged:true};
+  return {singleAdminAccountOnTwoHandsets:true,arbitraryAdminInstalls:2,normalPhonePinSessions:true,staffDenied:true,revokedAdminDenied:true,scopedInventory:true,explicitRefusalPreserved:true,sharedAndTeamAdmin:true,switchedHandsetCountedOnce:true,legacyTieUnknown:true,upstreamSuspensionExcluded:true,teamScopedDashboard:true,censusDriver,independentSensitiveAndFinancialGrants:true,treasuryUnchanged:true};
  }finally{await pool.end();}
 }

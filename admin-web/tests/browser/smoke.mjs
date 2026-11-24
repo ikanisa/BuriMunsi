@@ -175,8 +175,7 @@ try {
     await stepUp.context.close();
   }
 
-  // The fixture Admin has each view's read grant. Verify actual navigation and
-  // active states; the synthetic backend need not return live datasets here.
+  // A linked record and standalone unmatched receipt share the same activity table.
   const nav = page.getByRole('navigation', {name: 'Admin sections'});
   assert.deepEqual(await nav.getByRole('link').allTextContents(), ['Home', 'Members', 'Payments']);
   assert.equal(await page.getByRole('searchbox', {name: 'Search admin sections'}).count(), 0);
@@ -208,17 +207,37 @@ try {
   // The demo reads are synthetic and confined to this authenticated fixture.
   await nav.getByRole('link', {name: 'Members', exact: true}).click();
   const memberSearch = page.getByLabel('Search Members', {exact: true});
+  await memberSearch.waitFor();
+  assert.equal(await page.getByRole('navigation', {name: 'Member directory views'}).count(), 0);
+  const memberStatus = page.getByRole('combobox', {name: 'Status', exact: true});
+  assert.deepEqual(await memberStatus.locator('option').allTextContents(), ['All statuses', 'Active', 'Inactive']);
+  await memberStatus.selectOption('inactive');
+  const inactiveRow = page.getByRole('row').filter({hasText: fixtureInactiveMember.display_name});
+  await inactiveRow.getByRole('cell', {name: 'Inactive', exact:true}).waitFor();
+  const scopedDetail = member => page.waitForResponse(response => response.url() === origin + '/api/admin/operations/members/' + member.id && response.ok());
+  await Promise.all([scopedDetail(fixtureInactiveMember), inactiveRow.getByRole('button', {name:'View ' + fixtureInactiveMember.public_id}).click()]);
+  await page.getByRole('heading', {name: 'Record details',exact:true}).waitFor();
+  assert.equal(await page.getByText('Status', {exact:true}).locator('+ dd').textContent(), 'Inactive');
+  await page.getByRole('button', {name:'Back to members',exact:true}).click();
+  assert.equal(await memberStatus.inputValue(), 'inactive');
+  await memberStatus.selectOption('active');
+  await page.getByRole('row').filter({hasText: fixtureMember.display_name}).waitFor();
   await memberSearch.fill('No synthetic member matches');
   await page.getByRole('button', {name: 'Search', exact: true}).click();
   await page.getByText('No records found', {exact: true}).waitFor();
   await memberSearch.fill(fixtureMember.display_name);
   await page.getByRole('button', {name: 'Search', exact: true}).click();
   const memberRow = page.getByRole('row').filter({hasText: fixtureMember.display_name});
-  await memberRow.getByRole('button', {name: `View ${fixtureMember.public_id}`, exact: true}).click();
+  await Promise.all([scopedDetail(fixtureMember), memberRow.getByRole('button', {name: `View ${fixtureMember.public_id}`, exact: true}).click()]);
   await page.getByRole('heading', {name: 'Record details', exact: true}).waitFor();
   await page.getByText(fixtureMember.display_name, {exact: true}).waitFor();
   await page.getByRole('row').filter({hasText: 'Synthetic group'}).waitFor();
   await page.getByRole('button', {name: 'Back to members', exact: true}).click();
+  assert.equal(await memberSearch.inputValue(), fixtureMember.display_name);
+  const personBookmark = new URLSearchParams({search: fixtureMember.display_name, status:'active', sort: 'public_id_asc'});
+  await page.goto(origin + '/#/admin/users?' + personBookmark);
+  await page.waitForURL(url => url.hash === '#/admin/members?' + personBookmark);
+  await page.getByRole('row').filter({hasText: fixtureMember.display_name}).waitFor();
   assert.equal(await memberSearch.inputValue(), fixtureMember.display_name);
 
   await nav.getByRole('link', {name: 'Payments', exact: true}).click();
@@ -262,6 +281,9 @@ try {
   await page.getByRole('button', { name: /retry|try again/i }).click();
   const receiptRow = page.getByRole('table').getByRole('row').nth(1);
   await receiptRow.waitFor();
+  await receiptRow.getByRole('button', {name:'App receipt',exact:true}).click();
+  await page.getByText('Submitted by', {exact:true}).waitFor();
+  await page.getByText('Demo member A', {exact:true}).waitFor();
   await page.setViewportSize({width: 320, height: 768});
   assert.equal(await receiptRow.evaluate((row) => getComputedStyle(row).display), 'grid');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
@@ -330,7 +352,7 @@ try {
   await mobile.page.getByRole('heading', { name: 'Welcome to BuriMunsi' }).waitFor();
   assert(!decodeURIComponent(mobile.page.url()).includes('780000001'));
   assert.equal(await mobile.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-  assert.equal(await mobile.page.getByRole('heading', { name: 'SMS receipts' }).count(), 0);
+  assert.equal(await mobile.page.getByRole('heading', { name: 'Payments' }).count(), 0);
 
   await mobile.context.addCookies(cookies);
   await mobile.page.goto(origin + '/admin/sms-receipts');

@@ -119,7 +119,9 @@ fun main()=runBlocking{
     for(effect in listOf("reversed","corrected")){
         Fixture.financialState=effect;Fixture.outcomeState="committed"
         val oldMutations=Fixture.mutations;financial.retry();idle(financial)
-        ck("A04 $effect recovery displays financial warning without POST",financial.state.commandNotice?.contains("reversed or corrected")==true&&financial.state.error==null&&Fixture.mutations==oldMutations)
+        ck("A04 $effect recovery displays the current payment warning without POST",
+            financial.state.commandNotice?.contains("This payment changed after the original action.")==true&&
+                financial.state.error==null&&Fixture.mutations==oldMutations)
     }
     financial.viewModelScope.cancel();Fixture.pendingFlag=false;Fixture.financialState="posted"
     println("RESULT: $checks checkpoint and actual-controller restoration checks passed; storage encryption and Android process lifecycle not executed.")

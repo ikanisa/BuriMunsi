@@ -121,5 +121,431 @@
       "stage": "scoped_admin_outcomes",
       "elapsedMs": 3865.315
     }
-  ]
+  ],
+  "concurrentAdminReceivers": {
+    "environment": "Isolated PostgreSQL 17. Two authenticated Admin sources submitted the same test transfer concurrently. The gateway and carrier callback were simulated.",
+    "regression": "scripts/supabase/cloud-release/burimunsi-automatic-receipt-e2e.test.mjs",
+    "distinctPhoneSources": 2,
+    "providerTransfers": 1,
+    "payments": 1,
+    "ledgerCredits": 1,
+    "amountRwf": 1000,
+    "eligiblePayerObligations": 1,
+    "gatewayTransmissions": 1,
+    "gatewayRequests": [
+      "POST",
+      "GET same original message ID"
+    ],
+    "adminPayerState": [
+      "unknown",
+      "delivered"
+    ],
+    "scopedCensus": [
+      {
+        "status": "verified",
+        "candidates": 2
+      },
+      {
+        "status": "incomplete",
+        "extraReceiptOn": "second phone"
+      },
+      {
+        "status": "verified",
+        "candidates": 3
+      }
+    ]
+  },
+  "deployedDriverRegression": {
+    "driver": "postgres@3.4.7",
+    "original": "42501 consent_changed",
+    "staleConsent": 403,
+    "checkpoint": 200,
+    "processingStatus": 200,
+    "page": 200,
+    "missing": "incomplete"
+  },
+  "production20261124": {
+    "sqlRelease": {
+      "epoch": 78,
+      "observedAt": "2026-11-24T08:27:05.441Z",
+      "sourceCommit": "089860d5dac97511cd721f9c1f1d34e602a53a38",
+      "previousMigrationCount": 110,
+      "totalMigrations": 115,
+      "atomicAdditions": [
+        {
+          "version": "20261123061132",
+          "name": "burimunsi_single_admin",
+          "sha256": "631c125c2caed28585d15f9e47123ba8b8347ef1422da638e38c14d11ccd42ae",
+          "entries": 1
+        },
+        {
+          "version": "20261124075523",
+          "name": "burimunsi_materialize_retention_catalog",
+          "sha256": "9f1c8fb6c54a25d823bedd95d64e775b42a7d08e2c4296c672bb2f28954d55f6",
+          "entries": 1
+        },
+        {
+          "version": "20261124080000",
+          "name": "burimunsi_read_admission",
+          "sha256": "3ec13367ff8b08ba82a46465e21e1feb311154c7166e65696f195cba21a65e85",
+          "entries": 1
+        },
+        {
+          "version": "20261124080612",
+          "name": "burimunsi_retry_unclaimed_scheduler_refusals",
+          "sha256": "db49e3ae18abd8e18909e238a14c39c67e7691cb4251adae4c6796e1b2d15d2b",
+          "entries": 1
+        },
+        {
+          "version": "20261124081102",
+          "name": "burimunsi_inbox_check_freshness",
+          "sha256": "4eebcf6a67f673fa4cf6c29c7eb3474944892442f78b5e526becee22587e5e73",
+          "entries": 1
+        }
+      ],
+      "unchangedEdgeExecutables": 4,
+      "gatewayArchiveSha256": "f1b5d15cd788e0003cae6fdcf66757cc47635682aa4724eb6ce864a629e2f4b7",
+      "catalog": {
+        "private_classes": 93,
+        "copy_classes": 20,
+        "digest": "c7e515a0ecd521b8d1be45567fe38339e0ef2bf999afa9a949dec88a073e9333"
+      },
+      "activeAdminAccounts": 1,
+      "activeStaffAccounts": 1
+    },
+    "scheduled": [
+      {
+        "epoch": 78,
+        "checkedAt": "2026-11-24T08:27:14.908Z",
+        "schedule": "1 second",
+        "ticks": 6,
+        "runs": [
+          {
+            "slot": "2026-11-24 08:26:51+00",
+            "observed_at": "2026-11-24 08:27:04.321081+00",
+            "http_status": 200,
+            "native_provider_calls": 0
+          },
+          {
+            "slot": "2026-11-24 08:25:54+00",
+            "observed_at": "2026-11-24 08:26:03.527662+00",
+            "http_status": 200,
+            "native_provider_calls": 0
+          }
+        ]
+      },
+      {
+        "epoch": 80,
+        "checkedAt": "2026-11-24T08:35:22.299Z",
+        "schedule": "1 second",
+        "ticks": 9,
+        "runs": [
+          {
+            "slot": "2026-11-24 08:35:01+00",
+            "observed_at": "2026-11-24 08:35:09.304652+00",
+            "http_status": 200,
+            "native_provider_calls": 0
+          },
+          {
+            "slot": "2026-11-24 08:33:58+00",
+            "observed_at": "2026-11-24 08:34:03.109722+00",
+            "http_status": 200,
+            "native_provider_calls": 0
+          }
+        ]
+      },
+      {
+        "epoch": 83,
+        "checkedAt": "2026-11-24T08:41:14.883Z",
+        "schedule": "1 second",
+        "ticks": 10,
+        "runs": [
+          {
+            "slot": "2026-11-24 08:41:05+00",
+            "observed_at": "2026-11-24 08:41:10.630504+00",
+            "http_status": 200,
+            "native_provider_calls": 0
+          },
+          {
+            "slot": "2026-11-24 08:40:05+00",
+            "observed_at": "2026-11-24 08:40:09.612871+00",
+            "http_status": 200,
+            "native_provider_calls": 0
+          }
+        ]
+      }
+    ],
+    "paymentReadback": {
+      "observed_at": "2026-11-24 08:25:07.438207+00",
+      "posted_payments": 11,
+      "single_matching_credits": 11,
+      "provider_transfers_with_multiple_payments": 0,
+      "payer_obligations": {
+        "prior_posting": 11
+      },
+      "payer_delivery_records": 0,
+      "gateway_ledger_receipts": 0,
+      "payer_confirmed_all_parts": 0,
+      "ready_senders": 1
+    },
+    "currentPhonePage": {
+      "observedAt": "2026-11-24 08:32:48.915169+00",
+      "versionCode": 59,
+      "entries": 10,
+      "withoutRetainedSource": 0,
+      "outcomes": {
+        "parsed": 2,
+        "needs_review": 8
+      },
+      "historicalHoldsWithoutPostingJob": 8,
+      "sameContentAsOneEarlierTerminalParse": 4,
+      "sameHandsetSourceKeyOnThoseNativeParses": 0,
+      "fullSweepVerified": false,
+      "phoneAndParserHeadsMatched": null
+    },
+    "isolatedAccountCoverage": {
+      "postgresMajor": 17,
+      "singleAdminAccount": true,
+      "separateAuthenticatedHandsets": 2,
+      "bothVerifiedTheirOwnInbox": true,
+      "staffReceiverAccess": "denied"
+    },
+    "livePayerNotice": "All eleven existing postings predate payer notices. No carrier-confirmed notice for a new eligible posting was available.",
+    "completedHandsetCheck": {
+      "versionCode": 59,
+      "observedAt": "2026-11-24 09:00:06.400322+00",
+      "state": "incomplete",
+      "checkedAt": "2026-11-24T08:55:49.636+00:00",
+      "pageItems": 10,
+      "headsMatch": false,
+      "missingCount": 0,
+      "pendingCount": 9,
+      "candidateCount": 10,
+      "pageSourcesMatched": 10,
+      "pageHistoricalHolds": 8
+    },
+    "followingHandsetCheck": {
+      "checked_at": "2026-11-24 09:10:22.884219+00",
+      "check_state": "checking",
+      "total": 10,
+      "distinct_sources": 10,
+      "held": 8,
+      "parsed": 2,
+      "reported_phone_head_outcome": null,
+      "reported_parser_head_outcome": null,
+      "newest_source_outcome": "needs_review"
+    },
+    "release85At0900Utc": {
+      "epoch": 85,
+      "observed_at": "2026-11-24 09:00:06.400322+00",
+      "release_state": "open",
+      "scheduler_active": false,
+      "schedule": "1 second",
+      "last_signed_run": "2026-11-24 08:52:48.380784+00",
+      "ready_senders": 1
+    },
+    "androidContinuation": {
+      "commit": "54ebfb2446215696c8f1f443852317d4bb1c2e13",
+      "adapterChecksPassed": 146,
+      "installedVersionCode": 60,
+      "inPlaceUpdate": true,
+      "terminalCheck": {
+        "atUTC": "2026-11-24T09:15:05Z",
+        "state": "incomplete",
+        "pageItems": 10,
+        "source": "physical release operator"
+      }
+    },
+    "reconciliationLatency": {
+      "productionBaseline": {
+        "epoch": 83,
+        "versionCode": 59,
+        "windowUTC": [
+          "08:39:12",
+          "08:47:50"
+        ],
+        "reconcileRequests": 11,
+        "medianMs": 20699,
+        "maxMs": 70567,
+        "paymentsRequests": 12,
+        "paymentsMedianMs": 1265
+      },
+      "candidateCommits": [
+        "578b2dab707a3398dea8c5f4d37970651c5d8927",
+        "75014b96430c8c7063c3e07e420846c680241d46"
+      ],
+      "tenKeyedSources": {
+        "beforeLookupQueries": 30,
+        "afterLookupQueries": 3,
+        "encryptedObjectsVerified": 10
+      },
+      "perKeyedSourceFinalJournal": {
+        "beforeSql": 7,
+        "afterSql": 2,
+        "beforeOwnershipChecks": 15,
+        "afterOwnershipChecks": 5
+      },
+      "productionV60Early": {
+        "epoch": 87,
+        "source": "physical release operator, ordinary reconcile-batch HTTP 200",
+        "requestEndsUTC": [
+          "09:33:46",
+          "09:34:32",
+          "09:35:12",
+          "09:35:42"
+        ],
+        "durationMs": [
+          47010,
+          52490,
+          27220,
+          17690
+        ],
+        "sampleMedianMs": 37115,
+        "scope": "first four observations, different cohort from E83 baseline"
+      },
+      "schedulerPg17": {
+        "baselineEmptyQueueMs": [
+          5013,
+          5008
+        ],
+        "deployedSourceEmptyQueueMs": [
+          18,
+          9
+        ],
+        "realHostSchedulerJobsConfirmed": 2
+      },
+      "productionDatabaseSample": {
+        "fromUTC": "2026-11-24T09:38:10.015Z",
+        "untilUTC": "2026-11-24T09:39:00.550Z",
+        "scope": "All project requests in the sample window. Query texts, values, receipt identifiers and caller identities excluded.",
+        "workAssertions": {
+          "class": "work validity",
+          "calls": 557,
+          "execMs": 362
+        },
+        "inboxPage": {
+          "class": "inbox page",
+          "calls": 1,
+          "execMs": 48
+        },
+        "advisoryLockObserved": true
+      }
+    },
+    "release85SchedulerReview": {
+      "reviewedAtUTC": "2026-11-24T09:20:45Z",
+      "signedRegularUTC": [
+        "08:52:48",
+        "09:11:47"
+      ],
+      "claimedFailuresUTC": [
+        "08:53:46",
+        "09:12:46"
+      ],
+      "outcomes": [
+        "reviewed_unknown",
+        "reviewed_unknown"
+      ],
+      "providerCalls": [
+        0,
+        0
+      ],
+      "bothExecutorsStopped": true,
+      "unconfirmed": 0,
+      "awaiting": 0,
+      "pendingTransports": 0,
+      "activeJobAdmissions": 0,
+      "schedulerActive": false
+    },
+    "observedWorkLeaseLogin": {
+      "at": "2026-11-24T09:23:58.687Z",
+      "cohort": "Collect shared original-work lease executing or retaining private.collect_fence_assert_work",
+      "result": [
+        {
+          "login": "postgres",
+          "rolcanlogin": true,
+          "rolsuper": false,
+          "rolbypassrls": true,
+          "tls": true,
+          "sessions": 1
+        }
+      ]
+    },
+    "productionRelease87": {
+      "checkedAt": "2026-11-24T09:35:51.366Z",
+      "commit": "faed25be949dc3f1fdaf764f52588e36ae683a80",
+      "coreSha256": "a2e2f587bc38bfe3d0a155981558952fa253b638f1b8f4369ef04ebe69826460",
+      "schemaMigrations": 116,
+      "priorMigrationsRetained": 115,
+      "newMigration": "20261124091329_burimunsi_idle_native_jobs.sql",
+      "sqlSha256": "121154674461300384f37892f8798ca22a108dca31f07297d1450996e0a451f8",
+      "functionBodySha256": "fe0826706b4844655ec62423fdd14ecd2f7d3efdb41653142fd94f7fbf78c417",
+      "runtimeCanExecute": true,
+      "publicClientRolesCanExecute": false,
+      "retainedSettings": 78,
+      "gatewayArchiveSha256": "f1b5d15cd788e0003cae6fdcf66757cc47635682aa4724eb6ce864a629e2f4b7",
+      "originalJobsReviewedUnknown": 2,
+      "scheduler": {
+        "cadence": "1 second",
+        "verifiedAt": "2026-11-24T09:35:40.018Z",
+        "ticksInTenSeconds": 9,
+        "signedRuns": [
+          {
+            "kind": "probe",
+            "state": "confirmed",
+            "status": 200,
+            "observed_at": "2026-11-24 09:33:02.624206+00",
+            "native_provider_calls": 0,
+            "signed": true
+          },
+          {
+            "kind": "scheduled",
+            "state": "confirmed",
+            "status": 200,
+            "observed_at": "2026-11-24 09:33:45.456876+00",
+            "native_provider_calls": 0,
+            "signed": true
+          },
+          {
+            "kind": "scheduled",
+            "state": "confirmed",
+            "status": 200,
+            "observed_at": "2026-11-24 09:34:55.300231+00",
+            "native_provider_calls": 0,
+            "signed": true
+          }
+        ],
+        "queuedNativeJobs": 0,
+        "readyGateways": 1
+      },
+      "paymentAndHandsetReadback": {
+        "observed_at": "2026-11-24 09:35:45.900774+00",
+        "scheduler_active": true,
+        "schedule": "1 second",
+        "last_signed_run": "2026-11-24 09:34:55.300231+00",
+        "posted_payments": 11,
+        "single_matching_credits": 11,
+        "provider_transfers_with_multiple_payments": 0,
+        "payer_obligations": {
+          "prior_posting": 11
+        },
+        "payer_delivery_records": 0,
+        "gateway_ledger_receipts": 0,
+        "payer_confirmed_all_parts": 0,
+        "recorded_handset_checks": 2,
+        "latest_recorded_handset_check": {
+          "state": "checking",
+          "checkedAt": "2026-11-24T09:29:37.523+00:00",
+          "pageItems": 10,
+          "headsMatch": null,
+          "missingCount": null,
+          "pendingCount": null,
+          "candidateCount": null,
+          "pageSourcesMatched": 10,
+          "pageHistoricalHolds": 8
+        },
+        "ready_senders": 1,
+        "last_sender_heartbeat": "2026-11-24T09:35:30.615Z"
+      }
+    }
+  }
 }

@@ -3,7 +3,11 @@ import {Link, Navigate, useLocation, useParams} from 'react-router';
 import {canOpenPaymentView, paymentViews, paymentsPath} from '../../features/operations/paymentLocations';
 import {isValidId} from '../../features/operations/contracts';
 import {CORE_PERMISSIONS, type CoreArea} from '../../features/core/types';
+import {canAddMember} from '../../features/core/addMemberAccess';
+import {listLocation, readFilters} from '../../features/core/coreListFilters';
+import {MemberDirectoryActions} from '../../features/core/MemberDirectory';
 import {useSession} from '../../session/SessionProvider';
+import {usesPhoneCanonicalRecords} from '../../session/sessionContext';
 import {UnavailablePage} from '../UnavailablePage';
 import {useAccess, useCurrentAuthority, useSensitiveAccess} from './access';
 import {LegacyJournalCreateRoute, LegacyJournalEditRoute, TransactionEvidenceRoute} from './financial-routes';
@@ -14,6 +18,7 @@ const CoreRecordPage = lazy(() => import('../../features/core/CoreRecordPage').t
 const GroupCreatePage = lazy(() => import('../../features/core/GroupCreatePage').then(m => ({default: m.GroupCreatePage})));
 const GroupEditPage = lazy(() => import('../../features/core/GroupEditPage').then(m => ({default: m.GroupEditPage})));
 const UserCreatePage = lazy(() => import('../../features/core/UserCreatePage').then(m => ({default: m.UserCreatePage})));
+const AddMemberPage = lazy(() => import('../../features/core/AddMemberPage').then(m => ({default: m.AddMemberPage})));
 const UserEditPage = lazy(() => import('../../features/core/UserEditPage').then(m => ({default: m.UserEditPage})));
 const MembershipCreatePage = lazy(() => import('../../features/core/MembershipCreatePage').then(m => ({default: m.MembershipCreatePage})));
 const MembershipEditPage = lazy(() => import('../../features/core/MembershipEditPage').then(m => ({default: m.MembershipEditPage})));
@@ -29,11 +34,32 @@ function CoreListRoute({area}: {area: CoreArea}) {
     simplePayments={user?.authMethod === 'phone_passcode'} />;
 }
 
+function PeopleListRoute() {
+  const {search} = useLocation();
+  const session = useSession();
+  if (!usesPhoneCanonicalRecords(session)) return <CoreListRoute area="users" />;
+  return <Navigate replace to={listLocation('members', readFilters(search, 'members', 'canonical_evidence_ledger', true))} />;
+}
+
+function MemberListRoute() {
+  const access = useAccess(), {identity} = useSensitiveAccess(), session = useSession(), {search} = useLocation();
+  const scopedMember = usesPhoneCanonicalRecords(session);
+  return <CoreListPage key={access.authorityKey} {...access} area="members" locationSearch={search}
+    simplePayments={session.user?.authMethod === 'phone_passcode'} scopedMember={scopedMember}
+    memberActions={scopedMember && session.user && <MemberDirectoryActions user={session.user} identity={identity} />} />;
+}
+
+function MemberCreateRoute() {
+  const session = useSession();
+  return usesPhoneCanonicalRecords(session) ? <AddMemberPage /> : <GroupSelectionRoute action="member" />;
+}
+
 function CoreDetailRoute({area}: {area: CoreArea}) {
-  const access = useAccess(), sensitive = useSensitiveAccess(), isCurrent = useCurrentAuthority(), {id = ''} = useParams(), location = useLocation(), {user} = useSession();
+  const access = useAccess(), sensitive = useSensitiveAccess(), isCurrent = useCurrentAuthority(), {id = ''} = useParams(), location = useLocation(), session = useSession();
+  const scopedMember = usesPhoneCanonicalRecords(session) && (area === 'members' || area === 'users');
   return <CoreRecordPage key={`${access.authorityKey}:${area}:${id}`} {...access} identity={sensitive.identity} area={area} id={id}
-    isCurrent={isCurrent} returnTo={new URLSearchParams(location.search).get('returnTo')}
-    simplePayments={user?.authMethod === 'phone_passcode'} />;
+    scopedMember={scopedMember} isCurrent={isCurrent} returnTo={new URLSearchParams(location.search).get('returnTo')}
+    simplePayments={session.user?.authMethod === 'phone_passcode'} />;
 }
 
 function GroupEditRoute() {
@@ -160,11 +186,13 @@ const records: Record<CoreArea, RecordRoutes> = {
     edit: {element: <GroupEditRoute />, access: requiresPermissions('collections.manage')},
   },
   users: {
+    list: <PeopleListRoute />,
     create: {element: <UserCreateRoute />, access: canManageUsers},
     edit: {element: <UserEditRoute returnArea="users" />, access: canManageUsers},
   },
   members: {
-    create: {element: <GroupSelectionRoute action="member" />, access: canManageUsers},
+    list: <MemberListRoute />,
+    create: {element: <MemberCreateRoute />, access: user => user.financialModel === 'canonical_evidence_ledger' && user.authMethod === 'phone_passcode' ? canAddMember(user) : canManageUsers(user)},
     edit: {element: <UserEditRoute returnArea="members" />, access: canManageUsers},
   },
   payees: {

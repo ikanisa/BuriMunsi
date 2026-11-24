@@ -37,6 +37,9 @@ WITH scope AS (
   JOIN app.momo_transactions t ON t.id = f.transaction_id
   WHERE t.event_kind = 'incoming_receipt' AND t.provider_transaction_id IS NOT NULL
   GROUP BY t.receiving_account_id, t.provider_transaction_id
+), latest_check AS MATERIALIZED (
+  SELECT x.* FROM private.burimunsi_inbox_checks x JOIN scope s ON s.id = x.collection_id
+  ORDER BY x.checked_at DESC, x.installation_id LIMIT 1
 ), receipt_senders AS (
   SELECT count(*)::int AS ready_senders, max(last_seen_at) AS last_sender_heartbeat
   FROM collect_sms.devices
@@ -61,6 +64,19 @@ SELECT f.project_ref AS project, statement_timestamp() AS observed_at, f.epoch,
     AND EXISTS (SELECT 1 FROM collect_sms.attempt_evidence a WHERE a.message_id = sent.message_id
       AND a.parts_total > 0 AND a.delivered_count = a.parts_total)) AS payer_confirmed_all_parts,
   (SELECT count(*)::int FROM private.burimunsi_inbox_checks x WHERE x.collection_id = s.id) AS recorded_handset_checks,
+  (SELECT jsonb_build_object('state', x.state, 'checkedAt', to_timestamp(x.checked_at / 1000.0), 'pageItems', x.page_items,
+    'pageSourcesMatched', (SELECT count(i.source_id)::int FROM private.burimunsi_inbox_check_items i
+      WHERE (i.collection_id, i.installation_id) = (x.collection_id, x.installation_id)),
+    'pageHistoricalHolds', (SELECT count(*)::int FROM private.burimunsi_inbox_check_items i
+      JOIN private.burimunsi_held_observation_sources h ON h.source_id = i.source_id
+      WHERE (i.collection_id, i.installation_id) = (x.collection_id, x.installation_id)),
+    'candidateCount', CASE WHEN x.state <> 'checking' THEN x.report->'candidateCount' END,
+    'missingCount', CASE WHEN x.state <> 'checking' THEN x.report->'missingCount' END,
+    'pendingCount', CASE WHEN x.state <> 'checking' THEN x.report->'pendingCount' END,
+    'headsMatch', CASE WHEN x.state = 'verified' AND (x.report->>'candidateCount')::int = 0 THEN true
+      WHEN x.state <> 'checking' AND x.report->>'phoneLatestKey' IS NOT NULL THEN
+        (x.report->>'phoneLatestKey') IS NOT DISTINCT FROM (x.report->>'parsedLatestKey') END)
+   FROM latest_check x) AS latest_recorded_handset_check,
   senders.ready_senders, senders.last_sender_heartbeat
 FROM private.collect_fence_control f JOIN collect_ops.jobs_config c USING (singleton)
 JOIN cron.job j ON j.jobid = c.cron_job_id CROSS JOIN scope s
@@ -71,7 +87,7 @@ const response = await management('database/query', {
   headers: {'Content-Type': 'application/json'},
   // The Management API's read_only role cannot see the private journals.
   // Use the operator's identity with an explicit read-only database transaction.
-  body: JSON.stringify({query: 'BEGIN READ ONLY; ' + query + '; ROLLBACK;', read_only: false}),
+  body: JSON.stringify({query: "BEGIN READ ONLY; SET LOCAL statement_timeout='5s'; " + query + '; ROLLBACK;', read_only: false}),
 });
 const rows = response.json();
 if (rows.length !== 1 || rows[0].project !== PROJECT) throw Error('expected_one_burimunsi_collection');

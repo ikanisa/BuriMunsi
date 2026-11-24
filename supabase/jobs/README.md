@@ -58,8 +58,8 @@ scheduler. Existing auth/Admin SMTP delivery is not contribution-email delivery.
 Keep the original dispatch ID for reconciliation. A scheduled SQL call or HTTP
 request ID confirms queueing. Confirmation requires the authenticated response
 and its matching digest. Pause and reconcile an unresolved outcome before a
-new dispatch. The scheduler retains uncertainty while business lanes keep their
-own durable receipt, ledger and delivery state.
+new dispatch. For BuriMunsi, verify the retained SMS and its linked Payments row
+before retrying processing with an uncertain outcome.
 
 ## Separate receipt email
 
