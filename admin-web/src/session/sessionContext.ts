@@ -21,6 +21,11 @@ export function canReadSmsEvidence(user: Pick<AdminUser, 'role' | 'permissions'>
   return !!user && user.role !== 'staff' && user.permissions.includes('sms.read');
 }
 
+export function usesPhoneCanonicalRecords({user, verificationMode}: Pick<SessionContextValue, 'user' | 'verificationMode'>): boolean {
+  return user?.financialModel === 'canonical_evidence_ledger' &&
+    (verificationMode === 'passcode' || user.authMethod === 'phone_passcode');
+}
+
 export type PasswordChangeOutcome = 'session-retained' | 'signed-out';
 
 export interface SessionContextValue extends SessionSnapshot {

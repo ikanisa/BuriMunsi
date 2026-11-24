@@ -1,7 +1,7 @@
 import {Link, useSearchParams} from 'react-router';
 import {ErrorState, PageHeader} from '../../ui';
 import {useSession} from '../../session/SessionProvider';
-import {canDisplaySessionRecords, canReadSmsEvidence} from '../../session/sessionContext';
+import {canDisplaySessionRecords, canReadSmsEvidence, usesPhoneCanonicalRecords} from '../../session/sessionContext';
 import {CoreListPage} from '../core/CoreListPage';
 import type {FeatureAccess} from '../core/types';
 import {ReconciliationQueuePage} from '../reconciliation/ReconciliationQueuePage';
@@ -9,6 +9,7 @@ import {MemberReceiptsPage} from './MemberReceiptPages';
 import {UploadedSms} from './UploadedSms';
 import {WorkspaceMomoTransactionList} from './MomoTransactionList';
 import {ReceiverSmsPanel} from './ReceiverSmsPanel';
+import {PaymentActivityTable} from './PaymentActivityTable';
 import {canOpenPaymentView, canOpenReceiptSource, paymentViewLocation, paymentViews, receiptSources} from './paymentLocations';
 import './operations.css';
 import './paymentsWorkspace.css';
@@ -16,6 +17,12 @@ import './paymentsWorkspace.css';
 const denied = <ErrorState title="Access unavailable" message="Your current account cannot open this view." />;
 
 export function PaymentsWorkArea(access: FeatureAccess) {
+  const session = useSession();
+  if (usesPhoneCanonicalRecords(session)) return <PaymentActivityTable />;
+  return <SharedPaymentsWorkArea {...access} />;
+}
+
+function SharedPaymentsWorkArea(access: FeatureAccess) {
   const session = useSession(), [params] = useSearchParams();
   // Reuse the session presentation fence and keep each child under its own read permission.
   const permissions = canDisplaySessionRecords(session) ? access.permissions : [];

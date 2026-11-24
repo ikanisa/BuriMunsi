@@ -4,6 +4,7 @@ import {afterEach, describe, expect, it, vi} from 'vitest';
 import type {AdminBackend} from '../../src/api/client';
 import {makeAdminRouter} from '../../src/app/App';
 import {SessionProvider, type AdminOwnerIdentity} from '../../src/session/SessionProvider';
+import core from '../core/canonical-core-fixtures.json';
 
 const account = {
   id: 'staff-one', email: 'staff@example.com', role: 'staff', sessionId: 'session-one',
@@ -13,10 +14,12 @@ const account = {
 const reply = (body: unknown, status = 200) => Response.json(body, {status});
 let router: ReturnType<typeof makeAdminRouter>;
 
-type SessionFixture = {user: typeof account; ownerIdentity?: AdminOwnerIdentity; ownerEmail?: string};
+type SessionFixture = {user: typeof account & {accountId?: string; phone?: string; authMethod?: 'phone_passcode'; passcodeVerifiedAt?: string}; ownerIdentity?: AdminOwnerIdentity; ownerEmail?: string};
+const phoneIdentity = () => ({accountId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', phone:'+250780000001',
+  authMethod:'phone_passcode' as const, passcodeVerifiedAt:new Date().toISOString()});
 
-function openAdmin(path: string, {backend = 'supabase', failFirstCheck = false, session = {user: account}}:
-  {backend?: AdminBackend; failFirstCheck?: boolean; session?: SessionFixture} = {}) {
+function openAdmin(path: string, {backend = 'supabase', failFirstCheck = false, session = {user: account}, phonePasscodeOnly, read}:
+  {backend?: AdminBackend; failFirstCheck?: boolean; session?: SessionFixture; phonePasscodeOnly?: boolean; read?: (url: URL) => Response | undefined} = {}) {
   const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
   const requests: string[] = [];
   const fetchImpl: typeof fetch = async (input) => {
@@ -29,12 +32,12 @@ function openAdmin(path: string, {backend = 'supabase', failFirstCheck = false, 
     if (url.pathname.endsWith('/auth/email-verification')) {
       return reply({contractVersion: 1, sessionId: session.user.sessionId, emailVerifiedAt: null});
     }
-    return reply({error: {code: 'not_found'}}, 404);
+    return read?.(url) ?? reply({error: {code: 'not_found'}}, 404);
   };
   window.history.replaceState(null, '', '/#' + path);
   router = makeAdminRouter();
   render(<SessionProvider config={{backend, publishableKey: backend === 'supabase' ? 'sb_publishable_' + 'a'.repeat(32) : undefined,
-    captchaEnabled: false, googleEnabled: false, fetchImpl}}><RouterProvider router={router} /></SessionProvider>);
+    captchaEnabled: false, googleEnabled: false, phonePasscodeOnly:phonePasscodeOnly || undefined, fetchImpl}}><RouterProvider router={router} /></SessionProvider>);
   return {requests, expiresAt};
 }
 
@@ -105,19 +108,76 @@ describe('Admin session recovery through the router', () => {
 });
 
 describe('Admin navigation for the current session', () => {
-  it('keeps distinct member and person reads in one directory and respects the existing access guard', async () => {
-    const {requests} = openAdmin('/admin/members', {session: {user: {...account, permissions: ['users.read']}}});
+  it('takes old People list bookmarks to the same filtered member roster', async () => {
+    const {requests} = openAdmin('/admin/users?search=Group+One&sort=public_id_asc&status=suspended&unknown=drop',
+      {phonePasscodeOnly:true, session: {user: {...account, ...phoneIdentity(), permissions: ['users.read']}}});
     await screen.findByRole('heading', {name: 'Members'});
-    const views = within(screen.getByRole('navigation', {name: 'Member directory views'}));
-    expect(views.getByRole('link', {name: 'Group members'})).toHaveAttribute('aria-current', 'page');
-    expect(views.getByRole('link', {name: 'All people'})).toHaveAttribute('href', '#/admin/users');
-    await waitFor(() => expect(requests).toContain('/api/admin/core/members'));
+    expect(router.state.location.pathname + router.state.location.search).toBe('/admin/members?search=Group+One&sort=public_id_asc');
+    expect(screen.getByRole('textbox', {name: 'Search Members'})).toHaveValue('Group One');
+    expect(within(screen.getByRole('combobox', {name: 'Status'})).getAllByRole('option').map(option => option.textContent)).toEqual(['All statuses', 'Active', 'Inactive']);
+    expect(screen.queryByRole('link', {name: 'All people'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', {name: 'Group members'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', {name: 'Add member'})).not.toBeInTheDocument();
+    expect(requests).toContain('/api/admin/core/members');
     expect(requests).not.toContain('/api/admin/core/users');
-    fireEvent.click(views.getByRole('link', {name: 'All people'}));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/admin/users'));
-    expect(screen.getByRole('heading', {name: 'Members'})).toBeVisible();
-    expect(screen.getByRole('link', {name: 'All people'})).toHaveAttribute('aria-current', 'page');
-    await waitFor(() => expect(requests).toContain('/api/admin/core/users'));
+  });
+
+  it.each([
+    {name:'phone identity', phone:true, passcode:false, journals:false, scoped:true},
+    {name:'passcode deployment', phone:false, passcode:true, journals:false, scoped:true},
+    {name:'managed canonical session', phone:false, passcode:false, journals:false, scoped:false},
+    {name:'transaction journals on a passcode deployment', phone:false, passcode:true, journals:true, scoped:false},
+  ])('opens the member list and detail using the $name contract', async ({phone, passcode, journals, scoped}) => {
+    const status = scoped ? 'inactive' : journals ? 'closed' : 'suspended';
+    const model = journals ? 'transaction_journals' : 'canonical_evidence_ledger';
+    const common = core.members.rows[0], accountStatus = scoped ? 'active' : status;
+    const row = {...common, status:accountStatus, account_status:accountStatus,
+      ...(scoped ? {active_groups:0, amount:'0 groups', membership_status:status} : {}),
+      ...(journals ? {posted_contributed_rwf:0, contribution_basis:'confirmation_recorded_allocations'} : {})};
+    const metadata = journals ? {} : {contract_version:2, model};
+    const resource = scoped ? 'members' : 'users', calls: URL[] = [];
+    const {requests} = openAdmin('/admin/members?status=' + status, {phonePasscodeOnly:passcode,
+      session:{user:{...account, financialModel:model, permissions:['users.read'], ...(phone || passcode ? phoneIdentity() : {})}},
+      read(url) {
+        calls.push(url);
+        if (url.pathname === '/api/admin/core/members' && url.searchParams.get('status') === status &&
+            url.searchParams.get('directory') === (scoped ? 'roster' : null)) return reply({...metadata, rows:[row], total:1});
+        if (url.pathname === '/api/admin/operations/' + resource + '/' + row.id) return reply({...metadata,
+          current_actor_id:account.id, resource_type:resource, resource:row, can_manage:false, related:{}, related_truncated:false});
+        return reply({error:{code:'unexpected_directory_contract'}},403);
+      }});
+    const member = await screen.findByRole('row', {name:new RegExp(row.public_id)});
+    const statusOptions = within(screen.getByRole('combobox',{name:'Status'})).getAllByRole('option').map(option => option.textContent);
+    expect(statusOptions).toEqual(scoped ? ['All statuses','Active','Inactive'] : journals ?
+      ['All statuses','Invited','Active','Suspended','Closed'] : ['All statuses','Active','Suspended','Deleted']);
+    fireEvent.click(within(member).getByRole('button',{name:'View ' + row.public_id}));
+    await screen.findByRole('heading',{name:'Record details'});
+    expect(screen.getByText('Status',{selector:'dt'}).nextElementSibling).toHaveTextContent(status[0].toUpperCase()+status.slice(1));
+    expect(requests).not.toContain('/api/admin/operations/' + (scoped ? 'users' : 'members') + '/' + row.id);
+    fireEvent.click(screen.getByRole('button',{name:'Back to members'}));
+    await screen.findByRole('row',{name:new RegExp(row.public_id)});
+    expect(router.state.location.search).toBe('?status=' + status);
+    expect(calls.filter(url => url.pathname.endsWith('/core/members'))).toHaveLength(2);
+  });
+
+  it('keeps a generic People bookmark and its account-status filter on the existing people service', async () => {
+    const {requests} = openAdmin('/admin/users?status=suspended', {session:{user:{...account, permissions:['users.read']}},
+      read(url) {
+        if (url.pathname === '/api/admin/core/users' && !url.searchParams.has('directory') && url.searchParams.get('status') === 'suspended') {
+          return reply({...core.members, rows:[],total:0});
+        }
+      }});
+    await screen.findByText('No records found');
+    expect(router.state.location.pathname).toBe('/admin/users');
+    expect(screen.getByRole('link',{name:'All people'})).toHaveAttribute('aria-current','page');
+    expect(requests).not.toContain('/api/admin/core/members');
+  });
+
+  it('keeps the group selector available to a non-phone manager from an existing membership bookmark', async () => {
+    const {requests} = openAdmin('/admin/members/new',{session:{user:{...account,role:'admin',
+      permissions:['users.read','users.manage','collections.read']}}});
+    expect(await screen.findByRole('textbox',{name:'Search groups'})).toBeVisible();
+    expect(requests).not.toContain('/api/admin/burimunsi/members/enrollment');
   });
 
   it('does not read directory records or expose directory views without user permission', async () => {

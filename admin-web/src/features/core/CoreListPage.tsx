@@ -1,58 +1,23 @@
+import {AdminRequestError} from '../../api/client';
 import {Link} from 'react-router';
-import {paymentsPath} from '../operations/paymentLocations';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Button, Card, EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge } from '../../ui';
-import { containsControl, formatField, formatMoney, label, parseCorePage, paymentReference, STATUSES } from './contracts';
+import { containsControl, formatField, formatMoney, label, parseCorePage, parseMemberRosterPage, paymentReference } from './contracts';
 import { coreListAction } from './coreRecordActions';
 import {MemberDirectoryViews} from './MemberDirectory';
+import {baseSorts, listLocation, listStatuses, readFilters, type Filters} from './coreListFilters';
 import type { CoreArea, CorePage, DataRow, FeatureAccess, FinancialModel } from './types';
 import { AREA_TITLES, CORE_PERMISSIONS } from './types';
 import './core.css';
 
-type ListProps = FeatureAccess & { area: CoreArea; locationSearch?: string; allowMutations?: boolean; paymentsWorkspace?: boolean };
+type ListProps = FeatureAccess & { area: CoreArea; locationSearch?: string; allowMutations?: boolean; paymentsWorkspace?: boolean; scopedMember?: boolean; memberActions?: ReactNode };
 
 const PAGE_SIZE = 25;
 const descriptions: Record<CoreArea, string> = {
   groups: 'Explore group records and membership.', users: 'Find people with or without a group membership.',
-  members: 'Find people with a group membership.', payees: 'Review group payment receivers.',
+  members: '', payees: 'Review group payment receivers.',
   transactions: 'Review recorded payment evidence and its status.', ledgers: 'Review contribution records and ledger status.',
 };
-
-const baseSorts: Record<CoreArea, readonly [string, string][]> = {
-  groups: [['created_at', 'Created'], ['title', 'Group'], ['active_members', 'Members'], ['status', 'Status']],
-  users: [['created_at', 'Created'], ['public_id', 'Collect ID'], ['member_type', 'Type'], ['status', 'Status']],
-  members: [['created_at', 'Created'], ['public_id', 'Collect ID'], ['member_type', 'Type'], ['status', 'Status']],
-  payees: [['created_at', 'Created'], ['label', 'Payee'], ['group_title', 'Group'], ['status', 'Status']],
-  transactions: [['created_at', 'Created'], ['group_title', 'Group'], ['observed_at', 'Observed'], ['status', 'Status']],
-  ledgers: [['created_at', 'Created'], ['group_title', 'Group'], ['status', 'Status']],
-};
-
-interface Filters { search: string; status: string; sort: string; page: number }
-
-function readFilters(search: string, area: CoreArea, model: FinancialModel): Filters {
-  const query = new URLSearchParams(search);
-  const candidate = query.get('search') ?? '';
-  const rawStatus = query.get('status') ?? '';
-  const rawSort = query.get('sort') ?? 'created_at_desc';
-  const rawPage = Number(query.get('page') ?? 1);
-  const validSort = baseSorts[area].some(([field]) => rawSort === `${field}_asc` || rawSort === `${field}_desc`);
-  return {
-    search: candidate.length <= 200 && !containsControl(candidate) ? candidate : '',
-    status: STATUSES[model][area].includes(rawStatus) ? rawStatus : '',
-    sort: validSort ? rawSort : 'created_at_desc',
-    page: Number.isSafeInteger(rawPage) && rawPage >= 1 && rawPage <= 85899346 ? rawPage : 1,
-  };
-}
-
-function listLocation(area: CoreArea, filter: Filters, paymentsWorkspace = false): string {
-  const query = new URLSearchParams();
-  if (filter.search) query.set('search', filter.search);
-  if (filter.status) query.set('status', filter.status);
-  if (filter.sort !== 'created_at_desc') query.set('sort', filter.sort);
-  if (filter.page > 1) query.set('page', String(filter.page));
-  const suffix = query.toString();
-  return `${paymentsWorkspace ? paymentsPath : `/admin/${area}`}${suffix ? `?${suffix}` : ''}`;
-}
 
 function recordLocation(area: CoreArea, id: string, returnTo: string): string {
   const query = new URLSearchParams({ returnTo });
@@ -96,15 +61,16 @@ function columns(area: CoreArea, model: FinancialModel): { label: string; value:
   }
 }
 
-export function CoreListPage({ area, request, permissions, actorId, role, authorityKey, financialModel, navigate, locationSearch = '', allowMutations = false, paymentsWorkspace = false }: ListProps) {
+export function CoreListPage({ area, request, permissions, actorId, role, authorityKey, financialModel, navigate, locationSearch = '', allowMutations = false, paymentsWorkspace = false, scopedMember = false, memberActions }: ListProps) {
   const allowed = permissions.includes(CORE_PERMISSIONS[area]);
-  const filter = useMemo(() => readFilters(locationSearch, area, financialModel), [locationSearch, area, financialModel]);
+  const roster = scopedMember && area === 'members' && financialModel === 'canonical_evidence_ledger';
+  const filter = useMemo(() => readFilters(locationSearch, area, financialModel, roster), [locationSearch, area, financialModel, roster]);
   const [draftState, setDraftState] = useState({ base: filter.search, value: filter.search });
   const draft = draftState.base === filter.search ? draftState.value : filter.search;
   const [page, setPage] = useState<CorePage | null>(null);
   const [pageScope, setPageScope] = useState('');
-  const currentScope = JSON.stringify([authorityKey, area, financialModel, filter.search, filter.status, filter.sort, filter.page]);
-  const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const currentScope = JSON.stringify([authorityKey, area, financialModel, roster, filter.search, filter.status, filter.sort, filter.page]);
+  const [state, setState] = useState<'loading' | 'ready' | 'error' | 'unavailable'>('loading');
   const [retry, setRetry] = useState(0);
   useEffect(() => {
     if (!allowed) return;
@@ -112,12 +78,19 @@ export function CoreListPage({ area, request, permissions, actorId, role, author
     let active = true;
     const offset = (filter.page - 1) * PAGE_SIZE;
     const query = new URLSearchParams({ search: filter.search, status: filter.status, limit: String(PAGE_SIZE), offset: String(offset), sort: filter.sort, country: 'RW' });
+    if (roster) query.set('directory', 'roster');
     request(`core/${area}?${query.toString()}`, { signal: controller.signal }).then(data => {
-      const parsed = parseCorePage(data, area, financialModel, PAGE_SIZE, offset, filter.status);
+      const parsed = roster ? parseMemberRosterPage(data, PAGE_SIZE, offset, filter.status)
+        : parseCorePage(data, area, financialModel, PAGE_SIZE, offset, filter.status);
       if (active) { setPage(parsed); setPageScope(currentScope); setState('ready'); }
-    }).catch(() => { if (active) { setPageScope(currentScope); setState('error'); } });
+    }).catch(error => {
+      if (active) {
+        setPageScope(currentScope);
+        setState(roster && error instanceof AdminRequestError && error.statusCode === 503 ? 'unavailable' : 'error');
+      }
+    });
     return () => { active = false; controller.abort(); };
-  }, [allowed, area, request, actorId, authorityKey, financialModel, filter.search, filter.status, filter.sort, filter.page, currentScope, retry]);
+  }, [allowed, area, request, actorId, authorityKey, financialModel, roster, filter.search, filter.status, filter.sort, filter.page, currentScope, retry]);
 
   const update = (changes: Partial<Filters>) => navigate(listLocation(area, { ...filter, ...changes }, paymentsWorkspace));
   const tableColumns = columns(area, financialModel);
@@ -125,8 +98,8 @@ export function CoreListPage({ area, request, permissions, actorId, role, author
   const title = memberDirectory ? 'Members' : AREA_TITLES[area];
   const action = coreListAction({area, role, permissions, financialModel, allowed, allowMutations});
   return <>
-    {!paymentsWorkspace && <PageHeader title={title} subtitle={descriptions[area]} actions={action ? <Button type="button" onClick={() => navigate(action.path)}>{action.label}</Button> : undefined} />}
-    {allowed && (area === 'members' || area === 'users') && <MemberDirectoryViews area={area} />}
+    {!paymentsWorkspace && <PageHeader title={title} subtitle={descriptions[area]} actions={roster ? memberActions : action ? <Button type="button" onClick={() => navigate(action.path)}>{action.label}</Button> : undefined} />}
+    {allowed && memberDirectory && !roster && <MemberDirectoryViews area={area} />}
     {!allowed ? <ErrorState title="Access unavailable" message="Your account does not have permission to view this page." /> : <Card>
       <div className="core-toolbar">
         {!memberDirectory && !paymentsWorkspace && <div><h2>{AREA_TITLES[area]} list</h2><p>Search and review records</p></div>}
@@ -139,22 +112,23 @@ export function CoreListPage({ area, request, permissions, actorId, role, author
       </div>
       <div className="core-filters">
         <label>Status <select className="admin-input" value={filter.status} onChange={event => update({ status: event.target.value, page: 1 })}>
-          <option value="">All statuses</option>{STATUSES[financialModel][area].map(value => <option key={value} value={value}>{label(value)}</option>)}
+          <option value="">All statuses</option>{listStatuses(area, financialModel, roster).map(value => <option key={value} value={value}>{label(value)}</option>)}
         </select></label>
         <label>Sort by <select className="admin-input" value={filter.sort} onChange={event => update({ sort: event.target.value, page: 1 })}>
           {baseSorts[area].flatMap(([field, name]) => [<option key={`${field}_asc`} value={`${field}_asc`}>{name} · ascending</option>, <option key={`${field}_desc`} value={`${field}_desc`}>{name} · descending</option>])}
         </select></label>
       </div>
       {state === 'loading' || pageScope !== currentScope ? <LoadingState label={`Loading ${AREA_TITLES[area].toLowerCase()}`} /> :
-       state === 'error' ? <ErrorState message="The records could not be verified or the service is unavailable." onRetry={() => { setState('loading'); setRetry(value => value + 1); }} /> :
+       state === 'unavailable' || state === 'error' ? <ErrorState message={state === 'unavailable' ? 'Members are temporarily unavailable. Try again.' : 'The records could not be verified or the service is unavailable.'} onRetry={() => { setState('loading'); setRetry(value => value + 1); }} /> :
        !page || page.rows.length === 0 ? <EmptyState title="No records found" description="Change your search or filters and try again." /> : <>
         <div className="admin-table-wrap" role="region" aria-label={`${AREA_TITLES[area]} records`} tabIndex={0}>
           <table className={paymentsWorkspace ? "admin-table operations-receipt-table" : "admin-table"} role="table"><thead role="rowgroup"><tr role="row">{tableColumns.map(column => <th role="columnheader" scope="col" key={column.label}>{column.label}</th>)}<th role="columnheader" scope="col">Status</th>{!paymentsWorkspace && <th role="columnheader" scope="col">Open</th>}</tr></thead>
             <tbody role="rowgroup">{page.rows.map(row => {
               const href = recordLocation(area, row.id, listLocation(area, filter, paymentsWorkspace));
+              const status = roster ? String(row.membership_status) : row.status;
               return <tr key={row.id} role="row">{tableColumns.map((column, index) => <td role="cell" key={column.label}>{paymentsWorkspace && <span className="operations-receipt-field" aria-hidden="true">{column.label}</span>}{paymentsWorkspace && index === 0 ?
                 <Link className="operations-link payments-record-link" to={href}>{column.value(row)}</Link> : column.value(row)}</td>)}
-                <td role="cell">{paymentsWorkspace && <span className="operations-receipt-field" aria-hidden="true">Status</span>}<StatusBadge tone={tone(row.status)}>{label(row.status)}</StatusBadge></td>{!paymentsWorkspace &&
+                <td role="cell">{paymentsWorkspace && <span className="operations-receipt-field" aria-hidden="true">Status</span>}<StatusBadge tone={tone(status)}>{label(status)}</StatusBadge></td>{!paymentsWorkspace &&
                   <td role="cell"><Button type="button" onClick={() => navigate(href)} aria-label={`View ${area === 'transactions' && financialModel === 'canonical_evidence_ledger' ? paymentReference(row) : row.title}`}>View</Button></td>}
               </tr>;
             })}</tbody>

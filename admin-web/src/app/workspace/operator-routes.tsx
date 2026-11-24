@@ -31,6 +31,17 @@ function LegacyMomoReceiptsRoute() {
   return <Navigate replace to={canReadSmsEvidence(user) ? paymentViewLocation('sms') : paymentViewLocation('recorded', {momo: true})} />;
 }
 
+function ReceiptListRoute({member = false}: {member?: boolean}) {
+  const {user, verificationMode} = useSession(), location = useLocation();
+  if (user?.financialModel !== 'canonical_evidence_ledger' || (verificationMode !== 'passcode' && user.authMethod !== 'phone_passcode')) {
+    return member ? <MemberReceiptsPage /> : <SmsReceiptsPage />;
+  }
+  const next = new URLSearchParams(location.search);
+  if (!next.has('view')) next.set('view', 'sms');
+  if (!next.has('source')) next.set('source', member ? 'member' : 'app');
+  return <Navigate replace to={'/admin/payments?' + next} />;
+}
+
 export function OverviewRoute() {
   const access = useAccess();
   const {verificationMode} = useSession();
@@ -67,14 +78,14 @@ export const requestHistoryRoute = workspaceRoute('requests', <RequestHistoryRou
   user => canReadRequestHistory(user.financialModel, user.permissions));
 
 export const operatorRoutes = [
-  workspaceRoute('sms-receipts', <SmsReceiptsPage />, canReadSmsEvidence),
+  workspaceRoute('sms-receipts', <ReceiptListRoute />, canReadSmsEvidence),
   workspaceRoute('sms-receipts/:kind/:id', <SmsReceiptDetailPage />, canReadSmsEvidence),
   workspaceRoute('gateway', <GatewayDevicesPage />, canReadGateway),
   workspaceRoute('gateway/new', <GatewayEnrollmentPage />, requiresAdminRole('gateway.read', 'gateway.manage')),
   workspaceRoute('gateway/receiver-grants', <ReceiverGrantsPage />, canReadGateway),
   workspaceRoute('gateway/receiver-grants/:id', <ReceiverGrantDetailPage />, canReadGateway),
   workspaceRoute('gateway/:id', <GatewayDeviceDetailPage />, canReadGateway),
-  workspaceRoute('member-receipts', <MemberReceiptsPage />, canReadMemberReceipts),
+  workspaceRoute('member-receipts', <ReceiptListRoute member />, canReadMemberReceipts),
   workspaceRoute('member-receipts/:id', <MemberReceiptDetailPage />, canReadMemberReceipts),
   workspaceRoute('email', <EmailEventsPage />, requiresPermissions('email.read')),
   workspaceRoute('momo-receipts', <LegacyMomoReceiptsRoute />, user => canReadSmsEvidence(user) || canReadPayments(user)),

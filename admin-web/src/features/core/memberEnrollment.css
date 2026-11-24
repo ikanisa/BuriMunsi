@@ -1,0 +1,26 @@
+.members-enrollment {
+  max-inline-size: 38rem;
+  overflow-wrap: anywhere;
+}
+.members-enrollment .admin-auth-form { display: grid; gap: 1rem; }
+.members-enrollment .core-note { margin: 0; color: var(--admin-muted); }
+.members-enrollment-confirmations { margin: 0; padding: 0; min-inline-size: 0; border: 0; }
+.members-enrollment-confirmations legend { padding: 0; font-weight: 650; }
+.members-enrollment-confirmations label {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  min-block-size: 44px;
+  padding-block: .375rem;
+}
+.members-enrollment-confirmations input {
+  flex: none;
+  inline-size: 1.125rem;
+  block-size: 1.125rem;
+  margin: 0;
+  accent-color: var(--admin-accent);
+}
+.members-enrollment .admin-auth-form > button { justify-self: start; }
+@media (max-width: 480px) {
+  .members-enrollment .admin-auth-form > button { justify-self: stretch; }
+}
