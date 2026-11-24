@@ -47,6 +47,17 @@ release evidence and actual operator acceptance distinct.
 | C04 | P1 | After prerequisite | Create approved release record/tag and tie Admin assets, Android checksums, backend images/versions and migration receipts to final commit. | Release engineer | C02 and signed artifacts | One reproducible release manifest with public-safe evidence and protected private receipts. |
 | C05 | P1 | Ready | Keep clean release checkouts; preserve canonical local snapshots, never commit APKs, credentials, personal records or raw test evidence to the public repository. | Release engineer | G04 | Verify required source is on main, replayable release build, private separately held artifacts and evidence. |
 
+### Qualification evidence when GitHub jobs do not start
+
+Keep hosted CI and local checks separate for the same exact source revision. A job that does not start is **NOT RUN**, not a pass or a test failure; record the runner annotation as the blocker only when verified. A step skipped by runner conditions or an unmet prerequisite is not covered. The workflow summary reports actual started-job step outcomes, not a live release decision. Do not buy or enable a paid runner to replace this evidence.
+
+For an exact local candidate, record the source revision, versions and results for each lane:
+
+- **Source and design:** `make check-source`, `make revolut-design-authority`, and `bash scripts/release_secret_scan.sh`.
+- **Backend:** `make test-backend` for the existing frozen Edge lane; `make test-backend-operations` for additional synthetic gateway, scheduler and recovery inventory checks; `make test-backend-owned-pg` for the receipt/custody lane. The last lane requires a non-root user, PostgreSQL 17, pinned Deno with the frozen dependency graph available, and disposable fixture access. Do not substitute a skipped fixture for a pass. The older independently pinned managed ingress handler-integration bundle requires its own source requalification; a current handler test does not certify that older bundle.
+- **Admin:** `make test-admin`, then build and run the browser fixture in both negotiated and legacy session modes. Verify production-format packaging separately with public fixture input; this does not attest a deployed artifact.
+- **Android:** record host regressions, disposable real SDK signing, build, and API 26/36 instrumentation separately. The standalone Kotlin capture/queue/adapter/cross-layer host scripts require the pinned local Kotlin 2.3.21/JDK 17+coroutines setup; this hosted config does not provision that standalone compiler. Record absent tools as blocked. Physical handset, live carrier, production signing and operator UAT remain separate.
+
 ## Supabase recovery
 
 | ID | Priority | Status | Remaining task | Next responsible role | Depends on | Acceptance / done when |

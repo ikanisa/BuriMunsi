@@ -55,8 +55,10 @@ jobs:
           cache: npm
           cache-dependency-path: scripts/supabase/package-lock.json
       - name: Verify generated contracts, baseline SQL and public deployment configuration
+        id: source
         run: |
           make check-source
+          make revolut-design-authority
           bash scripts/release_secret_scan.sh
       - name: Install frozen Supabase tooling
         run: npm ci --prefix scripts/supabase --ignore-scripts --no-audit --no-fund
@@ -78,14 +80,53 @@ jobs:
           CREATE DATABASE collect_receipt_facts_test;
           SQL
       - name: Check all frozen Edge entrypoints and source test suites
+        id: edge
         run: |
           set -euo pipefail
           export PATH="$PWD/scripts/supabase/node_modules/@deno/linux-x64-glibc:$PATH"
           deno --version | grep -Eq '^deno 2[.]9[.]6 '
           make test-backend
+      - name: Qualify gateway, scheduler and recovery inventory with synthetic fixtures
+        id: operations
+        run: make test-backend-operations
+      - name: Qualify receipt and custody flows on owned PostgreSQL
+        id: owned_pg
+        run: |
+          set -euo pipefail
+          pg_bin="$(pg_config --bindir)"
+          deno_bin="$PWD/scripts/supabase/node_modules/@deno/linux-x64-glibc/deno"
+          node_dir="$(dirname "$(command -v node)")"
+          fixture_home="$(mktemp -d /tmp/burimunsi-ci-owned.XXXXXXXX)"
+          chown postgres:postgres "$fixture_home"
+          trap 'rm -rf -- "$fixture_home"' EXIT
+          fixture() {
+            gosu postgres env -i PATH="$node_dir:$pg_bin:/usr/bin:/bin:$PWD/scripts/supabase/node_modules/@deno/linux-x64-glibc" \
+              HOME="$fixture_home" DENO_DIR="$fixture_home/deno" DENO_TLS_CA_STORE=system \
+              COLLECT_CI_SYNTHETIC=true COLLECT_SYNTHETIC_PG_BIN="$pg_bin" "$@"
+          }
+          fixture "$deno_bin" cache --frozen --config=supabase/functions/deno.json --lock=supabase/functions/deno.lock \
+            deploy/collect-sms/test/gateway-latency-pg.fixture.ts supabase/functions/_shared/email-adapter.js
+          fixture "$deno_bin" cache --frozen --node-modules-dir=none --lock=scripts/supabase/deno.lock \
+            scripts/supabase/cloud-release/fixtures/burimunsi-keyed-journal-driver.mjs \
+            scripts/supabase/cloud-release/fixtures/burimunsi-census-jsonb-driver.mjs \
+            scripts/supabase/cloud-release/fixtures/burimunsi-page-storage-driver.mjs
+          fixture make test-backend-owned-pg
       - name: Stop the isolated Edge PostgreSQL fixture
         if: ${{ always() && steps.postgres.outcome != '' && steps.postgres.outcome != 'skipped' }}
         run: sh scripts/supabase/testing/ci-native-postgres.sh stop
+      - name: Report source and backend gate coverage
+        if: always()
+        env:
+          CI_SOURCE: ${{ steps.source.outcome }}
+          CI_EDGE: ${{ steps.edge.outcome }}
+          CI_OPERATIONS: ${{ steps.operations.outcome }}
+          CI_OWNED_PG: ${{ steps.owned_pg.outcome }}
+        run: |
+          bash scripts/qa/report_ci_coverage.sh "Source, Edge and operations qualification" \
+            "Source, design authority and secret scan" "$CI_SOURCE" \
+            "Frozen Edge checks and original tests" "$CI_EDGE" \
+            "Gateway, scheduler and recovery inventory" "$CI_OPERATIONS" \
+            "Owned PostgreSQL receipt and custody" "$CI_OWNED_PG"
 
   admin:
     runs-on: ubuntu-24.04
@@ -106,18 +147,33 @@ jobs:
           npm ci --prefix admin-web --no-audit --no-fund
           npm ci --prefix deploy/platform-admin --ignore-scripts --no-audit --no-fund
       - name: Check React, request transport and package contracts
+        id: react
         run: |
           make test-admin
           node --test admin-web/tests/pwa/package-pwa.test.mjs
       - name: Exercise the compiled browser fixture
+        id: browser
         run: |
           admin-web/node_modules/.bin/playwright-core install --with-deps --no-shell chromium
           make admin-fixture
           node admin-web/tests/browser/smoke.mjs build/admin-web-fixture
+          ADMIN_PWA_LEGACY_SESSIONS=1 node admin-web/tests/browser/smoke.mjs build/admin-web-fixture
       - name: Verify the dedicated host packaging contract with public fixture inputs
+        id: package
         env:
           SUPABASE_PUBLISHABLE_KEY: sb_publishable_admin_build_fixture_only
         run: |
           make admin-web-build
           python3 scripts/build_burimunsi_admin.py verify-ci
           bash scripts/admin_pwa_hosting_gate.sh --json
+      - name: Report Admin gate coverage
+        if: always()
+        env:
+          CI_REACT: ${{ steps.react.outcome }}
+          CI_BROWSER: ${{ steps.browser.outcome }}
+          CI_PACKAGE: ${{ steps.package.outcome }}
+        run: |
+          bash scripts/qa/report_ci_coverage.sh "Admin fixture qualification" \
+            "React, Worker and package tests" "$CI_REACT" \
+            "Browser fixture (negotiated and legacy sessions)" "$CI_BROWSER" \
+            "Dedicated host package using public fixture inputs" "$CI_PACKAGE"

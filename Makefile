@@ -2,13 +2,15 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 export NATIVE_OUTPUT
 
-.PHONY: help check-source test-backend test-admin admin-fixture admin-web-build native-build revolut-design-authority
+.PHONY: help check-source test-backend test-backend-operations test-backend-owned-pg test-admin admin-fixture admin-web-build native-build revolut-design-authority
 
 help:
 	@printf '%s\n' 'BuriMunsi commands' \
 	  '  make check-source       Verify shared contracts, schema and public profile' \
 	  '  make revolut-design-authority   Verify the Admin design authority' \
 	  '  make test-backend       Run locked Edge type checks and source tests' \
+	  '  make test-backend-operations  Run offline gateway, job and recovery proofs' \
+	  '  make test-backend-owned-pg    Run owned PostgreSQL 17 receipt and custody proofs' \
 	  '  make test-admin         Run React and Admin Worker tests' \
 	  '  make admin-fixture      Build the local browser test fixture' \
 	  '  make admin-web-build    Build the dedicated production Admin artifact' \
@@ -25,6 +27,12 @@ revolut-design-authority:
 
 test-backend:
 	@cd supabase/functions && deno task check && deno task test
+
+test-backend-operations:
+	@node scripts/supabase/testing/run_synthetic_ci.mjs operations
+
+test-backend-owned-pg:
+	@node scripts/supabase/testing/run_synthetic_ci.mjs owned-pg
 
 test-admin:
 	@cd admin-web && npm run typecheck && npm run lint && npm test

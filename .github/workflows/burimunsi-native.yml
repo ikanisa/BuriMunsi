@@ -1,9 +1,97 @@
 name: BuriMunsi isolated native build and instrumentation
 on:
   push:
-    paths: ['deploy/platform-admin/src/supabase-transport.js', 'deploy/platform-admin/src/transport-*.js', 'deploy/platform-admin/test/burimunsi-access.test.mjs', 'integration/collect-posting/**', 'supabase/functions/_shared/domain/contribution-posting.mjs', 'supabase/functions/_shared/domain/index.js', 'supabase/functions/_shared/domain/admin_bridge.js', 'supabase/functions/_shared/domain/canonical_people.js', 'supabase/functions/_shared/domain/admin_burimunsi_*.js', 'vendor/receiver-compat/**', 'native/burimunsi/**', 'supabase/functions/_shared/domain/burimunsi/**', 'supabase/functions/_shared/serve.js', 'supabase/functions/_shared/edge-*.js', 'supabase/functions/_shared/adapters.js', 'supabase/functions/_shared/storage/**', 'supabase/functions/_shared/momo-model.js', 'supabase/functions/collect-api/**', 'supabase/functions/collect-jobs/**', 'supabase/functions/_shared/opensms-receipts.js', 'supabase/migrations/*burimunsi*.sql', 'admin-web/src/features/burimunsi/**', 'supabase/functions/_shared/tests/burimunsi/**', 'tests/**', 'scripts/**', 'contracts/burimunsi-api/**', 'contracts/ui-copy.json', 'contracts/presentation-state-coverage.json', 'contracts/paged-restoration.json', 'contracts/read-only-recovery-retry.json', 'contracts/uiux-journeys.json', '.github/workflows/burimunsi-native.yml']
+    paths:
+      - '.github/workflows/burimunsi-native.yml'
+      - 'AGENTS.md'
+      - 'Makefile'
+      - 'admin-web/src/features/burimunsi/**'
+      - 'contracts/burimunsi-api/**'
+      - 'contracts/deployment-profile.schema.json'
+      - 'contracts/paged-restoration.json'
+      - 'contracts/presentation-state-coverage.json'
+      - 'contracts/read-only-recovery-retry.json'
+      - 'contracts/ui-copy.json'
+      - 'contracts/uiux-journeys.json'
+      - 'deploy/collect-sms/**'
+      - 'deploy/managed-native-ingress/**'
+      - 'deploy/platform-admin/src/supabase-transport.js'
+      - 'deploy/platform-admin/src/transport-*.js'
+      - 'deploy/platform-admin/test/burimunsi-access.test.mjs'
+      - 'docs/implementation/burimunsi-android/prototype-reference/**'
+      - 'integration/collect-posting/**'
+      - 'native/burimunsi/**'
+      - 'scripts/**'
+      - 'supabase/functions/_shared/adapters.js'
+      - 'supabase/functions/_shared/burimunsi-standalone.js'
+      - 'supabase/functions/_shared/deployment-profile.js'
+      - 'supabase/functions/_shared/domain/admin_bridge.js'
+      - 'supabase/functions/_shared/domain/admin_burimunsi_*.js'
+      - 'supabase/functions/_shared/domain/burimunsi/**'
+      - 'supabase/functions/_shared/domain/canonical_people.js'
+      - 'supabase/functions/_shared/domain/contribution-posting.mjs'
+      - 'supabase/functions/_shared/domain/index.js'
+      - 'supabase/functions/_shared/domain/momo_*.js'
+      - 'supabase/functions/_shared/edge-*.js'
+      - 'supabase/functions/_shared/momo-model.js'
+      - 'supabase/functions/_shared/opensms-receipts.js'
+      - 'supabase/functions/_shared/serve.js'
+      - 'supabase/functions/_shared/storage/**'
+      - 'supabase/functions/_shared/tests/burimunsi/**'
+      - 'supabase/functions/_shared/tests/momo*.test.*'
+      - 'supabase/functions/collect-api/**'
+      - 'supabase/functions/collect-jobs/**'
+      - 'supabase/functions/collect-sms/**'
+      - 'supabase/jobs/**'
+      - 'supabase/migrations/*burimunsi*.sql'
+      - 'tests/**'
+      - 'vendor/receiver-compat/**'
   pull_request:
-    paths: ['deploy/platform-admin/src/supabase-transport.js', 'deploy/platform-admin/src/transport-*.js', 'deploy/platform-admin/test/burimunsi-access.test.mjs', 'integration/collect-posting/**', 'supabase/functions/_shared/domain/contribution-posting.mjs', 'supabase/functions/_shared/domain/index.js', 'supabase/functions/_shared/domain/admin_bridge.js', 'supabase/functions/_shared/domain/canonical_people.js', 'supabase/functions/_shared/domain/admin_burimunsi_*.js', 'vendor/receiver-compat/**', 'native/burimunsi/**', 'supabase/functions/_shared/domain/burimunsi/**', 'supabase/functions/_shared/serve.js', 'supabase/functions/_shared/edge-*.js', 'supabase/functions/_shared/adapters.js', 'supabase/functions/_shared/storage/**', 'supabase/functions/_shared/momo-model.js', 'supabase/functions/collect-api/**', 'supabase/functions/collect-jobs/**', 'supabase/functions/_shared/opensms-receipts.js', 'supabase/migrations/*burimunsi*.sql', 'admin-web/src/features/burimunsi/**', 'supabase/functions/_shared/tests/burimunsi/**', 'tests/**', 'scripts/**', 'contracts/burimunsi-api/**', 'contracts/ui-copy.json', 'contracts/presentation-state-coverage.json', 'contracts/paged-restoration.json', 'contracts/read-only-recovery-retry.json', 'contracts/uiux-journeys.json', '.github/workflows/burimunsi-native.yml']
+    paths:
+      - '.github/workflows/burimunsi-native.yml'
+      - 'AGENTS.md'
+      - 'Makefile'
+      - 'admin-web/src/features/burimunsi/**'
+      - 'contracts/burimunsi-api/**'
+      - 'contracts/deployment-profile.schema.json'
+      - 'contracts/paged-restoration.json'
+      - 'contracts/presentation-state-coverage.json'
+      - 'contracts/read-only-recovery-retry.json'
+      - 'contracts/ui-copy.json'
+      - 'contracts/uiux-journeys.json'
+      - 'deploy/collect-sms/**'
+      - 'deploy/managed-native-ingress/**'
+      - 'deploy/platform-admin/src/supabase-transport.js'
+      - 'deploy/platform-admin/src/transport-*.js'
+      - 'deploy/platform-admin/test/burimunsi-access.test.mjs'
+      - 'docs/implementation/burimunsi-android/prototype-reference/**'
+      - 'integration/collect-posting/**'
+      - 'native/burimunsi/**'
+      - 'scripts/**'
+      - 'supabase/functions/_shared/adapters.js'
+      - 'supabase/functions/_shared/burimunsi-standalone.js'
+      - 'supabase/functions/_shared/deployment-profile.js'
+      - 'supabase/functions/_shared/domain/admin_bridge.js'
+      - 'supabase/functions/_shared/domain/admin_burimunsi_*.js'
+      - 'supabase/functions/_shared/domain/burimunsi/**'
+      - 'supabase/functions/_shared/domain/canonical_people.js'
+      - 'supabase/functions/_shared/domain/contribution-posting.mjs'
+      - 'supabase/functions/_shared/domain/index.js'
+      - 'supabase/functions/_shared/domain/momo_*.js'
+      - 'supabase/functions/_shared/edge-*.js'
+      - 'supabase/functions/_shared/momo-model.js'
+      - 'supabase/functions/_shared/opensms-receipts.js'
+      - 'supabase/functions/_shared/serve.js'
+      - 'supabase/functions/_shared/storage/**'
+      - 'supabase/functions/_shared/tests/burimunsi/**'
+      - 'supabase/functions/_shared/tests/momo*.test.*'
+      - 'supabase/functions/collect-api/**'
+      - 'supabase/functions/collect-jobs/**'
+      - 'supabase/functions/collect-sms/**'
+      - 'supabase/jobs/**'
+      - 'supabase/migrations/*burimunsi*.sql'
+      - 'tests/**'
+      - 'vendor/receiver-compat/**'
   workflow_dispatch:
 permissions:
   contents: read
@@ -22,6 +110,7 @@ jobs:
         with:
           node-version: '24.19.0'
       - name: Verify source and host-side gate regressions
+        id: native_source
         shell: bash
         run: |
           set -euo pipefail
@@ -34,6 +123,7 @@ jobs:
           python3 native/burimunsi/scripts/prepare_receiver.py --output "$RUNNER_TEMP/burimunsi/source-check/build/receiver-inputs"
           python3 native/burimunsi/scripts/verify_native_boundary.py | tee "$RUNNER_TEMP/burimunsi/source-gates.json"
       - name: Obtain pinned packages with existing owner licence acceptance
+        id: sdk
         shell: bash
         run: |
           set -euo pipefail
@@ -41,7 +131,21 @@ jobs:
           export PATH="$JAVA_HOME/bin:$PATH"
           python3 native/burimunsi/scripts/setup_native_toolchain.py \
             --execute --output "$RUNNER_TEMP/burimunsi/toolchain"
+      - name: Verify disposable APK signing with the actual installed SDK
+        id: sdk_signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          test -x "$JAVA_HOME/bin/keytool"
+          test -x "${ANDROID_HOME:?Android SDK path required}/build-tools/36.0.0/apksigner"
+          test -x "$ANDROID_HOME/build-tools/36.0.0/zipalign"
+          python3 native/burimunsi/pipeline-tests/sign_candidate_test.py -v ActualSdkPKCS12PasswordRegression 2>&1 | tee "$RUNNER_TEMP/burimunsi/sdk-signing.log"
+          grep -E '^Ran 1 test in ' "$RUNNER_TEMP/burimunsi/sdk-signing.log"
+          grep -Fx 'OK' "$RUNNER_TEMP/burimunsi/sdk-signing.log"
       - name: Build and inspect Staff and receiving APKs and test APKs
+        id: build
         shell: bash
         run: |
           set -euo pipefail
@@ -50,6 +154,7 @@ jobs:
           python3 native/burimunsi/scripts/native_pipeline.py build \
             --output "$RUNNER_TEMP/burimunsi/build"
       - name: Install and execute all native tests on API 26 and API 36
+        id: instrumentation
         shell: bash
         run: |
           set -euo pipefail
@@ -60,6 +165,23 @@ jobs:
           sudo setfacl -m "u:$(id -un):rw" /dev/kvm
           bash native/burimunsi/scripts/run_emulator_matrix.sh \
             "$RUNNER_TEMP/burimunsi/build" "$RUNNER_TEMP/burimunsi/devices"
+      - name: Report native gate coverage
+        if: always()
+        env:
+          NATIVE_SOURCE: ${{ steps.native_source.outcome }}
+          NATIVE_SDK: ${{ steps.sdk.outcome }}
+          NATIVE_SIGNING: ${{ steps.sdk_signing.outcome }}
+          NATIVE_BUILD: ${{ steps.build.outcome }}
+          NATIVE_INSTRUMENTATION: ${{ steps.instrumentation.outcome }}
+        shell: bash
+        run: |
+          bash scripts/qa/report_ci_coverage.sh "Android synthetic qualification" \
+            "Source and host-side regression" "$NATIVE_SOURCE" \
+            "Pinned SDK setup and licence prerequisite" "$NATIVE_SDK" \
+            "Disposable real SDK signing regression" "$NATIVE_SIGNING" \
+            "Native build" "$NATIVE_BUILD" \
+            "API 26 and 36 instrumentation" "$NATIVE_INSTRUMENTATION"
+          printf '\nNo carrier, physical handset, operator UAT or production signing evidence is supplied by this workflow.\n' >> "$GITHUB_STEP_SUMMARY"
       - name: Preserve build, APK, installation and instrumentation evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
