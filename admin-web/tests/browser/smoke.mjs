@@ -177,30 +177,52 @@ try {
     await stepUp.context.close();
   }
 
-  // A linked record and standalone unmatched receipt share the same activity table.
+  // The canonical financial table remains available while its scoped M-Money inbox is open.
   const nav = page.getByRole('navigation', {name: 'Admin sections'});
   assert.deepEqual(await nav.getByRole('link').allTextContents(), ['Home', 'Members', 'Payments']);
   assert.equal(await page.getByRole('searchbox', {name: 'Search admin sections'}).count(), 0);
   const payments = nav.getByRole('link', {name: 'Payments', exact: true});
   assert.equal(await payments.getAttribute('href'), '#/admin/payments');
+  const paymentListResponse = page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return url.origin === origin && url.pathname === '/api/admin/burimunsi/payments' &&
+      url.searchParams.get('limit') === '100' && url.searchParams.get('offset') === '0';
+  });
   await payments.click();
+  assert.equal((await paymentListResponse).status(), 200);
   await page.getByRole('heading', {name: 'Payments', level: 1, exact: true}).waitFor();
-  const paymentViews = page.getByRole('navigation', {name: 'Payment views'});
-  assert.deepEqual(await paymentViews.getByRole('link').allTextContents(), ['Records', 'M-Money SMS']);
-  const recorded = paymentViews.getByRole('link', {name: 'Records', exact: true});
-  const smsView = paymentViews.getByRole('link', {name: 'M-Money SMS', exact: true});
   assert.equal(new URL(page.url()).hash, '#/admin/payments');
-  await recorded.and(page.locator('[aria-current=page]')).waitFor();
-  await page.getByRole('button', {name: fixtureOutgoingPayment.ftId, exact: true}).waitFor();
-  assert.deepEqual(await page.getByRole('combobox', {name: 'Status', exact: true}).getByRole('option').allTextContents(),
-    ['All statuses', 'Allocated', 'Unallocated']);
-  await smsView.click();
+  assert.equal(await page.getByRole('navigation', {name: 'Payment views'}).count(), 0);
+  const paymentTable = page.getByRole('table', {name: 'Payments', exact: true});
+  const paymentRow = payment => paymentTable.getByRole('row').filter({has: page.getByRole('button', {name: payment.ftId, exact: true})});
+  await paymentRow(fixturePayment).getByRole('cell', {name: 'Incoming', exact: true}).waitFor();
+  await paymentRow(fixtureOutgoingPayment).getByRole('cell', {name: 'Outgoing', exact: true}).waitFor();
+  await paymentTable.getByRole('button', {name: 'Filter Direction', exact: true}).click();
+  const directionFilter = page.getByRole('dialog', {name: 'Filter Direction', exact: true});
+  await directionFilter.getByRole('checkbox', {name: 'Outgoing', exact: true}).check();
+  await directionFilter.getByRole('button', {name: 'Apply filter', exact: true}).click();
+  await paymentRow(fixturePayment).waitFor({state: 'hidden'});
+  await paymentRow(fixtureOutgoingPayment).waitFor();
+  await page.getByRole('button', {name: 'Clear all filters', exact: true}).click();
+  await paymentRow(fixturePayment).waitFor();
+  const receiptInbox = page.getByRole('region', {name: 'M-Money SMS inbox', exact: true});
+  const inboxToggle = receiptInbox.getByRole('button', {name: 'M-Money SMS', exact: true});
+  assert.equal(await inboxToggle.getAttribute('aria-expanded'), 'false');
+  await inboxToggle.click();
   await page.waitForURL(url => url.hash === '#/admin/payments?view=sms');
-  await smsView.and(page.locator('[aria-current=page]')).waitFor();
+  const observationTable = receiptInbox.getByRole('region', {name: 'Android receiver observations', exact: true}).getByRole('table');
+  await observationTable.waitFor();
+  assert.equal(await inboxToggle.getAttribute('aria-expanded'), 'true');
+  await paymentRow(fixturePayment).waitFor();
   await page.setViewportSize({width: 390, height: 844});
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-  await recorded.click();
-  await recorded.and(page.locator('[aria-current=page]')).waitFor();
+  const tableScroll = page.getByRole('region', {name: 'Payments table scroll area', exact: true});
+  assert.equal(await tableScroll.evaluate(region => region.scrollWidth > region.clientWidth), true);
+  await inboxToggle.click();
+  await page.waitForURL(url => url.hash === '#/admin/payments');
+  await observationTable.waitFor({state: 'hidden'});
+  assert.equal(await inboxToggle.getAttribute('aria-expanded'), 'false');
+  await paymentRow(fixtureOutgoingPayment).waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.setViewportSize({width: 1440, height: 900});
   await nav.getByRole('link', {name: 'Home', exact: true}).click();
@@ -216,9 +238,12 @@ try {
   await memberStatus.selectOption('inactive');
   const inactiveRow = page.getByRole('row').filter({hasText: fixtureInactiveMember.display_name});
   await inactiveRow.getByRole('cell', {name: 'Inactive', exact:true}).waitFor();
+  const memberRecords = page.getByRole('region', {name: 'Members records', exact: true});
+  assert.deepEqual(await memberRecords.getByRole('columnheader', {name: /number|phone|WhatsApp/i}).allTextContents(), ['Mobile number']);
   const scopedDetail = member => page.waitForResponse(response => response.url() === origin + '/api/admin/operations/members/' + member.id && response.ok());
   await Promise.all([scopedDetail(fixtureInactiveMember), inactiveRow.getByRole('button', {name:'View ' + fixtureInactiveMember.public_id}).click()]);
   await page.getByRole('heading', {name: 'Record details',exact:true}).waitFor();
+  assert.deepEqual(await page.getByRole('term').filter({hasText: /number|phone|WhatsApp/i}).allTextContents(), ['Mobile number']);
   assert.equal(await page.getByText('Status', {exact:true}).locator('+ dd').textContent(), 'Inactive');
   await page.getByRole('button', {name:'Back to members',exact:true}).click();
   assert.equal(await memberStatus.inputValue(), 'inactive');
@@ -248,17 +273,16 @@ try {
   await paymentFilter.getByRole('searchbox', {name:'Contains', exact:true}).fill(fixturePayment.ftId);
   await paymentFilter.getByRole('button', {name:'Apply filter', exact:true}).click();
   assert.equal(await page.getByRole('button', {name: fixtureOutgoingPayment.ftId, exact:true}).count(), 0);
-  const chosenPayment = page.getByRole('button', {name: fixturePayment.ftId, exact: true});
-  await chosenPayment.click();
+  await paymentRow(fixturePayment).getByRole('button', {name: 'Review linked SMS', exact: true}).click();
   const paymentDetail = page.getByRole('region', {name: 'Payment details', exact: true});
+  await paymentDetail.getByText(fixturePayment.ftId, {exact: true}).waitFor();
   await paymentDetail.getByRole('region', {name:'Linked SMS', exact:true}).getByText('Parsed', {exact:true}).waitFor();
   await paymentDetail.getByText('Unallocated', {exact: true}).waitFor();
   await paymentDetail.getByRole('button', {name: 'Close', exact: true}).click();
   await paymentDetail.waitFor({state: 'hidden'});
-  const selectedPayment = requestUrl => requestUrl.origin === origin && requestUrl.pathname === '/api/admin/burimunsi/payments/' + fixturePayment.id;
-  await page.route(selectedPayment, route => route.fulfill({json: {...fixturePayment, sourceId: null}}), {times: 1});
-  await chosenPayment.click();
-  await paymentDetail.getByText(fixturePayment.ftId, {exact: true}).waitFor();
+  await page.getByRole('button', {name: 'Clear all filters', exact: true}).click();
+  await paymentRow(fixtureOutgoingPayment).getByRole('button', {name: fixtureOutgoingPayment.ftId, exact: true}).click();
+  await paymentDetail.getByText(fixtureOutgoingPayment.ftId, {exact: true}).waitFor();
   await paymentDetail.getByText('RWF 5,000', {exact: true}).waitFor();
   assert.equal(await paymentDetail.getByRole('region', {name:'Linked SMS', exact:true}).count(), 0);
   assert.equal(await paymentDetail.getByText(fixtureSmsEvidenceId, {exact: true}).count(), 0);
@@ -271,20 +295,28 @@ try {
 
   const receipts = requestUrl => requestUrl.origin === origin && requestUrl.pathname === '/api/admin/momo/observations' &&
     requestUrl.searchParams.get('limit') === '25';
-  await page.route(receipts, route => route.fulfill({
+  await desktop.context.route(receipts, route => route.fulfill({
     status: 503, contentType: 'application/json', body: JSON.stringify({ error: { code: 'service_unavailable' } }),
   }), { times: 1 });
   assert.equal(await nav.getByRole('link', {name: 'SMS receipts', exact: true}).count(), 0);
+  const failedReceipts = page.waitForResponse(response => receipts(new URL(response.url())) && response.status() === 503);
   await page.goto(origin + '/#/admin/sms-receipts');
+  await page.waitForURL(url => url.hash === '#/admin/payments?view=sms');
   await page.getByRole('heading', { name: 'Payments', level: 1, exact: true }).waitFor();
-  await page.getByRole('button', { name: /retry|try again/i }).click();
-  const receiptInbox = page.getByRole('region', {name:'M-Money SMS inbox', exact:true});
-  const receiptRow = receiptInbox.getByRole('table').getByRole('row').nth(1);
+  await failedReceipts;
+  const retriedReceipts = page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return receipts(url) && url.searchParams.get('collectionId') === fixturePayment.groupId &&
+      url.searchParams.get('includeProcessing') === '1' && response.ok();
+  });
+  await receiptInbox.getByRole('button', {name: 'Try again', exact: true}).click();
+  await retriedReceipts;
+  const receiptRow = observationTable.getByRole('row').nth(1);
   await receiptRow.waitFor();
   const receiptCells = receiptRow.getByRole('cell');
   assert.match(await receiptCells.nth(1).innerText(), /\bParsed\b/);
-  assert.equal(await page.getByRole('columnheader', {name: 'Payment reference', exact: true}).count(), 0);
-  assert.equal(await page.getByRole('columnheader', {name: 'Payer SMS', exact: true}).count(), 0);
+  assert.equal(await observationTable.getByRole('columnheader', {name: 'Payment reference', exact: true}).count(), 0);
+  assert.equal(await observationTable.getByRole('columnheader', {name: 'Payer SMS', exact: true}).count(), 0);
   await page.setViewportSize({width: 320, height: 768});
   assert.equal(await receiptRow.evaluate((row) => getComputedStyle(row).display), 'grid');
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
@@ -416,7 +448,7 @@ try {
   assert.deepEqual(denied, []);
   assert.deepEqual(unexpectedAuth, []);
   assert.deepEqual(incorrectIdentityHeaders, []);
-  const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'admin_home_reports_scoped_sms_health', 'retired_passcode_bookmark_returns_to_overview', 'three_daily_links_and_no_redundant_sidebar_search', 'both_payment_directions_and_390px_reflow', 'protected_sms_deep_link', 'filtered_member_detail_and_return', 'payment_details_link_to_authorized_sms_evidence', 'payment_without_source_and_320px_reflow', 'sms_read_failure_retry',
+  const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'admin_home_reports_scoped_sms_health', 'retired_passcode_bookmark_returns_to_overview', 'three_daily_links_and_no_redundant_sidebar_search', 'canonical_payment_direction_filter_and_clear', 'inline_inbox_preserves_financial_table_and_390px_scroll', 'protected_sms_deep_link', 'filtered_member_detail_and_return', 'single_mobile_number_in_member_roster_and_detail', 'payment_details_link_to_authorized_sms_evidence', 'payment_without_source_and_320px_reflow', 'sms_read_failure_retry',
       'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
       'retired_authenticator_bookmark_preserves_safe_destination', 'missing_scoped_admin_identity_removes_controls', 'session_failure_and_recovery_require_server_authority', 'expired_request_and_history_return_require_sign_in',
       'mobile_drawer_traps_and_restores_focus_and_reflows', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, 'no_unexpected_auth_request', 'identity_version_only_on_session_exchanges'];

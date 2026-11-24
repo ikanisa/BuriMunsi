@@ -1,8 +1,21 @@
+import {normalizeLoginPhone} from '../../session/phonePasscode';
 import type { CoreArea, CorePage, DataRow, FinancialModel } from './types';
 
 const idPattern = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const isoPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const decimalPattern = /^(?:0|[1-9]\d*)$/;
+
+function isRwandaMobile(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  try {normalizeLoginPhone(value); return true;} catch {return false;}
+}
+
+/** Direct enrollment stores the member's number in momo_number. Older App members can also have a distinct contact. */
+export function memberMobileNumber(record: Record<string, unknown>): string | null {
+  const contact = [record.phone_e164, record.whatsapp_number].find((value): value is string =>
+    typeof value === 'string' && (/^\+[1-9]\d{6,14}$/.test(value) || isRwandaMobile(value)));
+  return contact ?? (isRwandaMobile(record.momo_number) ? record.momo_number : null);
+}
 
 export const STATUSES: Record<FinancialModel, Record<CoreArea, readonly string[]>> = {
   canonical_evidence_ledger: {
@@ -92,7 +105,7 @@ export function parseCoreRow(area: CoreArea, model: FinancialModel, input: unkno
     if (input.operator_admin_id !== null && !isId(input.operator_admin_id)) invalid();
     if (input.collect_user_id === null && input.operator_admin_id === null) invalid();
     if (input.id !== (input.collect_user_id ?? input.operator_admin_id)) invalid();
-    if (input.momo_number !== null && (typeof input.momo_number !== 'string' || !/^07[2389]\d{7}$/.test(input.momo_number))) invalid();
+    if (input.momo_number !== null && !isRwandaMobile(input.momo_number)) invalid();
     if (input.momo_pay_code !== null && (typeof input.momo_pay_code !== 'string' || !/^\d{4,9}$/.test(input.momo_pay_code))) invalid();
     if (model === 'canonical_evidence_ledger' && (input.posted_contributed_rwf !== null || input.contribution_basis !== 'reconciled_evidence_entries')) invalid();
     if (model === 'transaction_journals' && (!isSafeCount(input.posted_contributed_rwf) || input.posted_contributed_rwf > input.total_contributed_rwf || input.contribution_basis !== 'confirmation_recorded_allocations')) invalid();

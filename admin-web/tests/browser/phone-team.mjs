@@ -78,11 +78,15 @@ export async function qualifyPhoneTeam({admin, origin, open, legacySessions}) {
     assert.equal(await button(staffPage, 'Create account').count(), 0);
     checks.push('staff_signs_in_directly_and_cannot_manage_team');
     const withheld = await staffPage.evaluate(async () => {
-      const requests = ['/api/admin/core/members', '/api/admin/burimunsi/payments?limit=100&offset=0'];
+      const requests = ['/api/admin/core/members?directory=roster&limit=25&offset=0',
+        '/api/admin/burimunsi/payments?limit=100&offset=0', '/api/admin/momo/observations?collectionId=fixture-group&limit=25&includeProcessing=1'];
       return Promise.all(requests.map(async path => (await fetch(path)).status));
     });
-    assert.deepEqual(withheld, [403, 403]);
-    checks.push('staff_fixture_cannot_read_demo_members_or_payments');
+    assert.deepEqual(withheld, [403, 403, 403]);
+    await staffPage.goto(origin + '/admin/payments?view=sms');
+    await heading(staffPage, 'Access unavailable').waitFor();
+    assert.equal(await staffPage.getByRole('table').count(), 0);
+    checks.push('staff_without_grants_cannot_read_scoped_members_payments_or_sms');
 
     await staffPage.goto(origin + '/admin/security/verify-email?returnTo=%2Fadmin%2Fsecurity');
     await heading(staffPage, 'Account security').waitFor();

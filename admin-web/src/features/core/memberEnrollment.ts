@@ -20,7 +20,7 @@ export function validateMember(draft: MemberDraft) {
     errors.name = 'Enter the registered MoMo name, between 2 and 100 characters.';
   }
   let phone = '';
-  try {phone = normalizeLoginPhone(draft.phone);} catch {errors.phone = 'Enter a valid Rwanda MoMo number.';}
+  try {phone = normalizeLoginPhone(draft.phone);} catch {errors.phone = 'Enter a valid Rwanda mobile number.';}
   return {errors, name, phone};
 }
 
@@ -68,7 +68,7 @@ export async function readEnrollmentOutcome(data: JsonObject, attempt: PendingAt
 export function rejectedEnrollment(error: unknown): string | null {
   if (!(error instanceof AdminRequestError) || error.outcomeUnknown) return null;
   if (error.statusCode === 400 && error.code === 'invalid_name') return 'Check the registered MoMo name and try again.';
-  if (error.statusCode === 400 && error.code === 'invalid_phone') return 'Check the Rwanda MoMo number and try again.';
+  if (error.statusCode === 400 && error.code === 'invalid_phone') return 'Check the Rwanda mobile number and try again.';
   if (error.statusCode === 409 && error.code === 'duplicate_phone') return 'That number matches conflicting records. Check the number in Members before continuing.';
   if (error.statusCode === 403 && ['access_denied', 'admin_required', 'permission_required'].includes(error.code ?? '')) return 'Your account cannot add members to this group.';
   if (error.statusCode === 403 && error.code === 'csrf_rejected') return 'Refresh your session before saving the member.';

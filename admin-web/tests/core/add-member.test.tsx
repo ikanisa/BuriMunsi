@@ -31,7 +31,7 @@ function open(request: AdminRequest, actor = user) {
 }
 async function fields(fullName = name, number = '0788 000 100') {
   fireEvent.change(await screen.findByLabelText('Registered MoMo name'), {target: {value: fullName}});
-  fireEvent.change(screen.getByLabelText('MoMo phone number'), {target: {value: number}});
+  fireEvent.change(screen.getByRole('textbox', {name: 'Mobile number'}), {target: {value: number}});
 }
 function confirm() {
   for (const checkbox of screen.getAllByRole('checkbox')) {
@@ -67,13 +67,15 @@ describe('Add member', () => {
     expect(screen.queryByRole('button', {name: 'Save member'})).not.toBeInTheDocument();
   });
 
-  it('validates the name, Rwanda MoMo formats and required member confirmations before writing', async () => {
+  it('collects one mobile number and validates its Rwanda format and all confirmations before writing', async () => {
     const request = vi.fn<AdminRequest>().mockResolvedValue(scope);
     open(request);
     await fields('X', 'abc0788000100');
+    expect(screen.getAllByRole('textbox').filter(field => field.getAttribute('type') === 'tel')).toHaveLength(1);
+    expect(screen.queryByRole('textbox', {name: /MoMo.*number/i})).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', {name: 'Save member'}));
     expect(screen.getByLabelText('Registered MoMo name')).toHaveFocus();
-    expect(screen.getByText(/Enter a valid Rwanda MoMo number/)).toBeInTheDocument();
+    expect(screen.getByText(/Enter a valid Rwanda mobile number/)).toBeInTheDocument();
     await fields();
     fireEvent.click(screen.getByRole('button', {name: 'Save member'}));
     expect(screen.getByRole('checkbox', {name: /confirmed who owns/})).toHaveFocus();
@@ -164,7 +166,7 @@ describe('Add member', () => {
     open(request); await enter();
     expect(await screen.findByText(/That number matches conflicting records/)).toBeInTheDocument();
     expect(sessionStorage.getItem(PENDING_KEY)).toBeNull();
-    fireEvent.change(screen.getByLabelText('MoMo phone number'), {target: {value: '0788000102'}});
+    fireEvent.change(screen.getByRole('textbox', {name: 'Mobile number'}), {target: {value: '0788000102'}});
     await waitFor(() => expect(screen.getAllByRole('checkbox', {checked: false})).toHaveLength(3));
   });
 });

@@ -15,7 +15,7 @@ import {usePendingIdentity} from './usePendingIdentity';
 import './memberEnrollment.css';
 
 const attestations = [
-  ['verifiedOwnership', 'I checked the full MoMo number and confirmed who owns it.'],
+  ['verifiedOwnership', 'I checked the full mobile number and confirmed who owns it.'],
   ['acceptedTerms', 'The member accepted the savings terms.'],
   ['consentRecorded', 'I recorded the member’s consent to the privacy notice.'],
 ] as const;
@@ -100,7 +100,7 @@ function MemberForm({scope, identity, request, isCurrent, original}: FormProps) 
       const intent = await enrollmentIntent(requestId, {name, phone});
       if (!current()) return;
       if (original && (original.intent.memberHash !== intent.memberHash || original.intent.phoneHash !== intent.phoneHash)) {
-        setMessage('Use the same registered name and MoMo number as the original request.'); return;
+        setMessage('Use the same registered name and mobile number as the original request.'); return;
       }
       original = await retainPending(identity, ENROLLMENT_FAMILY, scope.collectionId, requestId, ENROLLMENT_PERMISSION, intent);
       if (!current()) return;
@@ -145,7 +145,7 @@ function MemberForm({scope, identity, request, isCurrent, original}: FormProps) 
           aria-invalid={!!errors.name} aria-describedby={errors.name ? 'member-name-error' : undefined} />
         {errors.name && <p className="admin-field-error" id="member-name-error">{errors.name}</p>}
       </div>
-      <div className="admin-field"><label htmlFor="member-phone">MoMo phone number</label>
+      <div className="admin-field"><label htmlFor="member-phone">Mobile number</label>
         <input className="admin-input" id="member-phone" name="phone" type="tel" autoComplete="off" required maxLength={40}
           value={draft.phone} onChange={event => update('phone', event.target.value)} disabled={!!working}
           aria-invalid={!!errors.phone} aria-describedby={errors.phone ? 'member-phone-error' : undefined} />

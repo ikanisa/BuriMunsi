@@ -2,7 +2,7 @@ import {AdminRequestError} from '../../api/client';
 import {Link} from 'react-router';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Button, Card, EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge } from '../../ui';
-import { containsControl, formatField, formatMoney, label, parseCorePage, parseMemberRosterPage, paymentReference } from './contracts';
+import { containsControl, formatField, formatMoney, label, memberMobileNumber, parseCorePage, parseMemberRosterPage, paymentReference } from './contracts';
 import { coreListAction } from './coreRecordActions';
 import {MemberDirectoryViews} from './MemberDirectory';
 import {baseSorts, listLocation, listStatuses, readFilters, type Filters} from './coreListFilters';
@@ -42,7 +42,8 @@ function columns(area: CoreArea, model: FinancialModel): { label: string; value:
     case 'users': case 'members': return [
       { label: 'Collect ID', value: row => row.title }, { label: 'Name on MoMo', value: row => row.display_name_recorded ? String(row.display_name) : 'Not recorded' },
       { label: 'Type', value: row => formatField('member_type', row.member_type) },
-      { label: 'MoMo number / code', value: row => formatField('momo_number_or_code', row.momo_number ?? row.momo_pay_code) },
+      area === 'members' ? {label: 'Mobile number', value: row => formatField('mobile_number', memberMobileNumber(row))} :
+        {label: 'MoMo number / code', value: row => formatField('momo_number_or_code', row.momo_number ?? row.momo_pay_code)},
       { label: 'Contributed', value: row => formatMoney(row.total_contributed_rwf) },
     ];
     case 'payees': return [

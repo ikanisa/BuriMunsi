@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { Button, Card, ErrorState, LoadingState, PageHeader } from '../../ui';
 import { LegacyTransactionActions } from '../legacy-transactions/LegacyTransactionActions';
 import { OperatorNotes } from '../notes/OperatorNotes';
-import { containsControl, formatField, isId, isObject, parseCoreRow, paymentReference, validateMemberStatus } from './contracts';
+import { containsControl, formatField, isId, isObject, memberMobileNumber, parseCoreRow, paymentReference, validateMemberStatus } from './contracts';
 import { coreRecordActions } from './coreRecordActions';
 import { CoreRelatedSection, MembershipRecoveries } from './CoreRelatedRecords';
 import type { PendingIdentity } from './pendingAttempt';
@@ -19,7 +19,7 @@ type RecordProps = FeatureAccess & { area: CoreArea; id: string; returnTo?: stri
 const fields: Record<CoreArea, readonly [string, string][]> = {
   groups: [['title', 'Group'], ['slug', 'Slug'], ['collection_type', 'Type'], ['purpose_label', 'Purpose'], ['visibility', 'Visibility'], ['active_members', 'Members'], ['status', 'Status'], ['created_at', 'Created']],
   users: [['public_id', 'Collect ID'], ['display_name', 'Name on MoMo'], ['member_type', 'Type'], ['whatsapp_number', 'Mobile number'], ['momo_provider', 'MoMo provider'], ['momo_number', 'MoMo number'], ['momo_pay_code', 'MoMo code'], ['total_contributed_rwf', 'Recorded contributions'], ['status', 'Status']],
-  members: [['public_id', 'Collect ID'], ['display_name', 'Name on MoMo'], ['member_type', 'Type'], ['whatsapp_number', 'Mobile number'], ['momo_provider', 'MoMo provider'], ['momo_number', 'MoMo number'], ['momo_pay_code', 'MoMo code'], ['total_contributed_rwf', 'Recorded contributions'], ['status', 'Status']],
+  members: [['public_id', 'Collect ID'], ['display_name', 'Name on MoMo'], ['member_type', 'Type'], ['mobile_number', 'Mobile number'], ['momo_provider', 'MoMo provider'], ['momo_pay_code', 'MoMo code'], ['total_contributed_rwf', 'Recorded contributions'], ['status', 'Status']],
   payees: [['title', 'Payee'], ['group_name', 'Group'], ['network', 'Provider'], ['momo_number_or_code', 'MoMo number / code'], ['status', 'Status']],
   transactions: [['title', 'Reference'], ['group_name', 'Group'], ['payee_label', 'Receiver'], ['amount_rwf', 'Recorded amount'], ['allocated_amount_rwf', 'Allocated amount'], ['status', 'Evidence status'], ['settlement_status', 'Settlement'], ['observed_at', 'Observed']],
   ledgers: [['title', 'Record'], ['group_name', 'Group'], ['signed_amount_rwf', 'Signed amount'], ['debit_rwf', 'Debit'], ['credit_rwf', 'Credit'], ['status', 'Status'], ['created_at', 'Created']],
@@ -72,6 +72,10 @@ export function CoreRecordPage({ area, id, request, permissions, actorId, princi
     current: detailScope === currentScope && state === 'ready', detail, identity,
   });
   const reload = () => {setState('loading'); setRetry(value => value + 1);};
+  const memberProfile = area === 'members' || area === 'users' && scopedMember;
+  const resourceRow = detail?.resource as Record<string, unknown> | undefined;
+  const displayRow = memberProfile && resourceRow ? {...resourceRow, mobile_number:memberMobileNumber(resourceRow)} : resourceRow;
+  const detailFields = memberProfile ? fields.members : fields[area];
   return <>
     <PageHeader title={area === 'users' ? 'Person' : AREA_TITLES[area]} subtitle="Review this record and its related information." actions={<>
       <Button type="button" onClick={() => navigate(back)}>Back to {paymentsReturn ? 'payments' : scopedMember && area === 'users' ? 'members' : AREA_TITLES[area].toLowerCase()}</Button>
@@ -81,8 +85,8 @@ export function CoreRecordPage({ area, id, request, permissions, actorId, princi
       !isId(id) ? <ErrorState message="Select a valid record." /> :
       state === 'loading' || detailScope !== currentScope ? <LoadingState label="Loading record" /> :
       state === 'error' || !detail ? <ErrorState message="The record could not be verified or the service is unavailable." onRetry={reload} /> : <>
-        <Card><div className="core-detail"><h2>Record details</h2><dl>{fields[area].filter(([key]) => (!simplePayments || key !== 'total_contributed_rwf') &&
-          (detail.resource as Record<string, unknown>)[key] !== undefined).map(([key, title]) => <div key={key}><dt>{title}</dt><dd>{area === 'transactions' && financialModel === 'canonical_evidence_ledger' && key === 'title' ? paymentReference(detail.resource as Record<string, unknown>) : formatField(key, (detail.resource as Record<string, unknown>)[resource === 'members' && key === 'status' ? 'membership_status' : key])}</dd></div>)}</dl></div></Card>
+        <Card><div className="core-detail"><h2>Record details</h2><dl>{detailFields.filter(([key]) => (!simplePayments || key !== 'total_contributed_rwf') &&
+          displayRow?.[key] !== undefined).map(([key, title]) => <div key={key}><dt>{title}</dt><dd>{area === 'transactions' && financialModel === 'canonical_evidence_ledger' && key === 'title' ? paymentReference(detail.resource as Record<string, unknown>) : formatField(key, displayRow?.[resource === 'members' && key === 'status' ? 'membership_status' : key])}</dd></div>)}</dl></div></Card>
         {area === 'transactions' && <p className="core-note">Recorded evidence does not establish provider settlement.</p>}
         {area === 'transactions' && financialModel === 'transaction_journals' && identity && identity.id === actorId && identity.role === role && isCurrent &&
           (['add', 'review'] as const).map(mode => <LegacyTransactionActions key={`${currentScope}:${mode}`} id={id} mode={mode} request={request} identity={identity}

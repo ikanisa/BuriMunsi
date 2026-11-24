@@ -106,6 +106,33 @@ describe('core list access and authority', () => {
     expect(request.mock.calls[0][0]).toBe('operations/members/' + member.id);
   });
 
+  it.each([
+    {scenario:'recorded contact differs', phone_e164:'+250788000111', whatsapp_number:'+250788000111', momo_number:'0788000222', expected:'+250788000111'},
+    {scenario:'existing international contact', phone_e164:'+256700000111', whatsapp_number:null, momo_number:'0788000222', expected:'+256700000111'},
+    {scenario:'same contact and member number', phone_e164:'+250788000222', whatsapp_number:'+250788000222', momo_number:'0788000222', expected:'+250788000222'},
+    {scenario:'legacy contact alias only', phone_e164:null, whatsapp_number:'+250788000333', momo_number:null, expected:'+250788000333'},
+    {scenario:'new direct member', phone_e164:null, whatsapp_number:null, momo_number:'0788000444', expected:'0788000444'},
+    {scenario:'legacy international member format', phone_e164:null, whatsapp_number:null, momo_number:'+250788000555', expected:'+250788000555'},
+    {scenario:'only a merchant code is present', phone_e164:null, whatsapp_number:null, momo_number:null, expected:'Not recorded'},
+  ])('shows one matching mobile number in the Members directory and detail for $scenario', async ({phone_e164, whatsapp_number, momo_number, expected}) => {
+    const member = {...fixture.members.rows[0], phone_e164, whatsapp_number, momo_number, momo_pay_code:'000021', membership_status:'active'};
+    const list = vi.fn().mockResolvedValue({...fixture.members, rows:[member], total:1});
+    const directory = render(<CoreListPage {...base} area="members" request={list} permissions={['users.read']} scopedMember />);
+    const header = await screen.findByRole('columnheader',{name:'Mobile number'});
+    expect(screen.queryByRole('columnheader',{name:/MoMo number/i})).not.toBeInTheDocument();
+    const table = within(header.closest('table')!);
+    const index = table.getAllByRole('columnheader').indexOf(header);
+    expect(within(table.getAllByRole('row')[1]).getAllByRole('cell')[index]).toHaveTextContent(expected);
+    directory.unmount();
+    const detail = vi.fn().mockResolvedValue({contract_version:2, model:base.financialModel, resource_type:'members',
+      resource:member, current_actor_id:base.actorId, can_manage:false, related:{}, related_truncated:false});
+    render(<CoreRecordPage {...base} area="members" id={member.id} request={detail} permissions={['users.read']} scopedMember />);
+    const mobile = await screen.findByText('Mobile number',{selector:'dt'});
+    expect(mobile.nextElementSibling).toHaveTextContent(expected);
+    expect(screen.queryByText('MoMo number',{selector:'dt'})).not.toBeInTheDocument();
+    expect(screen.getByText('MoMo code',{selector:'dt'}).nextElementSibling).toHaveTextContent('000021');
+  });
+
   it('offers one Add member action and a separate recovery link only when a person request exists', async () => {
     Object.defineProperty(globalThis, 'crypto', {value: webcrypto, configurable: true});
     sessionStorage.clear();
