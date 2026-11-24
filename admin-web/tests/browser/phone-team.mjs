@@ -71,7 +71,7 @@ export async function qualifyPhoneTeam({admin, origin, open, legacySessions}) {
   try {
     await staffPage.goto(origin + '/admin');
     await signIn(staffPage, fixtureInitialPasscode);
-    await heading(staffPage, 'Operations overview').waitFor();
+    await heading(staffPage, 'Home').waitFor();
     await staffPage.goto(teamUrl);
     await heading(staffPage, 'Access unavailable').waitFor();
     assert.equal(await button(staffPage, 'Create account').count(), 0);
@@ -119,12 +119,12 @@ export async function qualifyPhoneTeam({admin, origin, open, legacySessions}) {
     await targetRow.getByRole('cell', {name: 'Staff', exact: true}).waitFor();
     await targetRow.getByRole('cell', {name: 'Active', exact: true}).waitFor();
     await signIn(staffPage, changedPin);
-    await heading(staffPage, 'Operations overview').waitFor();
+    await heading(staffPage, 'Home').waitFor();
     checks.push('reenabled_staff_can_sign_in_without_promotion');
   } finally {
     await staff.context.close();
   }
   await admin.goto(origin + '/admin');
-  await heading(admin, 'Operations overview').waitFor();
+  await heading(admin, 'Home').waitFor();
   return checks;
 }

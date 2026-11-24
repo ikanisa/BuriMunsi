@@ -189,15 +189,15 @@ try {
   const smsView = paymentViews.getByRole('link', {name: 'SMS & receipts', exact: true});
   const attention = paymentViews.getByRole('link', {name: 'Needs attention', exact: true});
   assert.equal(new URL(page.url()).hash, '#/admin/payments');
-  assert.equal(await recorded.getAttribute('aria-current'), 'page');
+  await recorded.and(page.locator('[aria-current=page]')).waitFor();
   await smsView.click();
   await page.waitForURL(url => url.hash === '#/admin/payments?view=sms');
-  assert.equal(await smsView.getAttribute('aria-current'), 'page');
+  await smsView.and(page.locator('[aria-current=page]')).waitFor();
   await page.setViewportSize({width: 390, height: 844});
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await attention.click();
   await page.waitForURL(url => url.hash === '#/admin/payments?view=attention');
-  assert.equal(await attention.getAttribute('aria-current'), 'page');
+  await attention.and(page.locator('[aria-current=page]')).waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.setViewportSize({width: 1440, height: 900});
   await nav.getByRole('link', {name: 'Home', exact: true}).click();
