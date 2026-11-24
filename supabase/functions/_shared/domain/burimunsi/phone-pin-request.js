@@ -156,7 +156,10 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
       requireThat(db.applicationWork===work,'request_not_admitted',503);requireActiveNativeRequest(request);};
     const transaction=async(write,fn)=>db.transaction(async sql=>{
       await owned();if(write){
-        await db.context(sql);await lockCollectMutation(sql);
+        await db.context(sql);
+        // GET /session writes only through the database's guarded lease renewal.
+        // Login, logout and passcode changes keep their exclusive mutation lock.
+        if(!readSession)await lockCollectMutation(sql);
       }
       else{await sql.unsafe('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');await db.readContext(sql,{isolation:'repeatable read'});}
       const result=await fn(sql);await owned(true);return result;
