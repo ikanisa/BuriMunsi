@@ -31,7 +31,6 @@ export function SmsOversight({request, permissions, authorityKey, preferSmsHealt
     invalidated.current = false;
     const options = {authenticated: true, expectedStatus: 200, signal: controller.signal};
     const read = async () => {
-      if (hasSmsRead) return parseSmsOversight(await request('oversight/health?evidenceVersion=2', options));
       if (preferSmsHealth && legacyAuthority.current !== authorityKey) {
         try {return parseSmsOversight(await request('oversight/sms-health', options), 'admin_sms_health');}
         catch (failure) {
@@ -40,7 +39,8 @@ export function SmsOversight({request, permissions, authorityKey, preferSmsHealt
           legacyAuthority.current = authorityKey;
         }
       }
-      return parseSmsOversight(await request('oversight/health', options));
+      const fullHealth = hasSmsRead ? 'oversight/health?evidenceVersion=2' : 'oversight/health';
+      return parseSmsOversight(await request(fullHealth, options));
     };
     void read()
       .then(sample => {if (!controller.signal.aborted) {setNow(Date.now()); setState({scope, access, sample, error: false});}})

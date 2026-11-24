@@ -25,7 +25,7 @@ const nativeQueue = {pending: 0, retrying: 0, blocked: 0, unmatched: 0, posted: 
 describe('SMS oversight', () => {
   it('keeps idle standalone health checks 30 seconds apart and immediately refreshes a receipt change', async () => {
     vi.useFakeTimers();
-    const request = vi.fn(async () => sample());
+    const request = vi.fn(async () => ({...sample(), scope: 'admin_sms_health'}));
     const disconnected = {connected: () => false, subscribe: () => () => {}};
     const view = renderOversight(<OperationsLiveContext.Provider value={disconnected}>
       <SmsOversight request={request} permissions={['system_health.read','sms.read']} authorityKey="operator" preferSmsHealth />
@@ -73,7 +73,7 @@ describe('SMS oversight', () => {
   });
 
   it('opens existing SMS evidence from anywhere on the single status link', async () => {
-    const body = sample(), request = vi.fn(async (_path: string) => body);
+    const body = {...sample(), scope: 'admin_sms_health'}, request = vi.fn(async (_path: string) => body);
     renderOversight(<Routes>
       <Route path="/" element={<SmsOversight request={request} permissions={healthAndSms} authorityKey="operator" preferSmsHealth />} />
       <Route path="/admin/payments" element={<p>Payments evidence</p>} />
@@ -85,7 +85,7 @@ describe('SMS oversight', () => {
     expect(within(link).getByText(/Kigali/)).toHaveAttribute('datetime', body.checked_at);
     expect(link.querySelector('a, button, summary, [tabindex]')).toBeNull();
     expect(screen.getAllByRole('link')).toHaveLength(1);
-    expect(request.mock.calls.map(([path]) => path)).toEqual(['oversight/health?evidenceVersion=2']);
+    expect(request.mock.calls.map(([path]) => path)).toEqual(['oversight/sms-health']);
     fireEvent.click(status);
     expect(await screen.findByText('Payments evidence')).toBeVisible();
   });
@@ -99,6 +99,16 @@ describe('SMS oversight', () => {
     expect(await screen.findByText('Native SMS processing disabled')).toBeVisible();
     view.rerender(<SmsOversight request={request} permissions={health} authorityKey="session-a" preferSmsHealth refreshGeneration={1} />);
     await waitFor(() => expect(request.mock.calls.map(([path]) => path)).toEqual(['oversight/sms-health', 'oversight/health', 'oversight/health']));
+  });
+
+  it('uses the authorized evidence response when an older server lacks the status route', async () => {
+    const request = vi.fn(async (path: string) => {
+      if (path === 'oversight/sms-health') throw new AdminRequestError('Unavailable route.', {statusCode: 404, code: 'oversight_not_found'});
+      return sample();
+    });
+    renderOversight(<SmsOversight request={request} permissions={healthAndSms} authorityKey="operator" preferSmsHealth />);
+    expect(await screen.findByText('Native SMS processing disabled')).toBeVisible();
+    expect(request.mock.calls.map(([path]) => path)).toEqual(['oversight/sms-health', 'oversight/health?evidenceVersion=2']);
   });
 
   it('keeps a narrow response or permission failure closed', async () => {
