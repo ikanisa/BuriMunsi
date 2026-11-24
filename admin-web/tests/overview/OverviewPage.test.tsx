@@ -1,5 +1,5 @@
 import {act, fireEvent, render, screen, within} from '@testing-library/react';
-import {MemoryRouter} from 'react-router';
+import {MemoryRouter, Route, Routes} from 'react-router';
 import {describe, expect, it, vi} from 'vitest';
 import type {AdminRequest, JsonObject} from '../../src/api/client';
 import {OverviewPage} from '../../src/features/overview/OverviewPage';
@@ -20,22 +20,34 @@ describe('compact Admin home', () => {
     expect(request.mock.calls.map(([path]) => path)).toEqual(['core/overview']);
   });
 
-  it('shows no more than three measured metrics, not the raw evidence, and formats Kigali rollover', async () => {
+  it('makes each permitted metric one link and navigates when its value is clicked', async () => {
     const request = vi.fn(async () => canonicalFixture());
-    render(<OverviewPage {...base} request={request} permissions={admin} />, {wrapper});
+    render(<Routes>
+      <Route index element={<OverviewPage {...base} request={request} permissions={admin} />} />
+      <Route path="/admin/payments" element={<h1>Payments</h1>} />
+    </Routes>, {wrapper});
 
     expect(screen.getByRole('heading', {name: 'Home', level: 1})).toBeVisible();
     const summary = await screen.findByRole('region', {name: 'Workspace snapshot'});
     expect(within(summary).getAllByRole('term')).toHaveLength(3);
-    expect(within(summary).getByText('Net recorded contributions')).toBeVisible();
-    expect(within(summary).getByText('RWF 9,007,199,254,740,993')).toBeVisible();
-    expect(within(summary).getByText('Cumulative records, not provider settlement.')).toBeVisible();
-    expect(within(summary).getByText(/17 Nov 2026.*01:00 Kigali/)).toHaveAttribute('datetime', '2026-11-16T23:00:00.000Z');
-    expect(within(summary).getByRole('link', {name:'Open reconciliation'})).toHaveAttribute('href', '/admin/payments?view=attention&status=all');
-    expect(within(summary).getByRole('link', {name:'Open payments'})).toHaveAttribute('href', '/admin/payments');
-    expect(within(summary).getByRole('link', {name:'Open members'})).toHaveAttribute('href', '/admin/members');
+    expect(within(summary).getAllByRole('link')).toHaveLength(3);
+    const payments = within(summary).getByRole('link', {name: 'Open payments'});
+    const members = within(summary).getByRole('link', {name: 'Open members'});
+    const reconciliation = within(summary).getByRole('link', {name: 'Open reconciliation'});
+    expect(payments).toHaveAttribute('href', '/admin/payments');
+    expect(members).toHaveAttribute('href', '/admin/members');
+    expect(reconciliation).toHaveAttribute('href', '/admin/payments?view=attention&status=all');
+    expect(within(payments).getByRole('term')).toHaveTextContent('Net recorded contributions');
+    const amount = within(payments).getByRole('definition');
+    expect(amount).toHaveTextContent('RWF 9,007,199,254,740,993');
+    expect(payments).toHaveAccessibleDescription('Net recorded contributions RWF 9,007,199,254,740,993');
+    expect(within(members).getByRole('term')).toHaveTextContent('Active members');
+    expect(within(reconciliation).getByRole('term')).toHaveTextContent('Unallocated payments');
+    expect(within(summary).queryByText(/Workspace snapshot|As of|Cumulative records/i)).not.toBeInTheDocument();
     expect(within(summary).queryByText('Retained payment evidence')).not.toBeInTheDocument();
     expect(screen.getAllByRole('button')).toHaveLength(1);
+    fireEvent.click(amount);
+    expect(await screen.findByRole('heading', {name: 'Payments'})).toBeVisible();
   });
 
   it('updates Today across Kigali midnight without relabeling its cumulative snapshot as daily', async () => {
@@ -47,8 +59,9 @@ describe('compact Admin home', () => {
       vi.setSystemTime(new Date('2026-11-23T22:00:01.000Z'));
       fireEvent(window, new Event('pageshow'));
       expect(screen.getByText('Today in Kigali · 24 November 2026')).toBeVisible();
-      expect(within(summary).getByText(/17 Nov 2026.*01:00 Kigali/)).toBeVisible();
-      expect(within(summary).getByText('Cumulative records, not provider settlement.')).toBeVisible();
+      expect(summary).toHaveAccessibleDescription(/Measured 17 Nov 2026.*01:00 Kigali/);
+      expect(within(summary).getByText(/Measured 17 Nov 2026.*01:00 Kigali/)).not.toBeVisible();
+      expect(within(summary).getByText('RWF 9,007,199,254,740,993')).toBeVisible();
       view.unmount();
     } finally {vi.useRealTimers();}
   });
@@ -57,11 +70,14 @@ describe('compact Admin home', () => {
     const request = vi.fn(async () => canonicalFixture(0));
     const view = render(<OverviewPage {...base} request={request} permissions={admin} />, {wrapper});
     expect(await screen.findByText('Unallocated payments')).toBeVisible();
+    expect(screen.getByText('0')).toBeVisible();
+    expect(screen.getByText('0').closest('a')).toBeNull();
     expect(screen.queryByRole('link', {name:'Open reconciliation'})).not.toBeInTheDocument();
 
     view.rerender(<OverviewPage {...base} request={request} permissions={['overview.read']} />);
     expect(screen.queryByText(/RWF /)).not.toBeInTheDocument();
     expect(await screen.findByText('Active members')).toBeVisible();
+    expect(screen.getByText('Active members').closest('a')).toBeNull();
     expect(screen.queryByText('Unallocated payments')).not.toBeInTheDocument();
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
     expect(request.mock.calls).toHaveLength(2);

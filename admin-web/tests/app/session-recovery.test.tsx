@@ -44,6 +44,23 @@ afterEach(() => {
 });
 
 describe('Admin session recovery through the router', () => {
+  it('keeps a waiting PWA update out of the signed-in workspace', async () => {
+    const scriptURL = new URL('/custom-sw.js', location.origin).href;
+    const active = Object.assign(new EventTarget(), {scriptURL, state: 'activated'});
+    const waiting = Object.assign(new EventTarget(), {scriptURL, state: 'installed'});
+    const registration = Object.assign(new EventTarget(), {active, waiting, installing: null, scope: location.origin + '/'});
+    const serviceWorker = Object.assign(new EventTarget(), {controller: active, ready: Promise.resolve(registration)});
+    vi.stubGlobal('isSecureContext', true);
+    vi.stubGlobal('navigator', Object.create(navigator, {serviceWorker: {value: serviceWorker}}));
+    try {
+      openAdmin('/admin/licenses');
+      expect(await screen.findByRole('heading', {name: 'Open-source licenses'})).toBeVisible();
+      expect(screen.queryByText(/Admin update ready/i)).not.toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it.each([
     ['supabase', 'authenticator', 'verify-email', 'Verify your email'],
     ['cloudflare', 'verify-email', 'authenticator', 'Authenticator'],
