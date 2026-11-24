@@ -1003,6 +1003,80 @@ fun main(args:Array<String>) {
   check(result.completed&&e.repository.requests.size==45&&pending(adminA).isEmpty()&&
    e.repository.reconciliationBatches.flatten().map{it.sourceKey}.toSet().size==45)
  }
+ test("a late opening and a late last page finish the original check exactly once") {
+  val e=setup();val recovery=ObservationRecovery(e.context);recovery.resetAudit()
+  e.context.contentResolver.rows=listOf(row(4100))
+  e.repository.retainedSources[cloudKey(adminA,4100)]="historical-source"
+  e.repository.parserStates["historical-source"]="needs_review"
+  var expired=false
+  e.repository.afterReport={if(it.state=="checking")expired=true}
+  recovery.auditPage(e.repository,{expired},{expired})
+  val run=e.repository.reports.single().runId
+  check(e.repository.statusCalls==0)
+  expired=false
+  e.repository.afterBatch={expired=true}
+  repeat(5){if(!expired)recovery.auditPage(e.repository,{expired},{expired})}
+  check(e.repository.reconciliationBatches.size==1&&e.repository.reports.single().runId==run)
+  expired=false
+  check(recovery.auditPage(e.repository,{expired},{expired})==ObservationRecovery.Audit.UNCONFIRMED)
+  val last=e.repository.reports.last()
+  check(e.repository.reports.size==2&&last.runId==run&&last.state=="incomplete"&&last.pendingCount==1)
+  check(e.repository.reconciliationBatches.size==1&&e.repository.requests.isEmpty())
+ }
+ test("ambiguous opening and terminal acknowledgements replay only their original report") {
+  val e=setup();val recovery=ObservationRecovery(e.context);recovery.resetAudit()
+  e.context.contentResolver.rows=listOf(row(4130))
+  e.repository.retainedSources[cloudKey(adminA,4130)]="held-source"
+  e.repository.parserStates["held-source"]="needs_review"
+  val lost=mutableSetOf("checking","incomplete")
+  e.repository.afterReport={if(lost.remove(it.state))throw rw.ikanisa.burimunsi.data.ApiFailure("connection_waiting",0,true)}
+  var result=ObservationRecovery.Audit.MORE
+  repeat(8){if(result==ObservationRecovery.Audit.MORE){
+   try{result=recovery.auditPage(e.repository)}catch(failure:rw.ikanisa.burimunsi.data.ApiFailure){check(failure.status==0)}
+  }}
+  check(result==ObservationRecovery.Audit.UNCONFIRMED&&lost.isEmpty())
+  val reports=e.repository.reports
+  check(reports.map{it.state}==listOf("checking","checking","incomplete","incomplete"))
+  check(reports.map{it.runId}.distinct().size==1&&reports[2]==reports[3])
+  check(e.repository.reconciliationBatches.size==1&&e.repository.requests.isEmpty()&&e.repository.heldRequests.isEmpty())
+ }
+ test("a missing receipt in a late reconciliation reply enters the original repair journal once") {
+  val e=setup();val recovery=ObservationRecovery(e.context);recovery.resetAudit()
+  e.context.contentResolver.rows=listOf(row(4131));var expired=false
+  check(recovery.auditPage(e.repository)==ObservationRecovery.Audit.MORE)
+  e.repository.afterBatch={expired=true}
+  recovery.auditPage(e.repository,{expired},{expired})
+  check(e.repository.reconciliationBatches.size==1&&pending(adminA).isEmpty())
+  expired=false
+  check(recovery.auditPage(e.repository,{expired},{expired})==ObservationRecovery.Audit.REPAIRED)
+  check(e.repository.reconciliationBatches.size==1&&pending(adminA).size==1)
+ }
+ test("a slow first historical repair leaves the second item eligible without repeating the first upload") {
+  val e=setup();app.cool.mobile.BuildConfig.CLOUD_HOLD_EXISTING_INBOX=true
+  try{
+   e.context.contentResolver.rows=listOf(row(4140),row(4141))
+   val recovery=ObservationRecovery(e.context);recovery.scan();recovery.resetAudit()
+   var expired=false
+   check(recovery.auditPage(e.repository)==ObservationRecovery.Audit.MORE)
+   e.repository.afterHeldRecovery={expired=true}
+   recovery.auditPage(e.repository,{expired},{expired})
+   check(e.repository.heldRequests.size==1&&e.repository.reconciliationBatches.size==1)
+   expired=false;e.repository.afterHeldRecovery=null
+   check(recovery.auditPage(e.repository,{expired},{expired})==ObservationRecovery.Audit.REPAIRED)
+   check(e.repository.heldRequests.map{it.sourceKey}==listOf(cloudKey(adminA,4140),cloudKey(adminA,4141)))
+   check(e.repository.reconciliationBatches.size==1&&e.repository.requests.isEmpty()&&pending(adminA).isEmpty())
+  }finally{app.cool.mobile.BuildConfig.CLOUD_HOLD_EXISTING_INBOX=false}
+ }
+ test("the opening reply cannot continue after SMS permission is revoked") {
+  val e=setup();val recovery=ObservationRecovery(e.context);recovery.resetAudit()
+  e.repository.afterReport={if(it.state=="checking")e.context.denied=setOf(Manifest.permission.READ_SMS)}
+  check(recovery.auditPage(e.repository)==ObservationRecovery.Audit.BLOCKED)
+  val oldRun=e.repository.reports.single().runId
+  check(e.repository.statusCalls==0&&e.repository.reconciliationBatches.isEmpty())
+  e.context.denied=emptySet();e.repository.afterReport=null
+  check(recovery.auditPage(e.repository)==ObservationRecovery.Audit.MORE)
+  check(e.repository.reports.last().runId!=oldRun&&e.repository.statusCalls==1)
+ }
  test("one census page proves parser states without a second request on current servers") {
   for(combined in listOf(true,false)){
    val e=setup();e.repository.combinedProcessing=combined
