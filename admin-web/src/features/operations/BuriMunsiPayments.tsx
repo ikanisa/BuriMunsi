@@ -186,7 +186,7 @@ function PaymentDetail({id: paymentKey, group, onClose, onUpdated}: {id: string;
         ['Time (Kigali)', paymentTime(payment.atRaw)], ['Counterparty', recordedText(payment.payerNameRaw)], ['Counterparty number / code', recordedText(payment.payerPhoneRaw)],
         ['Member', payment.memberName], ['Member phone', recordedText(payment.memberPhone)], ['Allocation', allocationLabel(payment.state)], ['Record ID', payment.id]]} />
         {payment.sourceId && canReadSmsEvidence(user) && (evidenceGroup
-          ? <CanonicalPaymentEvidence key={payment.sourceId} group={evidenceGroup} sourceId={payment.sourceId} />
+          ? <CanonicalPaymentEvidence key={payment.sourceId} paymentId={payment.id} group={evidenceGroup} sourceId={payment.sourceId} />
           : <Link className="operations-link" to={buriMunsiSmsPath}>Open M-Money SMS</Link>)}
         {user && payment.groupId && payment.canAllocate === true &&
           <AllocatePayment key={JSON.stringify([epoch, user.id, user.sessionId, user.role, [...user.permissions].sort(), payment.groupId, payment.id, payment.version])}

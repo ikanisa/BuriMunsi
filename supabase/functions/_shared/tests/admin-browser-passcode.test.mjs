@@ -381,3 +381,59 @@ test('payment analysis uses the original authorized projection, exact full total
   tooLarge=false;unsafeAmount=true;
   assert.equal((await call()).status,503);
 });
+
+test('exact linked SMS route uses only current payment and SMS read scope and never reveals raw evidence',async()=>{
+  const {env,setGrants}=await fixture();
+  const login=await handleAdmin(request('phone-passcode',{body:{phone,pin}}),env);
+  const cookie=login.headers.get('set-cookie').split(';')[0];
+  const read=path=>handleAdmin(routeRequest(path,{cookie}),env);
+  const original='burimunsi/payments/synthetic-payment/sms-evidence';
+  setGrants(['payments.read','sms.read']);
+  let eligible=true,reads=0,projectedPayment='synthetic-payment',foreignOutcome=false,changedProof=false;
+  const sourceId=crypto.randomUUID(),requestId=crypto.randomUUID(),fingerprint='a'.repeat(64),objectSha256='b'.repeat(64),bodySha256='c'.repeat(64);
+  const keyId='synthetic-key',objectKey='sms/'+sourceId,ownerUserId='synthetic-principal';
+  const descriptor={scope:{ownerId:ownerUserId,purpose:'sms_receipt',entityId:sourceId},
+   aad:`sms:${sourceId}:${objectSha256}`,keyId,plaintextSha256:objectSha256,
+   requestDigest:fingerprint,httpMetadata:{contentType:'application/octet-stream'},
+   customMetadata:{sha256:objectSha256,key_id:keyId}};
+  const {canonicalJson}=await import('../domain/burimunsi/values.js');
+  const sourceFingerprint=await digest(canonicalJson(descriptor));
+  const noWrite=()=>assert.fail('metadata path attempted mutation');
+  Object.assign(env.DB,{transaction:noWrite,context:noWrite,readContext:noWrite,applicationWork:{assert:async()=>{}},
+    withLockedReadSnapshot:fn=>fn({unsafe:async(sql,args)=>{
+      if(sql.startsWith('SET LOCAL statement_timeout'))return [];
+      if(sql.startsWith('SELECT set_config')){assert.deepEqual(args,[group]);return [];}
+      if(sql.includes('burimunsi_browser_pin_session')){
+        assert.match(sql,/permissions.*'sms.read'/);
+        return [{role:'admin',can_allocate:true,can_read_sms:eligible}];
+      }
+      reads++;
+      assert.match(sql,/p.collection_id=\$1 AND p.id=\$2/);
+      assert.match(sql,/private\.burimunsi_payment_sms_evidence_rows\(\$1,\$2,linked\.sms_source_id\)/);
+      assert.doesNotMatch(sql,/FROM\s+private\.burimunsi_observation_admin_page|inlineEnvelope/);
+      assert.equal(args[0],group);assert.equal(args.length,2);
+      if(args[1]!==projectedPayment)return [];
+      return [{request_id:requestId,source_id:sourceId,admitted_at:1760000000000,retention_state:'retained',
+        body_sha256:bodySha256,owner_user_id:ownerUserId,object_key:objectKey,object_sha256:objectSha256,
+        fingerprint,key_id:keyId,source_fingerprint:changedProof?'d'.repeat(64):sourceFingerprint,
+        outcomes:[{sourceId:foreignOutcome?crypto.randomUUID():sourceId,processing:'parsed',paymentReference:null,payerStatus:null,payerReason:null}]}];
+    }})});
+  const off=await read(original);assert.equal(off.status,404);assert.equal(reads,0);
+  env.BURIMUNSI_ADMIN_SMS_OBSERVATIONS_ENABLED='true';
+  eligible=false;
+  assert.equal((await read(original)).status,403);assert.equal(reads,0);
+  eligible=true;
+  assert.equal((await read(original+'?sourceId='+sourceId)).status,400);assert.equal(reads,0);
+  const response=await read(original);
+  assert.match(response.headers.get('cache-control'),/no-store/);
+  assert.deepEqual(await response.json(),{paymentId:projectedPayment,groupId:group,evidence:{requestId,sourceId,
+    admittedAt:new Date(1760000000000).toISOString(),retentionState:'retained',bodySha256,processing:'parsed',
+    paymentReference:null,payerStatus:null,payerReason:null}});
+  changedProof=true;
+  const unresolved=await (await read(original)).json();
+  assert.equal(unresolved.evidence.retentionState,'unresolved');assert.equal(unresolved.evidence.bodySha256,null);
+  foreignOutcome=true;
+  assert.equal((await read(original)).status,503);
+  projectedPayment='different-only';
+  assert.deepEqual(await (await read(original)).json(),{paymentId:'synthetic-payment',groupId:group,evidence:null});
+});

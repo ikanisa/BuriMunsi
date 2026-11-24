@@ -106,6 +106,15 @@ createServer(async (request, response) => {
       const result = readBuriMunsiPayments(url.searchParams, sms);
       return result ? json(response, 200, result) : json(response, 400, {error:{code:'invalid_fixture'}});
     }
+    const evidencePayment = /^\/api\/admin\/burimunsi\/payments\/([A-Za-z0-9_-]+)\/sms-evidence$/.exec(url.pathname);
+    if (evidencePayment) {
+      if (!payments || !sms) return json(response,403,{error:{code:'forbidden'}});
+      if (url.search) return json(response,400,{error:{code:'invalid_fixture'}});
+      const paymentId=evidencePayment[1];
+      return json(response,200,{paymentId,groupId:'fixture-group',evidence:paymentId===fixturePayment.id ?
+        {requestId:fixturePayment.id,sourceId:fixtureSmsEvidenceId,admittedAt:fixturePayment.atRaw,retentionState:'retained',
+          bodySha256:'b'.repeat(64),processing:'parsed',paymentReference:null,payerStatus:null,payerReason:null}:null});
+    }
     const payment = [fixturePayment, fixtureOutgoingPayment].find(item => url.pathname === '/api/admin/burimunsi/payments/' + item.id);
     if (payment) return payments ? json(response, 200, visiblePayment(payment)) : json(response, 403, {error:{code:'forbidden'}});
     if (url.pathname === '/api/admin/momo/observations/collections') return sms ? json(response, 200, {

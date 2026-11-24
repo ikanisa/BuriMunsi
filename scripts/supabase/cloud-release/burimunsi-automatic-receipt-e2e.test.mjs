@@ -13,6 +13,7 @@ import {installNativeChain,installHandsetInventory,nativeRuntime,nativeActor,uui
 import {assignPayment,readPaymentAnalysisRows,PAYMENT_ANALYSIS_LIMIT} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-payments.js';
 import {lockCollectMutation} from '../../../supabase/functions/_shared/postgres-mutation-lock.js';
 import {body as stripFraming} from './migrations.mjs';
+import {readPaymentSmsEvidence} from '../../../supabase/functions/_shared/domain/admin_burimunsi_observations.js';
 import {compileSql} from '../../../supabase/functions/_shared/postgres-compatibility-sql.js';
 import {validateProviderProfile,MOMO_SCHEMA_VERSION} from '../../../supabase/functions/_shared/domain/momo_pipeline.js';
 import {decrypt} from '../../../supabase/functions/_shared/domain/encryption.js';
@@ -403,6 +404,77 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
  await assert.rejects(adminStatus(true),/permission denied/);
  await f.client.query("INSERT INTO app.admin_grants VALUES('principal','payments.read')");
  assert.equal((await adminStatus(true))[0].payerStatus,'delivered');
+ await t.test('one indexed payment/source metadata lookup keeps custody and RLS without writes',async()=>{
+  const lookup=await load('20261124151857_burimunsi_payment_sms_evidence.sql');
+  // The production browser identity resolver is qualified separately. The
+  // owned native-chain fixture provides only this live-grant seam for SQL.
+  await f.client.query(`CREATE FUNCTION private.burimunsi_browser_pin_assert_actor(text,text,text,bigint,bigint)
+    RETURNS text LANGUAGE plpgsql AS $$BEGIN
+     IF $1<>'payments.read' OR $2 IS DISTINCT FROM current_setting('burimunsi.collection_id',true)
+      OR $3<>'admin' OR $4<>1 OR $5 IS NOT NULL THEN RAISE insufficient_privilege;END IF;
+     RETURN private.assert_actor($1,NULL,NULL,$4,$5);
+    END$$`);
+  await f.client.query(lookup);
+  const old=await load('20261111121100_burimunsi_admin_observations.sql');
+  const oldStart=old.indexOf('CREATE FUNCTION private.burimunsi_observation_admin_rows(p_collection text)');
+  const oldEnd=old.indexOf('CREATE FUNCTION private.burimunsi_observation_admin_page(',oldStart);
+  assert.ok(oldStart>=0&&oldEnd>oldStart);
+  await f.client.query(old.slice(oldStart,oldEnd));
+  await f.client.query('GRANT EXECUTE ON FUNCTION private.burimunsi_observation_admin_rows(text) TO collect_runtime');
+
+  const inspect=sql=>f.client.query(sql).then(r=>r.rows[0]);
+  const counters=()=>inspect(`SELECT
+   (SELECT count(*)::int FROM burimunsi.payments) AS payments,
+   (SELECT count(*)::int FROM app.ledger_entries) AS credits,
+   (SELECT count(*)::int FROM private.burimunsi_observation_requests) AS sources,
+   (SELECT count(*)::int FROM private.burimunsi_allocation_receipts) AS delivery`);
+  const original=await counters(), run=runtime.run('http_admin');
+  let statement,bindings,reads=0;
+  const fetch=(id=source.sourceId,scope=group)=>run(tx=>readPaymentSmsEvidence({unsafe:(sql,args)=>{
+   reads++;statement=sql;bindings=args;return tx.unsafe(sql,args);
+  }},scope,id));
+  // The media double keeps reservation bytes after committing metadata;
+  // model the maintained Storage worker's separate reservation purge.
+  const oldProof=async()=>(await run(tx=>tx.unsafe(`SELECT retention_state,body_sha256
+   FROM private.burimunsi_observation_admin_rows($1) WHERE source_id=$2`,[group,source.sourceId])))[0];
+  assert.deepEqual(await oldProof(),{retention_state:'unresolved',body_sha256:null});
+  const uncleared=await fetch();assert.equal(uncleared.retentionState,'unresolved');assert.equal(uncleared.bodySha256,null);
+  reads=0;
+  const evidenceKey='sms/'+source.sourceId;
+  const {sealed_body:fixtureSealed}=(await f.client.query(
+   'SELECT sealed_body FROM private.storage_payload_reservations WHERE object_key=$1',[evidenceKey])).rows[0];
+  await f.client.query("UPDATE private.storage_payload_reservations SET sealed_body=NULL,cleared_at='fixture verified' WHERE object_key=$1",[evidenceKey]);
+  const detail=await fetch();
+  assert.equal(reads,1);
+  assert.equal(detail.sourceId,source.sourceId);assert.equal(detail.retentionState,'retained');
+  assert.equal(detail.payerStatus,'delivered');assert.match(detail.bodySha256,/^[0-9a-f]{64}$/);
+  assert.deepEqual(await oldProof(),{retention_state:detail.retentionState,body_sha256:detail.bodySha256});
+  assert.doesNotMatch(JSON.stringify(detail),/rawBody|ciphertext|objectKey|sourceFingerprint/);
+  // Verify the ordinary planner at a scope where the key is selective.
+  await f.client.query(`INSERT INTO burimunsi.payments(id,collection_id,receiving_account_id,provider,direction,amount_rwf)
+   SELECT 'f06-index-plan-'||n,$1,'wallet','mtn_momo','incoming',1 FROM generate_series(1,1024) n`,[group]);
+  await f.client.query('ANALYZE burimunsi.payments');
+  const explain=await run(tx=>tx.unsafe('EXPLAIN (FORMAT JSON) '+statement,bindings));
+  assert.match(JSON.stringify(explain),/payments_pkey/);
+  await f.client.query("DELETE FROM burimunsi.payments WHERE collection_id=$1 AND id LIKE 'f06-index-plan-%'",[group]);
+  assert.equal(await fetch('absent-payment'),null);
+  assert.equal(await fetch(source.sourceId,'another-group'),null);
+  assert.deepEqual(await run(tx=>tx.unsafe('SELECT * FROM private.burimunsi_payment_sms_evidence_rows($1,$2,$3)',
+   [group,source.sourceId,saved[1]])),[]);
+  await f.client.query("DELETE FROM app.admin_grants WHERE permission='payments.read'");
+  await assert.rejects(fetch(),{code:'42501'});
+  await f.client.query("INSERT INTO app.admin_grants VALUES('principal','payments.read')");
+  for(const role of ['anon','authenticated','service_role','collect_importer']){
+   assert.equal((await f.client.query("SELECT has_function_privilege($1,'private.burimunsi_payment_sms_evidence_rows(text,text,text)','EXECUTE') AS allowed",[role])).rows[0].allowed,false);
+  }
+  await f.client.query("INSERT INTO private.storage_delete_intents(object_key) VALUES($1)",['sms/'+source.sourceId]);
+  const deleted=await fetch();
+  assert.equal(deleted.retentionState,'unresolved');assert.equal(deleted.bodySha256,null);
+  await f.client.query('DELETE FROM private.storage_delete_intents WHERE object_key=$1',['sms/'+source.sourceId]);
+  await f.client.query('UPDATE private.storage_payload_reservations SET sealed_body=$2,cleared_at=NULL WHERE object_key=$1',[evidenceKey,fixtureSealed]);
+  assert.deepEqual(await counters(),original);
+ });
+
  await f.client.query("BEGIN; SET LOCAL ROLE collect_runtime; SET LOCAL burimunsi.collection_id='another-group'");
  assert.equal((await f.client.query('SELECT count(*)::int n FROM burimunsi.raw_sms')).rows[0].n,0);
  await f.client.query('ROLLBACK');

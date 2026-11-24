@@ -1,4 +1,5 @@
 import {adminAccountSession,validateAdminOrigin} from './admin_accounts.js';
+import {managedAdminObservationsEnabled,readPaymentSmsEvidence} from './admin_burimunsi_observations.js';
 import {BURI_ADMIN_PRIVATE_HEADERS} from './admin_burimunsi_authority.js';
 import {activePhoneOperator} from './admin_email_policy.js';
 import {ApiError,json,readJson} from './core.js';
@@ -63,6 +64,7 @@ export async function adminBuriMunsiPayments(request,env) {
       canAnalyzeSms:actor.role==='admin'&&actor.can_read_sms===true&&account.permissions.includes('sms.read'),
       canAllocate:actor.can_allocate===true};
   };
+  const evidenceMatch=/^payments\/([A-Za-z0-9_-]+)\/sms-evidence$/.exec(path.slice(base.length));
   const relative=path.slice(base.length),match=/^payments\/([A-Za-z0-9_-]+)(\/allocate)?$/.exec(relative);
   const statusMatch=/^payments\/([A-Za-z0-9_-]+)\/allocation-receipt$/.exec(relative);
   try{
@@ -114,6 +116,18 @@ export async function adminBuriMunsiPayments(request,env) {
           WHERE m.collection_id=$1 AND m.active=1 AND u.access_status='active' AND u.member_type<>'operator'
             AND strpos(lower(u.full_name),lower($2))>0 ORDER BY u.full_name,u.id LIMIT $3`,[groupId,q,limit]);
         return {items};
+      });
+    }else if(evidenceMatch){
+      if(request.method!=='GET'||!managedAdminObservationsEnabled(env))
+        throw new ApiError(404,'not_found','This Payments view is unavailable.');
+      query(url,[]);
+      const paymentId=requireId(evidenceMatch[1]);
+      result=await db.withLockedReadSnapshot(async sql=>{
+        await sql.unsafe("SET LOCAL statement_timeout='1250ms'");
+        requireThat((await scoped(sql)).canAnalyzeSms,'access_denied',403);
+        const evidence=await readPaymentSmsEvidence(sql,groupId,paymentId);
+        await authority.assertOwned();
+        return {paymentId,groupId,evidence};
       });
     }else if(request.method==='GET'&&statusMatch){
       query(url,[]);

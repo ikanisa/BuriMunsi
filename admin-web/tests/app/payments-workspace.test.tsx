@@ -12,7 +12,7 @@ import coreFixture from '../core/canonical-core-fixtures.json';
 import reconciliationFixture from '../core/canonical-reconciliation-fixture.json';
 
 const mock = vi.hoisted(() => ({request:vi.fn(), permissions:[] as string[], status:'authenticated', role:'admin',
-  authMethod:undefined as AdminUser['authMethod'], scoped:false, sessionId:'fixture-session'}));
+  authMethod:undefined as AdminUser['authMethod'], scoped:false, sessionId:'fixture-session', currentAuthority: true}));
 const currentActor = reconciliationFixture.detail.current_actor_id;
 const currentPrincipal = reconciliationFixture.detail.current_principal_id;
 const momoId = '11111111-1111-4111-8111-111111111111';
@@ -45,9 +45,10 @@ const sessionUser = () => ({id:currentActor,sessionId:mock.sessionId,email:'fixt
   expiresAt:'2030-01-01T00:00:00Z',financialModel:'canonical_evidence_ledger',authMethod:mock.authMethod,
   ...(mock.scoped ? {accountId,adminIdentity:{schemaVersion:1,role:'admin',accountId,adminId:currentActor,principalId:currentPrincipal,
     collectionId:'fixture-group'}} : {})} satisfies AdminUser);
+const isCurrentAuthority = () => mock.currentAuthority;
 vi.mock('../../src/session/SessionProvider',async original => ({
   ...await original<typeof import('../../src/session/SessionProvider')>(),
-  useSession:() => ({status:mock.status,epoch:1,user:sessionUser(),request:mock.request,isCurrentAuthority:() => true}),
+  useSession:() => ({status:mock.status,epoch:1,user:sessionUser(),request:mock.request,isCurrentAuthority}),
 }));
 
 function RouteHarness() {
@@ -64,7 +65,7 @@ const visit = (path: string, permissions: string[], role = 'admin') => {
 };
 const location = () => screen.getByLabelText('Current location');
 const called = (prefix: string) => mock.request.mock.calls.filter(([path]) => path.startsWith(prefix));
-afterEach(() => {mock.request.mockReset();mock.status='authenticated';mock.role='admin';mock.authMethod=undefined;mock.scoped=false;mock.sessionId='fixture-session';sessionStorage.clear();});
+afterEach(() => {mock.request.mockReset();mock.status='authenticated';mock.role='admin';mock.authMethod=undefined;mock.scoped=false;mock.sessionId='fixture-session';mock.currentAuthority=true;sessionStorage.clear();});
 
 describe('consolidated Payments routes',()=>{
   it('makes the old payment list a guarded alias and returns through the new list with search preserved',async()=>{
@@ -329,49 +330,102 @@ describe('BuriMunsi phone Payments', () => {
     expect(screen.getByRole('link',{name:'M-Money SMS'})).toHaveAttribute('href','/admin/payments?view=sms');
   });
 
+  const evidencePath = (id:string) => 'burimunsi/payments/'+id+'/sms-evidence';
+  const evidence = (sourceId: string, processing = 'parsed') => ({requestId:sourceId,sourceId,admittedAt:time,retentionState:'retained',
+    bodySha256:'a'.repeat(64),processing,paymentReference:null,payerStatus:null,payerReason:null});
+  const linked = {...buriPayment,sourceId:accountId};
+  const envelope = (paymentId:string, item:object|null) => ({paymentId,groupId:'fixture-group',evidence:item});
+
   it.each([
     {payerStatus:'delivered', payerReason:null, label:'Reported delivered', reason:null},
     {payerStatus:'suppressed', payerReason:'preferences_disabled', label:'Suppressed', reason:'Payer opted out'},
     {payerStatus:null, payerReason:null, label:'No receipt recorded', reason:null},
-  ])('opens the exact collection-bound linked SMS and shows its recorded outcome “$label” inline', async ({payerStatus,payerReason,label,reason}) => {
+  ])('does one exact payment-bound lookup and shows its recorded outcome “$label” inline', async ({payerStatus,payerReason,label,reason}) => {
     mock.authMethod = 'phone_passcode';
     mock.scoped = true;
-    const linked = {...buriPayment,sourceId:accountId};
-    const evidence = (id: string, processing: string) => ({requestId:id,sourceId:id,admittedAt:time,retentionState:'retained',
-      bodySha256:'a'.repeat(64),processing,paymentReference:null,payerStatus:null,payerReason:null});
     mock.request.mockImplementation(async (path: string) => {
       if (path === 'burimunsi/payments/analysis') return buriPage([linked]);
       if (path === 'burimunsi/payments/'+momoId) return linked;
+      if (path === evidencePath(momoId)) return envelope(momoId,{...evidence(accountId),payerStatus,payerReason});
       if (path === 'momo/observations/collections') return {contractVersion:1,asOf:time,items:[]};
-      const search = new URLSearchParams(path.split('?')[1]);
-      if (path.startsWith('momo/observations?') && search.get('collectionId') === 'fixture-group') {
-        const second = search.get('cursor') === 'next';
-        return {contractVersion:1,collectionId:'fixture-group',asOf:time,nextCursor:second ? null : 'next',
-          inboxCheck:{state:'unknown',checkedAt:null,candidateCount:null,missingCount:null,pendingCount:null,headsMatch:null},
-          items:[second ? {...evidence(accountId,'parsed'),payerStatus,payerReason}
-            : {...evidence(momoId,'held'),payerStatus:'failed',payerReason:'gateway_failed'}]};
-      }
       throw new Error('Unexpected request');
     });
     visit('/admin/payments',['payments.read','sms.read']);
-    expect(await screen.findByRole('button',{name:'Review linked SMS'})).toBeVisible();
+    const link=await screen.findByRole('button',{name:'Review linked SMS'});
+    expect(called(evidencePath(momoId))).toHaveLength(0);
     expect(called('momo/observations')).toHaveLength(0);
     expect(screen.getByRole('button',{name:'M-Money SMS'})).toHaveAttribute('aria-expanded','false');
-    fireEvent.click(screen.getByRole('button',{name:'Review linked SMS'}));
+    fireEvent.click(link);
     const evidenceRegion = within(await screen.findByRole('region',{name:'Linked SMS'}));
     expect(await evidenceRegion.findByText('Parsed')).toBeVisible();
     const payer = evidenceRegion.getByText('Payer SMS',{selector:'dt'}).nextElementSibling!;
     expect(payer).toHaveTextContent(label);
     if (reason) expect(payer).toHaveTextContent(reason);
-    expect(evidenceRegion.queryByText('Gateway failed')).not.toBeInTheDocument();
-    expect(evidenceRegion.queryByText('Held for review')).not.toBeInTheDocument();
-    expect(called('momo/observations').map(([path]) => path)).toEqual([
-      'momo/observations?collectionId=fixture-group&limit=25&includeProcessing=1',
-      'momo/observations?collectionId=fixture-group&limit=25&includeProcessing=1&cursor=next',
-    ]);
+    expect(called('momo/observations')).toHaveLength(0);
+    expect(called(evidencePath(momoId))).toEqual([[evidencePath(momoId),{signal:expect.any(AbortSignal)}]]);
+    expect(evidenceRegion.queryByRole('region',{name:'Original source access'})).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button',{name:'M-Money SMS'}));
     expect(screen.queryByRole('region',{name:'Payment details'})).not.toBeInTheDocument();
     expect(await screen.findByText('No receiver collections are available for this account.')).toBeVisible();
+  });
+
+  it.each([
+    {reply:envelope(momoId,null), message:/linked SMS is unavailable/, test:'missing'},
+    {reply:envelope(accountId,evidence(accountId)),message:/linked SMS could not be verified/,test:'wrong payment'},
+    {reply:{...envelope(momoId,evidence(accountId)),groupId:'another-group'},message:/linked SMS could not be verified/,test:'wrong group'},
+    {reply:envelope(momoId,evidence(momoId)),message:/linked SMS could not be verified/,test:'wrong source'},
+    {reply:envelope(momoId,{...evidence(accountId),rawBody:'Unexpected raw evidence'}),message:/linked SMS could not be verified/,test:'unexpected body'},
+  ])('fails closed without reading the inbox for $test', async ({reply,message}) => {
+    mock.authMethod='phone_passcode'; mock.scoped=true;
+    mock.request.mockImplementation(async(path:string)=>path===evidencePath(momoId)?reply:
+      path==='burimunsi/payments/'+momoId?linked:buriPage([linked]));
+    visit('/admin/payments?payment='+momoId,['payments.read','sms.read','sms.reveal']);
+    expect(await screen.findByText(message)).toBeVisible();
+    expect(screen.queryByText('Unexpected raw evidence')).not.toBeInTheDocument();
+    expect(screen.queryByRole('region',{name:'Original source access'})).not.toBeInTheDocument();
+    expect(called('momo/observations')).toHaveLength(0);
+    expect(called(evidencePath(momoId))).toHaveLength(1);
+  });
+
+  it('does not request linked evidence for Staff even if stale detail includes a link', async () => {
+    mock.authMethod='phone_passcode';
+    mock.request.mockImplementation(async(path:string)=>path==='burimunsi/payments/'+momoId?linked:buriPage([buriPayment]));
+    visit('/admin/payments?payment='+momoId,['payments.read','sms.read','sms.reveal'],'staff');
+    expect(await within(await screen.findByRole('region',{name:'Payment details'})).findByText(momoRef)).toBeVisible();
+    expect(screen.queryByRole('region',{name:'Linked SMS'})).not.toBeInTheDocument();
+    expect(called(evidencePath(momoId))).toHaveLength(0);
+    expect(called('momo/observations')).toHaveLength(0);
+  });
+
+  it('aborts the old linkage on selection, then discards in-flight evidence after authority changes',async()=>{
+    mock.authMethod='phone_passcode'; mock.scoped=true;
+    const second={...outgoing,sourceId:momoId};
+    let resolveFirst!:(outcome:unknown)=>void,resolveSecond!:(outcome:unknown)=>void;
+    const first=new Promise(resolve=>{resolveFirst=resolve;}), next=new Promise(resolve=>{resolveSecond=resolve;});
+    mock.request.mockImplementation(async(path:string)=>{
+      if (path===evidencePath(momoId)) return first;
+      if (path===evidencePath(accountId)) return next;
+      if (path==='burimunsi/payments/'+momoId) return linked;
+      if (path==='burimunsi/payments/'+accountId) return second;
+      return buriPage([linked,second]);
+    });
+    const url='/admin/payments?payment='+momoId;
+    const app=visit(url,['payments.read','sms.read']);
+    await waitFor(()=>expect(called(evidencePath(momoId))).toHaveLength(1));
+    const firstAbort = called(evidencePath(momoId))[0][1].signal;
+    fireEvent.click(screen.getByRole('button',{name:second.ftId}));
+    await waitFor(()=>expect(called(evidencePath(accountId))).toHaveLength(1));
+    expect(firstAbort.aborted).toBe(true);
+    await act(async()=>resolveFirst(envelope(momoId,evidence(accountId,'held'))));
+    expect(screen.queryByText('Held for review')).not.toBeInTheDocument();
+    const secondAbort = called(evidencePath(accountId))[0][1].signal;
+    mock.currentAuthority=false; mock.status='rechecking'; mock.permissions=['payments.read'];
+    app.rerender(<MemoryRouter initialEntries={[url]}><RouteHarness /></MemoryRouter>);
+    await waitFor(()=>expect(secondAbort.aborted).toBe(true));
+    await act(async()=>resolveSecond(envelope(accountId,evidence(momoId,'parsed'))));
+    expect(screen.queryByRole('region',{name:'Linked SMS'})).not.toBeInTheDocument();
+    expect(screen.queryByText('Parsed')).not.toBeInTheDocument();
+    expect(called('momo/observations')).toHaveLength(0);
   });
 
   it('keeps the allocation intent after an uncertain response and updates the same payment', async () => {

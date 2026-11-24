@@ -72,6 +72,38 @@ const observationStates=new Set(['pending','blocked','held','historical','duplic
 const legacyObservationStates=new Set([...observationStates,'posted','reversed','unmatched']);
 const paymentObservationStates=new Set([...observationStates,'parsed']);
 
+// One exact source selected from the already scoped payment in the visible
+// browser snapshot. Never call the collection list or audited content route.
+export async function readPaymentSmsEvidence(sql,collectionId,paymentId){
+ const rows=await sql.unsafe(`WITH linked AS MATERIALIZED (
+   SELECT p.sms_source_id FROM burimunsi.payments p
+   WHERE p.collection_id=$1 AND p.id=$2 AND p.sms_source_id IS NOT NULL
+ )
+ SELECT evidence.request_id,evidence.source_id,evidence.admitted_at,evidence.retention_state,evidence.body_sha256,
+   evidence.owner_user_id,evidence.object_key,evidence.object_sha256,evidence.fingerprint,evidence.key_id,evidence.source_fingerprint,
+   private.burimunsi_admin_payment_observation_outcomes($1,ARRAY[evidence.source_id],true) AS outcomes
+ FROM linked CROSS JOIN LATERAL private.burimunsi_payment_sms_evidence_rows($1,$2,linked.sms_source_id) evidence`,
+ [collectionId,paymentId]);
+ if(!rows.length)return null;
+ if(rows.length!==1)bad();
+ const r=rows[0];
+ if(!ID.test(r.request_id??'')||!ID.test(r.source_id??'')||
+   !['retained','unresolved'].includes(r.retention_state))bad();
+ const retained=r.retention_state==='retained'&&HASH.test(r.body_sha256??'')&&await reservationMatches({
+  sourceId:r.source_id,ownerUserId:r.owner_user_id,objectKey:r.object_key,objectSha256:r.object_sha256,
+  fingerprint:r.fingerprint,keyId:r.key_id,sourceFingerprint:r.source_fingerprint});
+ if(r.retention_state==='unresolved'&&r.body_sha256!==null)bad();
+ if(!Array.isArray(r.outcomes)||r.outcomes.length!==1)bad();
+ const [outcome]=r.outcomes;
+ if(!isObject(outcome)||Object.keys(outcome).length!==5||outcome.sourceId!==r.source_id||
+   !paymentObservationStates.has(outcome.processing)||outcome.paymentReference!==null||
+   !(outcome.payerStatus===null||payerStates.has(outcome.payerStatus))||
+   !(outcome.payerReason===null||payerReasons.has(outcome.payerReason)))bad();
+ return {requestId:r.request_id,sourceId:r.source_id,admittedAt:stamp(r.admitted_at),
+  retentionState:retained?'retained':'unresolved',bodySha256:retained?r.body_sha256:null,
+  processing:outcome.processing,paymentReference:null,payerStatus:outcome.payerStatus,payerReason:outcome.payerReason};
+}
+
 async function page(env,account,actor,url){
  filters(url,['collectionId','limit','cursor','includeProcessing']);
  const includeProcessing=url.searchParams.get('includeProcessing');

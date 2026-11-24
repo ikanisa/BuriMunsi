@@ -284,10 +284,21 @@ try {
   await paymentFilter.getByRole('searchbox', {name:'Contains', exact:true}).fill(fixturePayment.ftId);
   await paymentFilter.getByRole('button', {name:'Apply filter', exact:true}).click();
   assert.equal(await page.getByRole('button', {name: fixtureOutgoingPayment.ftId, exact:true}).count(), 0);
+  const linkedSmsReads = [];
+  const captureLinkedSms = request => {
+    const url=new URL(request.url());
+    if (url.origin===origin && (url.pathname.includes('/sms-evidence') || url.pathname.startsWith('/api/admin/momo/observations'))) {
+      linkedSmsReads.push([request.method(),url.pathname,url.search,request.postData()]);
+    }
+  };
+  page.on('request',captureLinkedSms);
   await paymentRow(fixturePayment).getByRole('button', {name: 'Review linked SMS', exact: true}).click();
   const paymentDetail = page.getByRole('region', {name: 'Payment details', exact: true});
   await paymentDetail.getByText(fixturePayment.ftId, {exact: true}).waitFor();
   await paymentDetail.getByRole('region', {name:'Linked SMS', exact:true}).getByText('Parsed', {exact:true}).waitFor();
+  page.off('request',captureLinkedSms);
+  assert.deepEqual(linkedSmsReads,[['GET','/api/admin/burimunsi/payments/'+fixturePayment.id+'/sms-evidence','',null]]);
+
   await paymentDetail.getByText('Unallocated', {exact: true}).waitFor();
   await paymentDetail.getByRole('button', {name: 'Close', exact: true}).click();
   await paymentDetail.waitFor({state: 'hidden'});

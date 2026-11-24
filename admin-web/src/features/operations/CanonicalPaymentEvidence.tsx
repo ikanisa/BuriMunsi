@@ -1,41 +1,46 @@
 import {useCallback} from 'react';
+import {z} from 'zod';
 import {useSession} from '../../session/SessionProvider';
 import {canReadSmsEvidence} from '../../session/sessionContext';
 import {ErrorState, LoadingState} from '../../ui';
 import {receiptLabels, reasonLabels} from '../overview/smsOversightContract';
 import {Facts} from './OperationsRecords';
 import {MomoSourceRevealPanel} from './MomoSourceRevealPanel';
-import {processingLabels, receiverPage} from './receiverSmsContract';
-import {paymentTime} from './canonicalPaymentAnalysis';
+import {processingLabels, receiverEvidenceItem} from './receiverSmsContract';
+import {paymentId as paymentIdSchema, paymentTime} from './canonicalPaymentAnalysis';
 import {useOperationRead} from './useOperationRead';
 
-export function CanonicalPaymentEvidence({group, sourceId}: {group: string; sourceId: string}) {
-  const {epoch, request, user} = useSession();
-  const enabled = canReadSmsEvidence(user) && !!user?.permissions.includes('payments.read');
+const linkedEvidence = z.object({paymentId:paymentIdSchema,groupId:paymentIdSchema,evidence:receiverEvidenceItem.nullable()}).strict();
+type EvidenceLink = {paymentId: string; group: string; sourceId: string};
+
+export function CanonicalPaymentEvidence(link: EvidenceLink) {
+  const {epoch, user, status, isCurrentAuthority} = useSession();
+  if (status !== 'authenticated' || !user || !canReadSmsEvidence(user) || !user.permissions.includes('payments.read') ||
+      (user.adminIdentity && user.adminIdentity.collectionId !== link.group) ||
+      !isCurrentAuthority(epoch,user.id,user.sessionId)) return null;
+  const authority = JSON.stringify([epoch,user.id,user.sessionId,user.role,user.principalId,user.adminIdentity?.collectionId,
+    [...user.permissions].sort(),link.group,link.paymentId,link.sourceId]);
+  return <ScopedCanonicalPaymentEvidence key={authority} {...link} authority={authority} />;
+}
+
+function ScopedCanonicalPaymentEvidence({paymentId,group,sourceId,authority}: EvidenceLink & {authority:string}) {
+  const {epoch,request,user,isCurrentAuthority} = useSession();
+  const actor = user?.id, sessionId = user?.sessionId;
   const load = useCallback(async (signal: AbortSignal) => {
-    const cursors = new Set<string>(), seen = new Set<string>();
-    let cursor: string | null = null;
-    do {
-      signal.throwIfAborted();
-      const query = new URLSearchParams({collectionId: group, limit: '25', includeProcessing: '1'});
-      if (cursor) query.set('cursor', cursor);
-      const page = receiverPage(await request('momo/observations?' + query, {signal}), group);
-      signal.throwIfAborted();
-      for (const item of page.items) {
-        if (seen.has(item.sourceId)) throw new Error('The SMS evidence list changed.');
-        seen.add(item.sourceId);
-        if (item.sourceId === sourceId) return item;
-      }
-      cursor = page.nextCursor;
-      if (cursor) {
-        if (!page.items.length || cursors.has(cursor)) throw new Error('The SMS evidence list changed.');
-        cursors.add(cursor);
-      }
-    } while (cursor);
-    return null;
-  }, [group, request, sourceId]);
-  const {result, retry} = useOperationRead(JSON.stringify([epoch, group, sourceId]), enabled, load);
-  if (!enabled) return null;
+    signal.throwIfAborted();
+    if (!actor || !sessionId || !isCurrentAuthority(epoch,actor,sessionId)) throw new Error('Evidence access changed.');
+    const value = await request('burimunsi/payments/'+paymentId+'/sms-evidence',{signal});
+    signal.throwIfAborted();
+    if (!isCurrentAuthority(epoch,actor,sessionId)) throw new Error('Evidence access changed.');
+    const response = linkedEvidence.parse(value);
+    const evidence = response.evidence;
+    if (response.paymentId !== paymentId || response.groupId !== group ||
+        evidence && (evidence.sourceId !== sourceId || (evidence.retentionState==='retained') !== !!evidence.bodySha256)) {
+      throw new Error('The selected payment evidence changed.');
+    }
+    return evidence;
+  }, [actor,epoch,group,isCurrentAuthority,paymentId,request,sessionId,sourceId]);
+  const {result,retry} = useOperationRead(authority,true,load,{invalidResponse:'The linked SMS could not be verified.'});
   const evidence = result?.status === 'success' ? result.value : null;
   return <section aria-label="Linked SMS"><h3>Linked SMS</h3>
     {!result ? <LoadingState label="Loading linked SMS" /> : result.status === 'error' ? <ErrorState message={result.message} onRetry={retry} /> :

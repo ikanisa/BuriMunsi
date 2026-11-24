@@ -46,6 +46,9 @@ export function standalonePrivacyRoute(method, path) {
 
 export function standaloneAdminRoute(method, path) {
   if (!path.startsWith('/api/admin/')) return false;
+  if (/^\/api\/admin\/burimunsi\/payments\/[A-Za-z0-9_-]+\/sms-evidence(?:\/|$)/.test(path)) {
+    return method === 'GET' && /^\/api\/admin\/burimunsi\/payments\/[A-Za-z0-9_-]+\/sms-evidence$/.test(path);
+  }
   if (path === '/api/admin/burimunsi/payments/analysis' || path.startsWith('/api/admin/burimunsi/payments/analysis/')) {
     return method === 'POST' && path === '/api/admin/burimunsi/payments/analysis';
   }
