@@ -8,6 +8,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 object Snapshot {
     val conflict = AtomicBoolean()
+    @Volatile var onCommittedValue: ((Any?) -> Unit)? = null
     private val lock = Any()
     private class Entry(val version: Long, var value: Any?, var written: Boolean = false)
     private val active = ThreadLocal<MutableMap<MutableState<*>, Entry>>()
@@ -36,6 +37,7 @@ object Snapshot {
         if (!state.equivalent(state.committed, next)) {
             state.committed = next
             state.version++
+            onCommittedValue?.invoke(next)
         }
     }
 

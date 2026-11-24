@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { installLocalNetworkFence } from './local-network-fence.cjs';
 import { qualifyPhoneTeam } from './phone-team.mjs';
+import { qualifyPaymentAuthority } from './payment-authority.mjs';
 import { fixtureInactiveMember, fixtureMember, fixtureOutgoingPayment, fixturePayment, fixtureSmsEvidenceId } from './operator-read-fixture.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
@@ -359,6 +360,10 @@ try {
   await overview.waitFor();
 
   const phoneTeamChecks = await qualifyPhoneTeam({admin: page, origin, open, legacySessions});
+  const authorityChecks = [
+    ...await qualifyPaymentAuthority({origin, open, staffPin:'7391'}),
+    ...await qualifyPaymentAuthority({origin, open, staffPin:'7391', installed:true}),
+  ];
 
   const recovery = await open({ width: 1440, height: 900 }, 'block');
   await recovery.context.addCookies(cookies);
@@ -485,7 +490,7 @@ try {
   const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'admin_home_reports_scoped_sms_health', 'retired_passcode_bookmark_returns_to_overview', 'three_daily_links_and_no_redundant_sidebar_search', 'canonical_payment_direction_filter_and_clear', 'inline_inbox_preserves_financial_table_and_390px_scroll', 'protected_sms_deep_link', 'filtered_member_detail_and_return', 'single_mobile_number_in_member_roster_and_detail', 'payment_details_link_to_authorized_sms_evidence', 'payment_without_source_and_320px_reflow', 'sms_read_failure_retry',
       'payer_sms_empty_and_reported_delivered', 'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
       'retired_authenticator_bookmark_preserves_safe_destination', 'missing_scoped_admin_identity_removes_controls', 'session_failure_and_recovery_require_server_authority', 'expired_request_and_history_return_require_sign_in',
-      'mobile_drawer_traps_and_restores_focus_and_reflows', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, 'no_unexpected_auth_request', 'identity_version_only_on_session_exchanges'];
+      'mobile_drawer_traps_and_restores_focus_and_reflows', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, ...authorityChecks, 'no_unexpected_auth_request', 'identity_version_only_on_session_exchanges'];
   console.log(JSON.stringify({status: 'pass', environment: 'synthetic_loopback', origin, count: checks.length, checks,
     sessionExchange: {mode: legacySessions ? 'legacy' : 'negotiated', signInRequests: loginRequests.length, verificationRequests: verificationRequests.length}}, null, 2));
 } finally {

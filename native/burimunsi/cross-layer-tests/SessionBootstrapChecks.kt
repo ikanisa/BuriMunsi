@@ -364,6 +364,106 @@ private suspend fun freshRowsPublishWhileRecordCacheIsBlocked() {
     }
 }
 
+/** Pause after the old session's request has gone out, then retire its
+ * grant before releasing a syntactically valid (but no longer owned) reply. */
+private suspend fun delayedRecordReadCannotCrossBoundary(route: Route, replacement: Replacement) {
+    val scenario = SessionScenario()
+    if(replacement==Replacement.SAME_OWNER)scenario.capabilities=listOf(Capability.READ,Capability.ALLOCATE)
+    val previous = scenario.repository()
+    scenario.signIn(previous)
+    val oldToken = scenario.token
+    val newToken = "b".repeat(64)
+    val oldGroup = scenario.group
+    val newGroup = if(replacement==Replacement.OTHER_GROUP)"group-b" else oldGroup
+    val oldOwner = scenario.owner
+    val oldPayment = "old-unique-payment"
+    val newPayment = "new-unique-payment"
+    val requestEntered = CountDownLatch(1)
+    val responseReleased = CountDownLatch(1)
+    val arm = java.util.concurrent.atomic.AtomicBoolean(false)
+    val normal = Transport.handler
+    fun payment(id:String, group:String) = JSONObject().put("id",id).put("groupId",group)
+        .put("memberId",JSONObject.NULL).put("memberPhone",JSONObject.NULL).put("sourceId",JSONObject.NULL)
+        .put("payerNameRaw","Synthetic").put("payerPhoneRaw","+250780000816")
+        .put("amountRwf",137L).put("atRaw","2026-11-20 08:00:00").put("ftId",id)
+        .put("state","unallocated").put("version",1)
+    fun paymentPage(id:String, group:String) = JSONObject()
+        .put("items",JSONArray().put(payment(id,group))).put("totalCount",1)
+        .put("revision",id).put("nextCursor",JSONObject.NULL).put("asOf","2026-11-20T00:00:00Z").toString()
+    Transport.handler = { req ->
+        val home = req.path.endsWith("/home")
+        val payments = req.path.contains("/payments?")
+        if (arm.get() && req.token == oldToken && ((route == Route.HOME && home) || (route == Route.PAYMENTS && payments))) {
+            requestEntered.countDown()
+            check(responseReleased.await(10,TimeUnit.SECONDS))
+            if(home) JSONObject(normal(req)).put("paymentCount",271L).toString()
+            else paymentPage(oldPayment,oldGroup)
+        } else if(req.token == newToken && home)
+            JSONObject(normal(req)).put("paymentCount",31L).toString()
+        else if(req.token == newToken && payments) paymentPage(newPayment,newGroup)
+        else normal(req)
+    }
+    Transport.sessionHome = null
+    val model = BuriViewModel(scenario.app)
+    var newModel:BuriViewModel?=null
+    val publishedStale=java.util.concurrent.atomic.AtomicBoolean(false)
+    fun containsStale(state:rw.ikanisa.burimunsi.ui.UiState) =
+        state.home?.paymentCount==271 || state.payments?.items.orEmpty().any{it.id==oldPayment}
+    try {
+        idle(model)
+        val originalOwner=checkNotNull(model.state.operator)
+        check(originalOwner.id==oldOwner && model.state.home?.paymentCount==0)
+        androidx.compose.runtime.snapshots.Snapshot.onCommittedValue={value->
+            if(value is rw.ikanisa.burimunsi.ui.UiState && containsStale(value))publishedStale.set(true)
+        }
+        arm.set(true)
+        model.onFixtureMain { navigate(route) }
+        check(requestEntered.await(5,TimeUnit.SECONDS))
+        check(model.state.operator?.id==oldOwner && Transport.calls.any { it.token==oldToken })
+        previous.logout()
+        if(replacement!=Replacement.NONE) {
+            if(replacement==Replacement.OTHER_GROUP)scenario.owner="operator-b"
+            scenario.group=newGroup; scenario.token=newToken
+            scenario.capabilities=listOf(Capability.READ)
+            scenario.signIn(scenario.repository())
+            val latest=BuriViewModel(scenario.app); newModel=latest
+            idle(latest)
+            val authorized=checkNotNull(latest.state.operator)
+            check(authorized.id==scenario.owner && latest.state.home?.paymentCount==31)
+            check(authorized.capabilities==setOf(Capability.READ.key) && authorized!==originalOwner)
+            if(route==Route.PAYMENTS) {
+                latest.onFixtureMain { navigate(Route.PAYMENTS) }
+                idle(latest)
+                check(latest.state.payments?.items?.map{it.id}==listOf(newPayment))
+            }
+        }
+        responseReleased.countDown()
+        idle(model)
+        check(model.state.operator!==originalOwner && !containsStale(model.state) && !publishedStale.get())
+        newModel?.let { survivor ->
+            check(survivor.state.operator?.id==scenario.owner)
+            if(route==Route.PAYMENTS) check(survivor.state.payments?.items?.map{it.id}==listOf(newPayment))
+            else check(survivor.state.home?.paymentCount==31)
+        }
+        val cache=NativeRecordCache(scenario.app)
+        val path = if(route==Route.HOME) "/home" else Transport.calls.last { it.token==oldToken && it.path.contains("/payments?") }.path.removePrefix("/v1/burimunsi")
+        val cached=cache.read(path)?.optJSONObject("entries")?.optJSONObject(path)?.getString("payload")?.let(::JSONObject)
+        if(cached!=null) {
+            if(route==Route.HOME)check(cached.getLong("paymentCount")!=271L)
+            else {
+                val rows=cached.getJSONArray("items")
+                check((0 until rows.length()).none { rows.getJSONObject(it).getString("id")==oldPayment })
+            }
+        }
+        if(replacement==Replacement.NONE) check(model.state.operator==null)
+    } finally {
+        androidx.compose.runtime.snapshots.Snapshot.onCommittedValue=null
+        responseReleased.countDown()
+        newModel?.let { stop(it) }
+        stop(model)
+    }
+}
+
 private suspend fun settingsRestoreSkipsUnusedHome() {
     val scenario = SessionScenario()
     scenario.signIn(scenario.repository())
@@ -568,6 +668,12 @@ fun main() = runBlocking {
         "a renewed deadline with identical grants preserves the current route and generation" to suspend { renewedDeadlineKeepsScope() },
         "an equal-valued foreground profile replaces the authority held by the screen" to suspend { equalProfileRefresh() },
         "an older actor-only saved profile restores through a current server profile" to suspend { legacyProfileRestores() },
+        "a delayed Home reply cannot publish after logout" to suspend { delayedRecordReadCannotCrossBoundary(Route.HOME,Replacement.NONE) },
+        "a delayed Home reply cannot enter a replacement account and collection" to suspend { delayedRecordReadCannotCrossBoundary(Route.HOME,Replacement.OTHER_GROUP) },
+        "a delayed Payments reply cannot publish after logout" to suspend { delayedRecordReadCannotCrossBoundary(Route.PAYMENTS,Replacement.NONE) },
+        "a delayed Payments reply cannot enter a replacement account and collection" to suspend { delayedRecordReadCannotCrossBoundary(Route.PAYMENTS,Replacement.OTHER_GROUP) },
+        "a delayed Home reply cannot cross a same-actor narrower grant" to suspend { delayedRecordReadCannotCrossBoundary(Route.HOME,Replacement.SAME_OWNER) },
+        "a delayed Payments reply cannot cross a same-actor narrower grant" to suspend { delayedRecordReadCannotCrossBoundary(Route.PAYMENTS,Replacement.SAME_OWNER) },
         "fresh Home and Payments publish while protected record cache writes are blocked" to suspend { freshRowsPublishWhileRecordCacheIsBlocked() },
         "a paired session and Home response restores and caches the authorized snapshot" to suspend { bundledHomeRestores() },
         "a restored Settings destination never requests unused Home records" to suspend { settingsRestoreSkipsUnusedHome() },
