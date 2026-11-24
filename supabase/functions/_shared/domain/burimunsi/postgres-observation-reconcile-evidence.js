@@ -73,8 +73,11 @@ export class PostgresObservationReconcileEvidence {
     return found.map(r => r.result);
   }
 
-  async verifyJournal(tx, record) {
-    const journal = await this.custody.journal(tx, record.object_key, target(record));
+  async verifyJournal(tx, record, keyedPage = false) {
+    const expect = target(record);
+    const journal = keyedPage && this.custody.keyedObservationJournal
+      ? await this.custody.keyedObservationJournal(tx, record.object_key, expect)
+      : await this.custody.journal(tx, record.object_key, expect);
     await verifyObservationJournal(record, journal);
     return journal;
   }

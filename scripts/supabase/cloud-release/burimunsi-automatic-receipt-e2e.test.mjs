@@ -3,6 +3,8 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {readFile,writeFile} from 'node:fs/promises';
+import {execFileSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import test from 'node:test';
 import {startPayerFixture} from './fixtures/burimunsi-payer-postgres.mjs';
 import {openFixturePayerWorker} from './fixtures/burimunsi-payer-delivery.mjs';
@@ -18,6 +20,8 @@ import {validateObservationInput} from '../../../supabase/functions/_shared/doma
 import {PostgresNativeObservations} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-observations.js';
 import {PostgresNativeAutoWorker} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-native-auto-worker.js';
 import {PostgresNativeSmsLedger} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-native-sms-ledger.js';
+import {PostgresPostingCustody} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-posting-custody.js';
+import {PostgresStorageWitnesses} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-storage-witnesses.js';
 
 const group=uuid(15),member=uuid(16),phone='+250780000001',origin='https://fixture.invalid';
 const masked={requestId:'a6d27d6d-62a7-4573-bae9-cd8c6fd5982f',rawSender:'+15555219877',
@@ -62,6 +66,10 @@ function receiptFixture(f,a=nativeActor(group)){
  env.DB=db;env.BURIMUNSI_PAYMENT_SMS_ENABLED="true";env.BURIMUNSI_PAYMENT_SMS_COLLECTION_ID=group;
  const authority={db,groupId:group,read:run('http_collect',{readOnly:true}),write:run('http_collect'),session:async()=>actor,assertOwned:work.assert};
  const custody={namespace:env.PRIVATE_MEDIA.namespace,journal,sameJournal:(x,y)=>canonicalJson(x)===canonicalJson(y),decrypt:(sealed,aad)=>decrypt(env,sealed,aad)};
+ const pageCustody=new PostgresPostingCustody({db,groupId:group,namespace:custody.namespace,decrypt:custody.decrypt,
+  storageWitnesses:new PostgresStorageWitnesses({db,groupId:group,namespace:custody.namespace,media:env.PRIVATE_MEDIA,
+   applicationWorkTuple:()=>[uuid(888),1,'a'.repeat(64)]})});
+ custody.keyedObservationJournal=pageCustody.keyedObservationJournal.bind(pageCustody);
  const witnesses={stage:async(_binding,targets)=>targets,prefetch:async targets=>{for(const target of targets)assert.ok(objects.has(target.key));},
   sealed:async(_binding,key)=>{assert.ok(objects.has(key));return objects.get(key).sealed;},forget(){}};
  const authGate=createPhonePinRequestGate({origin,secrets:{pinPepper:new Uint8Array(32),pinPepperId:'fixture'},networkBucket:async()=>sha('network')});
@@ -92,8 +100,72 @@ function receiptFixture(f,a=nativeActor(group)){
   db:{prepare:sql=>({bind:(...values)=>({sql,values})}),statement:async(tx,statement)=>{
    const {text,values}=compileSql(statement.sql,statement.values);return tx.unsafe(text,values);
   }}});
- return {route,parser,ledger,provider:(body)=>{output=providerOutput(body);}};
+ return {route,parser,ledger,pageCustody,provider:(body)=>{output=providerOutput(body);}};
 }
+
+test('keyed inbox custody returns the original journal under both advisory and all three row locks',async t=>{
+ let peer;t.after(async()=>{if(peer)await peer.end();});
+ const f=await startPayerFixture(t,{groupId:group,memberId:member,phoneNumber:phone,beforeNoticeMigration:client=>installNativeChain(client,group)});
+ const flow=receiptFixture(f),saved=await flow.route('',fullWire()),custody=flow.pageCustody;
+ const {object_key:key,object_sha256:hash,principal_user_id:ownerId}=(await f.client.query(
+  'SELECT object_key,object_sha256,principal_user_id FROM private.burimunsi_unresolved_observations WHERE source_id=$1',[saved.sourceId])).rows[0];
+ const expect={ownerId,purpose:'sms_receipt',entityId:saved.sourceId,plaintextSha256:hash,aad:'sms:'+saved.sourceId+':'+hash};
+ const run=nativeRuntime(f.client,group).run('http_collect');
+ peer=new pg.Client({host:f.cluster.socket,port:f.cluster.port,database:'postgres',user:f.cluster.initialUser});
+ await peer.connect();await peer.query('SET ROLE postgres');
+ const tables=['storage_put_intents','storage_objects','storage_payload_reservations'];
+ let assertions=0;custody.work.assert=async()=>{assertions++;};
+ async function measured(method){
+  let queries=0;assertions=0;
+  const proof=await run(async tx=>{
+   const result=await custody[method]({unsafe:(sql,args)=>{queries++;return tx.unsafe(sql,args);}},key,expect);
+   for(const table of tables)await assert.rejects(peer.query('SELECT object_key FROM private.'+table+' WHERE object_key=$1 FOR UPDATE NOWAIT',[key]),{code:'55P03'});
+   const locks=(await peer.query('SELECT pg_try_advisory_xact_lock(hashtextextended($1,7346369)) AS key, pg_try_advisory_xact_lock(hashtextextended($2,7346370)) AS owner',[key,ownerId])).rows;
+   assert.deepEqual(locks,[{key:false,owner:false}]);
+   return result;
+  });
+  return {proof,queries,assertions};
+ }
+ const prior=await measured('journal'),page=await measured('keyedObservationJournal');
+ assert.deepEqual(page.proof,prior.proof);
+ assert.deepEqual([prior.queries,prior.assertions,page.queries,page.assertions],[7,15,2,5]);
+ const endpoint=f.cluster.socket+'/.s.PGSQL.'+f.cluster.port;
+ const driver=fileURLToPath(new URL('./fixtures/burimunsi-keyed-journal-driver.mjs',import.meta.url));
+ const lock=fileURLToPath(new URL('../deno.lock',import.meta.url));
+ assert.equal(execFileSync('deno',['run','--frozen','--cached-only','--node-modules-dir=none','--lock='+lock,
+  '--allow-read','--allow-env','--allow-net=unix:'+endpoint,'--allow-write='+endpoint,driver,f.cluster.socket,String(f.cluster.port)],
+  {timeout:15000,encoding:'utf8',input:JSON.stringify({group,key,expect})}).trim(),'verified');
+ await f.client.query('UPDATE private.storage_payload_reservations SET sealed_body=NULL WHERE object_key=$1',[key]);
+ assert.deepEqual((await measured('keyedObservationJournal')).proof,(await measured('journal')).proof);
+ for(const [change,params] of [
+  ['INSERT INTO app.privacy_retention_barriers(subject_id) VALUES($1)',[ownerId]],
+  ['UPDATE private.storage_objects SET sha256=$2 WHERE object_key=$1',[key,'0'.repeat(64)]],
+  ['UPDATE private.storage_put_intents SET upload_unresolved=true WHERE object_key=$1',[key]],
+  ['DELETE FROM private.storage_payload_reservations WHERE object_key=$1',[key]],
+ ]){
+  await f.client.query('BEGIN');
+  try{
+   await f.client.query(change,params);await f.client.query('SET LOCAL ROLE collect_runtime');
+   const tx={unsafe:async(sql,args)=>(await f.client.query(sql,args)).rows};
+   await assert.rejects(custody.keyedObservationJournal(tx,key,expect),{code:'posting_evidence_unavailable'});
+  }finally{await f.client.query('ROLLBACK');}
+ }
+ const pid=(await f.client.query('SELECT pg_backend_pid() pid')).rows[0].pid;
+ await peer.query('BEGIN');
+ let pending;
+ try{
+  await peer.query('SELECT pg_advisory_xact_lock(hashtextextended($1,7346369))',[key]);
+  await peer.query('INSERT INTO private.storage_delete_intents(object_key) VALUES($1)',[key]);
+  pending=assert.rejects(run(tx=>custody.keyedObservationJournal(tx,key,expect)),{code:'posting_evidence_unavailable'});
+  const deadline=performance.now()+5000;
+  while(!(await peer.query('SELECT pg_backend_pid()=ANY(pg_blocking_pids($1)) AS waiting',[pid])).rows[0].waiting){
+   assert.ok(performance.now()<deadline,'the page must wait for the original object lock');
+   await new Promise(resolve=>setTimeout(resolve,5));
+  }
+  assert.equal((await peer.query('SELECT pg_try_advisory_xact_lock(hashtextextended($1,7346370)) AS acquired',[ownerId])).rows[0].acquired,true);
+  await peer.query('COMMIT');
+ }finally{await peer.query('ROLLBACK');if(pending)await pending;}
+});
 
 test('ordinary Android replay posts once, explicitly suppresses the masked payer and delivers the fully proven payer obligation to scoped Admin',async t=>{
  const maskedUploads=await phoneWire(process.env.BURIMUNSI_MASKED_WIRE,masked);

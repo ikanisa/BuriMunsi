@@ -339,7 +339,7 @@ export class PostgresObservationReconciliation {
           const records = initial.records[i] ? [initial.records[i]] : initial.candidates[i];
           for (let j = 0; j < records.length; j++) {
             const prior = records[j],
-              journal = await this.#evidence.verifyJournal(tx, prior);
+              journal = await this.#evidence.verifyJournal(tx, prior, values.length > 1 && Boolean(initial.records[i]));
             if (!initial.records[i]) {
               check(
                 this.#evidence.matchesJournal(journal, legacy.get(i).journals[j]),
