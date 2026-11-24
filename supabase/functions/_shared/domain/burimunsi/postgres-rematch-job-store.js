@@ -27,16 +27,12 @@ function project(r) {
     processedCount:n(r.processed_count),leaseStartCount:n(r.lease_start_count),state:r.state});
 }
 
-/** Durable scheduling metadata, never proof of phone ownership or a second
- * ledger. All writes use the current Collect transaction/fence/locking context.
- * The mandatory admission bridge must retain the processing hold and approved
- * identity-policy authority through this same SQL transaction. */
-export class PostgresRematchJobStore {
-  constructor({authority,admission,canonical,maxAttempts=4}) {
-    requirePort(authority,['write']);requireId(authority.groupId);
-    requirePort(admission,['assertInTransaction']);requirePort(canonical,['outcome']);
+/** Enqueues matched work inside the enrollment transaction. Execution requires separate worker authority. */
+export class PostgresMemberRematchQueue {
+  constructor(groupId,maxAttempts=4) {
+    this.groupId=requireId(groupId);
     requireThat(Number.isInteger(maxAttempts)&&maxAttempts>=4&&maxAttempts<=10,'invalid_worker_config',503);
-    Object.assign(this,{authority,admission,canonical,maxAttempts});this.groupId=authority.groupId;
+    this.maxAttempts=maxAttempts;
   }
   group(g){requireThat(g===this.groupId,'access_denied',403);}
   async time(tx){return n((await tx.unsafe('SELECT floor(extract(epoch FROM clock_timestamp())*1000)::text AS now_ms'))[0]?.now_ms);}
@@ -44,14 +40,6 @@ export class PostgresRematchJobStore {
     const rows=await tx.unsafe(`SELECT collection_id,receiving_account_id,enabled FROM private.burimunsi_scopes WHERE collection_id=$1 FOR UPDATE`,[this.groupId]);
     requireThat(rows.length===1&&rows[0].collection_id===this.groupId&&(allowDisabled||rows[0].enabled===true),'scope_unavailable',503);
     requireId(rows[0].receiving_account_id);return rows[0];
-  }
-  async admitted(tx,job=null) {
-    const a=await this.admission.assertInTransaction(tx,{kind:'rematch',groupId:this.groupId,job});
-    requireThat(a?.processingEnabled===true,'processing_on_hold',503);
-    requireThat(typeof a.policyVersion==='string'&&a.policyVersion.length>=1&&a.policyVersion.length<=128&&
-      !/[\u0000-\u001f\u007f]/.test(a.policyVersion),'profile_changed',409);
-    if(job)requireThat(a.policyVersion===job.policyVersion,'profile_changed',409);
-    return a;
   }
   /** Enqueue in the member command's existing transaction, even under a worker
    * pause. A replay keeps the original cutoff and never broadens old authority. */
@@ -71,6 +59,26 @@ export class PostgresRematchJobStore {
     requireThat(job.groupId===groupId&&job.requestId===requestId&&job.memberId===memberId&&job.receivingAccountId===scope.receiving_account_id&&job.cause===cause,'idempotency_conflict',409);
     return {durable:true,jobId:job.id,state:job.state};
   }
+
+}
+
+/** Processing also requires the current admission and canonical posting bridges. */
+export class PostgresRematchJobStore extends PostgresMemberRematchQueue {
+  constructor({authority,admission,canonical,maxAttempts=4}) {
+    requirePort(authority,['write']);
+    super(authority.groupId,maxAttempts);
+    requirePort(admission,['assertInTransaction']);requirePort(canonical,['outcome']);
+    Object.assign(this,{authority,admission,canonical});
+  }
+  async admitted(tx,job=null) {
+    const a=await this.admission.assertInTransaction(tx,{kind:'rematch',groupId:this.groupId,job});
+    requireThat(a?.processingEnabled===true,'processing_on_hold',503);
+    requireThat(typeof a.policyVersion==='string'&&a.policyVersion.length>=1&&a.policyVersion.length<=128&&
+      !/[\u0000-\u001f\u007f]/.test(a.policyVersion),'profile_changed',409);
+    if(job)requireThat(a.policyVersion===job.policyVersion,'profile_changed',409);
+    return a;
+  }
+
   async claimNext({groupId,owner,leaseMs=180000}) {
     this.group(groupId);requireId(owner);
     requireThat(Number.isInteger(leaseMs)&&leaseMs>=30000&&leaseMs<=600000,'invalid_worker_config',503);

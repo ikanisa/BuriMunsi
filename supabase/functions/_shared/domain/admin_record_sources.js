@@ -9,11 +9,13 @@ const common=(r,title,subtitle,amount,status=r.status)=>({id:r.id,title,subtitle
 
 const activeMembershipsForPerson=`FROM memberships m JOIN collections g ON g.id=m.collection_id
  WHERE m.user_id=u.id AND m.active=1 AND g.status='active'`;
-const personSql=`SELECT u.id,u.public_id,u.phone,u.email,u.full_name,u.member_type,u.momo_provider,u.momo_number,u.momo_pay_code,
- u.access_status AS status,u.revision,u.created_at,u.updated_at,l.admin_user_id AS operator_admin_id,a.id AS joined_operator_admin_id,a.role AS operator_role,a.status AS operator_status,
+const personFields=`SELECT u.id,u.public_id,u.phone,u.email,u.full_name,u.member_type,u.momo_provider,u.momo_number,u.momo_pay_code,
+ u.access_status AS status,u.revision,u.created_at,u.updated_at,l.admin_user_id AS operator_admin_id,a.id AS joined_operator_admin_id,a.role AS operator_role,a.status AS operator_status`;
+const operatorJoins=`LEFT JOIN admin_principal_links l ON l.user_id=u.id LEFT JOIN admin_users a ON a.id=l.admin_user_id`;
+const personSql=`${personFields},
  (SELECT count(*) ${activeMembershipsForPerson}) AS active_groups,
  COALESCE((SELECT sum(e.amount_minor) FROM ledger_entries e WHERE e.member_id=u.id),0) AS net_contributed_rwf
- FROM users u LEFT JOIN admin_principal_links l ON l.user_id=u.id LEFT JOIN admin_users a ON a.id=l.admin_user_id`;
+ FROM users u ${operatorJoins}`;
 const groupSql=`SELECT g.*, (SELECT count(*) FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.collection_id=g.id AND m.active=1 AND u.access_status='active') AS active_members FROM collections g`;
 const paymentSql=`SELECT p.*,to_jsonb(p)->>'payment_reference' AS short_payment_reference,g.title AS group_title,e.receiver_display_label,e.receiver_network,e.receiver_momo_number,
  e.authenticity,e.external_reference,e.observed_at,e.object_sha256,e.owner_user_id,e.receiver_momo_number AS evidence_receiver_momo,
@@ -83,6 +85,16 @@ function ledgerRow(r){const amount=exact(r.amount_minor,{signed:true});if(!amoun
  member_user_id:r.member_id,group_id:r.collection_id,group_name:r.group_title,reverses_entry_id:r.reverses_entry_id,posted_at:iso(r.posted_at),contribution_basis:contributionBasis,
  provider_confirmation:false,settlement_status:'not_asserted'};}
 const peopleSearch=['public_id','full_name','phone','email','momo_number','momo_pay_code'];
+// A membership and its balance both belong to the collection bound to the current phone session.
+const rosterSource={
+ query:`${personFields},m.active AS active_groups,
+  CASE WHEN m.active=1 THEN 'active' ELSE 'inactive' END AS membership_status,
+  COALESCE((SELECT sum(e.amount_minor) FROM ledger_entries e WHERE e.member_id=u.id AND e.collection_id=m.collection_id),0) AS net_contributed_rwf
+  FROM memberships m JOIN collections g ON g.id=m.collection_id JOIN users u ON u.id=m.user_id ${operatorJoins}
+  WHERE m.collection_id=? AND g.status='active' AND u.member_type IN ('direct','app')`,
+ search:peopleSearch,
+ row:r=>({...personRow(r),membership_status:r.membership_status}),
+};
 const lists={groups:{query:groupSql,row:groupRow,search:['title','slug','description']},users:{query:personSql,row:personRow,search:peopleSearch},
  // Eligibility only needs one active membership. Keep the exact count in projected rows and metric sorts.
  members:{query:`${personSql} WHERE u.member_type!='operator' AND EXISTS(SELECT 1 ${activeMembershipsForPerson})`,row:personRow,search:peopleSearch},
@@ -99,4 +111,4 @@ function membershipRow(r){return {id:r.id,group_id:r.group_id,user_id:r.user_id,
  whatsapp_number:r.member_type==='app'?r.whatsapp_number:null,momo_provider:r.momo_provider||null,
  momo_number:r.momo_number||null,momo_pay_code:r.momo_pay_code||null,account_status:r.access_status};}
 
-export {lists,membershipSql,membershipRow,payeeSql,payeeRow,ledgerSql,ledgerRow,evidenceMetadataSql,evidenceMetadata};
+export {lists,rosterSource,membershipSql,membershipRow,payeeSql,payeeRow,ledgerSql,ledgerRow,evidenceMetadataSql,evidenceMetadata};
