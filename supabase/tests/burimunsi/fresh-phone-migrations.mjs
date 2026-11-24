@@ -25,6 +25,7 @@ const latest = [
   '20261122203000_burimunsi_phone_admin_sms_read_scope.sql',
   '20261123061132_burimunsi_single_admin.sql',
   '20261124080000_burimunsi_read_admission.sql',
+  '20261124091329_burimunsi_idle_native_jobs.sql',
 ];
 
 export async function verifyFreshPhoneReads({owner,admin,database,fixtureRoot}) {

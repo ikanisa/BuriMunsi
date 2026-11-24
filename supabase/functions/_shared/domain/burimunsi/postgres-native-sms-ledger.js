@@ -224,7 +224,7 @@ export async function drainNativeSmsLedger(env,{limit=1}={}){
  await work.assert();
  const selected=await db.transaction(async tx=>{
   check(db.applicationWork===work);await db.context(tx);
-  const rows=await tx.unsafe('SELECT private.burimunsi_native_sms_post_candidates($1) AS result',[limit]);
+  const rows=await tx.unsafe("SELECT private.burimunsi_native_job_candidates('post',$1) AS result",[limit]);
   await work.assert();check(rows.length===1&&Array.isArray(rows[0].result)&&rows[0].result.length<=limit);return rows[0].result;
  });
  const results=[];
