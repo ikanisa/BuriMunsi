@@ -1,5 +1,6 @@
 import {lazy} from 'react';
-import {useLocation, useParams} from 'react-router';
+import {Navigate, useLocation, useParams} from 'react-router';
+import {paymentViewLocation} from '../../features/operations/paymentLocations';
 import {Button, PageHeader} from '../../ui';
 import {useAccess, useCurrentAuthority, useSensitiveAccess} from './access';
 import {requiresAdminRole, requiresPermissions, workspaceRoute} from './routePolicy';
@@ -11,7 +12,6 @@ const LegacyTransactionCreate = lazy(() => import('../../features/legacy-transac
 const TransactionEvidencePage = lazy(() => import('../../features/core/TransactionEvidencePage').then(m => ({default: m.TransactionEvidencePage})));
 const TransactionReversePage = lazy(() => import('../../features/core/TransactionReversePage').then(m => ({default: m.TransactionReversePage})));
 const ReconciliationDetailPage = lazy(() => import('../../features/reconciliation/ReconciliationDetailPage').then(m => ({default: m.ReconciliationDetailPage})));
-const ReconciliationQueuePage = lazy(() => import('../../features/reconciliation/ReconciliationQueuePage').then(m => ({default: m.ReconciliationQueuePage})));
 const LedgerAccountDetailPage = lazy(() => import('../../features/ledger-accounts/LedgerAccountPages').then(m => ({default: m.LedgerAccountDetailPage})));
 const LedgerAccountEditPage = lazy(() => import('../../features/ledger-accounts/LedgerAccountPages').then(m => ({default: m.LedgerAccountEditPage})));
 
@@ -66,11 +66,20 @@ function LegacyJournalPostRoute() {
   return <LegacyJournalPostPage key={`${access.authorityKey}:${id}`} {...access} id={id} identity={sensitive.identity} allowMutations={false} />;
 }
 
-function ReconciliationRoute({detail = false}: {detail?: boolean}) {
+function ReconciliationDetailRoute() {
   const access = useAccess(), sensitive = useSensitiveAccess(), location = useLocation(), {id = ''} = useParams();
-  return detail ? <ReconciliationDetailPage key={`${access.authorityKey}:${id}`} {...access} id={id}
-    {...sensitive} allowMutations={false} returnTo={new URLSearchParams(location.search).get('returnTo')} /> :
-    <ReconciliationQueuePage key={access.authorityKey} {...access} locationSearch={location.search} />;
+  return <ReconciliationDetailPage key={`${access.authorityKey}:${id}`} {...access} id={id}
+    {...sensitive} allowMutations={false} returnTo={new URLSearchParams(location.search).get('returnTo')} />;
+}
+
+function ReconciliationListRoute() {
+  const params = new URLSearchParams(useLocation().search);
+  const next = new URLSearchParams({status: 'all'});
+  for (const key of ['search', 'status', 'page']) {
+    const values = params.getAll(key);
+    if (values.length === 1 && values[0]) next.set(key, values[0]);
+  }
+  return <Navigate replace to={paymentViewLocation('attention') + '&' + next} />;
 }
 
 const canReadReconciliation = requiresPermissions('reconciliations.read');
@@ -78,8 +87,8 @@ const canReadLedger = requiresPermissions('ledger.read');
 const canWriteLedger = requiresPermissions('ledger.read', 'ledger.manage');
 
 export const reconciliationRoutes = [
-  workspaceRoute('reconciliations', <ReconciliationRoute />, canReadReconciliation),
-  workspaceRoute('reconciliations/:id', <ReconciliationRoute detail />, canReadReconciliation),
+  workspaceRoute('reconciliations', <ReconciliationListRoute />, canReadReconciliation),
+  workspaceRoute('reconciliations/:id', <ReconciliationDetailRoute />, canReadReconciliation),
 ];
 
 export const financialActionRoutes = [

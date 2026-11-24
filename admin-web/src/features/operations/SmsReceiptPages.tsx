@@ -1,3 +1,4 @@
+import {safePaymentListReturn} from './paymentLocations';
 import { useCallback } from 'react';
 import { Navigate, useLocation, useParams } from 'react-router';
 import type { AdminRequest } from '../../api/client';
@@ -94,7 +95,7 @@ export function SmsReceiptDetailPage({allowActions = false, allowRecovery = true
   const {epoch} = useSession();
   const valid = isValidId(id) && ['member', 'receiver', 'capture'].includes(kind);
   const load = useCallback(async (request: AdminRequest, actor: Actor, offset: number) => parseSmsDetail(await request(`sms/receipts/${kind}/${id}?limit=25&offset=${offset}`), kind, id, actor.id, actor.canExtract, offset), [id, kind]);
-  return <DetailPage title="SMS receipt" subtitle="Review recorded source evidence and extracted facts." permission="sms.read" back="/admin/sms-receipts" additionalReturns={['/admin/momo-receipts']} resourceKey={`${kind}/${id}`} valid={valid} load={load} render={(value, offset, setOffset, reload, returnPath) => <>
+  return <DetailPage title="SMS receipt" subtitle="Review recorded source evidence and extracted facts." permission="sms.read" back="/admin/sms-receipts" additionalReturns={['/admin/momo-receipts']} additionalReturn={value => safePaymentListReturn(value, 'sms', 'app')} resourceKey={`${kind}/${id}`} valid={valid} load={load} render={(value, offset, setOffset, reload, returnPath) => <>
     <p className="operations-note">The source is evidence only; provider confirmation and settlement are not asserted.</p>
     <Card className="operations-detail"><h2>Receipt details</h2><Facts items={[
       ['Source', formatStatus(value.resource.source_kind)], ['Receipt ID', value.resource.id], ['Status', formatStatus(value.resource.status)],

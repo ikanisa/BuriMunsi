@@ -1,3 +1,4 @@
+import {safePaymentListReturn} from '../operations/paymentLocations';
 import { useEffect, useState } from 'react';
 import { Button, Card, ErrorState, LoadingState, PageHeader } from '../../ui';
 import { LegacyTransactionActions } from '../legacy-transactions/LegacyTransactionActions';
@@ -56,7 +57,8 @@ export function CoreRecordPage({ area, id, request, permissions, actorId, princi
     }).catch(() => { if (active) { setDetailScope(currentScope); setState('error'); } });
     return () => { active = false; controller.abort(); };
   }, [allowed, id, resource, request, actorId, authorityKey, financialModel, area, currentScope, retry]);
-  const back = safeReturn(area, returnTo);
+  const paymentsReturn = area === 'transactions' ? safePaymentListReturn(returnTo, 'recorded') : null;
+  const back = paymentsReturn ?? safeReturn(area, returnTo);
   const {actions, membershipRecovery, membershipWrite, journalRecovery, journalWrite} = coreRecordActions({
     area, role, permissions, financialModel, allowMutations, actorId, id, resource,
     current: detailScope === currentScope && state === 'ready', detail, identity,
@@ -64,7 +66,7 @@ export function CoreRecordPage({ area, id, request, permissions, actorId, princi
   const reload = () => {setState('loading'); setRetry(value => value + 1);};
   return <>
     <PageHeader title={AREA_TITLES[area]} subtitle="Review this record and its related information." actions={<>
-      <Button type="button" onClick={() => navigate(back)}>Back to {AREA_TITLES[area].toLowerCase()}</Button>
+      <Button type="button" onClick={() => navigate(back)}>Back to {paymentsReturn ? 'payments' : AREA_TITLES[area].toLowerCase()}</Button>
       {actions.map(action => <Button key={action.path} type="button" variant={action.variant} onClick={() => navigate(action.path)}>{action.label}</Button>)}
     </>} />
     {!allowed ? <ErrorState title="Access unavailable" message="Your account does not have permission to view this record." /> :

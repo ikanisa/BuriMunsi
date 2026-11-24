@@ -1,3 +1,4 @@
+import {paymentViewLocation, safePaymentListReturn} from '../operations/paymentLocations';
 import {containsControl} from '../core/contracts';
 import type {FinancialModel} from '../core/types';
 
@@ -14,27 +15,31 @@ export function safeReconciliationSearch(value: string): string {
   return value.length <= 200 && !containsControl(value) ? value : '';
 }
 
-export function reconciliationFilters(locationSearch: string, model: FinancialModel) {
+export function reconciliationFilters(locationSearch: string, model: FinancialModel, paymentsWorkspace = false) {
   const query = new URLSearchParams(locationSearch);
-  const status = query.get('status') ?? '';
+  const defaultStatus = paymentsWorkspace ? model === 'canonical_evidence_ledger' ? 'ambiguous' : 'evidence_conflict' : '';
+  const status = query.get('status') ?? defaultStatus;
   const page = Number(query.get('page') ?? 1);
   return {
     search: safeReconciliationSearch(query.get('search') ?? ''),
-    status: reconciliationStatuses(model).includes(status) ? status : '',
+    status: status === 'all' && paymentsWorkspace ? '' : reconciliationStatuses(model).includes(status) ? status : defaultStatus,
     page: Number.isSafeInteger(page) && page >= 1 && page <= 85899346 ? page : 1,
   };
 }
 
-export function reconciliationQueueLocation(search: string, status: string, page: number): string {
+export function reconciliationQueueLocation(search: string, status: string, page: number, paymentsWorkspace = false): string {
   const query = new URLSearchParams();
   if (search) query.set('search', search);
-  if (status) query.set('status', status);
+  if (status || paymentsWorkspace) query.set('status', status || 'all');
   if (page > 1) query.set('page', String(page));
   const suffix = query.toString();
+  if (paymentsWorkspace) return paymentViewLocation('attention') + (suffix ? '&' + suffix : '');
   return suffix ? `${queuePath}?${suffix}` : queuePath;
 }
 
 export function reconciliationReturnLocation(raw?: string | null): string {
+  const canonical = safePaymentListReturn(raw, 'attention');
+  if (canonical) return canonical;
   if (!raw || raw.length > 2000 || containsControl(raw, true) || raw.includes('\\') ||
       raw.includes('#') || !raw.startsWith('/') || raw.startsWith('//')) return queuePath;
   try {

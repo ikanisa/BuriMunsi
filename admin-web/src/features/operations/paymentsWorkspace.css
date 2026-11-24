@@ -1,0 +1,17 @@
+.payments-workspace { min-inline-size: 0; }
+.payments-nav { display: flex; flex-wrap: wrap; gap: .5rem; margin-block: .5rem 1rem; }
+.payments-nav a { display: inline-flex; align-items: center; justify-content: center; min-block-size: 44px; padding: .25rem .875rem; border-radius: 999px; text-decoration: none; font-weight: 600; }
+.payments-nav a[aria-current="page"] { background: var(--admin-accent-surface); color: var(--admin-accent-ink); text-decoration: underline; text-underline-offset: .25em; }
+.payments-sources { margin-block-start: 0; }
+.payments-sources a { font-weight: 500; }
+.payments-record-link { overflow-wrap: anywhere; }
+.payments-workspace .admin-table-wrap { min-inline-size: 0; }
+.payments-workspace .admin-input { max-inline-size: 100%; min-inline-size: 0; }
+.payments-workspace .core-filters label { flex-wrap: wrap; min-inline-size: 0; }
+.payments-workspace .operations-search { min-inline-size: 0; }
+.payments-nav a:focus-visible { outline: 2px solid var(--admin-focus); outline-offset: 2px; }
+@media (max-width: 720px) {
+  .payments-nav { gap: .25rem; }
+  .payments-nav a { justify-content: start; }
+  .payments-workspace .core-search input { min-width: 0; }
+}

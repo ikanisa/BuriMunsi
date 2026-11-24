@@ -48,13 +48,13 @@ export interface Column<T> { label: string; render: (row: T) => ReactNode; }
 export interface RecordsFilter { key: string; label: string; allLabel: string; options: readonly {value: string; label: string}[] }
 export interface RecordsProps<T> {
   title: string; subtitle: string; permission: string; statuses?: readonly string[]; searchable?: boolean;
-  filters?: readonly RecordsFilter[]; smsPagination?: boolean;
+  filters?: readonly RecordsFilter[]; smsPagination?: boolean; embedded?: boolean;
   rowKey: (row: T) => string; columns: Column<T>[];
   load: (request: AdminRequest, offset: number, status: string, search: string, actor: Actor, filters: Record<string, string>, limit: number) => Promise<Page<T>>;
   extra?: ReactNode | ((reload: () => void) => ReactNode);
 }
 
-export function RecordsPage<T>({title, subtitle, permission, statuses = [], searchable = false, filters = [], smsPagination = false, rowKey, columns, load, extra}: RecordsProps<T>) {
+export function RecordsPage<T>({title, subtitle, permission, statuses = [], searchable = false, filters = [], smsPagination = false, embedded = false, rowKey, columns, load, extra}: RecordsProps<T>) {
   const {session, actor} = useActor();
   const {request} = session;
   const [params, setParams] = useSearchParams();
@@ -100,7 +100,7 @@ export function RecordsPage<T>({title, subtitle, permission, statuses = [], sear
     changeParams({search: '', status: '', offset: 0, ...Object.fromEntries(filters.map(({key}) => [key, '']))});
   }}>Clear filters</Button> : undefined;
 
-  return <><PageHeader eyebrow={`${adminBrand.name} / Operations`} title={title} subtitle={subtitle} />
+  return <>{!embedded && <PageHeader eyebrow={`${adminBrand.name} / Operations`} title={title} subtitle={subtitle} />}
     {canRead && (typeof extra === 'function' ? extra(retry) : extra)}
     {!canRead ? <ErrorState title="Access unavailable" message="Your current account cannot open these records." /> : <Card className="operations-records">
       <div className="operations-toolbar"><h2>{title}</h2>
@@ -142,9 +142,10 @@ interface DetailProps<T> {
   load: (request: AdminRequest, actor: Actor, offset: number) => Promise<T>;
   render: (value: T, offset: number, setOffset: (offset: number) => void, reload: () => void, returnPath: string) => ReactNode;
   additionalReturns?: string[];
+  additionalReturn?: (value: string | null) => string | null;
 }
 
-export function DetailPage<T>({title, subtitle, permission, back, resourceKey, valid, load, render, additionalReturns = []}: DetailProps<T>) {
+export function DetailPage<T>({title, subtitle, permission, back, resourceKey, valid, load, render, additionalReturns = [], additionalReturn}: DetailProps<T>) {
   const {session, actor} = useActor();
   const {request} = session;
   const [params, setParams] = useSearchParams();
@@ -159,7 +160,8 @@ export function DetailPage<T>({title, subtitle, permission, back, resourceKey, v
   }, [actor, load, offset, request]);
   const {result, retry} = useOperationRead(`${session.epoch}:${actor?.id ?? ''}:${resourceKey}:${offset}`, canRead && valid, loadDetail, {live: permission === 'sms.read' || permission === 'payments.read'});
   const candidate = safeAdminReturnLocation(params.get('returnTo'));
-  const returnPath = candidate && [back, ...additionalReturns].includes(new URL(candidate, 'https://admin.invalid').pathname) ? candidate : back;
+  const returnPath = additionalReturn?.(candidate) ??
+    (candidate && [back, ...additionalReturns].includes(new URL(candidate, 'https://admin.invalid').pathname) ? candidate : back);
   return <><PageHeader eyebrow={`${adminBrand.name} / Operations`} title={title} subtitle={subtitle} /><p><Link className="operations-link" to={returnPath}>← Back to records</Link></p>
     {!canRead ? <ErrorState title="Access unavailable" message="Your current account cannot open this record." /> : !valid ? <ErrorState title="Record unavailable" message="Select a valid record." /> : !result ? <LoadingState label="Loading record" /> : result.status === 'error' ? <ErrorState message={result.message} onRetry={retry} /> : render(result.value, offset, setOffset, retry, returnPath)}
   </>;

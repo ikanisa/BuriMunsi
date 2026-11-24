@@ -1,5 +1,6 @@
 import {lazy} from 'react';
-import {useLocation, useNavigate} from 'react-router';
+import {Navigate, useLocation, useNavigate} from 'react-router';
+import {paymentViewLocation} from '../../features/operations/paymentLocations';
 import {OverviewPage} from '../../features/overview/OverviewPage';
 import {canReadRequestHistory} from '../../features/requests/permissions';
 import {hasScopedAdminAuthority} from '../../session/ownerIdentity';
@@ -24,7 +25,10 @@ const AssistedSmsPage = lazy(() => import('../../features/assisted/AssistedSmsPa
 const SmsControlsPage = lazy(() => import('../../features/assisted/SmsControlsPage').then(m => ({default: m.SmsControlsPage})));
 const BuriMunsiPage = lazy(() => import('../../features/burimunsi').then(m => ({default: m.BuriMunsiPage})));
 
-export const MomoReceiptsPage = lazy(() => import('../../features/operations/MomoReceiptsPage').then(m => ({default: m.MomoReceiptsPage})));
+function LegacyMomoReceiptsRoute() {
+  const {user} = useSession();
+  return <Navigate replace to={user?.permissions.includes('sms.read') ? paymentViewLocation('sms') : paymentViewLocation('recorded', {momo: true})} />;
+}
 
 export function OverviewRoute() {
   const access = useAccess();
@@ -73,7 +77,7 @@ export const operatorRoutes = [
   workspaceRoute('member-receipts', <MemberReceiptsPage />, canReadPayments),
   workspaceRoute('member-receipts/:id', <MemberReceiptDetailPage />, canReadPayments),
   workspaceRoute('email', <EmailEventsPage />, requiresPermissions('email.read')),
-  workspaceRoute('momo-receipts', <MomoReceiptsPage />, user => canReadSms(user) || canReadPayments(user)),
+  workspaceRoute('momo-receipts', <LegacyMomoReceiptsRoute />, user => canReadSms(user) || canReadPayments(user)),
   workspaceRoute('notification-operator', <AssistedSmsRoute />, requiresPermissions('assisted_sms.read')),
   workspaceRoute('notification-settings', <SmsControlsRoute />, user => (user.accountId ? hasScopedAdminAuthority(user) : user.role === 'owner') && user.permissions.includes('admin_users.manage')),
   workspaceRoute('burimunsi', <BuriMunsiRoute />, canOpenOperatorProfile),

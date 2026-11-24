@@ -1,12 +1,12 @@
 import {lazy, type ReactElement} from 'react';
-import {Link, useLocation, useNavigate, useParams} from 'react-router';
+import {Link, Navigate, useLocation, useNavigate, useParams} from 'react-router';
 import {Button} from '../../ui';
+import {canOpenPaymentView, paymentViews, paymentsPath} from '../../features/operations/paymentLocations';
 import {CORE_PERMISSIONS, type CoreArea} from '../../features/core/types';
 import {useSession} from '../../session/SessionProvider';
 import {UnavailablePage} from '../UnavailablePage';
 import {useAccess, useCurrentAuthority, useSensitiveAccess} from './access';
 import {LegacyJournalCreateRoute, LegacyJournalEditRoute, TransactionEvidenceRoute} from './financial-routes';
-import {MomoReceiptsPage} from './operator-routes';
 import {requiresAdminRole, requiresPermissions, workspaceRoute, type WorkspaceAccess} from './routePolicy';
 
 const CoreListPage = lazy(() => import('../../features/core/CoreListPage').then(m => ({default: m.CoreListPage})));
@@ -87,16 +87,21 @@ function GroupSelectionRoute({action}: {action: 'member' | 'payee'}) {
   return <GroupSelectionPage key={`${access.authorityKey}:${action}`} {...access} action={action} isCurrent={isCurrent} />;
 }
 
+const PaymentsWorkArea = lazy(() => import('../../features/operations/PaymentsWorkArea').then(m => ({default: m.PaymentsWorkArea})));
+
+function PaymentsRoute() {
+  const access = useAccess();
+  return <PaymentsWorkArea key={access.authorityKey} {...access} />;
+}
+
 function TransactionListRoute() {
-  const location = useLocation(), navigate = useNavigate();
-  const momo = new URLSearchParams(location.search).get('view') === 'momo';
-  return <>
-    <nav className="transaction-view-switch" aria-label="Transaction views">
-      <Button variant={!momo ? 'primary' : 'secondary'} aria-pressed={!momo} onClick={() => navigate('/admin/transactions')}>Collect payments</Button>
-      <Button variant={momo ? 'primary' : 'secondary'} aria-pressed={momo} onClick={() => navigate('/admin/transactions?view=momo')}>MoMo transactions</Button>
-    </nav>
-    {momo ? <MomoReceiptsPage initialView="transactions" transactionsOnly /> : <CoreListRoute area="transactions" />}
-  </>;
+  const params = new URLSearchParams(useLocation().search), next = new URLSearchParams();
+  if (params.get('view') === 'momo') next.set('dataset', 'momo');
+  for (const key of ['search', 'status', 'sort', 'page']) {
+    const values = params.getAll(key);
+    if (values.length === 1) next.set(key, values[0]);
+  }
+  return <Navigate replace to={paymentsPath + (next.size ? '?' + next : '')} />;
 }
 
 interface RecordAction {
@@ -161,7 +166,9 @@ const records: Record<CoreArea, RecordRoutes> = {
   },
 };
 
-export const recordRoutes = (Object.keys(CORE_PERMISSIONS) as CoreArea[]).flatMap(area => {
+export const recordRoutes = [
+  workspaceRoute('payments', <PaymentsRoute />, user => paymentViews.some(({id}) => canOpenPaymentView(id, user.permissions))),
+  ...(Object.keys(CORE_PERMISSIONS) as CoreArea[]).flatMap(area => {
   const {list, create, edit} = records[area];
   const canRead = area === 'payees' ? canReadReceivingAccounts : canReadCoreArea(area);
   return [
@@ -170,7 +177,8 @@ export const recordRoutes = (Object.keys(CORE_PERMISSIONS) as CoreArea[]).flatMa
     workspaceRoute(area + '/:id/edit', edit.element, user => canRead(user) && edit.access(user)),
     workspaceRoute(area + '/:id', <CoreDetailRoute area={area} />, canRead),
   ];
-});
+}),
+];
 
 const canManageMemberships = requiresPermissions('collections.read', 'users.manage');
 

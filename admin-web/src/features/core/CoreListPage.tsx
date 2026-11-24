@@ -1,3 +1,5 @@
+import {Link} from 'react-router';
+import {paymentsPath} from '../operations/paymentLocations';
 import { useEffect, useMemo, useState } from 'react';
 import { Button, Card, EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge } from '../../ui';
 import { containsControl, formatField, formatMoney, label, parseCorePage, paymentReference, STATUSES } from './contracts';
@@ -7,7 +9,7 @@ import type { CoreArea, CorePage, DataRow, FeatureAccess, FinancialModel } from 
 import { AREA_TITLES, CORE_PERMISSIONS } from './types';
 import './core.css';
 
-type ListProps = FeatureAccess & { area: CoreArea; locationSearch?: string; allowMutations?: boolean };
+type ListProps = FeatureAccess & { area: CoreArea; locationSearch?: string; allowMutations?: boolean; paymentsWorkspace?: boolean };
 
 const PAGE_SIZE = 25;
 const descriptions: Record<CoreArea, string> = {
@@ -42,14 +44,14 @@ function readFilters(search: string, area: CoreArea, model: FinancialModel): Fil
   };
 }
 
-function listLocation(area: CoreArea, filter: Filters): string {
+function listLocation(area: CoreArea, filter: Filters, paymentsWorkspace = false): string {
   const query = new URLSearchParams();
   if (filter.search) query.set('search', filter.search);
   if (filter.status) query.set('status', filter.status);
   if (filter.sort !== 'created_at_desc') query.set('sort', filter.sort);
   if (filter.page > 1) query.set('page', String(filter.page));
   const suffix = query.toString();
-  return `/admin/${area}${suffix ? `?${suffix}` : ''}`;
+  return `${paymentsWorkspace ? paymentsPath : `/admin/${area}`}${suffix ? `?${suffix}` : ''}`;
 }
 
 function recordLocation(area: CoreArea, id: string, returnTo: string): string {
@@ -94,7 +96,7 @@ function columns(area: CoreArea, model: FinancialModel): { label: string; value:
   }
 }
 
-export function CoreListPage({ area, request, permissions, actorId, role, authorityKey, financialModel, navigate, locationSearch = '', allowMutations = false }: ListProps) {
+export function CoreListPage({ area, request, permissions, actorId, role, authorityKey, financialModel, navigate, locationSearch = '', allowMutations = false, paymentsWorkspace = false }: ListProps) {
   const allowed = permissions.includes(CORE_PERMISSIONS[area]);
   const filter = useMemo(() => readFilters(locationSearch, area, financialModel), [locationSearch, area, financialModel]);
   const [draftState, setDraftState] = useState({ base: filter.search, value: filter.search });
@@ -117,20 +119,20 @@ export function CoreListPage({ area, request, permissions, actorId, role, author
     return () => { active = false; controller.abort(); };
   }, [allowed, area, request, actorId, authorityKey, financialModel, filter.search, filter.status, filter.sort, filter.page, currentScope, retry]);
 
-  const update = (changes: Partial<Filters>) => navigate(listLocation(area, { ...filter, ...changes }));
+  const update = (changes: Partial<Filters>) => navigate(listLocation(area, { ...filter, ...changes }, paymentsWorkspace));
   const tableColumns = columns(area, financialModel);
   const memberDirectory = area === 'members' || area === 'users';
   const title = memberDirectory ? 'Members' : AREA_TITLES[area];
   const action = coreListAction({area, role, permissions, financialModel, allowed, allowMutations});
   return <>
-    <PageHeader title={title} subtitle={descriptions[area]} actions={action ? <Button type="button" onClick={() => navigate(action.path)}>{action.label}</Button> : undefined} />
+    {!paymentsWorkspace && <PageHeader title={title} subtitle={descriptions[area]} actions={action ? <Button type="button" onClick={() => navigate(action.path)}>{action.label}</Button> : undefined} />}
     {allowed && (area === 'members' || area === 'users') && <MemberDirectoryViews area={area} />}
     {!allowed ? <ErrorState title="Access unavailable" message="Your account does not have permission to view this page." /> : <Card>
       <div className="core-toolbar">
-        {!memberDirectory && <div><h2>{AREA_TITLES[area]} list</h2><p>Search and review records</p></div>}
+        {!memberDirectory && !paymentsWorkspace && <div><h2>{AREA_TITLES[area]} list</h2><p>Search and review records</p></div>}
         <form className="core-search" onSubmit={event => { event.preventDefault(); const value = draft.trim(); if (value.length <= 200 && !containsControl(value)) update({ search: value, page: 1 }); }}>
-          <label className="core-visually-hidden" htmlFor={`search-${area}`}>Search {AREA_TITLES[area]}</label>
-          <input id={`search-${area}`} className="admin-input" value={draft} onChange={event => setDraftState({ base: filter.search, value: event.target.value })} maxLength={200} placeholder={memberDirectory ? 'Search by name or ID' : 'Search records'} />
+          <label className="core-visually-hidden" htmlFor={`search-${area}`}>Search {paymentsWorkspace ? 'payments' : AREA_TITLES[area]}</label>
+          <input id={`search-${area}`} className="admin-input" value={draft} onChange={event => setDraftState({ base: filter.search, value: event.target.value })} maxLength={200} placeholder={paymentsWorkspace ? 'Payment reference' : memberDirectory ? 'Search by name or ID' : 'Search records'} />
           <Button type="submit">Search</Button>
           <Button type="button" onClick={() => { setDraftState({ base: '', value: '' }); update({ search: '', status: '', sort: 'created_at_desc', page: 1 }); }}>Clear</Button>
         </form>
@@ -147,8 +149,15 @@ export function CoreListPage({ area, request, permissions, actorId, role, author
        state === 'error' ? <ErrorState message="The records could not be verified or the service is unavailable." onRetry={() => { setState('loading'); setRetry(value => value + 1); }} /> :
        !page || page.rows.length === 0 ? <EmptyState title="No records found" description="Change your search or filters and try again." /> : <>
         <div className="admin-table-wrap" role="region" aria-label={`${AREA_TITLES[area]} records`} tabIndex={0}>
-          <table className="admin-table"><thead><tr>{tableColumns.map(column => <th scope="col" key={column.label}>{column.label}</th>)}<th scope="col">Status</th><th scope="col">Open</th></tr></thead>
-            <tbody>{page.rows.map(row => <tr key={row.id}>{tableColumns.map(column => <td key={column.label}>{column.value(row)}</td>)}<td><StatusBadge tone={tone(row.status)}>{label(row.status)}</StatusBadge></td><td><Button type="button" onClick={() => navigate(recordLocation(area, row.id, listLocation(area, filter)))} aria-label={`View ${area === 'transactions' && financialModel === 'canonical_evidence_ledger' ? paymentReference(row) : row.title}`}>View</Button></td></tr>)}</tbody>
+          <table className={paymentsWorkspace ? "admin-table operations-receipt-table" : "admin-table"} role="table"><thead role="rowgroup"><tr role="row">{tableColumns.map(column => <th role="columnheader" scope="col" key={column.label}>{column.label}</th>)}<th role="columnheader" scope="col">Status</th>{!paymentsWorkspace && <th role="columnheader" scope="col">Open</th>}</tr></thead>
+            <tbody role="rowgroup">{page.rows.map(row => {
+              const href = recordLocation(area, row.id, listLocation(area, filter, paymentsWorkspace));
+              return <tr key={row.id} role="row">{tableColumns.map((column, index) => <td role="cell" key={column.label}>{paymentsWorkspace && <span className="operations-receipt-field" aria-hidden="true">{column.label}</span>}{paymentsWorkspace && index === 0 ?
+                <Link className="operations-link payments-record-link" to={href}>{column.value(row)}</Link> : column.value(row)}</td>)}
+                <td role="cell">{paymentsWorkspace && <span className="operations-receipt-field" aria-hidden="true">Status</span>}<StatusBadge tone={tone(row.status)}>{label(row.status)}</StatusBadge></td>{!paymentsWorkspace &&
+                  <td role="cell"><Button type="button" onClick={() => navigate(href)} aria-label={`View ${area === 'transactions' && financialModel === 'canonical_evidence_ledger' ? paymentReference(row) : row.title}`}>View</Button></td>}
+              </tr>;
+            })}</tbody>
           </table>
         </div>
         <div className="core-pager"><span>Showing {(filter.page - 1) * PAGE_SIZE + 1}–{(filter.page - 1) * PAGE_SIZE + page.rows.length} of {page.total}</span><div><Button type="button" disabled={filter.page <= 1} onClick={() => update({ page: filter.page - 1 })}>Previous</Button><span aria-current="page">{filter.page}</span><Button type="button" disabled={filter.page * PAGE_SIZE >= page.total} onClick={() => update({ page: filter.page + 1 })}>Next</Button></div></div>

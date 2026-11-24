@@ -1,5 +1,6 @@
 /* eslint-disable no-control-regex -- Reject control characters in operator search input. */
 import {useCallback, useLayoutEffect, useRef, useState, type FormEvent} from 'react';
+import {useSearchParams} from 'react-router';
 import {useSession} from '../../session/SessionProvider';
 import {canDisplaySessionRecords} from '../../session/sessionContext';
 import {AdminRequestError} from '../../api/client';
@@ -19,10 +20,55 @@ function kigaliDate(value: string, end: boolean): string | null {
   if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== value) return null;
   return new Date(date.getTime() - 7200000 + (end ? 86399999 : 0)).toISOString();
 }
-export function MomoTransactionList({allowActions, allowRecovery}: {allowActions: boolean; allowRecovery: boolean}) {
+type Draft = { search: string; status: MomoStatus; account: string; group: string; from: string; to: string };
+type WorkspaceNavigation = {
+  draft: Draft; filters: MomoFilters; offset: number; selected: string | null;
+  apply: (draft: Draft, offset: number) => void; select: (id: string | null) => void;
+};
+
+/** URL re-entry restores the operator's search, filters, page and open detail. */
+export function WorkspaceMomoTransactionList() {
+  const session = useSession(), [params, setParams] = useSearchParams();
+  const value = (key: string) => params.getAll(key).length === 1 ? params.get(key) ?? '' : '';
+  const permissions = session.user?.permissions ?? [];
+  const search = value('search'), status = value('status'), account = value('account'), group = value('group');
+  const from = value('from'), to = value('to'), offset = Number(value('offset'));
+  const start = kigaliDate(from, false), end = kigaliDate(to, true), ordered = !start || !end || start <= end;
+  const draft: Draft = {
+    search: search.length <= 200 && !/[\x00-\x1f\x7f]/.test(search) ? search : '',
+    status: momoStatuses.find(candidate => candidate === status) ?? '',
+    account: permissions.includes('receivers.read') && isValidId(account) ? account : '',
+    group: permissions.includes('collections.read') && isValidId(group) ? group : '',
+    from: ordered && start ? from : '', to: ordered && end ? to : '',
+  };
+  const applied = {draft, filters:{...draft, from: ordered ? start ?? '' : '', to: ordered ? end ?? '' : ''},
+    offset: Number.isSafeInteger(offset) && offset >= 0 && offset <= 2147483647 && offset % 25 === 0 ? offset : 0,
+    selected: isValidId(value('payment')) ? value('payment') : null};
+  function listQuery(candidate: Draft, pageOffset: number) {
+    const next = new URLSearchParams({dataset:'momo'});
+    for (const [key, value] of Object.entries(candidate)) if (value) next.set(key,value);
+    if (pageOffset) next.set('offset',String(pageOffset));
+    return next;
+  }
+  const workspace: WorkspaceNavigation = {...applied,
+    apply: (draft, offset) => setParams(listQuery(draft,offset)),
+    select: id => {
+      const next = listQuery(draft,applied.offset);
+      if (id) next.set('payment',id);
+      setParams(next,{replace: !id});
+    },
+  };
+  return <MomoTransactionList key={JSON.stringify([session.epoch,draft])} allowActions={false} allowRecovery workspace={workspace} />;
+}
+
+export function MomoTransactionList({allowActions, allowRecovery, workspace}: {allowActions: boolean; allowRecovery: boolean; workspace?: WorkspaceNavigation}) {
   const session = useSession(), request = session.request, permissions = session.user?.permissions ?? [];
-  const [search, setSearch] = useState(''), [status, setStatus] = useState<MomoStatus>(''), [account, setAccount] = useState(''), [group, setGroup] = useState(''), [from, setFrom] = useState(''), [to, setTo] = useState('');
-  const [filters, setFilters] = useState(initialFilters), [offset, setOffset] = useState(0), [filterError, setFilterError] = useState('');
+  const [search, setSearch] = useState(workspace?.draft.search ?? ''), [status, setStatus] = useState<MomoStatus>(workspace?.draft.status ?? ''),
+    [account, setAccount] = useState(workspace?.draft.account ?? ''), [group, setGroup] = useState(workspace?.draft.group ?? ''),
+    [from, setFrom] = useState(workspace?.draft.from ?? ''), [to, setTo] = useState(workspace?.draft.to ?? '');
+  const [localFilters, setFilters] = useState(initialFilters), [localOffset, setOffset] = useState(0), [filterError, setFilterError] = useState('');
+  const {search: appliedSearch,status: appliedStatus,account: appliedAccount,group: appliedGroup,from: appliedFrom,to: appliedTo} = workspace?.filters ?? localFilters;
+  const offset = workspace?.offset ?? localOffset;
   const [selected, setSelected] = useState<{id: string; epoch: number} | null>(null);
   const [checking, setChecking] = useState(false);
   const canCheck = ['payments.read', 'users.read', 'collections.read'].every((permission) => permissions.includes(permission));
@@ -31,9 +77,9 @@ export function MomoTransactionList({allowActions, allowRecovery}: {allowActions
   const latestRequest = useRef(0);
   const load = useCallback(async function readTransactions(signal: AbortSignal): Promise<MomoPage> {
     const requestNumber = ++latestRequest.current;
-    const query = new URLSearchParams({limit: '25', offset: String(offset), search: filters.search, status: filters.status});
-    if (filters.account) query.set('receiving_account_id', filters.account); if (filters.group) query.set('group_id', filters.group);
-    if (filters.from) query.set('from', filters.from); if (filters.to) query.set('to', filters.to);
+    const query = new URLSearchParams({limit: '25', offset: String(offset), search: appliedSearch, status: appliedStatus});
+    if (appliedAccount) query.set('receiving_account_id', appliedAccount); if (appliedGroup) query.set('group_id', appliedGroup);
+    if (appliedFrom) query.set('from', appliedFrom); if (appliedTo) query.set('to', appliedTo);
     const path = `momo/transactions?${query}`;
     let body;
     try {body = await request(path, {signal});}
@@ -43,19 +89,24 @@ export function MomoTransactionList({allowActions, allowRecovery}: {allowActions
           !actorId || !sessionId || !isCurrentAuthority(epoch, actorId, sessionId)) throw error;
       body = await request(path, {signal});
     }
-    return parseMomoPage(body, offset, filters);
-  }, [filters, offset, request, epoch, actorId, sessionId, isCurrentAuthority]);
+    return parseMomoPage(body, offset, {search:appliedSearch,status:appliedStatus,account:appliedAccount,group:appliedGroup,from:appliedFrom,to:appliedTo});
+  }, [appliedSearch, appliedStatus, appliedAccount, appliedGroup, appliedFrom, appliedTo, offset, request, epoch, actorId, sessionId, isCurrentAuthority]);
   useLayoutEffect(() => {
     retryOwner.current = load;
     return () => {retryOwner.current = null;};
   }, [load]);
-  const {result, retry} = useOperationRead(`${session.epoch}:transactions:${JSON.stringify(filters)}:${offset}`, canDisplaySessionRecords(session) && permissions.includes('payments.read'), load, momoReadOptions);
+  const {result, retry} = useOperationRead(`${session.epoch}:transactions:${JSON.stringify([appliedSearch,appliedStatus,appliedAccount,appliedGroup,appliedFrom,appliedTo])}:${offset}`, canDisplaySessionRecords(session) && permissions.includes('payments.read'), load, momoReadOptions);
   const apply = (event: FormEvent) => {
     event.preventDefault();
     const start = from ? kigaliDate(from, false) : '', end = to ? kigaliDate(to, true) : '';
     if (search.length > 200 || /[\x00-\x1f\x7f]/.test(search) || account && !isValidId(account) || group && !isValidId(group) || start === null || end === null || start && end && start > end) {setFilterError('Check the search, account, group and date values.'); return;}
-    setFilterError(''); setOffset(0); setFilters({search: search.trim(), status, account: permissions.includes('receivers.read') ? account : '', group: permissions.includes('collections.read') ? group : '', from: start, to: end});
+    const next = {search: search.trim(),status,account: permissions.includes('receivers.read') ? account : '',
+      group: permissions.includes('collections.read') ? group : '',from,to};
+    setFilterError('');
+    if (workspace) workspace.apply(next,0);
+    else {setOffset(0);setFilters({...next,from:start,to:end});}
   };
+  const selectedId = workspace ? workspace.selected : selected?.epoch === session.epoch ? selected.id : null;
   return <><Card className="operations-records"><form className="operations-toolbar" onSubmit={apply}><h2>Transactions</h2>
     <label className="operations-filter">Search MoMo TX ID or counterparty<input className="admin-input" value={search} onChange={(event) => setSearch(event.target.value)} maxLength={200} /></label>
     <label className="operations-filter">Payment status<select className="admin-input" value={status} onChange={(event) => setStatus(event.target.value as MomoStatus)}><option value="">All statuses</option>{momoStatuses.map((value) => <option key={value} value={value}>{formatStatus(value)}</option>)}</select></label>
@@ -70,12 +121,12 @@ export function MomoTransactionList({allowActions, allowRecovery}: {allowActions
           <td>{row.event_kind ? formatStatus(row.event_kind) : 'Not recorded'}</td>
           <td>{formatMomoAmount(row.amount_minor, row.currency)}</td>
           <td>{row.payer_name ?? 'Not recorded'}{row.payer_last3 ? ` · …${row.payer_last3}` : ''}</td>
-          <td><button type="button" className="operations-link" onClick={() => setSelected({id: row.id, epoch: session.epoch})}
+          <td><button type="button" className="operations-link" onClick={() => workspace ? workspace.select(row.id) : setSelected({id: row.id, epoch: session.epoch})}
             aria-label={row.provider_transaction_id ?? `View transaction ${row.id}`}>{row.provider_transaction_id ?? 'View details'}</button></td>
           <td>{row.member_name ?? 'Unassigned'}</td><td>{row.group_name ?? 'Unassigned'}</td>
           <td><StatusBadge>{formatStatus(row.status)}</StatusBadge></td><td>{row.has_conflict ? 'Needs review' : '—'}</td>
-        </tr>)}</MomoTable>}<MomoPager page={page} change={setOffset} /></>}</MomoResult>
-  </Card>{filters.status === 'needs_attention' && permissions.includes('sms.read') && <MomoSourceReview allowActions={allowActions} allowRecovery={allowRecovery} />}
-  {selected?.epoch === session.epoch && <MomoPaymentDetail id={selected.id} allowActions={allowActions} allowRecovery={allowRecovery} onClose={() => setSelected(null)} />}
-  {checking && canCheck && <MomoMemberChecks onClose={() => setChecking(false)} onSearch={(value) => {setChecking(false); setSearch(value); setStatus(''); setOffset(0); setFilters((previous) => ({...previous, search: value, status: ''}));}} />}</>;
+        </tr>)}</MomoTable>}<MomoPager page={page} change={value => workspace ? workspace.apply(workspace.draft,value) : setOffset(value)} /></>}</MomoResult>
+  </Card>{appliedStatus === 'needs_attention' && permissions.includes('sms.read') && <MomoSourceReview allowActions={allowActions} allowRecovery={allowRecovery} />}
+  {selectedId && canDisplaySessionRecords(session) && permissions.includes('payments.read') && <MomoPaymentDetail id={selectedId} allowActions={allowActions} allowRecovery={allowRecovery} onClose={() => workspace ? workspace.select(null) : setSelected(null)} />}
+  {checking && canCheck && <MomoMemberChecks onClose={() => setChecking(false)} onSearch={(value) => {setChecking(false); if (workspace) workspace.apply({...workspace.draft,search:value,status:''},0); else {setSearch(value); setStatus(''); setOffset(0); setFilters((previous) => ({...previous, search: value, status: ''}));}}} />}</>;
 }
