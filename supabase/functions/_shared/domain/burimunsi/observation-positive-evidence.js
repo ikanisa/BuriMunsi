@@ -19,10 +19,11 @@ export function hasPositiveReceiptEvidence(body, profile) {
  const reference = new RegExp('(?<![\\p{L}\\p{N}_])(?:'+labels(profile.transactionIdPrefixes)+')[ \\t:#-]*[A-Z0-9][A-Z0-9_-]{3,63}'+boundary,'iu');
  const id = reference.exec(body);
  if (!id) return false;
- // This established outgoing receipt puts the currency before the amount.
- // A generic "Your payment of" notice without its completion clause is not proof.
- const outgoing = new RegExp('^\\s*your payment of[ \\t]+(?:'+labels(profile.currencyAliases)+')[ \\t]+'+
-   '(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?![\\p{L}\\p{N}.,_])[ \\t]+to[ \\t]+'+
+ // Both established amounts are supported; keep pending notices unconfirmed.
+ const units = '(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)';
+ const currency = '(?:'+labels(profile.currencyAliases)+')';
+ const amountAndCurrency = '(?:'+currency+'[ \\t]+'+units+'|'+units+'[ \\t]+'+currency+')';
+ const outgoing = new RegExp('^\\s*your payment of[ \\t]+'+amountAndCurrency+'[ \\t]+to[ \\t]+'+
    '[^.!?\\r\\n]{1,120}[ \\t]+has been completed(?=[.!? \\t])','iu').exec(body);
  if (outgoing && outgoing[0].length <= id.index) return true;
  // Recognize currency-first reversal evidence without classifying it as a payment.

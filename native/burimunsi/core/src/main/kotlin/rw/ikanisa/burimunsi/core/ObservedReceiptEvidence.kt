@@ -16,8 +16,11 @@ object ObservedReceiptEvidence {
             !valid(profile.currencyAliases) || !valid(profile.transactionIdPrefixes)) return false
         val ref = Regex("""(?<![\p{L}\p{N}_])(?:${labels(profile.transactionIdPrefixes)})[ \t:#-]*[A-Z0-9][A-Z0-9_-]{3,63}$boundary""",
             RegexOption.IGNORE_CASE).find(body) ?: return false
-        // Already supported by the parser. Keep generic, unfinished notices unconfirmed.
-        val outgoing = Regex("""^\s*your payment of[ \t]+(?:${labels(profile.currencyAliases)})[ \t]+(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?![\p{L}\p{N}.,_])[ \t]+to[ \t]+[^.!?\r\n]{1,120}[ \t]+has been completed(?=[.!? \t])""",
+        // Both established amounts are supported; keep pending notices unconfirmed.
+        val units = """(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)"""
+        val currency = "(?:"+labels(profile.currencyAliases)+")"
+        val amountAndCurrency = """(?:$currency[ \t]+$units|$units[ \t]+$currency)"""
+        val outgoing = Regex("""^\s*your payment of[ \t]+$amountAndCurrency[ \t]+to[ \t]+[^.!?\r\n]{1,120}[ \t]+has been completed(?=[.!? \t])""",
             RegexOption.IGNORE_CASE).find(body)
         if (outgoing != null && outgoing.range.last < ref.range.first) return true
         val reversal = Regex("""^\s*transaction reversed for[ \t]+(?:${labels(profile.currencyAliases)})[ \t]+(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?=[.!?](?:[ \t\r\n]|$))""",

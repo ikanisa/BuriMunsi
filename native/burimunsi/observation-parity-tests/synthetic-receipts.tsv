@@ -19,3 +19,6 @@ mixed-currency-first	false	Example Money	Your payment of RWF 250 to Example Shop
 currency-first-fractional	false	Example Money	Your payment of RWF 2.50 to Example Shop has been completed. Reference: 12345007.
 currency-first-reversal	true	Example Money	Transaction reversed for RWF 5. Reference: 1234567891.
 fractional-reversal	false	Example Money	Transaction reversed for RWF 5.25. Reference: 1234567891.
+amount-first-debit	true	Example Money	Your payment of 250 RWF to Example Shop has been completed. Reference: 12345007.
+amount-first-pending	false	Example Money	Your payment of 250 RWF to Example Shop is pending. Reference: 12345007.
+amount-first-fractional	false	Example Money	Your payment of 2.50 RWF to Example Shop has been completed. Reference: 12345007.

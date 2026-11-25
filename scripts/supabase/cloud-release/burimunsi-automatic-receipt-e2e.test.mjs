@@ -241,10 +241,14 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
   payer_name_raw:'Example Shop',payer_identifier_raw:null,wallet_balance_after_raw:null,
   evidence:{incoming_success:outgoingClause,principal:'Your payment of RWF 250',transaction_id:'FT Id: 12345007',
    transaction_datetime:null,payer:'to Example Shop',fee:null,wallet_balance_after:null}};
+ const amountFirstClause=outgoingClause.replace('RWF 250','250 RWF');
+ const amountFirstBody=outgoingBody.replace(outgoingClause,amountFirstClause);
+ const amountFirst={...outgoing,fee_amount_raw:'7',evidence:{...outgoing.evidence,
+  incoming_success:amountFirstClause,principal:'Your payment of 250 RWF',fee:'Fee 7 RWF'}};
  const samples=[
   [masked.rawBody,{...providerOutput(masked.rawBody),schema_version:NATIVE_AUTO_SCHEMA_VERSION,wallet_effect:'credit'},{state:'completed',relation:'accepted'}],
   [outgoingBody+' Fee 7 RWF.',{...outgoing,fee_amount_raw:'7',evidence:{...outgoing.evidence,fee:'Fee 7 RWF'}},{state:'completed',relation:'accepted'}],
-  [outgoingBody+' Fee 7 RWF. Thank you.',{...outgoing,fee_amount_raw:'7',evidence:{...outgoing.evidence,fee:'Fee 7 RWF'}},{state:'completed',relation:'duplicate'}],
+  [amountFirstBody+' Fee 7 RWF. Thank you.',amountFirst,{state:'completed',relation:'duplicate'}],
  ];
  const saved=[],captured=[archivedInput];
  for(const [index,[body,output,result]] of samples.entries()){
