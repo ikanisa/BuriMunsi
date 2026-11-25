@@ -1,4 +1,4 @@
-// A01 private candidate. Evidence is intake eligibility only, never a payment.
+// Evidence is intake eligibility only, never a payment.
 // Unfamiliar text is unconfirmed, rather than assumed nonfinancial.
 import { escape } from './native-auto-source.js';
 
@@ -17,8 +17,20 @@ export function hasPositiveReceiptEvidence(body, profile) {
  const start = new RegExp('^\\s*(?:'+labels([...profile.incomingPrefixes,...transactionStart])+')'+boundary,'iu');
  const amount = new RegExp('(?<![\\p{L}\\p{N}.,_])(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)[ \\t]+(?:'+labels(profile.currencyAliases)+')'+boundary,'iu');
  const reference = new RegExp('(?<![\\p{L}\\p{N}_])(?:'+labels(profile.transactionIdPrefixes)+')[ \\t:#-]*[A-Z0-9][A-Z0-9_-]{3,63}'+boundary,'iu');
- const first = start.exec(body), money = amount.exec(body), id = reference.exec(body);
- if (!first || !money || !id || first[0].length > money.index || money.index+money[0].length > id.index)
+ const id = reference.exec(body);
+ if (!id) return false;
+ // This established outgoing receipt puts the currency before the amount.
+ // A generic "Your payment of" notice without its completion clause is not proof.
+ const outgoing = new RegExp('^\\s*your payment of[ \\t]+(?:'+labels(profile.currencyAliases)+')[ \\t]+'+
+   '(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?![\\p{L}\\p{N}.,_])[ \\t]+to[ \\t]+'+
+   '[^.!?\\r\\n]{1,120}[ \\t]+has been completed(?=[.!? \\t])','iu').exec(body);
+ if (outgoing && outgoing[0].length <= id.index) return true;
+ // Recognize currency-first reversal evidence without classifying it as a payment.
+ const reversal = new RegExp('^\\s*transaction reversed for[ \\t]+(?:'+labels(profile.currencyAliases)+')[ \\t]+'+
+   '(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?=[.!?](?:[ \t\r\n]|$))','iu').exec(body);
+ if (reversal && reversal[0].length <= id.index) return true;
+ const first = start.exec(body), money = amount.exec(body);
+ if (!first || !money || first[0].length > money.index || money.index+money[0].length > id.index)
   return false;
  // A prefix followed by prose is not sufficient (e.g. "Received your offer").
  return /^\s*(?:(?:accepted|processed)\b[ \t.:;-]*)?[ \t.:;-]*$/iu.test(body.slice(first[0].length,money.index));

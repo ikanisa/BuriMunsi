@@ -239,14 +239,10 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
   payer_name_raw:'Example Shop',payer_identifier_raw:null,wallet_balance_after_raw:null,
   evidence:{incoming_success:outgoingClause,principal:'Your payment of RWF 250',transaction_id:'FT Id: 12345007',
    transaction_datetime:null,payer:'to Example Shop',fee:null,wallet_balance_after:null}};
- const notice={...outgoing,event_kind:'other',wallet_effect:'none',payment_outcome:'unknown',transaction_id_raw:null,
-  principal_amount_raw:null,currency_raw:null,payer_name_raw:null,
-  evidence:{incoming_success:null,principal:null,transaction_id:null,transaction_datetime:null,payer:null,fee:null,wallet_balance_after:null}};
  const samples=[
   [masked.rawBody,{...providerOutput(masked.rawBody),schema_version:NATIVE_AUTO_SCHEMA_VERSION,wallet_effect:'credit'},{state:'completed',relation:'accepted'}],
   [outgoingBody,outgoing,{state:'completed',relation:'accepted'}],
   [outgoingBody+' Thank you.',outgoing,{state:'completed',relation:'duplicate'}],
-  ['Our services are available today.',notice,{state:'non_payment'}],
  ];
  const saved=[],captured=[archivedInput];
  for(const [index,[body,output,result]] of samples.entries()){
@@ -266,7 +262,23 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
   assert.deepEqual(await flow.parser.process(source.sourceId),result);
   assert.deepEqual(await flow.parser.process(source.sourceId),result);
  }
- assert.deepEqual(flow.counts(),{providerCalls:4,externalFetches:0});
+ const custodyCounts=async()=>(await f.client.query(`SELECT
+   (SELECT count(*)::int FROM private.burimunsi_unresolved_observations) AS observations,
+   (SELECT count(*)::int FROM burimunsi.raw_sms) AS sms,
+   (SELECT count(*)::int FROM private.storage_objects) AS storage,
+   (SELECT count(*)::int FROM private.burimunsi_auto_sms_jobs) AS jobs`)).rows[0];
+ const admittedBeforeRejections=await custodyCounts();
+ for(const [rawBody,code] of [
+   ['Our services are available today.','unsupported_receipt'],
+   ['Entry ZETA Q7 has settled.','unsupported_receipt'],
+   ['Your OTP is 123456.','security_message_not_retained'],
+   [outgoingBody+' Verification code 123456.','security_message_not_retained'],
+   ['Your payment of RWF 250 to Example Shop is pending. FT Id: 12345099.','unsupported_receipt']]){
+  const response=await flow.route('',{...masked,requestId:randomUUID(),sourceKey:sha(randomUUID()),rawBody},422);
+  assert.deepEqual(response,{contractVersion:'burimunsi.native.v1',ok:false,error:{code}});
+  assert.deepEqual(await custodyCounts(),admittedBeforeRejections);
+ }
+ assert.deepEqual(flow.counts(),{providerCalls:3,externalFetches:0});
  const {rows:payments}=await f.client.query(`SELECT id,direction,amount_rwf::int,provider_reference,allocation_state
   FROM burimunsi.payments ORDER BY direction,provider_reference`);
  assert.deepEqual(payments,[
@@ -278,18 +290,18 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
   WHERE source_id=ANY($1::text[]) ORDER BY array_position($1::text[],source_id)`,[saved]);
  assert.deepEqual(jobs,[
   {state:'completed',payment_id:saved[0],transaction_id:null},{state:'completed',payment_id:saved[1],transaction_id:null},
-  {state:'completed',payment_id:saved[1],transaction_id:null},{state:'non_payment',payment_id:null,transaction_id:null},
+  {state:'completed',payment_id:saved[1],transaction_id:null},
  ]);
  assert.deepEqual((await f.client.query(`SELECT (SELECT count(*) FROM app.ledger_entries)::int ledger,
   (SELECT count(*) FROM app.payments)::int legacy,(SELECT count(*) FROM app.momo_transactions)::int canon,
   (SELECT count(*) FROM private.burimunsi_payment_sms_obligations)::int notices`)).rows,
   [{ledger:0,legacy:0,canon:1,notices:0}]);
- const ids=[archived.sourceId,...saved],statuses=['parsed','parsed','parsed','duplicate','parsed'];
+ const ids=[archived.sourceId,...saved],statuses=['parsed','parsed','parsed','duplicate'];
  const statusesResponse=await flow.route('/processing-status',{sourceIds:ids});
  assert.deepEqual(statusesResponse.statuses,ids.map((sourceId,i)=>({sourceId,status:statuses[i],canRetry:false})));
  await f.client.query("INSERT INTO private.burimunsi_operator_approvals VALUES($1,'principal','admin',true,ARRAY['records.read','sms.read'],NULL,'admin')",[group]);
  const admin=async (collection=group)=>f.rpc('burimunsi_admin_payment_observation_outcomes',[collection,ids],['text','text[]'],'http_admin');
- assert.deepEqual(await admin(),ids.map((sourceId,i)=>({sourceId,processing:i===4?'non_payment':statuses[i],
+ assert.deepEqual(await admin(),ids.map((sourceId,i)=>({sourceId,processing:statuses[i],
   paymentReference:null,payerStatus:null,payerReason:null})));
  await assert.rejects(admin('another-group'),/scope denied/);
  const proof=captured.map(input=>({sourceKey:input.sourceKey,bodySha256:sha(input.rawBody),rawSender:input.rawSender,
@@ -929,7 +941,7 @@ test('the page custody barrier verifies all ten journals in two statements after
  const f=await startPayerFixture(t,{groupId:group,memberId:member,phoneNumber:phone,beforeNoticeMigration:client=>installNativeChain(client,group)});
  const flow=receiptFixture(f),targets=[],inputs=[];
  for(let i=0;i<10;i++){
-  const input={...fullWire(),rawBody:'Synthetic receipt '+i,requestId:randomUUID(),sourceKey:sha('page-key '+i)};
+  const input={...fullWire(),rawBody:`You have received 1,000 RWF from Example Payer. FT Id: 1234510${i}.`,requestId:randomUUID(),sourceKey:sha('page-key '+i)};
   inputs.push(input);
   const {sourceId}=await flow.route('',input);
   const {object_key:key,object_sha256:hash,principal_user_id:ownerId}=(await f.client.query(

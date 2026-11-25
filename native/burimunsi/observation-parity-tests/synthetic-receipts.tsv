@@ -13,3 +13,9 @@ sender-trailing-space	false	Example Money 	Received 250 RWF. Reference: 1234.
 decimal	false	Example Money	Received 2.50 RWF. Reference: 123401.
 amount-suffix	false	Example Money	Received 250 RWFX. Reference: 1234.
 reference-prefix	false	Example Money	Received 250 RWF. NotReference: 1234.
+currency-first-debit	true	Example Money	Your payment of RWF 250 to Example Shop has been completed. Reference: 12345007.
+unfinished-debit	false	Example Money	Your payment of RWF 250 to Example Shop is pending. Reference: 12345007.
+mixed-currency-first	false	Example Money	Your payment of RWF 250 to Example Shop has been completed. Reference: 12345007. OTP 123456.
+currency-first-fractional	false	Example Money	Your payment of RWF 2.50 to Example Shop has been completed. Reference: 12345007.
+currency-first-reversal	true	Example Money	Transaction reversed for RWF 5. Reference: 1234567891.
+fractional-reversal	false	Example Money	Transaction reversed for RWF 5.25. Reference: 1234567891.
