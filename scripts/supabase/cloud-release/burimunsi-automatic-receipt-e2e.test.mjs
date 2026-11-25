@@ -14,6 +14,8 @@ import {installNativeChain,installHandsetInventory,nativeRuntime,nativeActor,uui
 import {assignPayment,readPaymentsHome,readPaymentAnalysisRows,PAYMENT_ANALYSIS_LIMIT} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-payments.js';
 import {lockCollectMutation} from '../../../supabase/functions/_shared/postgres-mutation-lock.js';
 import {body as stripFraming} from './migrations.mjs';
+import {adminBuriMunsiPayments} from '../../../supabase/functions/_shared/domain/admin_burimunsi_payments.js';
+import {adminAccountSession} from '../../../supabase/functions/_shared/domain/admin_session.js';
 import {readPaymentSmsEvidence} from '../../../supabase/functions/_shared/domain/admin_burimunsi_observations.js';
 import {compileSql} from '../../../supabase/functions/_shared/postgres-compatibility-sql.js';
 import {validateProviderProfile,MOMO_SCHEMA_VERSION} from '../../../supabase/functions/_shared/domain/momo_pipeline.js';
@@ -241,8 +243,8 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
    transaction_datetime:null,payer:'to Example Shop',fee:null,wallet_balance_after:null}};
  const samples=[
   [masked.rawBody,{...providerOutput(masked.rawBody),schema_version:NATIVE_AUTO_SCHEMA_VERSION,wallet_effect:'credit'},{state:'completed',relation:'accepted'}],
-  [outgoingBody,outgoing,{state:'completed',relation:'accepted'}],
-  [outgoingBody+' Thank you.',outgoing,{state:'completed',relation:'duplicate'}],
+  [outgoingBody+' Fee 7 RWF.',{...outgoing,fee_amount_raw:'7',evidence:{...outgoing.evidence,fee:'Fee 7 RWF'}},{state:'completed',relation:'accepted'}],
+  [outgoingBody+' Fee 7 RWF. Thank you.',{...outgoing,fee_amount_raw:'7',evidence:{...outgoing.evidence,fee:'Fee 7 RWF'}},{state:'completed',relation:'duplicate'}],
  ];
  const saved=[],captured=[archivedInput];
  for(const [index,[body,output,result]] of samples.entries()){
@@ -279,6 +281,14 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
   assert.deepEqual(await custodyCounts(),admittedBeforeRejections);
  }
  assert.deepEqual(flow.counts(),{providerCalls:3,externalFetches:0});
+ const [fee]=(await f.client.query(`SELECT a.output_json::jsonb->>'fee_amount_raw' AS fee,
+   p.amount_rwf::text AS recorded_principal
+   FROM private.burimunsi_auto_sms_jobs j JOIN burimunsi.payments p
+   ON p.sms_source_id=j.source_id AND p.collection_id=j.collection_id
+   JOIN app.momo_parse_attempts a ON a.id=j.attempt_id::text AND a.raw_sms_id=j.source_id
+   WHERE j.source_id=$1 AND j.collection_id=$2`,[saved[1],group])).rows;
+ assert.deepEqual(fee,{fee:'7',recorded_principal:'250'});
+ t.diagnostic('W02: RWF 7 fee retained separately as evidence; recorded outgoing principal remains exactly RWF 250.');
  const {rows:payments}=await f.client.query(`SELECT id,direction,amount_rwf::int,provider_reference,allocation_state
   FROM burimunsi.payments ORDER BY direction,provider_reference`);
  assert.deepEqual(payments,[
@@ -378,6 +388,14 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
  await owner(sql=>allocate(sql,archivedPayment)); // already assigned before the allocation notification feature
  await f.client.query(allocation);
  assert.equal(await count(),0);
+ const paymentSnapshot=async()=>(await f.client.query(`SELECT id,direction,provider_reference,amount_rwf::text AS amount,
+  sms_source_id,member_id,allocation_state,version::text FROM burimunsi.payments WHERE collection_id=$1 ORDER BY id`,[group])).rows;
+ const beforeAllocation=await paymentSnapshot();
+ const separate=beforeAllocation.filter(row=>row.amount==='1000'&&row.direction==='incoming');
+ assert.equal(separate.length,3);
+ assert.equal(new Set(separate.map(row=>row.provider_reference)).size,3);
+ assert.equal(new Set(separate.map(row=>row.sms_source_id)).size,3);
+ assert.ok(separate.some(row=>row.id===source.sourceId&&row.member_id===null&&row.version==='1'));
  await assert.rejects(owner(async sql=>{await allocate(sql,source.sourceId);throw Error('rolled back allocation');}),/rolled back allocation/);
  assert.equal(await count(),0);
  await owner(sql=>allocate(sql,saved[1])); // outgoing
@@ -399,17 +417,27 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
  } finally {await peer.end();}
  await assert.rejects(owner(sql=>allocate(sql,source.sourceId)),error=>error.code==='payment_changed');
  assert.equal(await count(),2);
+ const fixed=await paymentSnapshot();
+ const outgoingBefore=beforeAllocation.find(row=>row.id===saved[1]);
+ assert.deepEqual(fixed.find(row=>row.id===saved[1]),{...outgoingBefore,member_id:differentMember,allocation_state:'allocated',version:'2'});
+ const incomingBefore=beforeAllocation.find(row=>row.id===source.sourceId);
+ assert.deepEqual(fixed.find(row=>row.id===source.sourceId),{...incomingBefore,member_id:differentMember,allocation_state:'allocated',version:'2'});
  assert.deepEqual(await worker.drain(),{status:'complete',processed:1,outcome:'unknown'});
  assert.deepEqual(worker.requests,['POST']);
  assert.equal(worker.submitted.to,phone);
  assert.ok(worker.submitted.text.includes('1,000 RWF'));
  assert.ok(!worker.submitted.text.includes('2,000'));
  assert.deepEqual(await receiptStatus(source.sourceId),{status:'unknown',reason:'gateway_unconfirmed'});
+ assert.deepEqual(await paymentSnapshot(),fixed);
+ assert.equal(await count(),2);
  await worker.carrierDelivered();
  assert.deepEqual(await worker.drain(),{status:'complete',processed:1,outcome:'accepted',gateway_state:'delivered'});
  assert.deepEqual(await worker.drain(),{status:'complete',processed:0});
  assert.deepEqual(worker.requests,['POST','GET']);
  assert.deepEqual(await receiptStatus(source.sourceId),{status:'delivered',reason:null});
+ assert.deepEqual(await paymentSnapshot(),fixed);
+ assert.equal(await count(),2);
+ t.diagnostic('W06: three equal amounts with distinct references remain distinct. Lost delivery acknowledgement and carrier-status inquiry leave payment rows and notice count unchanged.');
  await worker.complete();
  await t.test('an owned PostgreSQL restore preserves standalone SMS custody and allocation delivery without replay', async t=>{
   // Both databases are test-owned, under the same fixture PostgreSQL process
@@ -595,6 +623,12 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
   await f.client.query("DELETE FROM burimunsi.payments WHERE collection_id=$1 AND id LIKE 'f06-index-plan-%'",[group]);
   assert.equal(await fetch('absent-payment'),null);
   assert.equal(await fetch(source.sourceId,'another-group'),null);
+  // The owned fixture's SMS scope seam models current operator approval.
+  const revoked=await f.client.query("UPDATE private.burimunsi_operator_approvals SET active=false WHERE collection_id=$1 AND active",[group]);
+  assert.equal(revoked.rowCount,1);
+  await assert.rejects(fetch(),{code:'42501'});
+  await f.client.query("UPDATE private.burimunsi_operator_approvals SET active=true WHERE collection_id=$1",[group]);
+  assert.deepEqual(await fetch(),detail);
   assert.deepEqual(await run(tx=>tx.unsafe('SELECT * FROM private.burimunsi_payment_sms_evidence_rows($1,$2,$3)',
    [group,source.sourceId,saved[1]])),[]);
   await f.client.query("DELETE FROM app.admin_grants WHERE permission='payments.read'");
@@ -738,6 +772,15 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
   t.diagnostic('Default PG indexed collection plan: '+indexes.join(',')+'; '+ms+'ms at '+cap.rows.length+' visible rows and 15001 other-group rows');
 
   assert.equal(cap.rows.length,PAYMENT_ANALYSIS_LIMIT);
+  const independentCap=(await f.client.query(`SELECT
+   coalesce(sum(amount_rwf) FILTER(WHERE direction='incoming'),0)::text AS incoming,
+   coalesce(sum(amount_rwf) FILTER(WHERE direction='outgoing'),0)::text AS outgoing,
+   count(*)::int AS count FROM burimunsi.payments WHERE collection_id=$1`,[group])).rows[0];
+  const exactCap=Object.fromEntries(['incoming','outgoing'].map(direction=>[direction,
+   cap.rows.filter(row=>row.direction===direction).reduce((sum,row)=>sum+cap.amounts.get(row.id),0n).toString()]));
+  assert.deepEqual({...exactCap,count:cap.rows.length},independentCap);
+  assert.ok(BigInt(independentCap.incoming)>BigInt(Number.MAX_SAFE_INTEGER));
+  t.diagnostic('W02: SQL sums matched both directions at the inclusive cap, with the other collection excluded.');
   t.diagnostic('Co-located PG capped reader including row decode: '+Math.round(performance.now()-start)+'ms at '+cap.rows.length+' rows');
   await seed(group,'analysis-over-limit','1');
   await assert.rejects(scoped({q:'No existing match'}),{status:503,code:'payment_analysis_scope_too_large'});
@@ -869,6 +912,90 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
    if(two)await two.complete();
    await one.complete();
   }
+ });
+ await t.test('two tabs recover one committed browser allocation after a lost response',async()=>{
+  const fixtureOrigin='https://burimunsi-admin.ikanisa.com';
+  const a=nativeActor(group),requestId=randomUUID(),browserSession=randomUUID(),secondSession=randomUUID();
+  const token='a'.repeat(64),tokenHash=sha(token),peer=new pg.Client({
+   host:f.cluster.socket,port:f.cluster.port,database:'postgres',user:f.cluster.initialUser});
+  const original=fullWire(),ref='987654338';
+  const input={...original,requestId:randomUUID(),sourceKey:sha(ref),rawBody:original.rawBody.replace('987654322',ref)};
+  const held=await flow.route('',input);
+  flow.provider({...providerOutput(input.rawBody),schema_version:NATIVE_AUTO_SCHEMA_VERSION,wallet_effect:'credit'});
+  assert.deepEqual(await flow.parser.process(held.sourceId),{state:'completed',relation:'accepted'});
+  const paymentId=held.sourceId,path='/api/admin/burimunsi/payments/'+paymentId;
+  // The owned fixture substitutes only the browser identity resolver and
+  // minimal journal schema. The production route, mutation and read-back SQL run.
+  await f.client.query(`CREATE TABLE IF NOT EXISTS private.burimunsi_command_receipts (
+   collection_id text NOT NULL,actor_id uuid NOT NULL,request_id uuid NOT NULL,session_id uuid NOT NULL,
+   operation text NOT NULL,fingerprint text NOT NULL,response jsonb NOT NULL,created_at bigint NOT NULL,
+   PRIMARY KEY(collection_id,actor_id,request_id));
+   GRANT SELECT,INSERT,UPDATE ON private.burimunsi_command_receipts TO collect_runtime`);
+  const gate=()=>{let release;const wait=new Promise(resolve=>{release=resolve});return {release,wait};};
+  const beforeCommit=gate(),commitPermission=gate();
+  let permitted=true,posts=0;
+  const envFor=(client,session,lost=false)=>{
+   const live=()=>({adminId:'synthetic-owner',principalId:a.principalUserId,accountId:a.accountId,authVersion:1,
+    collectionId:group,sessionId:session,publicId:session,proofId:session,verifiedAt:Math.floor(Date.now()/1000),expiresAt:Math.floor(Date.now()/1000)+3600,
+    name:'Fixture operator',permissions:['payments.read'],phone,operatorRole:'admin',storageRole:'owner',
+    accountVersion:1,credentialVersion:1});
+   const rr=nativeRuntime(client,group);
+   const wrap=fn=>tx=>fn({unsafe:(sql,args)=>{
+    if(sql.includes('FROM private.burimunsi_browser_pin_session')){
+     assert.equal(args[1],tokenHash);assert.equal(args[3],a.accountId);assert.equal(args[5],session);
+     return Promise.resolve([{role:'admin',can_allocate:permitted}]);
+    }
+    return tx.unsafe(sql,args);
+   }});
+   const db={applicationWork:{assert:async()=>{}},setBrowserPasscodeAccount(){},context:async()=>{},readContext:async()=>{},
+    prepare:sql=>({bind:(...args)=>({first:async()=>{
+     assert.match(sql,/burimunsi_browser_pin_session/);assert.deepEqual(args,[group,tokenHash,fixtureOrigin]);return {result:live()};
+    }})}),
+    withLockedReadSnapshot:fn=>rr.run('http_admin',{readOnly:true})(wrap(fn)),
+    transaction:async fn=>{
+     posts++;
+     const result=await rr.run('http_admin')(wrap(async tx=>{
+      const value=await fn(tx);
+      if(lost){beforeCommit.release();await commitPermission.wait;}
+      return value;
+     }));
+     if(lost)throw Error('synthetic lost response after confirmed database commit');
+     return result;
+    }};
+   return {DB:db,BURIMUNSI_PRODUCT_MODE:'standalone',BURIMUNSI_COLLECTION_ID:group,ADMIN_ORIGINS:fixtureOrigin};
+  };
+  const request=(kind,key=requestId,body,csrf)=>new Request(fixtureOrigin+path+kind,
+    {method:body?'POST':'GET',headers:{Origin:fixtureOrigin,Cookie:'__Host-collect_admin='+token,'Idempotency-Key':key,
+      ...(body?{'Content-Type':'application/json','X-Collect-CSRF':csrf,'X-Collect-Requested-With':'collect-admin'}:{})},
+     ...(body?{body:JSON.stringify(body)}:{})});
+  const lookup=async(env,key=requestId)=>await (await adminBuriMunsiPayments(request('/allocation-receipt',key),env)).json();
+  await peer.connect();
+  let sent;
+  try{
+   await peer.query('SET ROLE postgres');
+   const tab1=envFor(f.client,browserSession,true),tab2=envFor(peer,browserSession);
+   const who=await adminAccountSession(request('/allocation-receipt'),tab1);
+   sent=assert.rejects(adminBuriMunsiPayments(request('/allocate',requestId,{memberId:differentMember,expectedVersion:1},who.csrfToken),tab1),
+    error=>error.status===503);
+   await Promise.race([beforeCommit.wait,sent.then(()=>{throw Error('allocation ended before commit barrier');})]);
+   assert.deepEqual(await lookup(tab2),{state:'unconfirmed',requestId});
+   commitPermission.release();await sent;
+   const refreshed=envFor(peer,browserSession);
+   assert.deepEqual(await lookup(refreshed),{state:'committed',requestId,receipt:{paymentId,memberId:differentMember,version:2}});
+   assert.deepEqual(await lookup(envFor(peer,secondSession)),{state:'unconfirmed',requestId});
+   permitted=false;
+   await assert.rejects(lookup(refreshed),error=>error.status===403);
+   permitted=true;
+   await assert.rejects(adminBuriMunsiPayments(request('/allocate',requestId,{memberId:member,expectedVersion:1},who.csrfToken),refreshed),
+    error=>error.status===409);
+   const {rows:[state]}=await peer.query(`SELECT
+    (SELECT count(*)::int FROM private.burimunsi_command_receipts WHERE request_id=$1) AS commands,
+    (SELECT count(*)::int FROM private.burimunsi_allocation_receipts WHERE payment_id=$2) AS notices,
+    (SELECT version::int FROM burimunsi.payments WHERE id=$2) AS version,
+    (SELECT count(*)::int FROM app.ledger_entries WHERE collection_id=$3) AS legacy_credits`,[requestId,paymentId,group]);
+   assert.deepEqual(state,{commands:1,notices:1,version:2,legacy_credits:0});
+   assert.equal(posts,2); // First write and deliberate conflicting request; GETs never retry.
+  } finally {commitPermission.release();if(sent)await sent.catch(()=>{});await peer.end();}
  });
 });
 
