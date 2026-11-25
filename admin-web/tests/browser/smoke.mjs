@@ -447,6 +447,21 @@ try {
   await mobile.page.getByRole('main').waitFor();
   await mobile.context.close();
 
+  // The tablet layout should keep the working surfaces usable without opening
+  // any shared Collect reconciliation or financial-write routes.
+  const tablet = await open({width:820,height:1180},'block');
+  await tablet.context.addCookies(cookies);
+  try {
+    for(const [entry,name] of [['/admin','Home'],['/admin/members','Members'],['/admin/payments','Payments'],
+        ['/admin/sms-receipts','M-Money SMS'],['/admin/admin-users','Team access'],['/admin/security','Account security']]){
+      await tablet.page.goto(origin+entry);
+      await tablet.page.getByRole('heading',{name,exact:true}).first().waitFor();
+      assert(await tablet.page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),entry);
+    }
+    await tablet.page.goto(origin+'/admin/reconciliations');
+    await tablet.page.getByRole('heading',{name:'Access unavailable',exact:true}).waitFor();
+  } finally {await tablet.context.close();}
+
   await page.getByRole('button', { name: /^Account:/ }).click();
   await page.getByRole('button', { name: 'Sign out', exact: true }).click();
   await page.getByRole('heading', { name: 'Welcome to BuriMunsi' }).waitFor();
@@ -490,7 +505,7 @@ try {
   const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'admin_home_reports_scoped_sms_health', 'retired_passcode_bookmark_returns_to_overview', 'three_daily_links_and_no_redundant_sidebar_search', 'canonical_payment_direction_filter_and_clear', 'inline_inbox_preserves_financial_table_and_390px_scroll', 'protected_sms_deep_link', 'filtered_member_detail_and_return', 'single_mobile_number_in_member_roster_and_detail', 'payment_details_link_to_authorized_sms_evidence', 'payment_without_source_and_320px_reflow', 'sms_read_failure_retry',
       'payer_sms_empty_and_reported_delivered', 'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
       'retired_authenticator_bookmark_preserves_safe_destination', 'missing_scoped_admin_identity_removes_controls', 'session_failure_and_recovery_require_server_authority', 'expired_request_and_history_return_require_sign_in',
-      'mobile_drawer_traps_and_restores_focus_and_reflows', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, ...authorityChecks, 'no_unexpected_auth_request', 'identity_version_only_on_session_exchanges'];
+      'mobile_drawer_traps_and_restores_focus_and_reflows', 'tablet_core_routes_fit_viewport_and_collect_reconciliation_stays_closed', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, ...authorityChecks, 'no_unexpected_auth_request', 'identity_version_only_on_session_exchanges'];
   console.log(JSON.stringify({status: 'pass', environment: 'synthetic_loopback', origin, count: checks.length, checks,
     sessionExchange: {mode: legacySessions ? 'legacy' : 'negotiated', signInRequests: loginRequests.length, verificationRequests: verificationRequests.length}}, null, 2));
 } finally {
