@@ -10,7 +10,7 @@ import rw.ikanisa.burimunsi.storage.SecureStore
 /** Keystore-backed, atomic and bounded. This store has no network or posting path. */
 internal class PduCorrelationStore(context:Context,private val byteLimit:Int=MAX_BYTES,private val pduLimit:Int=MAX_PDUS,private val rowLimit:Int=MAX_ROWS) {
     private val store=SecureStore(context.applicationContext,"pdu-correlation")
-    companion object { private val lock=Any();private const val MAX_PDUS=64;private const val MAX_ROWS=256;private const val MAX_BYTES=1_500_000 }
+    companion object { private val lock=Any();private const val MAX_PDUS=64;private const val MAX_UNRESOLVED_OWNERS=32;private const val MAX_ROWS=256;private const val MAX_BYTES=1_500_000 }
     init{require(byteLimit in 1..MAX_BYTES&&pduLimit in 1..MAX_PDUS&&rowLimit in 1..MAX_ROWS)}
     private fun exact(v:JSONObject,keys:Set<String>)=checkContract(v.keys().asSequence().toSet()==keys,"correlation_store_unavailable")
     private fun owner(v:JSONObject):ObservationOwner {exact(v,setOf("collectionId","accountId"));return ObservationOwner(v.getString("collectionId"),v.getString("accountId"))}
@@ -33,8 +33,11 @@ internal class PduCorrelationStore(context:Context,private val byteLimit:Int=MAX
             v.getLong("receivedAtMs"),nullInt(v,"subscriptionId")).also{checkContract(PduInboxCorrelation.valid(it),"correlation_store_unavailable")}
     }
     private fun readUnlocked():CorrelationState {
-        val raw=store.read()?:return CorrelationState();val root=JSONObject(raw);exact(root,setOf("version","pdus","inbox","conflictedSources","conflictedWitnesses","saturated"))
-        checkContract(root.getInt("version")==1,"correlation_store_unavailable")
+        val raw=store.read()?:return CorrelationState();val root=JSONObject(raw)
+        val keys=setOf("version","pdus","inbox","conflictedSources","conflictedWitnesses","saturated")
+        val version=root.getInt("version")
+        exact(root,if(version==2)keys+"unresolvedPduOwners" else keys)
+        checkContract(version in 1..2,"correlation_store_unavailable")
         val p=root.getJSONArray("pdus");val i=root.getJSONArray("inbox");val c=root.getJSONArray("conflictedSources");val w=root.getJSONArray("conflictedWitnesses")
         checkContract(p.length()<=MAX_PDUS&&i.length()<=MAX_ROWS&&c.length()<=MAX_ROWS&&w.length()<=MAX_PDUS,"correlation_store_unavailable")
         val pdus=(0 until p.length()).map{pdu(p.getJSONObject(it))};val inbox=(0 until i.length()).map{inbox(i.getJSONObject(it))}
@@ -44,7 +47,11 @@ internal class PduCorrelationStore(context:Context,private val byteLimit:Int=MAX
             conflicts.all{Regex("[a-f0-9]{64}").matches(it)}&&witnessConflicts.toSet().size==witnessConflicts.size&&
             witnessConflicts.all{id->pdus.any{it.witnessId==id}},"correlation_store_unavailable")
         checkContract(root.opt("saturated") is Boolean,"correlation_store_unavailable")
-        return CorrelationState(pdus,inbox,conflicts.toSet(),witnessConflicts.toSet(),root.getBoolean("saturated"))
+        val unresolved=if(version==2)root.getJSONArray("unresolvedPduOwners") else JSONArray()
+        checkContract(unresolved.length()<=MAX_UNRESOLVED_OWNERS,"correlation_store_unavailable")
+        val owners=(0 until unresolved.length()).map{owner(unresolved.getJSONObject(it))}
+        checkContract(owners.toSet().size==owners.size&&owners.all{it.valid()},"correlation_store_unavailable")
+        return CorrelationState(pdus,inbox,conflicts.toSet(),witnessConflicts.toSet(),root.getBoolean("saturated"),owners.toSet())
     }
     private fun encode(state:CorrelationState):String {
         val pdus=JSONArray();for(v in state.pdus){val segments=JSONArray();for(s in v.segments)segments.put(JSONObject()
@@ -59,8 +66,10 @@ internal class PduCorrelationStore(context:Context,private val byteLimit:Int=MAX
             .put("receivedAtMs",v.receivedAtMs).put("subscriptionId",v.subscriptionId?:JSONObject.NULL))
         val conflicts=JSONArray();state.conflictedSources.sorted().forEach(conflicts::put)
         val witnesses=JSONArray();state.conflictedWitnesses.sorted().forEach(witnesses::put)
-        return JSONObject().put("version",1).put("pdus",pdus).put("inbox",inbox).put("conflictedSources",conflicts)
-            .put("conflictedWitnesses",witnesses).put("saturated",state.saturated).toString()
+        val unresolved=JSONArray()
+        state.unresolvedPduOwners.sortedWith(compareBy({it.collectionId},{it.accountId})).forEach{unresolved.put(ownerJson(it))}
+        return JSONObject().put("version",2).put("pdus",pdus).put("inbox",inbox).put("conflictedSources",conflicts)
+            .put("conflictedWitnesses",witnesses).put("saturated",state.saturated).put("unresolvedPduOwners",unresolved).toString()
     }
     private fun writeUnlocked(state:CorrelationState) {
         val encoded=encode(state)
@@ -74,6 +83,16 @@ internal class PduCorrelationStore(context:Context,private val byteLimit:Int=MAX
         writeUnlocked(candidate.copy(saturated=false));return true
     }
     fun read():CorrelationState=synchronized(lock){readUnlocked()}
+    /** Incomplete broadcast has no verified inbox row. Retain only a scope
+     * fence so neither an existing nor a later witness can become unique. */
+    fun markUnresolved(owner:ObservationOwner):Boolean=synchronized(lock){
+        checkContract(owner.valid(),"invalid_correlation_evidence")
+        val state=readUnlocked()
+        if(state.saturated)return@synchronized false
+        if(owner in state.unresolvedPduOwners)return@synchronized true
+        commit(state,if(state.unresolvedPduOwners.size>=MAX_UNRESOLVED_OWNERS)null
+            else state.copy(unresolvedPduOwners=state.unresolvedPduOwners+owner))
+    }
     /** Do not retain inbox metadata unless a locally retained PDU can match it. */
     fun recordIfRelevant(value:InboxEvidence):CorrelationWrite?=synchronized(lock){
         checkContract(PduInboxCorrelation.valid(value),"invalid_correlation_evidence")

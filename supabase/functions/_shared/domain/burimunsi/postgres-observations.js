@@ -1,3 +1,4 @@
+import { hasPositiveReceiptEvidence } from './observation-positive-evidence.js';
 // Native observation capture, authority, and audited disclosure.
 import { BuriError, ObservationUploadUnresolved, requirePort } from './errors.js';
 import { canonicalJson, exactKeys, requireRequestId, sha256 } from './values.js';
@@ -271,9 +272,10 @@ export class PostgresNativeObservations {
    HASH.test(input.sourceKey??'')&&input.sourceMode==='catch_up'&&input.complete===false,'invalid_request',400);
   const result=await this.#capture(actor,input,expectedConsentGeneration,ackOnly);
   if(!ackOnly)return {...result,autoProcessing:'held'};
+  check(result.sourceId,'observation_changed',409);
   return {requestId:input.requestId,sourceKey:input.sourceKey,bodySha256:result.bodySha256,
-   state:result.sourceId?'acknowledged':'unconfirmed',sourceId:result.sourceId,
-   autoProcessing:result.sourceId?'held':'unknown',financialEffects:0,retryAllowed:false};
+   state:'acknowledged',sourceId:result.sourceId,
+   autoProcessing:'held',financialEffects:0,retryAllowed:false};
  }
  async #capture(actor, input, heldGeneration, ackOnly) {
   const value = validateObservationInput(input);
@@ -314,7 +316,9 @@ export class PostgresNativeObservations {
   try {
    if(heldGeneration!==null){
     const admitted=await this.authority.read(heldWitness);
-    if(ackOnly&&!admitted)return {sourceId:null,bodySha256:bodySha};
+    // No positive custody witness: the standard error envelope has no
+    // receipt identifiers or body digest. Leave the original command held.
+    if(ackOnly)check(admitted,'observation_changed',409);
    }
    const first=await this.authority.read(async tx=>{
     const prior=await this.find(tx,actor,value.requestId,fingerprint);
@@ -332,10 +336,10 @@ export class PostgresNativeObservations {
      financialEffects: 0,
     };
    }
-   if(ackOnly)return {sourceId:null,bodySha256:bodySha};
+   if(ackOnly)throw new BuriError('observation_changed',409);
    const {initial}=first;
    check(heldGeneration===null||initial.ctx.consentGeneration===heldGeneration,'access_denied',403);
-   check(isObservationCandidate(value, initial.profile), 'unsupported_receipt', 422);
+   check(isObservationCandidate(value, initial.profile) && hasPositiveReceiptEvidence(value.rawBody, initial.profile), 'unsupported_receipt', 422);
    const id = await storageEntity(
     'burimunsi.native.observation.v1',
     actor.principalUserId,

@@ -20,6 +20,26 @@ internal object BuriCapturePolicy {
         val profile=BuriReceiverProfile.current(binding)?:return false
         return ReceiptCandidate.accepts(sender,body,profile)
     }
+    /** Hold legacy rows that do not clear current admission; never retire
+     * solely because a row cannot be confidently classified. */
+    fun positiveQueueEvidence(binding:JSONObject?, row:JSONObject):Boolean {
+        val profile=BuriReceiverProfile.current(binding)?:return false
+        val sender=row.opt("raw_sender") as? String?:return false
+        val body=row.opt("raw_body") as? String?:return false
+        return ReceiptCandidate.accepts(sender,body,profile) &&
+            ObservedReceiptEvidence.isNewCandidate(sender,body,profile)
+    }
+    enum class CaptureEvidence { ELIGIBLE, EXCLUDED, UNCONFIRMED }
+
+    fun captureEvidence(binding:JSONObject?,sender:String,body:String,complete:Boolean=true):CaptureEvidence {
+        val profile=BuriReceiverProfile.current(binding)?:return CaptureEvidence.UNCONFIRMED
+        if (!ObservationCandidate.senderAllowed(sender,profile)) return CaptureEvidence.EXCLUDED
+        if (ObservationCandidate.excludeFromFinancialCensus(sender,body,profile)) return CaptureEvidence.EXCLUDED
+        return if (complete && ReceiptCandidate.accepts(sender,body,profile) &&
+            ObservedReceiptEvidence.isNewCandidate(sender,body,profile)) CaptureEvidence.ELIGIBLE
+        else CaptureEvidence.UNCONFIRMED
+    }
+
     fun routeConfigured(binding: JSONObject?, subscription: Int?): Boolean =
         binding != null && profileReady(binding) && binding.optionalInt("subscription_id") != null &&
         subscription != null && binding.optionalInt("subscription_id") == subscription
@@ -82,9 +102,7 @@ internal object BuriCapturePolicy {
                 body.opt("gateway_binding_version") == binding.opt("version") &&
                 body.opt("subscription_id") == binding.opt("subscription_id") &&
                 captureSourceAllowed(body,binding) &&
-                (body.opt("raw_sender") as? String)?.let{sender->
-                    (body.opt("raw_body") as? String)?.let{text->sourceAllowed(binding,sender,text)}
-                }==true
+                positiveQueueEvidence(binding,body)
         } == true
     } catch (_: Exception) { false }
     /** Inbox observations are synced as incomplete, never as PDU-complete live captures. */
@@ -96,15 +114,5 @@ internal object BuriCapturePolicy {
             !received.isBefore(paired)
         } catch (_:Exception) { false }
         else -> false
-    }
-    fun retain(context: Context, binding: JSONObject?, sender: String, body: String, subscription: Int?): Boolean {
-        if (!routeConfigured(binding, subscription)) return false
-        return if(sourceAllowed(binding,sender,body))true else {
-            val prefs = context.getSharedPreferences("burimunsi_capture_health", Context.MODE_PRIVATE)
-            synchronized(this) {
-                prefs.edit().putLong("rejected_receipt_count", prefs.getLong("rejected_receipt_count", 0) + 1).apply()
-            }
-            false // Never log or retain OTPs, unrelated bodies, phone numbers or parser excerpts.
-        }
     }
 }

@@ -19,7 +19,8 @@ internal data class InboxEvidence(val requestId:String,val owner:ObservationOwne
     override fun toString()="InboxEvidence(redacted)"
 }
 internal data class CorrelationState(val pdus:List<PduEvidence> = emptyList(),val inbox:List<InboxEvidence> = emptyList(),
-    val conflictedSources:Set<String> = emptySet(),val conflictedWitnesses:Set<String> = emptySet(),val saturated:Boolean=false)
+    val conflictedSources:Set<String> = emptySet(),val conflictedWitnesses:Set<String> = emptySet(),val saturated:Boolean=false,
+    val unresolvedPduOwners:Set<ObservationOwner> = emptySet())
 internal enum class CorrelationStatus { INCOMPLETE, WAITING, AMBIGUOUS, CORRELATED_UNVERIFIED }
 internal enum class CorrelationWrite { STORED, DUPLICATE, CONFLICT, FULL }
 
@@ -40,12 +41,17 @@ internal object PduInboxCorrelation {
     private fun hex(bytes:ByteArray)=bytes.joinToString(""){"%02x".format(it.toInt() and 255)}
     /** The pinned Collect policy decides structural completeness; it does not authenticate the decoded body. */
     fun capture(witnessId:String,owner:ObservationOwner,installationId:String,profile:ObservationProfile,now:Long,
-        subscriptionId:Int?,format:String?,senders:List<String>,times:List<Long>,bodies:List<String?>,pdus:List<ByteArray>):PduEvidence? {
+        subscriptionId:Int?,format:String?,senders:List<String>,times:List<Long>,bodies:List<String?>,pdus:List<ByteArray>,onIncomplete:(()->Unit)?=null):PduEvidence? {
         if(!id(witnessId)||!owner.valid()||!id(installationId)||!profile.current(now)||subscriptionId!=null&&subscriptionId<0||
             pdus.size !in 1..MAX_SEGMENTS||pdus.any{it.isEmpty()||it.size>512}||
             senders.size!=pdus.size||times.size!=pdus.size||bodies.size!=pdus.size)return null
         val assembly=MomoMultipartPolicy.assemble(senders,times,bodies,pdus,format)
         if(!ObservationCandidate.accepts(senders.first(),assembly.body,profile.receipt))return null
+        if(!assembly.complete&&onIncomplete!=null){onIncomplete();return null}
+        // A full decoded message must meet positive intake evidence before
+        // allocating any raw PDU/decoded-body record or content fingerprints.
+        // Runtime callers fence an incomplete observation via metadata only.
+        if(assembly.complete&&!ObservedReceiptEvidence.matches(assembly.body,profile.receipt))return null
         val evidence=PduEvidence(witnessId,owner,installationId,profile.fingerprint(),format?:"unknown",now,subscriptionId,
             pdus.indices.map{i->PduSegmentEvidence(senders[i],times[i],bodies[i],hex(pdus[i]))},
             Values.sha256(assembly.body),digest(pdus),assembly.complete)
@@ -117,7 +123,7 @@ internal object PduInboxCorrelation {
     /** A later collision may change a correlation to ambiguous; it never becomes financial proof. */
     fun status(state:CorrelationState,witnessId:String):CorrelationStatus {
         val pdu=state.pdus.singleOrNull{it.witnessId==witnessId}?:return CorrelationStatus.INCOMPLETE
-        if(state.saturated)return CorrelationStatus.AMBIGUOUS
+        if(state.saturated||pdu.owner in state.unresolvedPduOwners)return CorrelationStatus.AMBIGUOUS
         if(!valid(pdu)||!pdu.structurallyComplete||pdu.subscriptionId==null||pdu.segments.first().serviceCentreMs<=0)return CorrelationStatus.INCOMPLETE
         if(witnessId in state.conflictedWitnesses)return CorrelationStatus.AMBIGUOUS
         val rows=state.inbox.filter{matches(pdu,it)}

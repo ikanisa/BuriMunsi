@@ -3,6 +3,7 @@ package app.cool.mobile.receiver_sms
 import android.content.Context
 import org.json.JSONObject
 import rw.ikanisa.burimunsi.core.ObservationCandidate
+import rw.ikanisa.burimunsi.core.ObservedReceiptEvidence
 import rw.ikanisa.burimunsi.core.ObservationJournal
 import rw.ikanisa.burimunsi.core.ObservationOwner
 import rw.ikanisa.burimunsi.core.ObservationConsentState
@@ -264,9 +265,11 @@ internal class ObservationRecovery(context:Context) {
                 }
             }
             val row=newestBySubscription.values.sortedWith(compareByDescending<PhoneRow>{it.received}.thenByDescending{it.id})
-                .firstOrNull{ObservationLegacyOwnership.classify(app,owner,it.id,it.received,it.sender,it.body,it.sub)!=ObservationLegacyOwnership.Decision.OTHER_SIM}
+                .firstOrNull{!ObservedReceiptEvidence.isNewCandidate(it.sender,it.body,profile.receipt)||
+                    ObservationLegacyOwnership.classify(app,owner,it.id,it.received,it.sender,it.body,it.sub)!=ObservationLegacyOwnership.Decision.OTHER_SIM}
             if(row!=null){
-                if(!ObservationCandidate.accepts(row.sender,row.body,profile.receipt))return@synchronized Latest.Held
+                if(!ObservedReceiptEvidence.isNewCandidate(row.sender,row.body,profile.receipt))
+                    return@synchronized if(current())Latest.Held else Latest.Blocked
                 val key=heldInboxSourceKey(device,owner.collectionId,row.id,row.received)
                 val decision=ObservationLegacyOwnership.classify(app,owner,row.id,row.received,row.sender,row.body,row.sub)
                 if(decision==ObservationLegacyOwnership.Decision.HOLD || decision==ObservationLegacyOwnership.Decision.OTHER_SIM)return@synchronized Latest.Held

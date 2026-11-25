@@ -11,6 +11,7 @@ import rw.ikanisa.burimunsi.core.ObservationConsentState
 import rw.ikanisa.burimunsi.core.ObservationCursor
 import rw.ikanisa.burimunsi.core.ObservationJournal
 import rw.ikanisa.burimunsi.core.ObservationCandidate
+import rw.ikanisa.burimunsi.core.ObservedReceiptEvidence
 import rw.ikanisa.burimunsi.core.ObservationOwner
 import rw.ikanisa.burimunsi.core.ObservationProfile
 import rw.ikanisa.burimunsi.core.ObservationSessionOwner
@@ -160,6 +161,11 @@ internal class ObservationHeldInbox(
      * The secure marker binds the exact envelope before either a first send or a retry. */
     fun recoverMissing(repo:NativeRepository,session:ObservationSessionOwner,consent:ObservationConsentState,profile:ObservationProfile,
         device:String,key:String,request:ObservationReconcileRequest,body:String):Boolean {
+        // A repair may retain the exact reconciled financial receipt only. An
+        // unknown or excluded body must not create a marker or reach transport.
+        if (request.sourceKey != key || request.gatewayEnvelopeId != null ||
+            !ObservedReceiptEvidence.isNewCandidate(request.rawSender, body, profile.receipt) ||
+            Values.sha256(body) != request.bodySha256) return false
         val owner=session.owner
         val installation=MomoGatewayStore(app).existingInstallationId() ?: return false
         if(HeldRecoveryJournal.protects(app,owner,installation,Values.sha256(device),key))return false

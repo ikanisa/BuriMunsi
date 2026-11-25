@@ -7,9 +7,14 @@ internal class ObservationStateStore(context:Context):ObservationJournalStore {
  override fun write(value:ObservationJournalState){check(!fail);Companion.value=value}
 }
 internal class ObservationConfigStore(context:Context){
- fun paused(owner:ObservationOwner)=false
- fun consent(owner:ObservationOwner):ObservationConsentState?=null
- fun profile(owner:ObservationOwner,now:Long):ObservationProfile?=null
- fun setPaused(owner:ObservationOwner,paused:Boolean){}
+ fun paused(owner:ObservationOwner)=isPaused
+ fun consent(owner:ObservationOwner):ObservationConsentState?=if(isPaused) ObservationConsentState(ObservationConsentRevision(false,2),true) else null
+ companion object {
+  var currentProfile:ObservationProfile?=null
+  var isPaused=false
+  fun changeProfile(profile:ObservationProfile?)=ObservationInboxPolicyRevision.changing{currentProfile=profile}
+ }
+ fun profile(owner:ObservationOwner,now:Long):ObservationProfile?=currentProfile?.takeIf{it.current(now)}
+ fun setPaused(owner:ObservationOwner,paused:Boolean)=ObservationInboxPolicyRevision.changing{isPaused=paused}
 }
 internal object ObservationBackground { fun ensure(context:Context){};fun signal(context:Context){} }

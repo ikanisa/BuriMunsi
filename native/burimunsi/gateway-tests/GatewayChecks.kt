@@ -293,6 +293,14 @@ fun main(){
  control.sync();val started=F.jobs;controls=false;scope=null
  control.start();ck("ordinary operator logout preserves previously resumed background receiver",F.jobs>started&&BuriCapturePolicy.uploadsAdmitted(context))
  ck("signed-out operator cannot explicitly Sync",runCatching{control.sync()}.isFailure)
+ val current=F.state!!.getJSONObject("binding")
+ ck("capture distinguishes credential-only, mixed, and ordinary receipt",
+  BuriCapturePolicy.captureEvidence(current,"M-Money","Your verification code is 123456.")==BuriCapturePolicy.CaptureEvidence.EXCLUDED&&
+  BuriCapturePolicy.captureEvidence(current,"M-Money",candidate+" OTP 1234")==BuriCapturePolicy.CaptureEvidence.UNCONFIRMED&&
+  BuriCapturePolicy.captureEvidence(current,"M-Money",candidate)==BuriCapturePolicy.CaptureEvidence.ELIGIBLE)
+ ck("unknown financial format and partial assembly remain unresolved",
+  BuriCapturePolicy.captureEvidence(current,"M-Money","Payment settled for 2000 RWF.")==BuriCapturePolicy.CaptureEvidence.UNCONFIRMED&&
+  BuriCapturePolicy.captureEvidence(current,"M-Money",candidate,false)==BuriCapturePolicy.CaptureEvidence.UNCONFIRMED)
  var opens=0
  val opener:(String)->HttpURLConnection={target->opens++;object:HttpURLConnection(URL(target)){
   override fun connect()=Unit;override fun disconnect()=Unit;override fun usingProxy()=false
@@ -306,6 +314,29 @@ fun main(){
   .put("raw_body","You have received 1000 RWF from EXAMPLE (*****001) at 2026-11-07 12:00:00. Balance: 2000 RWF. FT Id: 123456789.")
  val transport=MomoGatewayHttp(openConnection=opener,uploadAdmission={token,payload->BuriCapturePolicy.uploadRequestAdmitted(context,token,payload)})
  ck("real generated HTTP dispatches current admitted tuple",transport.request("ingest","a".repeat(64),body).getBoolean("ok")&&opens==1)
+ val originals=listOf(
+  "Your verification code is 123456.",
+  "Promo: You have received 1000 RWF in bonus points. FT Id: 098765432.",
+  "You have received a notice on 19 November. Balance guidance uses RWF. FT Id: 098765432."
+ )
+ for((i,text) in originals.withIndex()){
+  val prior=JSONObject(body.toString()).put("raw_body",text)
+  val original=prior.toString()
+  ck("unqualified queue evidence ${i+1} remains unchanged and transport never opens",
+   !BuriCapturePolicy.positiveQueueEvidence(F.state!!.getJSONObject("binding"),prior) &&
+   runCatching{transport.request("ingest","a".repeat(64),prior)}.isFailure&&opens==1&&prior.toString()==original)
+  val id=app.cool.mobile.receiver_sms.MomoGatewayPolicy.captureId(
+   "50000000-0000-4000-8000-000000000001","old-binding","M-Money",text,received,3)
+  val jobs=F.jobs
+  ck("unqualified historical repair ${i+1} creates no queue record or wake",
+   !ObservationLegacyOwnership.repairGateway(context,sourceOwner,101,received,"M-Money",text,null,3,id)&&
+   F.retainedCaptureId==null&&F.jobs==jobs)
+ }
+ val repairId=app.cool.mobile.receiver_sms.MomoGatewayPolicy.captureId(
+  "50000000-0000-4000-8000-000000000001","old-binding","M-Money",candidate,received,3)
+ ck("confirmed financial repair retains the exact original gateway identity",
+  ObservationLegacyOwnership.repairGateway(context,sourceOwner,101,received,"M-Money",candidate,null,3,repairId)&&
+  F.retainedCaptureId==repairId&&F.retainedBodyHash==rw.ikanisa.burimunsi.core.Values.sha256(candidate))
  val inbox=JSONObject().put("gateway_binding_id","old-binding").put("gateway_binding_version",1).put("subscription_id",3)
   .put("raw_sender",body.getString("raw_sender")).put("raw_body",body.getString("raw_body"))
   .put("source_mode","catch_up").put("complete",false).put("inbox_received_at","2026-11-02T00:00:00Z")

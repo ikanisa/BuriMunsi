@@ -21,6 +21,7 @@ class SecureStore(context:Context,private val name:String){
   fun reset(){data.clear();unreadable.clear();readCounts.clear();beforeDirectoryRead=null}
  }
  fun read():String?{readCounts[name]=(readCounts[name]?:0)+1;check(name !in unreadable);return data[name]}
+ fun readWithoutRepair():String? = read()
  fun write(value:String){check(name !in unreadable);data[name]=value}
  fun clear(){data.remove(name)}
 }

@@ -18,6 +18,7 @@ fun main(){
   val item=SmsObservation(java.util.UUID.randomUUID().toString(),"SyntheticSender",body,"catch_up",false,time,null,time,null)
   check(journal.append(owner,ObservationSourceIdentity.inbox(installation,owner,row),row,item,profile,now)==ObservationAppend.STORED);return item
  }
+ ObservationConfigStore.changeProfile(profile)
  NativeRepository.switch(a);val first=put(a,1)
  test("queue preview and body search are local and owner scoped"){
   val view=ObservationGateway.queued(context,"")!!;check(view.items==listOf(QueuedObservationRow(first.requestId,"SyntheticSender",time,body)))
@@ -54,6 +55,48 @@ fun main(){
   check(!ObservationGateway.publishQueued(context,updated){shown=true}&&!shown)
   val remaining=ObservationGateway.queued(context,"")!!;check(remaining.items.single().id==second.requestId)
   check(ObservationGateway.publishQueued(context,remaining){shown=true}&&shown)
+ }
+ test("retained pre-filter messages stay in custody and cannot be previewed or searched"){
+  val saved=ObservationStateStore.value
+  fun seed(needle:String,body:String)=ObservationEntry(a,Values.sha256(needle),
+   SmsObservation(java.util.UUID.randomUUID().toString(),"SyntheticSender",body,"catch_up",false,time,null,time,null))
+  val otp=seed("old-credential","Your verification code is 000000")
+  val promo=seed("old-promo","Join our fictional promotion today")
+  val other=seed("old-structured","You have received processed 1000 RWF from SYNTHETIC at branch. FT Id: TEST0001.")
+  try {
+   val baseline=saved.copy(pending=saved.pending+listOf(otp,promo,other))
+   ObservationStateStore.value=baseline
+   check(ObservationGateway.queued(context,"")!!.items.map{it.id}.toSet()==
+    saved.pending.filter{it.owner==a}.map{it.observation.requestId}.toSet()+other.observation.requestId)
+   for(q in listOf("verification","promotion",otp.observation.requestId,promo.observation.requestId))
+    check(ObservationGateway.queued(context,q)!!.items.isEmpty())
+   check(ObservationGateway.queued(context,"TEST0001")!!.items.single().id==other.observation.requestId)
+   check(ObservationStateStore.value==baseline)
+  } finally { ObservationStateStore.value=saved }
+ }
+ test("changed or absent live policy prevents publishing a retained preview"){
+  val snapshot=ObservationGateway.queued(context,"")!!;var shown=false
+  val replacement=profile.copy(receipt=profile.receipt.copy(senders=setOf("DifferentSender")))
+  ObservationConfigStore.changeProfile(replacement)
+  check(!ObservationGateway.publishQueued(context,snapshot){shown=true}&&!shown)
+  check(ObservationGateway.queued(context,"")!!.items.isEmpty())
+  ObservationConfigStore.changeProfile(null)
+  check(ObservationGateway.queued(context,"")==null)
+  ObservationConfigStore.changeProfile(profile)
+  check(!ObservationGateway.publishQueued(context,snapshot){shown=true}&&!shown)
+  check(ObservationGateway.queued(context,"")!!.items.isNotEmpty())
+ }
+ test("pausing invalidates an in-flight preview but permits fresh review of approved retained receipts"){
+  val active=ObservationGateway.queued(context,"")!!
+  val config=ObservationConfigStore(context)
+  config.setPaused(a,true)
+  try {
+   check(config.consent(a)?.canCapture(true)==false)
+   check(!ObservationGateway.publishQueued(context,active){error("stale view published")})
+   val paused=ObservationGateway.queued(context,"")!!
+   check(paused.items==active.items && paused.items.isNotEmpty())
+   check(ObservationGateway.publishQueued(context,paused){})
+  } finally { config.setPaused(a,false) }
  }
  test("unreadable local queue fails closed"){
   ObservationStateStore.fail=true;check(runCatching{ObservationGateway.queued(context,"")}.isFailure);ObservationStateStore.fail=false

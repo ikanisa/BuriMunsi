@@ -21,6 +21,21 @@ fun main(){
     fun row(id:Long,request:String=UUID.randomUUID().toString(),message:String=body)=PduInboxCorrelation.inbox(request,owner,installation,profile,now,id,
         "M-Money",message,centre,now,3)!!
     fun fresh():PduCorrelationStore{SecureStore.reset();return PduCorrelationStore(Context())}
+    test("complete approved-sender unrelated and unfamiliar messages produce no PDU evidence") {
+        val store=fresh()
+        for(text in listOf("Check our new service. Save 30% next week.",
+            "Received an offer worth 250 RWF. FT Id: 123456789.",
+            "Message ZETA Q7 uses an unfamiliar format.")){
+            val split=text.length/2
+            val a=text.substring(0,split);val b=text.substring(split)
+            val evidence=PduInboxCorrelation.capture(UUID.randomUUID().toString(),owner,installation,profile,now,3,"3gpp",
+                listOf("M-Money","M-Money"),listOf(centre,centre),listOf(b,a),
+                listOf(pdu(b.toByteArray(),2),pdu(a.toByteArray(),1)))
+            check(evidence==null)
+        }
+        check(store.read().pdus.isEmpty())
+        check(complete().structurallyComplete)
+    }
     test("complete reordered multipart data is correlated only as unverified") {
         val store=fresh();val p=complete();check(p.structurallyComplete&&store.record(p)==CorrelationWrite.STORED)
         check(store.record(row(101))==CorrelationWrite.STORED)

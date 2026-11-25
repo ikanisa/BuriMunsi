@@ -91,9 +91,20 @@ internal object ObservationCapture {
             if(confirmedMissingKey!=null&&confirmedMissingKey!=stableKey)return@withObservationOwner Result.UNAVAILABLE
             if(HeldRecoveryJournal.protects(app,owner,installation,Values.sha256(androidId),stableKey))
                 return@withObservationOwner Result.AMBIGUOUS
+            if(!ObservationCandidate.accepts(sender,body,profile.receipt))return@withObservationOwner Result.FILTERED
+            if(!ObservedReceiptEvidence.matches(body,profile.receipt)){
+                val control=config.controlState(owner)
+                val review=AndroidUnclassifiedSmsStore(app,collection,account,installation,Values.sha256(androidId),{
+                    permitted(app)&&!control.paused&&config.controlState(owner)==control&&config.consent(owner)==consent&&
+                        config.profile(owner,System.currentTimeMillis())?.fingerprint()==profileFingerprint&&
+                        Settings.Secure.getString(app.contentResolver,Settings.Secure.ANDROID_ID)==androidId
+                })
+                val receivedMs=Instant.parse(inboxReceivedAt).toEpochMilli()
+                return@withObservationOwner if(review.hold(rowId,receivedMs)==CursorPermission.MAY_ADVANCE)
+                    Result.AMBIGUOUS else Result.UNAVAILABLE
+            }
             val item=SmsObservation(UUID.randomUUID().toString(),sender,body,mode,complete,
                 Instant.ofEpochMilli(now).toString(),serviceCentreAt,inboxReceivedAt,subscriptionId,stableKey)
-            if(!ObservationCandidate.accepts(sender,body,profile.receipt))return@withObservationOwner Result.FILTERED
             if(!item.valid(profile,now))return@withObservationOwner Result.UNAVAILABLE
             val journal=ObservationJournal(ObservationStateStore(app))
             val prior=journal.seen(owner,sourceKey,rowId,Values.sha256(body))

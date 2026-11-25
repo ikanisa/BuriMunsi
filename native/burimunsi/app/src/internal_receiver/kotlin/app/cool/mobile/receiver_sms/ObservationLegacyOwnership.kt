@@ -3,6 +3,7 @@ package app.cool.mobile.receiver_sms
 import android.content.Context
 import org.json.JSONObject
 import rw.ikanisa.burimunsi.core.ObservationOwner
+import rw.ikanisa.burimunsi.core.ObservedReceiptEvidence
 import rw.ikanisa.burimunsi.core.ReceiptCandidate
 import rw.ikanisa.burimunsi.core.Values
 import java.time.Instant
@@ -69,6 +70,8 @@ internal object ObservationLegacyOwnership {
         return store.withObservationState{state->
             if(classifyLocked(context,store,state,owner,row,received,sender,body,subscription)!=Decision.OWNED)return@withObservationState false
             val binding=state?.optJSONObject("binding") ?: return@withObservationState false
+            val profile=BuriReceiverProfile.current(binding) ?: return@withObservationState false
+            if (!ObservedReceiptEvidence.isNewCandidate(sender,body,profile)) return@withObservationState false
             val installation=store.existingInstallationId() ?: return@withObservationState false
             val carrierTime=sent?:received
             val id=MomoGatewayPolicy.captureId(installation,binding.getString("id"),sender,body,carrierTime,subscription)

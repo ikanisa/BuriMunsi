@@ -185,8 +185,24 @@ class GatewayDurabilityTest {
             rw.ikanisa.burimunsi.storage.SecureStore(context,name).write(fixture.original(install,phase))
             fixture.ciphertext(context,name)
         }
+        assertTrue(HeldRecoveryJournal.hasRecords(context))
         assertTrue(HeldRecoveryJournal.hasUncertain(context,scope,install,fixture.device))
         assertFalse(HeldRecoveryJournal.hasUncertain(context,scope.copy(accountId="other-admin"),install,fixture.device))
+        for (phase in fixture.phases) {
+            assertTrue(HeldRecoveryJournal.protects(context,scope,install,fixture.device,fixture.key(phase)))
+            assertEquals(before[phase],fixture.ciphertext(context,fixture.name(install,phase)))
+        }
+        // Even a broken base alongside a readable AtomicFile backup is not repaired by inventory.
+        val pendingName=fixture.name(install,"ATTEMPTING")
+        val pendingBase=File(root,"buri-$pendingName.v1")
+        val pendingBackup=File(root,"buri-$pendingName.v1.bak")
+        check(pendingBase.copyTo(pendingBackup).exists())
+        pendingBase.writeText("synthetic-interrupted-generation")
+        assertTrue(HeldRecoveryJournal.hasUncertain(context,scope,install,fixture.device))
+        assertTrue(pendingBackup.exists())
+        assertEquals("synthetic-interrupted-generation",pendingBase.readText())
+        assertTrue(pendingBackup.renameTo(pendingBase))
+        HeldRecoveryJournal.compactTerminalRecords(context)
         for(phase in fixture.phases){
             val name=fixture.name(install,phase)
             val raw=checkNotNull(rw.ikanisa.burimunsi.storage.SecureStore(context,name).read())

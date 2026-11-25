@@ -48,8 +48,8 @@ internal object HeldRecoveryJournal {
             Values.id(value.text("sourceId")) == value.text("sourceId") && hash.matches(value.text("rowDigest")))
     }
 
-    private fun inspect(store: SecureStore, storeName: String): Retained? {
-        val value = JSONObject(checkNotNull(store.read()))
+    private fun inspect(store: SecureStore, storeName: String, compactTerminal: Boolean): Retained? {
+        val value = JSONObject(checkNotNull(store.readWithoutRepair()))
         if (value.integer("version") == 2L) {
             validateCompact(value)
             return null
@@ -66,7 +66,9 @@ internal object HeldRecoveryJournal {
         require(name(scope, key) == storeName && Values.requestId(request) == request && row > 0 &&
             value.text("sourceMode") == "catch_up" && value.get("complete") == false)
         // The protected header suffices to keep an uncertain request. Its raw fields stay unused.
-        if (!completed) return Retained(scope, key)
+        // Until maintenance validates and compacts a v1 terminal record, keep its
+        // source fenced across operators too; an unvalidated header is not finality.
+        if (!completed || !compactTerminal) return Retained(scope, key)
         val sender = value.text("rawSender")
         val body = value.text("rawBody")
         val received = value.text("inboxReceivedAt")
@@ -89,23 +91,23 @@ internal object HeldRecoveryJournal {
         return null
     }
 
-    private fun inventory(context: Context): Inventory = synchronized(lock) {
+    private fun inventory(context: Context, compactTerminal: Boolean = false): Inventory = synchronized(lock) {
         val directory = context.noBackupFilesDir
         val files = checkNotNull(directory.listFiles { _, filename -> namePattern.matches(filename) })
         val stamps = files.map { Triple(it.name, it.length(), it.lastModified()) }.sortedBy { it.first }
-        cached?.takeIf { it.directory == directory.absolutePath && it.stamps == stamps }?.let { return@synchronized it.inventory }
+        if (!compactTerminal) cached?.takeIf { it.directory == directory.absolutePath && it.stamps == stamps }?.let { return@synchronized it.inventory }
         val stores = stamps.map { namePattern.matchEntire(it.first)!!.groupValues[1] }.toSet()
         val pending = mutableSetOf<Retained>()
         var unreadable = false
         for (storeName in stores) {
             try {
-                inspect(SecureStore(context, storeName), storeName)?.let { pending.add(it) }
+                inspect(SecureStore(context, storeName), storeName, compactTerminal)?.let { pending.add(it) }
             } catch (_: Exception) {
                 unreadable = true
             }
         }
         Inventory(stores, pending, unreadable).also {
-            cached = if (unreadable) null else Cached(directory.absolutePath, stamps, it)
+            cached = if (unreadable || compactTerminal) null else Cached(directory.absolutePath, stamps, it)
         }
     }
 
@@ -126,14 +128,23 @@ internal object HeldRecoveryJournal {
         return records.unreadable || records.uncertain.any { it.scope == Scope(owner, installation, device) }
     }
 
-    fun hasRecords(context: Context): Boolean = inventory(context).stores.isNotEmpty()
+    /** File-presence only; do not decrypt or compact from diagnostic/status entry points. */
+    fun hasRecords(context: Context): Boolean = synchronized(lock) {
+        context.noBackupFilesDir.listFiles { _, filename -> namePattern.matches(filename) }
+            ?.isNotEmpty() ?: true
+    }
+
+    // Invoked only by the explicit maintenance path. Never rewrite an uncertain record.
+    internal fun compactTerminalRecords(context: Context) {
+        inventory(context, compactTerminal = true)
+    }
 
     /** Safe on resume without an authenticated operator. Only valid v1 terminal records are rewritten. */
     fun maintain(context: Context) {
         if (!maintenanceRunning.compareAndSet(false, true)) return
         try {
             Thread({
-                try { inventory(context.applicationContext) } catch (_: Exception) { /* Retain every unreadable record for a subsequent attempt. */ }
+                try { compactTerminalRecords(context.applicationContext) } catch (_: Exception) { /* Retain every unreadable record for a subsequent attempt. */ }
                 finally { maintenanceRunning.set(false) }
             }, "held-recovery-privacy-migration").start()
         } catch (failure: Exception) {

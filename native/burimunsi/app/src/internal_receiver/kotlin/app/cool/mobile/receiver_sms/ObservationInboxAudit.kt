@@ -3,6 +3,7 @@ package app.cool.mobile.receiver_sms
 import android.content.Context
 import app.cool.mobile.receiver_sms.ObservationRecovery.Audit
 import rw.ikanisa.burimunsi.core.ObservationCandidate
+import rw.ikanisa.burimunsi.core.ObservedReceiptEvidence
 import rw.ikanisa.burimunsi.core.ObservationConsentState
 import rw.ikanisa.burimunsi.core.ObservationOwner
 import rw.ikanisa.burimunsi.core.ObservationProfile
@@ -39,7 +40,7 @@ internal class ObservationInboxAudit(
     }
 
     private data class AuditScope(val session:ObservationSessionOwner,val fingerprint:String,val legacyHold:Boolean?,
-        val consent:ObservationConsentState,val control:ObservationConfigStore.Control,val deviceScope:String,val heldScope:String,val revision:Long,val uncertainLegacy:Boolean)
+        val consent:ObservationConsentState,val control:ObservationConfigStore.Control,val deviceScope:String,val heldScope:String,val revision:Long,val uncertainLegacy:Boolean,val uncertainLocal:Boolean)
     private data class Opening(val scope:AuditScope,val startedAt:Long,val runId:String,val acknowledged:Boolean=false)
     private data class AuditProgress(val scope:AuditScope,val last:Long,val unconfirmed:Boolean,val startedAt:Long,
         val collectionRevision:String,val recordedCount:Int,
@@ -92,13 +93,19 @@ internal class ObservationInboxAudit(
         }?:return null
         val (profile,consent,control)=initial
         val (device,keys)=heldInbox.snapshot(session,profile,consent,control,stopped)?:return null
-        val uncertainLegacy=if(HeldRecoveryJournal.hasRecords(app)){
-            val installation=MomoGatewayStore(app).existingInstallationId()?:return null
-            HeldRecoveryJournal.hasUncertain(app,session.owner,installation,Values.sha256(device))
-        }else false
+        val installation=MomoGatewayStore(app).existingInstallationId()?:return null
+        val deviceScope=Values.sha256(device)
+        val uncertainLegacy=HeldRecoveryJournal.hasRecords(app)&&
+            HeldRecoveryJournal.hasUncertain(app,session.owner,installation,deviceScope)
+        val uncertainLocal=AndroidUnclassifiedSmsStore(app,session.owner.collectionId,session.owner.accountId,
+            installation,deviceScope,{
+                !stopped()&&observationInboxPermitted(app)&&NativeRepository.observationOwner(app)==session&&
+                    config.controlState(session.owner)==control&&config.consent(session.owner)==consent&&
+                    config.profile(session.owner,System.currentTimeMillis())==profile&&heldInbox.deviceId()==device
+            }).hasUnresolved()
         val heldScope=Values.sha256(keys.sorted().joinToString(""){"${it.length}:$it"})
         val scope=AuditScope(session,profile.fingerprint(),profile.legacyHold,consent,control,Values.sha256(device),heldScope,
-            ObservationInboxRevision.snapshot(),uncertainLegacy)
+            ObservationInboxRevision.snapshot(),uncertainLegacy,uncertainLocal)
         if(stopped()||!ObservationInboxRevision.observerActive()||!observationInboxPermitted(app)||NativeRepository.observationOwner(app)!=session)return null
         return AuditAuthority(scope,profile,device,keys)
     }
@@ -108,7 +115,7 @@ internal class ObservationInboxAudit(
             Values.sha256(listOf(scope.session.owner.collectionId,scope.session.owner.accountId,scope.session.generation.toString(),
                 scope.fingerprint,scope.legacyHold.toString(),scope.consent.revision.enabled.toString(),
                 scope.consent.revision.generation.toString(),scope.consent.confirmed.toString(),scope.control.paused.toString(),
-                scope.control.revision.toString(),scope.deviceScope,scope.heldScope,scope.revision.toString(),scope.uncertainLegacy.toString())
+                scope.control.revision.toString(),scope.deviceScope,scope.heldScope,scope.revision.toString(),scope.uncertainLegacy.toString(),scope.uncertainLocal.toString())
                 .joinToString(""){"${it.length}:$it"})
         }}catch(_:Exception){null}
     }
@@ -169,7 +176,7 @@ internal class ObservationInboxAudit(
                 resetAudit();return@synchronized Audit.UNCONFIRMED
             }
             val resume=restartPosition(scope)
-            auditProgress=AuditProgress(scope,resume,scope.uncertainLegacy || status.hasPending || status.hasUnmatchedCanonical,
+            auditProgress=AuditProgress(scope,resume,scope.uncertainLegacy || scope.uncertainLocal || status.hasPending || status.hasUnmatchedCanonical,
                 start.startedAt,status.revision,status.recordedCount,runId=start.runId,repairTail=resume>0)
             opening=null
             return@synchronized Audit.MORE
@@ -229,13 +236,18 @@ internal class ObservationInboxAudit(
         for(row in rows){
             if(!ObservationCandidate.senderAllowed(row.sender,authority.profile.receipt))continue
             if(ObservationCandidate.excludeFromFinancialCensus(row.sender,row.body,authority.profile.receipt))continue
+            // Leave a local uncertainty result, not a reconciliation fingerprint,
+            // even when other verified receipt rows share this transport page.
+            if(!ObservedReceiptEvidence.isNewCandidate(row.sender,row.body,authority.profile.receipt)){
+                uncertain=true;pending++;candidates++;continue
+            }
             val decision=ObservationLegacyOwnership.classify(app,owner,row.id,row.received,row.sender,row.body,row.sub)
             if(decision==ObservationLegacyOwnership.Decision.OTHER_SIM)continue
             val key=heldInboxSourceKey(authority.device,owner.collectionId,row.id,row.received)
             candidates++
             phoneHead=newest(phoneHead,Head(row.received,row.id,key))
             decisions[row.id]=decision
-            if(decision==ObservationLegacyOwnership.Decision.HOLD || !ObservationCandidate.accepts(row.sender,row.body,authority.profile.receipt)){
+            if(decision==ObservationLegacyOwnership.Decision.HOLD){
                 uncertain=true;pending++;continue
             }
             val gateway=if(decision==ObservationLegacyOwnership.Decision.OWNED)

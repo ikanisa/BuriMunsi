@@ -300,8 +300,12 @@ test('strict HTTP capture and reconciliation replay one retained observation und
   f.state.legacyInventory=false;
   for(const raw of ['/recover-held','/recover-held-ack'])assert.equal((await request(raw,capture)).status,400);
   const historical={...capture,requestId:id(58),sourceKey:'8'.repeat(64),expectedConsentGeneration:1};
-  const absent=await read(await request('/recover-held-ack',historical));
-  assert.equal(absent.state,'unconfirmed');assert.equal(absent.retryAllowed,false);assert.equal(f.state.puts,1);
+  const absent=await request('/recover-held-ack',historical);
+  assert.equal(absent.status,409);
+  assert.deepEqual(await absent.json(),{
+   contractVersion:'burimunsi.native.v1',ok:false,error:{code:'observation_changed'},
+  });
+  assert.equal(f.state.puts,1);
   const held=await read(await request('/recover-held',historical));assert.equal(held.autoProcessing,'held');
   assert.deepEqual(await read(await request('/recover-held',historical)),held);
   const acknowledged=await read(await request('/recover-held-ack',historical));
@@ -1166,4 +1170,38 @@ test('in-flight-only and missing journal outcomes remain generic; revoked consen
    mode==='consent_revoked'?e.status===403:e.status===503&&e.code==='observation_unavailable'));
   assert.equal(f.state.commits,0);assert.equal(f.state.row,null);
  }
+});
+
+test('A01: nonfinancial and unfamiliar bodies never reach the new capture reservation or media',async()=>{
+ const f=fixture();
+ await f.run(async observations=>{
+  const unknown=[
+   'Check our new service. Save 30% next week.',
+   'We have maintenance. Reference: XX-1234. No fee.',
+   'Your balance: 250 RWF. Reference: XX-1234.',
+   'Received message about a new campaign. Reference: XX-1234.',
+   'Received an offer worth 250 RWF. Reference: XX-1234.',
+   'Message ZETA Q7 uses an unfamiliar format.',
+  ];
+  for(const [n,rawBody] of unknown.entries()){
+   const payload={...incoming,requestId:id(910+n),rawBody};
+   await assert.rejects(()=>observations.observe(actor,payload),{code:'unsupported_receipt',status:422});
+   const held={...payload,sourceMode:'catch_up',complete:false,inboxReceivedAt:incoming.capturedAt,
+    sourceKey:String(n).repeat(64),expectedConsentGeneration:1};
+   await assert.rejects(()=>observations.recoverHeld(actor,held),{code:'unsupported_receipt',status:422});
+   await assert.rejects(()=>observations.recoverHeldAck(actor,held),{code:'observation_changed',status:409});
+  }
+  assert.equal(f.state.requests.size,0);assert.equal(f.state.media.size,0);assert.equal(f.state.sourceKeys.size,0);
+  assert.equal(f.state.puts,0);assert.equal(f.state.commits,0);assert.equal(f.state.audits.length,0);
+  for(const [n,rawBody] of [
+   incoming.rawBody,'You have sent 325 RWF. Reference: XX-1234.',
+   'Reversal accepted. 325 RWF. Reference: XX-1234.','Transfer fee: 25 RWF. Reference: TF616.',
+  ].entries()){
+   const payload={...incoming,requestId:id(930+n),rawBody};
+   const saved=await observations.observe(actor,payload);
+   assert.equal(saved.financialEffects,0);assert.ok(saved.sourceId);
+   assert.equal((await observations.observe(actor,payload)).sourceId,saved.sourceId);
+  }
+  assert.equal(f.state.puts,4);
+ });
 });

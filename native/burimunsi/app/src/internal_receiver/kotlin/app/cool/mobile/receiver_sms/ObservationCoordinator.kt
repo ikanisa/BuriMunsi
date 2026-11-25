@@ -126,8 +126,8 @@ internal class ObservationCoordinator(context:Context,private val repository:Nat
         diagnostic?.phase(Phase.PROFILE_SAVE)
         if(profile!=null&&owned(session){config.saveProfile(current,profile,System.currentTimeMillis());true}!=true)return fail(Fence.OWNER_CHANGED)
         diagnostic?.phase(Phase.PROFILE_VALIDATE)
-        val currentProfile=owned(session){config.profile(current,System.currentTimeMillis())!=null}?:return fail(Fence.OWNER_CHANGED)
-        if(!currentProfile)return fail(Fence.PROFILE_UNAVAILABLE)
+        val currentProfile=owned(session){config.profile(current,System.currentTimeMillis())}
+            ?:return fail(Fence.PROFILE_UNAVAILABLE)
         diagnostic?.phase(Phase.JOURNAL_READ)
         val entries=owned(session){journal.pending(current)}?:return fail(Fence.OWNER_CHANGED)
         diagnostic?.queued(entries.size)
@@ -135,7 +135,7 @@ internal class ObservationCoordinator(context:Context,private val repository:Nat
             ?:return fail(Fence.OWNER_CHANGED)
         var unresolved=0;var laterAttempts=0
         var held=false
-        var credentialBlocked=false
+        var contentBlocked=false
         for(entry in entries){
             diagnostic?.phase(Phase.UPLOAD_GUARD)
             if(unresolved>0&&laterAttempts>=2)return fail(Fence.UNRESOLVED_LATER_LIMIT)
@@ -146,8 +146,13 @@ internal class ObservationCoordinator(context:Context,private val repository:Nat
             // Existing encrypted entries predate local privacy filtering. Never
             // transmit or ACK one of these, but later safe entries may still progress.
             if(ObservationCandidate.hasCredentials(evidence.rawSender,evidence.rawBody)){
-                credentialBlocked=true
+                contentBlocked=true
                 diagnostic?.reject(Fence.CREDENTIAL_EVIDENCE_HELD)
+                continue
+            }
+            if (!ObservedReceiptEvidence.isNewCandidate(evidence.rawSender,evidence.rawBody,currentProfile.receipt)) {
+                contentBlocked=true
+                diagnostic?.reject(Fence.UNCLASSIFIED_EVIDENCE_HELD)
                 continue
             }
             val inbox=seen[evidence.requestId]
@@ -172,6 +177,12 @@ internal class ObservationCoordinator(context:Context,private val repository:Nat
                 }
                 if(!uploadAllowed(session,stopped))return false
             }
+            // The profile may have changed during protected legacy custody checks.
+            // Do not dispatch under a retired classifier; retry the same entry later.
+            if(!uploadAllowed(session,stopped))return false
+            val dispatchProfile=owned(session){config.profile(current,System.currentTimeMillis())}
+                ?:return fail(Fence.PROFILE_UNAVAILABLE)
+            if(dispatchProfile.fingerprint()!=currentProfile.fingerprint())return fail(Fence.PROFILE_CHANGED)
             diagnostic?.phase(Phase.UPLOAD)
             diagnostic?.attempted()
             val ack=try{repository.submitObservation(entry.observation)}catch(error:Exception){
@@ -198,6 +209,6 @@ internal class ObservationCoordinator(context:Context,private val repository:Nat
             if(!removed)return false
             diagnostic?.acknowledged()
         }
-        return (!credentialBlocked&&!held&&unresolved==0)||fail(Fence.UNRESOLVED_REMAIN)
+        return (!contentBlocked&&!held&&unresolved==0)||fail(Fence.UNRESOLVED_REMAIN)
     }
 }

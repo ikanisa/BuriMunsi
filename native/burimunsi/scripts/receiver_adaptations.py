@@ -151,12 +151,22 @@ def _adapt_collect_sms_receiver(text: str) -> str:
         '                    val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)')
     text = replace_once(text, '                    if (!MomoGatewayPolicy.providerSource(sender)) return@executeCapture',
         '                    if (!BuriCapturePolicy.senderAllowed(binding, sender)) return@executeCapture')
+    text = replace_once(text, '                    if (body.isEmpty()) return@executeCapture\n', '')
     text = replace_once(text, '''                    if (!BuriCapturePolicy.retain(context, binding, sender, body, subscription)) return@executeCapture''', '''                    when (BuriCapturePolicy.route(context, binding, subscription)) {
                         BuriReceiverReliability.Route.ACCEPT -> Unit
                         BuriReceiverReliability.Route.OTHER_SIM -> return@executeCapture
                         else -> { gateway?.park("sim_or_profile_uncertain"); return@executeCapture }
                     }
-                    if (!BuriCapturePolicy.retain(context, binding, sender, body, subscription)) return@executeCapture''')
+                    when (BuriCapturePolicy.captureEvidence(binding, sender, body, complete)) {
+                        BuriCapturePolicy.CaptureEvidence.ELIGIBLE -> Unit
+                        BuriCapturePolicy.CaptureEvidence.EXCLUDED -> return@executeCapture
+                        BuriCapturePolicy.CaptureEvidence.UNCONFIRMED -> {
+                            gateway?.withCurrentCapture(binding) {
+                                gateway.update { it.put("live_format_unconfirmed", true) }
+                            }
+                            return@executeCapture
+                        }
+                    }''')
     text = replace_once(text, '''                    val result = queue.appendIfCapacity(
                         envelope,
                         MomoGatewayPolicy.MAX_PENDING,
@@ -181,7 +191,9 @@ def _adapt_momo_gateway_recovery(text: str) -> str:
     text = replace_once(text, '        val owner = binding.getString("owner_user_id")',
         '        if (state.withCurrentCapture(binding) { true } != true) return false\n        val owner = binding.getString("owner_user_id")')
     text = replace_once(text, '                if (MomoGatewayPolicy.providerSource(sender) && body.isNotEmpty()) {',
-        '                if (BuriCapturePolicy.senderAllowed(binding, sender) && body.isNotEmpty()) {')
+        '                if (BuriCapturePolicy.senderAllowed(binding, sender)) {')
+    text = replace_once(text, '        var advanced = cursorId',
+        '        var advanced = cursorId\n        var formatUnconfirmed = false')
     text = replace_once(text, '            while (cursor.moveToNext()) {\n                scanned++',
         '            while (cursor.moveToNext()) {\n                if (state.withCurrentCapture(binding) { true } != true) return false\n                scanned++')
     text = replace_once(text, '''                    val received = cursor.getLong(receivedColumn)
@@ -209,7 +221,9 @@ def _adapt_momo_gateway_recovery(text: str) -> str:
                 val current = it.getJSONObject("binding")
                 check(BuriReceiverReliability.bindingMatches(binding::opt, current::opt))
                 it.put("inbox_checkpoint", maxOf(it.optLong("inbox_checkpoint"), advanced))
-                    .put("historical_backlog_paused", false).put("catch_up_pending", scanned == MomoGatewayPolicy.MAX_SCAN_ROWS)
+                    .put("historical_backlog_paused", formatUnconfirmed)
+                    .put("catch_up_format_unconfirmed", formatUnconfirmed)
+                    .put("catch_up_pending", !formatUnconfirmed && scanned == MomoGatewayPolicy.MAX_SCAN_ROWS)
             }
             true
         } ?: false
@@ -234,11 +248,22 @@ def _adapt_momo_gateway_recovery(text: str) -> str:
                         }
                         else -> { state.park("sim_or_profile_uncertain"); return false }
                     }
-                    if (!BuriCapturePolicy.retain(context, binding, sender, body, subscription)) {
-                        advanced = maxOf(advanced, id)
-                        continue
+                    when (BuriCapturePolicy.captureEvidence(binding, sender, body)) {
+                        BuriCapturePolicy.CaptureEvidence.ELIGIBLE -> Unit
+                        BuriCapturePolicy.CaptureEvidence.EXCLUDED -> {
+                            advanced = maxOf(advanced, id)
+                            continue
+                        }
+                        BuriCapturePolicy.CaptureEvidence.UNCONFIRMED -> {
+                            // Leave this inbox row and later rows uncheckpointed.
+                            // Write a non-content backlog flag, not a body, hash or envelope.
+                            formatUnconfirmed = true
+                            break
+                        }
                     }'''
     text = replace_once(text, old, new)
+    text = replace_once(text, '        return scanned == MomoGatewayPolicy.MAX_SCAN_ROWS',
+        '        return !formatUnconfirmed && scanned == MomoGatewayPolicy.MAX_SCAN_ROWS')
     text = replace_once(text, '''                    when (SmsQueueStore(context).appendIfCapacity(capture, MomoGatewayPolicy.MAX_PENDING,
                         MomoGatewayPolicy.LIVE_CAPTURE_RESERVE)) {''', '''                    val retained = state.withCurrentCapture(binding) {
                         SmsQueueStore(context).appendIfCapacity(capture, MomoGatewayPolicy.MAX_PENDING,
@@ -267,7 +292,8 @@ def _adapt_momo_gateway_jobs(text: str) -> str:
     if text.count('gatewayUploadEligible(row, binding, cases)') != 2:
         raise ValueError('Expected both exact receiver eligibility call sites.')
     text = text.replace('gatewayUploadEligible(row, binding, cases)',
-        'gatewayUploadEligible(row, binding, cases, BuriCapturePolicy.uploadsAdmitted(context))')
+        '(gatewayUploadEligible(row, binding, cases, BuriCapturePolicy.uploadsAdmitted(context)) && '
+        'BuriCapturePolicy.positiveQueueEvidence(binding, row))')
     text = replace_once(text, '        if (!state.active() || stopped.get()) return false',
         '        if (stopped.get()) return false\n        BuriReceiverProfile.refresh(context, http)\n        if (!state.active()) return false')
     text = replace_once(text, '''            try {

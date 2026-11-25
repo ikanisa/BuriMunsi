@@ -8,23 +8,6 @@ import rw.ikanisa.burimunsi.core.*
 import rw.ikanisa.burimunsi.storage.SecureStore
 
 /** Candidate filters and consent belong to the signed-in account, not to a hardcoded wallet. */
-/** All writers of the protected SMS policy invalidate in-progress body leases.
- * Metadata scans never need this lock. Exact body reads hold it only while
- * obtaining the already-scoped cursor field. */
-internal object ObservationInboxPolicyRevision {
-    private val lock = Any()
-    private var revision = 0L
-    private var writes = 0
-    fun stable(): Long? = synchronized(lock) { revision.takeIf { writes == 0 } }
-    fun <T> whileCurrent(expected: Long, action: () -> T): T? = synchronized(lock) {
-        if (writes == 0 && revision == expected) action() else null
-    }
-    fun <T> changing(action: () -> T): T {
-        synchronized(lock) { writes++; revision++ }
-        return try { action() } finally { synchronized(lock) { writes--; revision++ } }
-    }
-}
-
 internal class ObservationConfigStore(context:Context) {
     data class Control(val paused:Boolean,val revision:Long)
     private val app=context.applicationContext

@@ -73,6 +73,39 @@ fun main(args:Array<String>) {
   if(phase in setOf("CONFIRMED","MATCHED_EXISTING"))value.put("terminalSourceId","synthetic-existing-source")
   return (name to value.toString()).also{SecureStore.data[it.first]=it.second}
  }
+ test("held repair requires positive receipt evidence and exact reconciled identity before marker or transport"){
+  val e=setup()
+  val config=ObservationConfigStore(e.context)
+  val active=config.profile(adminA,System.currentTimeMillis())!!
+  val consent=config.consent(adminA)!!
+  val session=NativeRepository.observationOwner(e.context)!!
+  val held=ObservationHeldInbox(e.context,config)
+  val device=held.deviceId()!!
+  val at=Instant.ofEpochMilli(time).toString()
+  val id=17L
+  val key=cloudKey(adminA,id)
+  val request=ObservationReconcileRequest(key,Values.sha256(body),"M-Money",null,at,3)
+  // Fix this synthetic receipt in the original held baseline.
+  val deviceScope=Values.sha256(listOf("burimunsi-held-device-v1",adminA.collectionId,device.lowercase())
+   .joinToString(""){"${it.length}:$it"})
+  val baseline="observation-prior-cursor-held-"+Values.sha256(listOf(adminA.collectionId,adminA.accountId)
+   .joinToString(""){"${it.length}:$it"})
+  SecureStore.data[baseline]=JSONObject().put("collectionId",adminA.collectionId).put("deviceScope",deviceScope)
+   .put("keys",JSONArray().put(key)).toString()
+  val before=SecureStore.data.toMap()
+  fun repair(r:ObservationReconcileRequest,text:String)=held.recoverMissing(e.repository,session,consent,active,device,key,r,text)
+  for(text in listOf("Your verification code is 123456.", "Confirm your subscription today.", "Unfamiliar transfer format 1000 RWF.")){
+   check(!repair(request.copy(bodySha256=Values.sha256(text)),text))
+  }
+  check(!repair(request.copy(sourceKey=cloudKey(adminA,id+1)),body))
+  check(!repair(request.copy(bodySha256="0".repeat(64)),body))
+  check(!repair(request.copy(gatewayEnvelopeId="synthetic-conflicting-gateway"),body))
+  check(SecureStore.data==before&&e.repository.heldRequests.isEmpty())
+  check(repair(request,body))
+  check(repair(request,body))
+  check(e.repository.heldRequests.size==2&&e.repository.heldRequests.distinct().size==1)
+  check(e.repository.heldRequests.first().sourceKey==key&&e.repository.requests.isEmpty())
+ }
  for(phase in listOf("PREPARED","ATTEMPTING")){
   test("code-48 $phase preserves the exact uncertain request when the phone and Cloud are empty"){
    val e=setup();val (name,original)=legacyHeld(adminA,21,phase)
@@ -124,6 +157,13 @@ fun main(args:Array<String>) {
    }
   }
  }
+ test("held presence inventory lists files without fetching or changing protected content"){
+  val e=setup();val (name,original)=legacyHeld(adminA,22,"PREPARED")
+  val (terminal,terminalOriginal)=legacyHeld(adminA,23,"CONFIRMED")
+  check(HeldRecoveryJournal.hasRecords(e.context))
+  check(SecureStore.readCounts[name]==null&&SecureStore.readCounts[terminal]==null)
+  check(SecureStore.data[name]==original&&SecureStore.data[terminal]==terminalOriginal)
+ }
  test("capture cannot recreate an uncertain held source with a new ID for either operator"){
   for(owner in listOf(adminA,adminB)){
    val e=setup(owner);val (name,original)=legacyHeld(adminA,22,"ATTEMPTING")
@@ -144,6 +184,9 @@ fun main(args:Array<String>) {
   test("a code-48 $phase record becomes its original compact tombstone and protects the row"){
    val e=setup();val (name,original)=legacyHeld(adminA,23,phase);val device=Values.sha256("1234567890abcdef")
    check(HeldRecoveryJournal.protects(e.context,adminA,installation,device,cloudKey(adminA,23)))
+   check(SecureStore.data[name]==original &&
+    HeldRecoveryJournal.protects(e.context,adminB,installation,device,cloudKey(adminA,23)))
+   HeldRecoveryJournal.compactTerminalRecords(e.context)
    val redacted=SecureStore.data.getValue(name);val v=JSONObject(redacted)
    check(v.keys().asSequence().toSet()==setOf("version","phase","requestId","sourceId","rowDigest")&&v.getInt("version")==2&&
     v.getString("requestId")==JSONObject(original).getString("requestId")&&v.getString("phase")==phase&&
@@ -155,6 +198,8 @@ fun main(args:Array<String>) {
   val e=setup();val (wrong,raw)=legacyHeld(adminA,24,"ATTEMPTING");SecureStore.data[wrong]=JSONObject(raw).put("accountId",adminB.accountId).toString()
   val (valid,_)=legacyHeld(adminA,25,"CONFIRMED");val saved=SecureStore.data[wrong]
   check(HeldRecoveryJournal.hasUncertain(e.context,adminA,installation,Values.sha256("1234567890abcdef")))
+  check(SecureStore.data[wrong]==saved&&JSONObject(SecureStore.data.getValue(valid)).getInt("version")==1)
+  HeldRecoveryJournal.compactTerminalRecords(e.context)
   check(SecureStore.data[wrong]==saved&&JSONObject(SecureStore.data.getValue(valid)).getInt("version")==2)
   check(!ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false}).completed&&e.repository.requests.isEmpty())
  }
@@ -188,6 +233,40 @@ fun main(args:Array<String>) {
   check(pending(adminA)==historical&&ObservationStateStore.value.seen==seen)
   check(diagnostic.snapshot().fence==ObservationSyncDiagnostics.Fence.CREDENTIAL_EVIDENCE_HELD)
   check(!coordinator.cycle{false}&&e.repository.requests.size==1&&pending(adminA)==historical)
+ }
+ test("historical non-receipts remain unchanged and later qualified requests keep exact identity"){
+  val e=setup();val session=NativeRepository.observationOwner(e.context)!!
+  val fp=ObservationConfigStore(e.context).profile(adminA,time)!!.fingerprint();val at=Instant.ofEpochMilli(time).toString()
+  for(id in 31..33)check(ObservationCapture.retain(e.context,session,fp,"inbox:$id","M-Money",body,"catch_up",false,null,at,3)==ObservationCapture.Result.STORED)
+  val original=ObservationStateStore.value
+  val prior=original.pending.take(2).zip(listOf("Provider news: a new rewards programme.", "Payment settled for 2000 RWF.")).map{(entry,text)->
+   entry.copy(observation=entry.observation.copy(rawBody=text))
+  }
+  val priorSeen=original.seen.map{seen->prior.firstOrNull{it.observation.requestId==seen.requestId}
+   ?.let{seen.copy(bodySha256=Values.sha256(it.observation.rawBody))}?:seen}
+  ObservationStateStore.value=ObservationJournalState(prior+original.pending.last(),priorSeen)
+  val diagnostic=ObservationSyncDiagnostics.begin(true){System.nanoTime()/1_000_000L}
+  val coordinator=ObservationCoordinator(e.context,e.repository,diagnostic)
+  repeat(2){check(!coordinator.cycle())}
+  check(e.repository.requests==listOf(original.pending.last().observation))
+  check(pending(adminA)==prior&&ObservationStateStore.value.seen==priorSeen)
+  val report=diagnostic.snapshot()
+  check(report.fence==ObservationSyncDiagnostics.Fence.UNCLASSIFIED_EVIDENCE_HELD&&report.attempts==1&&report.acknowledged==1)
+ }
+ test("queue cannot continue dispatch after the active receipt profile changes"){
+  val e=setup();e.context.contentResolver.rows=(31L..32L).map{row(it)};ObservationRecovery(e.context).scan()
+  val original=pending(adminA).map{it.observation}
+  val changed=JSONObject(e.approved.toString()).put("profileVersion","later").put("currencyAliases",JSONArray().put("FRW"))
+  e.repository.switchDuringSubmit={
+   e.repository.profile=changed
+   ObservationConfigStore(e.context).saveProfile(adminA,changed,System.currentTimeMillis())
+  }
+  val diagnostic=ObservationSyncDiagnostics.begin(true){System.nanoTime()/1_000_000L}
+  check(!ObservationCoordinator(e.context,e.repository,diagnostic).cycle())
+  check(diagnostic.snapshot().fence==ObservationSyncDiagnostics.Fence.PROFILE_CHANGED)
+  check(e.repository.requests==listOf(original.first())&&pending(adminA).single().observation==original.last())
+  check(!ObservationCoordinator(e.context,e.repository).cycle())
+  check(e.repository.requests==listOf(original.first())&&pending(adminA).single().observation==original.last())
  }
  fun seedSeen(owner:ObservationOwner,ids:LongRange):List<ObservationSeen> = ids.map{id->
   val received=Instant.ofEpochMilli(time).toString()
@@ -401,7 +480,7 @@ fun main(args:Array<String>) {
   ObservationRecovery(e.context).scan()
   check(pending(adminA).size==1&&e.context.contentResolver.querySelection=="_id > ?")
  }
- test("scanner excludes credentials before the durable journal and keeps unfamiliar financial formats") {
+ test("scanner excludes credentials and holds unfamiliar approved-sender rows as locators") {
   val e=setup();val outgoing="Transfer completed to another account.\r\nRef:\t5678"
   e.context.contentResolver.rows=listOf(row(9,outgoing),row(10,"Your OTP is 1234"),row(11),
    row(12,"Other sender message")+("address" to "Other"),row(13,"Invalid\u0000body"),
@@ -411,7 +490,10 @@ fun main(args:Array<String>) {
    row(20,body+" Verification complete."))
   ObservationRecovery(e.context).scan()
   val retained=pending(adminA).map{it.observation}
-  check(retained.map{it.rawBody}==listOf(outgoing,body,body+" Never share your PIN.","Reversal accepted. Transaction code AB-6789.",body+" Verification complete."))
+  check(retained.map{it.rawBody}==listOf(body,body+" Never share your PIN.",body+" Verification complete."))
+  val held=SecureStore.data.entries.single{it.key.startsWith("unclassified-sms-")}.value
+  check(held=="1|0\n9:$time\n18:$time")
+  check(SecureStore.data.values.none{it.contains(outgoing)||it.contains(Values.sha256(outgoing))})
   check(retained.all{it.sourceMode=="catch_up"&&!it.complete&&it.inboxReceivedAt!=null})
   check(cursor(e.context)!=null)
  }
@@ -420,27 +502,28 @@ fun main(args:Array<String>) {
   val prior=JSONArray().put(JSONObject().put("collectionId",adminA.collectionId).put("accountId",adminA.accountId)
    .put("profileFingerprint",fingerprint).put("lastId",3000L))
   SecureStore(e.context,"observation-cursors").write(JSONObject().put("items",prior).toString())
-  e.context.contentResolver.rows=listOf(row(100,body),row(1100,"Transfer sent 100 RWF"),row(2000,body),
-   row(2500,"Provider notice"),row(3001,"Transfer sent 500 RWF"))
+  e.context.contentResolver.rows=listOf(row(100,body),row(1100,"You have sent 100 RWF. FT Id: 55667788."),row(2000,body),
+   row(2500,"Provider notice"),row(3001,"You have sent 500 RWF. FT Id: 99887766."))
   check(ObservationRecovery(e.context).backfill()==ObservationRecovery.Backfill.COMPLETE)
-  check(pending(adminA).map{it.observation.rawBody}==listOf("Transfer sent 100 RWF","Provider notice"))
+  check(pending(adminA).map{it.observation.rawBody}==listOf("You have sent 100 RWF. FT Id: 55667788."))
   check(ObservationRecovery(e.context).backfill()==ObservationRecovery.Backfill.COMPLETE)
   ObservationRecovery(e.context).scan()
-  check(pending(adminA).map{it.observation.rawBody}==listOf("Transfer sent 100 RWF","Provider notice","Transfer sent 500 RWF"))
+  check(pending(adminA).map{it.observation.rawBody}==listOf("You have sent 100 RWF. FT Id: 55667788.","You have sent 500 RWF. FT Id: 99887766."))
+  check(SecureStore.data.entries.single{it.key.startsWith("unclassified-sms-")}.value=="1|0\n2500:$time")
  }
  test("backfill permission loss does not advance its protected cursor") {
   val e=setup();val fingerprint=ObservationConfigStore(e.context).profile(adminA,System.currentTimeMillis())!!.fingerprint()
   val prior=JSONArray().put(JSONObject().put("collectionId",adminA.collectionId).put("accountId",adminA.accountId)
    .put("profileFingerprint",fingerprint).put("lastId",100L))
   SecureStore(e.context,"observation-cursors").write(JSONObject().put("items",prior).toString())
-  e.context.contentResolver.rows=listOf(row(40,"Transfer sent 100 RWF"))
+  e.context.contentResolver.rows=listOf(row(40,"You have sent 100 RWF. FT Id: 55667788."))
   e.context.contentResolver.afterBodyRead={e.context.denied=setOf(Manifest.permission.READ_SMS)}
   check(ObservationRecovery(e.context).backfill()==ObservationRecovery.Backfill.BLOCKED&&pending(adminA).isEmpty())
   e.context.denied=emptySet()
   check(ObservationRecovery(e.context).backfill()==ObservationRecovery.Backfill.COMPLETE&&pending(adminA).size==1)
  }
  test("fresh installation initializes an empty backfill and scans normally") {
-  val e=setup();e.context.contentResolver.rows=listOf(row(5,"Transfer sent 100 RWF"))
+  val e=setup();e.context.contentResolver.rows=listOf(row(5,"You have sent 100 RWF. FT Id: 55667788."))
   check(ObservationRecovery(e.context).backfill()==ObservationRecovery.Backfill.COMPLETE)
   ObservationRecovery(e.context).scan();check(pending(adminA).size==1)
   check(ObservationRecovery(e.context).backfill()==ObservationRecovery.Backfill.COMPLETE&&pending(adminA).size==1)
@@ -496,7 +579,7 @@ fun main(args:Array<String>) {
   check(pending(adminA).size==1)
  }
  test("500 irrelevant provider rows avoid per-row protected configuration and correlation reads") {
-  val e=setup();val sent=time-1_000;e.context.contentResolver.rows=listOf(row(500,"Provider seed"))
+  val e=setup();val sent=time-1_000;e.context.contentResolver.rows=listOf(row(500))
   ObservationRecovery(e.context).scan();val original=pending(adminA);val pdu=witness(e,sent=sent)
   e.context.contentResolver.rows=(1L..500L).map{row(it,"Provider notice $it")+("date_sent" to sent)}
   SecureStore.readCounts.clear();e.context.contentResolver.cursorRowsRead=0;e.context.contentResolver.bodyReads=0
@@ -512,7 +595,7 @@ fun main(args:Array<String>) {
   check(pending(adminA)==original&&e.repository.requests.isEmpty())
  }
  test("rejected rows still honor the existing stop callback within the bounded scan") {
-  val e=setup();e.context.contentResolver.rows=listOf(row(500,"Provider seed"));ObservationRecovery(e.context).scan();witness(e)
+  val e=setup();e.context.contentResolver.rows=listOf(row(500));ObservationRecovery(e.context).scan();witness(e)
   e.context.contentResolver.rows=(1L..500L).map{row(it,"Provider notice $it")+("date_sent" to (time-1_000))}
   e.context.contentResolver.bodyReads=0;var stops=0
   ObservationRecovery(e.context).correlateRecent{++stops>=16}
@@ -568,14 +651,30 @@ fun main(args:Array<String>) {
   val state=PduCorrelationStore(e.context).read();check(state.inbox.isEmpty()&&pdu.witnessId in state.conflictedWitnesses)
   check(PduInboxCorrelation.status(state,pdu.witnessId)==CorrelationStatus.AMBIGUOUS&&pending(adminA)==original)
  }
- test("incomplete matching PDU evidence remains eligible for guarded retention without completeness promotion") {
+ test("inbox catch-up stores only the row locator for unmatched approved sender text") {
+  val e=setup();val text="A synthetic announcement near the next holiday."
+  e.context.contentResolver.rows=listOf(row(401,text),row(402))
+  ObservationRecovery(e.context).scan();ObservationRecovery(e.context).scan()
+  check(pending(adminA).size==1&&pending(adminA).single().observation.rawBody==body&&e.repository.requests.isEmpty())
+  val review=SecureStore.data.entries.single{it.key.startsWith("unclassified-sms-")}.value
+  check(review=="1|0\n401:$time")
+  check(SecureStore.data.values.none{it.contains(text)||it.contains(Values.sha256(text))})
+ }
+ test("incomplete approved PDU leaves only a durable scope fence and later complete inbox row admits once") {
   val e=setup();val sent=time-1_000;val partial=body.substring(0,55)
-  e.context.contentResolver.rows=listOf(row(44,partial)+("date_sent" to sent));ObservationRecovery(e.context).scan()
-  val original=pending(adminA).single();val session=NativeRepository.observationOwner(e.context)!!
-  check(ObservationPduCapture.record(e.context,session,time,3,"3gpp",listOf("M-Money"),listOf(sent),listOf(partial),listOf(pdu(partial,1))))
-  ObservationRecovery(e.context).correlateRecent();val state=PduCorrelationStore(e.context).read()
-  check(state.inbox.single().requestId==original.observation.requestId&&!state.pdus.single().structurallyComplete)
-  check(PduInboxCorrelation.status(state,state.pdus.single().witnessId)==CorrelationStatus.INCOMPLETE&&!original.observation.complete)
+  val session=NativeRepository.observationOwner(e.context)!!
+  check(!ObservationPduCapture.record(e.context,session,time,3,"3gpp",listOf("M-Money"),listOf(sent),listOf(partial),listOf(pdu(partial,1))))
+  val empty=PduCorrelationStore(e.context).read()
+  check(empty.unresolvedPduOwners==setOf(adminA)&&empty.pdus.isEmpty()&&empty.inbox.isEmpty()&&pending(adminA).isEmpty())
+  val durable=SecureStore.data.getValue("pdu-correlation")
+  check(!durable.contains(partial)&&!durable.contains(Values.sha256(partial))&&!durable.contains("pduHex"))
+  val exact=witness(e,sent=sent)
+  e.context.contentResolver.rows=listOf(row(44)+("date_sent" to sent))
+  ObservationRecovery(e.context).scan();ObservationRecovery(e.context).scan()
+  val state=PduCorrelationStore(e.context).read()
+  check(pending(adminA).size==1&&pending(adminA).single().observation.rawBody==body&&state.pdus.size==1)
+  check(PduInboxCorrelation.status(state,exact.witnessId)==CorrelationStatus.AMBIGUOUS)
+  check(e.repository.requests.isEmpty())
  }
  for(fence in listOf("owner","session generation","profile","pause","consent","READ_SMS","RECEIVE_SMS","legacy transition","legacy binding"))
  test("potential correlation still fences a changed $fence") {
@@ -1470,6 +1569,46 @@ fun main(args:Array<String>) {
   val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
   check(!result.completed&&e.repository.requests.size==1&&e.repository.requests.single().rawBody==body)
   check(e.repository.reconciliationBatches.flatten().none{it.sourceKey==cloudKey(adminA,1299)})
+ }
+ test("unclassified approved sender text blocks census confirmation without transmitting a fingerprint") {
+  for(newest in listOf(false,true)){
+   val e=setup();val unknown="A new synthetic message with an unfamiliar layout."
+   val received=time+(if(newest)100L else -100L)
+   e.context.contentResolver.rows=listOf(row(1297,unknown)+("date" to received),row(1298))
+   val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
+   check(!result.completed&&e.repository.requests.size==1&&e.repository.requests.single().rawBody==body)
+   check(e.repository.reconciliationBatches.flatten().any{it.sourceKey==cloudKey(adminA,1298)})
+   check(e.repository.reconciliationBatches.flatten().none{
+      it.sourceKey==cloudKey(adminA,1297,received)||it.bodySha256==Values.sha256(unknown)
+   })
+   check(if(newest)ObservationRecovery(e.context).latest()==ObservationRecovery.Latest.Held
+      else ObservationRecovery(e.context).latest() is ObservationRecovery.Latest.Ready)
+   check(SecureStore.data.values.none{it.contains(unknown)||it.contains(Values.sha256(unknown))})
+  }
+ }
+ test("missing unclassified locator stays unresolved even after its numeric inbox ID is reused") {
+  val e=setup();val unknown="A new synthetic message with an unfamiliar layout."
+  val r=e.context.contentResolver
+  r.rows=listOf(row(1340,unknown));ObservationRecovery(e.context).scan()
+  val entry=SecureStore.data.entries.single{it.key.startsWith("unclassified-sms-")}
+  val locatorKey=entry.key;val original=entry.value
+  check(original=="1|0\n1340:$time"&&pending(adminA).isEmpty())
+  r.rows=emptyList();ObservationInboxRevision.changed()
+  check(!ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false}).completed)
+  check(SecureStore.data[locatorKey]==original&&e.repository.requests.isEmpty())
+  val received=time+100
+  r.rows=listOf(row(1340)+("date" to received));ObservationInboxRevision.changed()
+  val replacement=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
+  check(!replacement.completed&&e.repository.requests.single().sourceKey==cloudKey(adminA,1340,received))
+  check(SecureStore.data[locatorKey]==original)
+  check(e.repository.reconciliationBatches.flatten().none{it.sourceKey==cloudKey(adminA,1340)})
+ }
+ test("same-ID row replacement between metadata and body reads is not dereferenced") {
+  val e=setup();val r=e.context.contentResolver
+  r.rows=listOf(row(1341,"A synthetic unknown notice."))
+  r.beforeItemQuery={id-> if(id==1341L)r.rows=listOf(row(1341)+("date" to time+100))}
+  check(ObservationRecovery(e.context).scanStatus()==ObservationRecovery.Scan.BLOCKED)
+  check(r.bodyReads==0&&pending(adminA).isEmpty()&&SecureStore.data.keys.none{it.startsWith("unclassified-sms-")})
  }
  test("an unsupported newest approved-provider SMS prevents confirmation") {
   val e=setup();e.context.contentResolver.rows=listOf(row(1300),row(1301,"x".repeat(3001))+("date" to (time+100)))

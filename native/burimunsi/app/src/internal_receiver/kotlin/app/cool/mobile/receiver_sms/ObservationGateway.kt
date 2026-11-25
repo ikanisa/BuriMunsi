@@ -7,6 +7,7 @@ import app.cool.mobile.BuildConfig
 import rw.ikanisa.burimunsi.core.GatewayStatus
 import rw.ikanisa.burimunsi.core.ObservationJournal
 import rw.ikanisa.burimunsi.core.ObservationOwner
+import rw.ikanisa.burimunsi.core.ObservedReceiptEvidence
 import rw.ikanisa.burimunsi.core.QueuedObservationRow
 import rw.ikanisa.burimunsi.core.QueuedObservationSnapshot
 import rw.ikanisa.burimunsi.core.QueuedObservationPreview
@@ -29,28 +30,41 @@ internal object ObservationGateway {
     private fun permitted(context:Context)=listOf(Manifest.permission.RECEIVE_SMS,Manifest.permission.READ_SMS).all{
         context.checkSelfPermission(it)==PackageManager.PERMISSION_GRANTED
     }
-    /** The bounded preview is local only; raw bodies and search text never leave this adapter. */
+    /** The bounded preview is local only. Retained pre-filter entries stay in
+     * custody but are neither searched nor copied into a view. Pausing
+     * capture does not end a current Admin’s scoped review of past receipts. */
     fun queued(context:Context,query:String):QueuedObservationSnapshot? {
         if(BuildConfig.IS_QUALIFICATION||query.length>80||query.any{it.isISOControl()})return null
         val session=NativeRepository.observationOwner(context)?:return null
         return NativeRepository.withObservationOwner(context,session){group,account->
             if(!permitted(context))return@withObservationOwner null
-            val pending=ObservationJournal(ObservationStateStore(context)).pendingSnapshot(ObservationOwner(group,account))
-            val rows=pending.entries.filter{entry->
-                SmsListSearch.matches(entry.observation.requestId,SmsListContent(entry.observation.rawSender,entry.observation.rawBody),query)
-            }.map{entry->
-                val value=entry.observation
+            val owner=ObservationOwner(group,account)
+            val policyRevision=ObservationInboxPolicyRevision.stable()?:return@withObservationOwner null
+            val profile=ObservationConfigStore(context).profile(owner,System.currentTimeMillis())
+                ?:return@withObservationOwner null
+            val pending=ObservationJournal(ObservationStateStore(context)).pendingSnapshot(owner)
+            val rows=pending.entries.asSequence().map{it.observation}.filter{value->
+                ObservedReceiptEvidence.isNewCandidate(value.rawSender,value.rawBody,profile.receipt)&&
+                    SmsListSearch.matches(value.requestId,SmsListContent(value.rawSender,value.rawBody),query)
+            }.map{value->
                 QueuedObservationRow(value.requestId,value.rawSender,value.inboxReceivedAt?:value.capturedAt,QueuedObservationPreview.from(value.rawBody))
-            }
-                .sortedWith(compareByDescending<QueuedObservationRow>{Instant.parse(it.at)}.thenBy{it.id})
-            if(!permitted(context))null else QueuedObservationSnapshot(session,pending.revision,rows)
+            }.sortedWith(compareByDescending<QueuedObservationRow>{Instant.parse(it.at)}.thenBy{it.id}).toList()
+            if(!permitted(context)||!profile.current(System.currentTimeMillis())||
+                ObservationInboxPolicyRevision.stable()!=policyRevision)null
+            else QueuedObservationSnapshot(session,pending.revision,rows,policyRevision)
         }
     }
-    /** Session -> journal lock order matches capture and acknowledgement. */
+    /** Owner -> policy -> journal fence, as for a scoped inbox reveal. */
     fun publishQueued(context:Context,snapshot:QueuedObservationSnapshot,publish:()->Unit):Boolean =
-        NativeRepository.withObservationOwner(context,snapshot.session){_,_->
-            if(!permitted(context))false else ObservationJournal(ObservationStateStore(context)).ifRevision(snapshot.revision){
-                if(!permitted(context))false else{publish();true}
+        NativeRepository.withObservationOwner(context,snapshot.session){group,account->
+            val revision=snapshot.policyRevision?:return@withObservationOwner false
+            if(!permitted(context))return@withObservationOwner false
+            val profile=ObservationConfigStore(context).profile(ObservationOwner(group,account),System.currentTimeMillis())
+                ?:return@withObservationOwner false
+            ObservationInboxPolicyRevision.whileCurrent(revision){
+                ObservationJournal(ObservationStateStore(context)).ifRevision(snapshot.revision){
+                    if(!permitted(context)||!profile.current(System.currentTimeMillis()))false else{publish();true}
+                }?:false
             }?:false
         }?:false
     fun start(context:Context) {

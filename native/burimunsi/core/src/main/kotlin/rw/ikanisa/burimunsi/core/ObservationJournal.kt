@@ -20,7 +20,8 @@ data class ObservationJournalState(val pending:List<ObservationEntry>,val seen:L
 data class QueuedObservationRow(val id:String,val sender:String,val at:String,val preview:String="") {
     override fun toString()="QueuedObservationRow(redacted)"
 }
-data class QueuedObservationSnapshot(val session:ObservationSessionOwner,val revision:Long,val items:List<QueuedObservationRow>) {
+data class QueuedObservationSnapshot(val session:ObservationSessionOwner,val revision:Long,val items:List<QueuedObservationRow>,
+    val policyRevision:Long?=null) {
     override fun toString()="QueuedObservationSnapshot(redacted)"
 }
 object QueuedObservationPreview {
