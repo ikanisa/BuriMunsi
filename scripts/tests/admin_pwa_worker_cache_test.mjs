@@ -164,6 +164,7 @@ for (const request of normal.requests) {
   assert.equal(request.credentials, 'omit');
   assert.equal(request.redirect, 'error');
 }
+// Cache installation verifies assets concurrently; membership, not insertion order, is the boundary.
 const cache = await normal.caches.open('collect-admin-current');
 const currentDocument = {status: 200, type: 'basic', url: origin, redirected: false,
   headers: new Headers({'Content-Type': 'text/html; charset=utf-8'}), body: '<title>Next Admin</title>'};
@@ -187,7 +188,7 @@ normal.setRejectedAsset(origin);
 assert.equal((await normal.request('/', navigate)).body, '<title>Collect Admin</title>');
 normal.setRejectedAsset(null);
 assert.equal(await normal.request('/api/admin/workspace', navigate), null);
-assert.deepEqual((await cache.keys()).map((request) => request.url), [origin, origin + 'main.dart.js']);
+assert.deepEqual((await cache.keys()).map((request) => request.url).sort(), [origin, origin + 'main.dart.js'].sort());
 assert.equal((await normal.request('/admin/transactions', { mode: 'navigate' })).body,
   '<title>Collect Admin</title>');
 assert.equal((await normal.request('/main.dart.js?v=new')).body, 'bundle');
@@ -201,7 +202,7 @@ assert.equal(await normal.request('/__private/account'), null);
 const directB = await normal.network(origin + '__private/account');
 assert.equal(directA.actor, 'account-a');
 assert.equal(directB.actor, 'account-b');
-assert.deepEqual((await cache.keys()).map((request) => request.url), [origin, origin + 'main.dart.js']);
+assert.deepEqual((await cache.keys()).map((request) => request.url).sort(), [origin, origin + 'main.dart.js'].sort());
 // Reserved service families include both exact roots and slash-delimited
 // descendants. Navigation must not convert live service failures into shell200.
 const serviceFamilies = ['/api', '/v1', '/functions', '/privacy', '/account-deletion', '/admin/auth/local-challenge'];
@@ -237,7 +238,7 @@ for (const path of servicePaths) {
     await assert.rejects(normal.browserRequest(path, { mode }), /Interrupted synthetic static fetch/,
       path + ': offline service request fails instead of returning the Admin shell');
     normal.setRejectedAsset(null);
-    assert.deepEqual((await cache.keys()).map((request) => request.url), [origin, origin + 'main.dart.js']);
+    assert.deepEqual((await cache.keys()).map((request) => request.url).sort(), [origin, origin + 'main.dart.js'].sort());
   }
   assert.equal(await normal.request(path, { method: 'POST', mode: 'navigate' }), null,
     'Existing non-GET pass-through is preserved');

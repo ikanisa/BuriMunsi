@@ -37,6 +37,7 @@ test-backend-owned-pg:
 test-admin:
 	@cd admin-web && npm run typecheck && npm run lint && npm test
 	@cd deploy/platform-admin && npm test
+	@node scripts/tests/admin_pwa_worker_cache_test.mjs
 
 admin-fixture:
 	@./scripts/admin_pwa_release_build.sh --fixture
