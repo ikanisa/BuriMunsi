@@ -119,3 +119,20 @@ operation classification, 503 counts and window completeness against a bounded
 hosted sample; establish trusted independent incident inputs, reporter and backup
 owners, and a private delivery and acknowledgement procedure. Never emit an
 apparently complete empty window when collection was incomplete.
+
+### L04: Verify monitoring coverage before clearing an incident
+
+The offline coverage gate (`scripts/qa/l04_alert_coverage.py`) does not treat
+successful reads of function invocation logs as proof that client-facing API
+responses were counted. It builds the aggregate input only when separately
+attested client-facing ingress and invocation aggregates for the exact route
+and same closed five-minute window are complete, their counts agree, no malformed
+rows were counted, and the independent jobs/queue/receipt counters are available.
+Otherwise it emits telemetry unavailable, preserving independent integrity and
+privacy signals. A source attestation workflow and a real private delivery
+destination are still required; the helper neither connects nor sends anything.
+
+In the bounded hosted comparison on 25 November 2026 at 21:45–22:00 Kigali,
+the selected stream returned 54 function rows with no protected-route suffix
+matches. This establishes neither zero client traffic nor coverage of gateway
+failures and is not evidence of recovery.
