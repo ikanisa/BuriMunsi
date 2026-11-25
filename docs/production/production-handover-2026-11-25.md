@@ -136,3 +136,14 @@ In the bounded hosted comparison on 25 November 2026 at 21:45–22:00 Kigali,
 the selected stream returned 54 function rows with no protected-route suffix
 matches. This establishes neither zero client traffic nor coverage of gateway
 failures and is not evidence of recovery.
+
+### R05: Reproducible local source receipt
+
+On a clean exact-commit checkout, create a fresh owner-only evidence directory
+outside Git and run `python3 scripts/qa/r05_local_source_receipt.py
+/absolute/private/source-receipt.json`. This runs only the frozen source,
+design-authority and offline alert checks. It writes the exact commit and each
+actual outcome; it refuses a changed or dirty checkout and never overwrites a
+prior receipt. Output includes no test log or credentials. Hosted CI, Edge,
+gateway, jobs, PostgreSQL, Admin and Android are marked NOT RUN, even if the
+source receipt passes. Record real evidence for those lanes separately.

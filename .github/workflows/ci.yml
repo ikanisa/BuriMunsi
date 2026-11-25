@@ -60,7 +60,9 @@ jobs:
           make check-source
           make revolut-design-authority
       - name: Verify offline incident checkpoint and alert rules
-        run: python3 -m unittest discover -s scripts/qa -p 'test_l04_alert_*.py'
+        run: |
+          python3 -m unittest discover -s scripts/qa -p 'test_l04_alert_*.py'
+          python3 -m unittest discover -s scripts/qa -p 'test_r05_local_source_receipt.py'
       - name: Install frozen Supabase tooling
         run: npm ci --prefix scripts/supabase --ignore-scripts --no-audit --no-fund
       - name: Start the isolated Edge PostgreSQL fixture
