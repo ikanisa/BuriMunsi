@@ -1,0 +1,15 @@
+credit	true	Example Money	Received 250 RWF. Reference: 1234.
+debit	true	Example Money	You have sent 325 RWF. Reference: XX-1234.
+reversal	true	Example Money	Reversal accepted. 325 RWF. Reference: XX-1234.
+fee	true	Example Money	Transfer fee: 25 RWF. Reference: TF616.
+grouped-amount	true	Example Money	Received 2,500 RWF. Reference: 123401.
+credential	false	Example Money	Votre code de vérification est 1234.
+mixed	false	Example Money	Received 250 RWF. Reference: 1234. OTP 984321.
+offer	false	Example Money	Received an offer worth 250 RWF. Reference: XX-1234.
+unknown	false	Example Money	Entry ZETA Q7 has settled.
+balance-advice	false	Example Money	Check your balance anytime.
+wrong-sender	false	ExampleOther	Received 250 RWF. Reference: 1234.
+sender-trailing-space	false	Example Money 	Received 250 RWF. Reference: 1234.
+decimal	false	Example Money	Received 2.50 RWF. Reference: 123401.
+amount-suffix	false	Example Money	Received 250 RWFX. Reference: 1234.
+reference-prefix	false	Example Money	Received 250 RWF. NotReference: 1234.
