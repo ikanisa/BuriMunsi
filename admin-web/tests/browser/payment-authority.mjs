@@ -109,6 +109,22 @@ export async function qualifyPaymentAuthority({origin, open, staffPin, installed
     await noExposure();
     assert.deepEqual(seenAfterSwitch,[]);
     assert.deepEqual(receipts,[]);
+    const reopened = await context.newPage();
+    const reopenedReads = [];
+    reopened.on('request', request => {
+      const target = new URL(request.url());
+      if (target.pathname.startsWith(api) || request.headers()['idempotency-key'] === requestKey) reopenedReads.push(target.pathname);
+    });
+    await reopened.goto(paymentLink);
+    await reopened.getByRole('heading',{name:'Access unavailable',exact:true}).waitFor();
+    assert.equal(await reopened.getByText(requestKey,{exact:true}).count(),0);
+    assert.equal(await reopened.getByText(originalMarker,{exact:true}).count(),0);
+    assert.equal(await reopened.getByRole('button',{name:fixturePayment.ftId,exact:true}).count(),0);
+    assert.deepEqual(reopenedReads,[]);
+    if (installed) {
+      assert(await reopened.evaluate(()=>navigator.serviceWorker.controller !== null));
+    }
+    await reopened.close();
     if (installed) {
       const cachePaths = await page.evaluate(async () => {
         const keys = await caches.keys();

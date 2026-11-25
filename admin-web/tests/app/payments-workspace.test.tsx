@@ -6,7 +6,7 @@ import type {AdminUser} from '../../src/session/sessionResponses';
 import {workspaceRoutes} from '../../src/app/WorkspaceRoutes';
 import {canOpenAdminPath} from '../../src/app/route-access';
 import {safePaymentListReturn} from '../../src/features/operations/paymentLocations';
-import {AdminTransportError} from '../../src/api/contracts';
+import {AdminRequestError, AdminTransportError} from '../../src/api/contracts';
 import {ReceiverSmsPanel} from '../../src/features/operations/ReceiverSmsPanel';
 import {BuriMunsiHome} from '../../src/features/overview/BuriMunsiHome';
 import {analyzeCanonicalPaymentRows, type PaymentAnalysisQuery} from '../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
@@ -533,6 +533,34 @@ describe('BuriMunsi phone Payments', () => {
     await act(async()=>resolveSecond(envelope(accountId,evidence(momoId,'parsed'))));
     expect(screen.queryByRole('region',{name:'Linked SMS'})).not.toBeInTheDocument();
     expect(screen.queryByText('Parsed')).not.toBeInTheDocument();
+    expect(called('momo/observations')).toHaveLength(0);
+  });
+
+  it('never restores old payment evidence after an Admin session changes and the new session is denied', async () => {
+    mock.authMethod='phone_passcode'; mock.scoped=true;
+    let finishOld!:(value:unknown)=>void;
+    const first=new Promise(resolve=>{finishOld=resolve;});
+    let evidenceReads=0;
+    mock.request.mockImplementation(async(path:string)=>{
+      if (path===evidencePath(momoId)) {
+        if (++evidenceReads===1) return first;
+        throw new AdminRequestError('Permission removed',{statusCode:403,code:'permission_required'});
+      }
+      if (path==='burimunsi/payments/'+momoId) return linked;
+      return buriPage([linked]);
+    });
+    const url='/admin/payments?payment='+momoId;
+    const app=visit(url,['payments.read','sms.read','sms.reveal']);
+    await waitFor(()=>expect(called(evidencePath(momoId))).toHaveLength(1));
+    const previous=called(evidencePath(momoId))[0][1].signal;
+    mock.sessionId='different-session';
+    app.rerender(<MemoryRouter initialEntries={[url]}><RouteHarness /></MemoryRouter>);
+    await waitFor(()=>expect(previous.aborted).toBe(true));
+    await waitFor(()=>expect(called(evidencePath(momoId))).toHaveLength(2));
+    await act(async()=>finishOld(envelope(momoId,evidence(accountId,'held'))));
+    expect(await screen.findByText("Permission removed")).toBeVisible();
+    expect(screen.queryByText('Held for review')).not.toBeInTheDocument();
+    expect(screen.queryByRole('region',{name:'Original source access'})).not.toBeInTheDocument();
     expect(called('momo/observations')).toHaveLength(0);
   });
 
