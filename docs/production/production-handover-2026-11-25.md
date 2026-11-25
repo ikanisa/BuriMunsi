@@ -98,3 +98,24 @@ The operations helper now retains completed five-minute UTC sample windows, open
 Keep the checkpoint under a dedicated owner-only directory, outside Git. Initialise it once with `python3 scripts/qa/l04_alert_checkpoint.py /absolute/private/alerts.db init`. Use `status` after a restart, `ingest WINDOW_END_UTC_EPOCH` with one aggregate JSON object on stdin, and `pending` to inspect stable IDs. A later authorised delivery adapter must use the event ID for destination deduplication and call `ack EVENT_ID` only after verified handoff. This acknowledgement does not close the underlying incident and is not a substitute for operator acknowledgement. Do not drop or replace a checkpoint, or clear a backlog on a timeout. Restore its protected state or audit and refurnish missing windows under operator control. The helper stores no SMS body, account or receipt ID, raw SQL, token or telemetry records.
 
 Run `python3 -m unittest discover -s scripts/qa -p 'test_l04_alert_*.py'`. This checks atomic recording, duplicate/concurrent samples, explicit telemetry gaps, restarts, pending acknowledgements, limits and privacy. There is no live telemetry adapter, pager, outbound message or production activation in this change. Qualification still needs an agreed operator and reserve owner, real route evidence, a private delivery destination, and tested recipient acknowledgement.
+
+### L04: Closed-window aggregate intake
+
+`python3 scripts/qa/l04_alert_adapter.py /absolute/private/alerts.db` ingests a
+version 1 aggregate envelope from standard input into the same checkpoint, not
+raw logs. Give it integer UTC epoch `window_start` and `window_end` exactly five
+minutes apart on UTC five-minute boundaries and already closed. Include
+`incidents` with `duplicate_postings` (count), `unexplained_difference` (boolean)
+and `privacy_event` (boolean). Supply `telemetry: null` when coverage cannot be
+proven; separately verified incident signals still apply. Otherwise `telemetry`
+contains `missed_jobs`, `queue_oldest_seconds`, `overdue_receipt_checks` and an
+`operations` map with an explicit `observationReconcileBatch` bucket carrying
+`responses` and `http_503`, even for zero traffic. The protected bucket represents
+only POST /v1/burimunsi/sms/observations/reconcile-batch. Other operations do not
+affect its alert denominator or failure count.
+
+No exporter or destination is configured. Before activation, compare exact
+operation classification, 503 counts and window completeness against a bounded
+hosted sample; establish trusted independent incident inputs, reporter and backup
+owners, and a private delivery and acknowledgement procedure. Never emit an
+apparently complete empty window when collection was incomplete.
