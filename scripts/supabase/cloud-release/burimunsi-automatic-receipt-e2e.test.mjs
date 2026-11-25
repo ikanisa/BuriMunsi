@@ -494,7 +494,51 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
       OR $3<>'admin' OR $4<>1 OR $5 IS NOT NULL THEN RAISE insufficient_privilege;END IF;
      RETURN private.assert_actor($1,NULL,NULL,$4,$5);
     END$$`);
-  await f.client.query(lookup);
+  const version='20261124151857';
+  const expected={installed:true,recorded:true,digest:sha(lookup)};
+  const absent={installed:false,recorded:false,digest:null};
+  const lookupState=async client=>(await client.query(`SELECT
+   to_regprocedure('private.burimunsi_payment_sms_evidence_rows(text,text,text)') IS NOT NULL AS installed,
+   EXISTS(SELECT 1 FROM supabase_migrations.schema_migrations WHERE version=$1) AS recorded,
+   (SELECT encode(sha256(convert_to(statements[1],'UTF8')),'hex')
+    FROM supabase_migrations.schema_migrations WHERE version=$1) AS digest`,[version])).rows[0];
+  const priorClient=await adminStatus(true);
+  assert.deepEqual(await lookupState(f.client),absent);
+  // Broken preflight must not install or journal the routine.
+  await f.client.query('BEGIN');
+  try {
+   await f.client.query("UPDATE private.collect_fence_control SET mode='open' WHERE singleton");
+   await assert.rejects(f.client.query(stripFraming(lookup)),{code:'55000'});
+  } finally {await f.client.query('ROLLBACK');}
+  assert.deepEqual(await lookupState(f.client),absent);
+  const peer=new pg.Client({host:f.cluster.socket,port:f.cluster.port,database:'postgres',user:f.cluster.initialUser});
+  await peer.connect();
+  try {
+   await peer.query('SET ROLE postgres');
+   // Failure after DDL but before the exact journal commit leaves neither.
+   await f.client.query('BEGIN');
+   try {
+    await f.client.query(stripFraming(lookup));
+    await journal(version,'burimunsi_payment_sms_evidence',lookup);
+    assert.deepEqual(await lookupState(peer),absent);
+   } finally {await f.client.query('ROLLBACK');}
+   assert.deepEqual(await lookupState(peer),absent);
+   await f.client.query('BEGIN');
+   try{
+    await f.client.query(stripFraming(lookup));
+    await journal(version,'burimunsi_payment_sms_evidence',lookup);
+    assert.deepEqual(await lookupState(f.client),expected);
+    assert.deepEqual(await lookupState(peer),absent);
+    await f.client.query('COMMIT');
+   } catch(error){await f.client.query('ROLLBACK');throw error;}
+   assert.deepEqual(await lookupState(peer),expected);
+   const {rows:[attributes]}=await peer.query(`SELECT p.prosecdef AS definer, p.proconfig AS settings,
+     owner.rolname AS owner, has_function_privilege('collect_runtime',p.oid,'EXECUTE') AS runtime
+     FROM pg_proc p JOIN pg_roles owner ON owner.oid=p.proowner
+     WHERE p.oid='private.burimunsi_payment_sms_evidence_rows(text,text,text)'::regprocedure`);
+   assert.deepEqual(attributes,{definer:true,settings:['search_path=pg_catalog, pg_temp'],owner:'postgres',runtime:true});
+   assert.deepEqual(await adminStatus(true),priorClient);
+  } finally {await peer.end();}
   const old=await load('20261111121100_burimunsi_admin_observations.sql');
   const oldStart=old.indexOf('CREATE FUNCTION private.burimunsi_observation_admin_rows(p_collection text)');
   const oldEnd=old.indexOf('CREATE FUNCTION private.burimunsi_observation_admin_page(',oldStart);

@@ -7,6 +7,7 @@ import {workspaceRoutes} from '../../src/app/WorkspaceRoutes';
 import {canOpenAdminPath} from '../../src/app/route-access';
 import {safePaymentListReturn} from '../../src/features/operations/paymentLocations';
 import {AdminTransportError} from '../../src/api/contracts';
+import {ReceiverSmsPanel} from '../../src/features/operations/ReceiverSmsPanel';
 import {BuriMunsiHome} from '../../src/features/overview/BuriMunsiHome';
 import {analyzeCanonicalPaymentRows, type PaymentAnalysisQuery} from '../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
 import coreFixture from '../core/canonical-core-fixtures.json';
@@ -374,6 +375,45 @@ describe('BuriMunsi phone Payments', () => {
       vi.setSystemTime(Date.now()-300_000);
       await act(async()=>window.dispatchEvent(new Event('focus')));
       expect(screen.getByText('Last inbox check is out of date')).toBeVisible();
+    } finally {view.unmount();vi.useRealTimers();}
+  });
+
+  it('expires the same server proof simultaneously on Home and SMS and keeps it expired after reload',async()=>{
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-18T06:00:00.000Z'));
+    mock.authMethod='phone_passcode';mock.scoped=true;mock.permissions=['overview.read','payments.read','sms.read'];
+    let asOf='2026-10-18T08:04:59.999Z', checkedAt=time;
+    const groupId='fixture-group';
+    mock.request.mockImplementation(async(path:string)=>{
+      if(path==='burimunsi/home')return {paymentCount:1,memberCount:5,unallocatedCount:1,recentPayments:[buriPayment],asOf};
+      if(path==='momo/observations/collections')return {contractVersion:1,asOf,items:[{collectionId:groupId,label:'Fixture group'}]};
+      return {contractVersion:1,collectionId:groupId,nextCursor:null,asOf,items:[],
+        inboxCheck:{state:'verified',checkedAt,candidateCount:0,missingCount:0,pendingCount:0,headsMatch:true}};
+    });
+    const renderBoth=()=>render(<MemoryRouter><BuriMunsiHome /><ReceiverSmsPanel simplePayments /></MemoryRouter>);
+    let view=renderBoth();
+    const inbox=()=>within(screen.getByRole('region',{name:'Inbox completeness'})).getByRole('status');
+    try {
+      await act(async()=>{});
+      expect(screen.getByText('Last inbox check matched')).toBeVisible();
+      expect(inbox()).toHaveTextContent(/inboxes matched/i);
+      await act(async()=>{await vi.advanceTimersByTimeAsync(1);});
+      expect(screen.getByText('Last inbox check is out of date')).toBeVisible();
+      expect(inbox()).toHaveTextContent(/out of date/i);
+      view.unmount();
+      asOf='2026-10-18T08:05:00.000Z'; // Same proof, served again after browser reload.
+      view=renderBoth();
+      await act(async()=>{});
+      expect(screen.getByText('Last inbox check is out of date')).toBeVisible();
+      expect(inbox()).toHaveTextContent(/out of date/i);
+      const newest='2026-10-18T08:05:01.000Z';
+      asOf=newest;checkedAt=newest;
+      await act(async()=>{
+        fireEvent.click(screen.getByRole('button',{name:'Refresh Home'}));
+        window.dispatchEvent(new CustomEvent('burimunsi-operations-changed',{detail:{collectionId:groupId}}));
+      });
+      expect(screen.getByText('Last inbox check matched')).toBeVisible();
+      expect(inbox()).toHaveTextContent(/inboxes matched/i);
     } finally {view.unmount();vi.useRealTimers();}
   });
 
