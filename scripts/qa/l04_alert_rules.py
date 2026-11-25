@@ -4,8 +4,8 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Signals:
-    responses: int
-    unavailable: int
+    reconciliation_responses: int
+    reconciliation_unavailable: int
     missed_jobs: int
     queue_oldest_seconds: int
     overdue_receipt_checks: int
@@ -21,8 +21,8 @@ def decide(s: Signals) -> Mapping[str, str]:
                 raise ValueError('invalid boolean signal')
         elif type(value) is not int or value < 0:
             raise ValueError('invalid aggregate signal')
-    if s.unavailable > s.responses:
-        raise ValueError('invalid response counts')
+    if s.reconciliation_unavailable > s.reconciliation_responses:
+        raise ValueError('invalid reconciliation response counts')
     alerts = {}
     if s.duplicate_postings or s.unexplained_difference:
         alerts['ledger-integrity'] = 'halt'
@@ -31,7 +31,10 @@ def decide(s: Signals) -> Mapping[str, str]:
     if not s.telemetry_available:
         alerts['telemetry-blind'] = 'page'
         return alerts
-    if s.unavailable >= 5 or (s.responses >= 10 and 10 * s.unavailable >= s.responses):
+    if s.reconciliation_unavailable >= 5 or (
+        s.reconciliation_responses >= 10
+        and 10 * s.reconciliation_unavailable >= s.reconciliation_responses
+    ):
         alerts['api-unavailable'] = 'page'
     if s.missed_jobs >= 3:
         alerts['scheduler-dispatch'] = 'page'
@@ -41,5 +44,18 @@ def decide(s: Signals) -> Mapping[str, str]:
         alerts['receipt-coverage'] = 'page'
     return alerts
 
-def newly_open(previous: Mapping[str, str], current: Mapping[str, str]) -> dict:
-    return {k: v for k, v in current.items() if previous.get(k) != v}
+@dataclass(frozen=True)
+class Transition:
+    active: Mapping[str, str]
+    notify: Mapping[str, str]
+
+
+def advance(previous: Mapping[str, str], s: Signals) -> Transition:
+    """A blind sample cannot resolve a prior incident; a quiet API lane cannot
+    prove recovery. The inputs refer to one protected five-minute window."""
+    detected = decide(s)
+    active = dict(previous) if not s.telemetry_available else {}
+    if s.reconciliation_responses < 10 and 'api-unavailable' in previous:
+        active['api-unavailable'] = previous['api-unavailable']
+    active.update(detected)
+    return Transition(active, {k: v for k, v in detected.items() if previous.get(k) != v})
