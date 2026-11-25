@@ -60,7 +60,10 @@ const suites=[
  {label:'observation-history',files:[
   'supabase/functions/_shared/tests/burimunsi/observation-history-postgres.test.mjs'],expected:[
   'account SMS history preserves scope, audit, consent, grant and retained-object boundaries',
-  'historical authorization rows stay locked until a disclosure transaction ends']}
+  'historical authorization rows stay locked until a disclosure transaction ends']},
+ {label:'advisory-contention',files:[
+  'supabase/functions/_shared/tests/burimunsi/lock-contention-postgres.test.mjs'],expected:[
+  'redacted advisory snapshot pairs an actual waiter with its holder']}
 ];
 for(const name of ['postgres','initdb','pg_ctl','psql']){
  const path=join(bin,name),out=execFileSync(path,['--version'],{encoding:'utf8',env:{PATH:'/usr/bin:/bin',LC_ALL:'C'},timeout:15000});

@@ -1,7 +1,7 @@
 # Isolated BuriMunsi PostgreSQL checks
 
-The shared Edge suite skips six tests when no PostgreSQL fixture is present.
-`qualify.mjs` runs them in three fresh PostgreSQL 17 clusters using synthetic
+The shared Edge suite skips eight tests when no PostgreSQL fixture is present.
+`qualify.mjs` runs them in five fresh PostgreSQL 17 clusters using synthetic
 records. The test workers connect directly to the private Unix socket after
 checking the cluster's data directory, socket, server version and listener
 settings.
@@ -30,3 +30,17 @@ the current source queries and migration snippets under a synthetic C-locale
 database; it does not test real accounts, a managed Supabase project, provider
 connections or the full migration chain. The isolated bootstrap superuser is
 not evidence of privileges on the hosted `postgres` role.
+
+### Read-only contention snapshot
+
+The release owner's probe is `advisory-contention.sql`. Use an approved
+diagnostic role on the intended database during natural recurrence. It does
+not acquire the application advisory locks, inspect query text or read
+application data. It has a two-second statement limit. Keep a bounded sample
+private; report times, target labels and counts rather than process IDs.
+A verified pair requires the blocker PID to also hold the exact target in the
+same observation. Pairings can disappear during a snapshot; a null pair,
+missing transaction metadata (role visibility), or a quiet result is not
+evidence that no lock caused an earlier failure. Correlate with the exact
+failed operation and timestamps before attributing any incident. The probe
+does not cancel a process, take a lock or retry a request.
