@@ -157,6 +157,43 @@ describe('consolidated Payments routes',()=>{
     expect(mock.request).not.toHaveBeenCalled();
   });
 
+  it('reads the attested phone Admin collection directly and rejects an inbox tagged with another collection', async () => {
+    mock.authMethod='phone_passcode';
+    mock.scoped=true;
+    let group='other-group';
+    mock.request.mockImplementation(async()=>({contractVersion:1,collectionId:group,nextCursor:null,asOf:time,items:[],
+      inboxCheck:{state:'incomplete',checkedAt:null,candidateCount:null,missingCount:null,pendingCount:null,headsMatch:null}}));
+    visit('/admin/payments?view=sms',['sms.read']);
+    expect(await screen.findByRole('alert')).toHaveTextContent('The MoMo records could not be verified.');
+    expect(screen.queryByRole('region',{name:'Inbox completeness'})).not.toBeInTheDocument();
+    const expected='momo/observations?collectionId=fixture-group&limit=25&includeProcessing=1';
+    expect(mock.request.mock.calls.map(([path])=>path)).toEqual([expected]);
+    group='fixture-group';
+    fireEvent.click(screen.getByRole('button',{name:'Try again'}));
+    const inbox=within(await screen.findByRole('region',{name:'Inbox completeness'}));
+    expect(inbox.getByRole('status')).toHaveTextContent('SMS sync pending');
+    expect(inbox.queryByText(/missing|pending ·/i)).not.toBeInTheDocument();
+    expect(mock.request.mock.calls.map(([path])=>path)).toEqual([expected,expected]);
+  });
+
+  it('retains collection discovery and switching for Admin sessions without the phone collection proof', async () => {
+    mock.permissions=['sms.read'];
+    const scopes=[{collectionId:'first-group',label:'First group'},{collectionId:'second-group',label:'Second group'}];
+    mock.request.mockImplementation(async (path:string)=>path==='momo/observations/collections'
+      ? {contractVersion:1,asOf:time,items:scopes}
+      : {contractVersion:1,collectionId:new URLSearchParams(path.split('?')[1]).get('collectionId'),nextCursor:null,asOf:time,items:[],
+        inboxCheck:{state:'unknown',checkedAt:null,candidateCount:null,missingCount:null,pendingCount:null,headsMatch:null}});
+    render(<MemoryRouter><ReceiverSmsPanel /></MemoryRouter>);
+    const selector=await screen.findByRole('combobox',{name:'Collection'});
+    expect(selector).toHaveValue('first-group');
+    await screen.findByRole('heading',{name:'Receiver SMS'});
+    fireEvent.change(selector,{target:{value:'second-group'}});
+    await screen.findByRole('heading',{name:'Receiver SMS'});
+    expect(mock.request.mock.calls.map(([path])=>path)).toEqual(['momo/observations/collections',
+      'momo/observations?collectionId=first-group&limit=25&includeProcessing=1',
+      'momo/observations?collectionId=second-group&limit=25&includeProcessing=1']);
+  });
+
   it.each([
     {role:'staff', permissions:['payments.read'], allowed:false},
     {role:'staff', permissions:['payments.read','sms.read'], allowed:false},
@@ -488,7 +525,10 @@ describe('BuriMunsi phone Payments', () => {
       if (path === 'burimunsi/payments/analysis') return buriPage([linked]);
       if (path === 'burimunsi/payments/'+momoId) return linked;
       if (path === evidencePath(momoId)) return envelope(momoId,{...evidence(accountId),payerStatus,payerReason});
-      if (path === 'momo/observations/collections') return {contractVersion:1,asOf:time,items:[]};
+      if (path === 'momo/observations?collectionId=fixture-group&limit=25&includeProcessing=1') return {
+        contractVersion:1,collectionId:'fixture-group',asOf:time,items:[],nextCursor:null,
+        inboxCheck:{state:'unknown',checkedAt:null,candidateCount:null,missingCount:null,pendingCount:null,headsMatch:null},
+      };
       throw new Error('Unexpected request');
     });
     visit('/admin/payments',['payments.read','sms.read']);
@@ -507,7 +547,8 @@ describe('BuriMunsi phone Payments', () => {
     expect(evidenceRegion.queryByRole('region',{name:'Original source access'})).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button',{name:'M-Money SMS'}));
     expect(screen.queryByRole('region',{name:'Payment details'})).not.toBeInTheDocument();
-    expect(await screen.findByText('No receiver collections are available for this account.')).toBeVisible();
+    expect(await screen.findByText('Waiting for Admin phone inbox checks')).toBeVisible();
+    expect(called('momo/observations/collections')).toHaveLength(0);
   });
 
   it.each([
