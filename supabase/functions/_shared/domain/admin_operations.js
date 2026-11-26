@@ -1,6 +1,7 @@
 import {activePhoneOperator} from './admin_email_policy.js';
 import {json,readJson,uuid,text,integer} from './core.js';
-import {permission,lists,list,filters,operatingDetail,iso,fail,unavailable} from './admin_records.js';
+import {permission,lists,list,filters,operatingDetail,readScopedMemberProfile,iso,fail,unavailable} from './admin_records.js';
+import {readScopedAdminMemberPaymentDetail} from './admin_burimunsi_payments.js';
 import {adminAccountSession,adminCanonicalActor,adminInternalRequest,accountDatabase,accountReadDatabase} from './admin_accounts.js';
 import {recordOperatorNote,listOperatorNotes,operatorNotePermission} from './operator_notes.js';
 import {evidenceRoute,compensationRpc} from './evidence.js';
@@ -32,6 +33,12 @@ export async function operatingRead(request,env,account,parts,url){
  if(type==='members'){
   const operator=activePhoneOperator(account);
   if(operator){
+   const include=url.searchParams.get('include');
+   if(include!==null){
+    if(url.searchParams.size!==1||!['balance','statement'].includes(include))
+     fail(400,'invalid_filter','This member view is unavailable.');
+    return readScopedAdminMemberPaymentDetail(env,account,{memberId:uuid(parts[1]),include,readProfile:readScopedMemberProfile});
+   }
    const caps=account.permissions.includes('collections.read')?['users.read','collections.read']:'users.read';
    return operatingDetail(accountReadDatabase(env,account,caps),account,type,uuid(parts[1]),url,{rosterGroupId:operator.collectionId});
   }

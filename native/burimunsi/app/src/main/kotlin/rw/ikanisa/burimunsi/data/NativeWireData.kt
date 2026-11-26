@@ -6,6 +6,7 @@ import rw.ikanisa.wire.*
 internal const val PAYMENT_REFERENCE_VERSION_HEADER = "X-BuriMunsi-Payment-Reference-Version"
 internal const val HOME_WALLET_PATH = "/home?include=wallet"
 internal const val HOME_SAVINGS_PATH = "/home?include=savings"
+internal const val SESSION_HOME_SAVINGS_INCLUDE = "home_savings"
 internal fun ApiFailure.isLegacyHomeSelectorRejection(): Boolean =
     status == 400 && code == "contract_query" && !uncertain
 

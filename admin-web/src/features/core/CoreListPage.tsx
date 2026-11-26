@@ -1,17 +1,17 @@
 import {AdminRequestError} from '../../api/client';
 import {Link} from 'react-router';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ComponentProps } from 'react';
 import { Button, Card, EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge } from '../../ui';
 import { containsControl, formatField, formatMoney, label, memberMobileNumber, parseCorePage, parseMemberRosterPage, paymentReference } from './contracts';
 import { coreListAction } from './coreRecordActions';
-import {MemberDirectoryViews} from './MemberDirectory';
+import {MemberDirectoryActions, MemberDirectoryViews} from './MemberDirectory';
 import {baseSorts, listLocation, listStatuses, readFilters, type Filters} from './coreListFilters';
 import type { CoreArea, CorePage, DataRow, FeatureAccess, FinancialModel } from './types';
 import { AREA_TITLES, CORE_PERMISSIONS } from './types';
 import './core.css';
 
 type ListProps = FeatureAccess & { area: CoreArea; locationSearch?: string; allowMutations?: boolean; paymentsWorkspace?: boolean;
-  simplePayments?: boolean; scopedMember?: boolean; memberActions?: ReactNode };
+  simplePayments?: boolean; scopedMember?: boolean; memberActions?: ComponentProps<typeof MemberDirectoryActions> };
 
 const PAGE_SIZE = 25;
 const descriptions: Record<CoreArea, string> = {
@@ -101,7 +101,8 @@ export function CoreListPage({ area, request, permissions, actorId, role, author
   const title = memberDirectory ? 'Members' : AREA_TITLES[area];
   const action = coreListAction({area, role, permissions, financialModel, allowed, allowMutations});
   return <>
-    {!paymentsWorkspace && <PageHeader title={title} subtitle={descriptions[area]} actions={roster ? memberActions : action ? <Button type="button" onClick={() => navigate(action.path)}>{action.label}</Button> : undefined} />}
+    {!paymentsWorkspace && <PageHeader title={title} subtitle={descriptions[area]} actions={roster ? memberActions && <MemberDirectoryActions {...memberActions} /> :
+      action ? <Button type="button" onClick={() => navigate(action.path)}>{action.label}</Button> : undefined} />}
     {allowed && memberDirectory && !roster && <MemberDirectoryViews area={area} />}
     {!allowed ? <ErrorState title="Access unavailable" message="Your account does not have permission to view this page." /> : <Card>
       <div className="core-toolbar">

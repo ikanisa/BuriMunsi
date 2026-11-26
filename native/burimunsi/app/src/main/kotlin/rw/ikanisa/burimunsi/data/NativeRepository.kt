@@ -50,7 +50,9 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
 
     fun restore(): Operator? = sessions.restore()?.operator
 
-    internal class Restoration(val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null)
+    internal class Restoration(
+        val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null,val homeSavingsRequested:Boolean=false,
+    )
 
     internal fun restoreForHome(wantsHome:(String?,String)->Boolean):Restoration? {
         val revision=cacheStore.revision()
@@ -59,8 +61,8 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
     }
 
     private fun withHome(verified:NativeSessions.ProfileRead,revision:Long):Restoration {
-        val snapshot=verified.home?.let{records.acceptRestoredHome(verified.operator,it,revision)}
-        return Restoration(verified.operator,snapshot?.first,snapshot?.second)
+        val snapshot=verified.home?.let{records.acceptRestoredHome(verified.operator,it,revision,fromSessionBundle=true)}
+        return Restoration(verified.operator,snapshot?.first,snapshot?.second,verified.homeSavingsRequested)
     }
 
     internal fun refreshHome():Restoration {
@@ -95,7 +97,8 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
 
     fun home(): Home = homeSnapshot().value
     internal fun homeSnapshot(): RecordSnapshot<Home> = records.home()
-    internal fun readHomeEnhancement(owner: Operator): Home? = records.readHomeEnhancement(owner)
+    internal fun readHomeEnhancement(owner: Operator, savingsAlreadyRequested: Boolean): Home? =
+        records.readHomeEnhancement(owner,savingsAlreadyRequested)
     internal fun discardDisplayedRecordsFor(owner: Operator) = withCurrentProfile(owner){_,_->cacheStore.clear(verify=true)}
 
     /** A quiet Home read can finish after the screen has left. No cache or
@@ -108,7 +111,7 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
     }
 
     internal fun acceptQuietHome(owner:Operator, read:QuietHome):Pair<Home,Long>? =
-        records.acceptRestoredHome(owner,read.payload,read.revision)
+        records.acceptRestoredHome(owner,read.payload,read.revision,fromSessionBundle=false)
     internal fun recentPayments(listing:ListingQuery) = records.recentPayments(listing)
     internal fun recentMembers(listing:ListingQuery) = records.recentMembers(listing)
     fun recordReadScope(): RecordReadScope = records.recordReadScope()
@@ -121,6 +124,8 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
 
     fun members(listing: ListingQuery, cursor: String? = null, scope: RecordReadScope? = null, anchorId: String? = null): Page<Member> =
         records.members(listing, cursor, scope, anchorId)
+    internal fun memberPage(listing: ListingQuery, cursor: String? = null, anchorId: String? = null) =
+        records.memberPage(listing, cursor, anchorId)
 
     fun sms(listing: ListingQuery, cursor: String? = null, scope: RecordReadScope? = null, limit: Int = 100): Page<SmsRow> =
         records.sms(listing, cursor, scope, limit)
@@ -136,6 +141,7 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
 
     fun members(q: String = "", cursor: String? = null): Page<Member> = records.members(q, cursor)
     fun payment(id: String): Payment = records.payment(id)
+    internal fun paymentRecord(id: String) = records.paymentRecord(id)
     fun member(id: String): Member = records.member(id)
     internal fun memberRecord(id: String) = records.memberRecord(id)
 

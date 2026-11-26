@@ -173,9 +173,19 @@ createServer(async (request, response) => {
       }
       const member = fixtureMembers.rows.find(row => url.pathname === '/api/admin/operations/members/' + row.id);
       if (!member) return json(response, 403, {error: {code: 'expected_group_roster'}});
+      let projection = {};
+      const include = url.searchParams.get('include');
+      if (include !== null) {
+        if (url.searchParams.size !== 1 || !['balance','statement'].includes(include)) return json(response,400,{error:{code:'invalid_filter'}});
+        if (!payments || !phoneAccounts.hasPermission(session,'collections.read')) return json(response,403,{error:{code:'forbidden'}});
+        const {status,body} = readMemberStatementFixture(new URLSearchParams({statement:'1',memberId:member.id,offset:'0'}));
+        if (status !== 200) return json(response,status,body);
+        const {groupId,memberId,membershipId,closingRwf} = body;
+        projection = include === 'statement' ? {member_statement:body} : {member_balance:{groupId,memberId,membershipId,closingRwf}};
+      }
       return json(response, 200, {contract_version: 2, model: 'canonical_evidence_ledger', resource_type: 'members',
         current_actor_id: fixtureAdminId, can_manage: false, resource: member, related_truncated: false,
-        related: {memberships: [fixtureMembership(member)]}});
+        related: {memberships: [fixtureMembership(member)]}, ...projection});
     }
     if (url.pathname === '/api/admin/momo/transactions' ||
         url.pathname === `/api/admin/momo/transactions/${fixtureMomoRecord.id}`) {

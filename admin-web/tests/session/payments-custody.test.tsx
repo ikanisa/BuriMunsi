@@ -46,8 +46,70 @@ function FixtureControls() {
   </>;
 }
 
+function openPayments(initialPath: string, fetchImpl: typeof fetch) {
+  const router=createMemoryRouter([
+    {path:'/admin',element:<><FixtureControls /><ProtectedShell navigation={[{label:'Payments',path:paymentRoute}]} /></>,
+      children:[{path:'payments',element:<BuriMunsiPayments />}]},
+    {path:'/admin/login',element:<><h1>Fixture signed out</h1><FixtureControls /></>},
+  ],{initialEntries:[initialPath]});
+  const view=render(<SessionProvider config={{...config,fetchImpl}}><RouterProvider router={router} /></SessionProvider>);
+  return () => {view.unmount();router.dispose();};
+}
+
 afterEach(()=>{
   vi.unstubAllGlobals(); sessionStorage.clear(); localStorage.clear();
+});
+
+describe('collection-pinned payment detail reads',()=>{
+  const selectedPath=paymentRoute+'?payment='+oldPayment.id, detailPath=api+'/'+oldPayment.id;
+
+  it('starts the selected read with analysis and reads current detail again after reopening',async()=>{
+    const analysis=holdResponse(), initialDetail=holdResponse();
+    let detailReads=0;
+    const updated={...oldPayment,version:2,ftId:'FRESH-DETAIL-ON-REOPEN'};
+    const fetchImpl=vi.fn<typeof fetch>(async input=>{
+      if (input===sessionPath) return session(who);
+      if (input===api+'/analysis') return analysis.promise;
+      if (input===detailPath) return ++detailReads===1 ? initialDetail.promise : Response.json(updated);
+      throw new Error('Unexpected fixture request.');
+    });
+    const close=openPayments(selectedPath,fetchImpl);
+    try {
+      await waitFor(()=>expect(detailReads).toBe(1));
+      expect(fetchImpl.mock.calls.map(([path])=>path)).toEqual([sessionPath,api+'/analysis',detailPath]);
+      await act(async()=>initialDetail.release(Response.json(oldPayment)));
+      expect(screen.queryByRole('heading',{name:oldPayment.ftId})).not.toBeInTheDocument();
+      await act(async()=>analysis.release(page(oldPayment)));
+      expect(await screen.findByRole('heading',{name:oldPayment.ftId})).toBeVisible();
+      expect(detailReads).toBe(1);
+      fireEvent.click(screen.getByRole('button',{name:'Close'}));
+      fireEvent.click(screen.getByRole('button',{name:oldPayment.ftId}));
+      expect(await screen.findByRole('heading',{name:updated.ftId})).toBeVisible();
+      expect(fetchImpl.mock.calls.map(([path])=>path)).toEqual([sessionPath,api+'/analysis',detailPath,detailPath]);
+    } finally {close();}
+  });
+
+  it('discards detail older than the concurrent list version and only reveals the reread',async()=>{
+    const analysis=holdResponse(), recovery=holdResponse();
+    let detailReads=0;
+    const updated={...oldPayment,version:2,ftId:'FRESH-DETAIL-AFTER-VERSION-CHANGE'};
+    const fetchImpl=vi.fn<typeof fetch>(async input=>{
+      if (input===sessionPath) return session(who);
+      if (input===api+'/analysis') return analysis.promise;
+      if (input===detailPath) return ++detailReads===1 ? Response.json(oldPayment) : recovery.promise;
+      throw new Error('Unexpected fixture request.');
+    });
+    const close=openPayments(selectedPath,fetchImpl);
+    try {
+      await waitFor(()=>expect(detailReads).toBe(1));
+      await act(async()=>analysis.release(page(updated)));
+      await waitFor(()=>expect(detailReads).toBe(2));
+      expect(screen.queryByRole('heading',{name:oldPayment.ftId})).not.toBeInTheDocument();
+      await act(async()=>recovery.release(Response.json(updated)));
+      expect(await screen.findByRole('heading',{name:updated.ftId})).toBeVisible();
+      expect(detailReads).toBe(2);
+    } finally {close();}
+  });
 });
 
 describe('Payments authority changes with a slow privileged response',()=>{
@@ -77,12 +139,7 @@ describe('Payments authority changes with a slow privileged response',()=>{
       }
       throw new Error('Unexpected fixture request.');
     });
-    const router=createMemoryRouter([
-      {path:'/admin',element:<><FixtureControls /><ProtectedShell navigation={[{label:'Payments',path:paymentRoute}]} /></>,
-        children:[{path:'payments',element:<BuriMunsiPayments />}]},
-      {path:'/admin/login',element:<><h1>Fixture signed out</h1><FixtureControls /></>},
-    ],{initialEntries:[paymentRoute]});
-    const view=render(<SessionProvider config={{...config,fetchImpl}}><RouterProvider router={router} /></SessionProvider>);
+    const close=openPayments(paymentRoute,fetchImpl);
     try {
       fireEvent.click(await screen.findByRole('link',{name:'Unallocated – allocate payment '+oldPayment.ftId}));
       fireEvent.change(await screen.findByRole('combobox',{name:'Member'}),{target:{value:memberId}});
@@ -119,6 +176,6 @@ describe('Payments authority changes with a slow privileged response',()=>{
       expect(sessionStorage.getItem(PENDING_KEY)).toBeNull();
       expect(fetchImpl.mock.calls.filter(([path])=>String(path).endsWith('/allocate'))).toHaveLength(1);
       expect(fetchImpl.mock.calls.filter(([path])=>String(path).endsWith('/allocation-receipt'))).toHaveLength(0);
-    } finally {view.unmount();router.dispose();}
+    } finally {close();}
   });
 });

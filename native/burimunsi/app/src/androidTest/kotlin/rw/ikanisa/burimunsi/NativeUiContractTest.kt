@@ -305,10 +305,15 @@ class NativeUiContractTest {
         ui.onNodeWithContentDescription("Lifetime member contributions · Unavailable").assertIsDisplayed()
         ui.onNodeWithContentDescription("Total outgoing payments · Unavailable").assertIsDisplayed()
         ui.onNodeWithContentDescription("MoMo balance · last SMS · Unavailable").assertIsDisplayed()
-        ui.runOnIdle { c.state=c.state.copy(homeSavingsLoading=true) }
+        ui.runOnIdle { useSavings(reconciled);c.state=c.state.copy(homeSavingsLoading=true) }
         ui.onNodeWithText("Loading payment totals").assertExists()
         ui.onNodeWithText("Savings figures unavailable.").assertDoesNotExist()
-        ui.runOnIdle { c.state=c.state.copy(homeSavingsLoading=false) }
+        ui.onNodeWithContentDescription("Lifetime member contributions",substring=true).assertDoesNotExist()
+        ui.runOnIdle { c.state=c.state.copy(homeSavingsLoading=false,homeWalletUnavailable=true) }
+        ui.onNodeWithContentDescription("Cumulative incoming payments · Unavailable").assertExists()
+        ui.onNodeWithContentDescription("Cumulative outgoing payments · Unavailable").assertExists()
+        ui.onNodeWithContentDescription("Lifetime member contributions",substring=true).assertDoesNotExist()
+        ui.runOnIdle { c.state=c.state.copy(homeWalletUnavailable=false) }
         val list=ui.onNode(hasScrollToIndexAction())
         list.performScrollToNode(hasContentDescription("1 unallocated"))
         ui.onNodeWithContentDescription("1 unallocated").assertHasClickAction()

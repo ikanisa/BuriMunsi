@@ -7,6 +7,7 @@ import rw.ikanisa.burimunsi.core.*
 import rw.ikanisa.burimunsi.storage.SecureStore
 import java.security.SecureRandom
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 /** Native login, protected credentials and lifecycle of the process-wide session. */
 internal class NativeSessions(
@@ -74,6 +75,9 @@ internal class NativeSessions(
     private val sessionStore=SecureStore(context,"session")
     private val revocationStore=SecureStore(context,"session-revocations")
     private val signedOutStore=SecureStore(context,"signed-out")
+    // Accessed only by the ordered session refresh stream. Retry after a
+    // short cooldown so the same app process can pick up a backend rollout.
+    private var homeSavingsRejectedAt: Long? = null
     override val authority = processSessionAuthority
     private data class LocalOwnership(val group:String,val owner:String?,val tokenHash:String)
     @Volatile private var ownedWitness:SessionWitness?=null
@@ -113,7 +117,7 @@ internal class NativeSessions(
         if(ownedWitness==witness)clearMemoryOperator()
     }
 
-    class ProfileRead(val operator:Operator,val home:JSONObject?=null)
+    class ProfileRead(val operator:Operator,val home:JSONObject?=null,val homeSavingsRequested:Boolean=false)
 
     fun restore(includeHome:Boolean=false,wantsHome:(String?,String)->Boolean={_,_->true}):ProfileRead?{
         // Snapshot, validate and attach under one process-wide lock. A second
@@ -243,18 +247,24 @@ internal class NativeSessions(
         val witness=ownedSession()
         return synchronized(sessionRefreshLock){refreshSessionLocked(witness,expectedOwner=null,includeHome)}
     }
-    private fun readSession(witness:SessionWitness,includeHome:Boolean):JSONObject {
+    private fun readSession(witness:SessionWitness,includeHome:Boolean):Pair<JSONObject,Boolean> {
+        fun read(path:String) = JSONObject(requestOwned(witness,"GET",path))
+        fun ApiFailure.selectorRejected() = status==400 && !uncertain && code in setOf("invalid_query","contract_query")
         if(includeHome&&api.resolvesLoginScope){
-            try{return JSONObject(requestOwned(witness,"GET","/session?include=home"))}
-            catch(e:ApiFailure){
-                // A previous backend can reject the new query before loading records.
-                if(e.status!=400||e.code !in setOf("invalid_query","contract_query"))throw e
+            if(homeSavingsRejectedAt?.let { System.nanoTime()-it < TimeUnit.MINUTES.toNanos(5) } != true) {
+                try { return read("/session?include=$SESSION_HOME_SAVINGS_INCLUDE") to true }
+                catch(e:ApiFailure) {
+                    if(!e.selectorRejected())throw e
+                    homeSavingsRejectedAt = System.nanoTime()
+                }
             }
+            try { return read("/session?include=home") to false }
+            catch(e:ApiFailure) { if(!e.selectorRejected())throw e }
         }
-        return JSONObject(requestOwned(witness,"GET","/session"))
+        return read("/session") to false
     }
     private fun refreshSessionLocked(witness:SessionWitness,expectedOwner:String?,includeHome:Boolean=false):ProfileRead {
-        val j=try{readSession(witness,includeHome)}catch(e:ApiFailure){
+        val (j,homeSavingsRequested)=try{readSession(witness,includeHome)}catch(e:ApiFailure){
             if(e.status==403&&confirmedSessionDenial(e)){authority.invalidateIfCurrent(witness,::clearLocalOperator);throw ApiFailure("session_unavailable",401)}
             throw e
         }
@@ -286,7 +296,7 @@ internal class NativeSessions(
             if(savedProfile!=null&&!profile.hasSameAccess(savedProfile)){
                 authority.renewGrant(witness){ownedWitness=it}
             }else authority.confirmObservationCurrent(witness)
-            ProfileRead(profile,j.optJSONObject("home"))
+            ProfileRead(profile,j.optJSONObject("home"),homeSavingsRequested)
         }
     }
     private fun saveSession(encoded:String){
@@ -508,17 +518,19 @@ internal class NativeSessions(
         recoveryOrigin: String?,
     ): String = callOwned(witness, method, path, body, recoveryOrigin, publishProvenance = true)
 
-    internal fun requestHome(witness: SessionWitness, allowBaseFallback: Boolean = true): String {
+    internal enum class HomeFallback { NONE, SAVINGS, SAVINGS_AND_BASE }
+
+    internal fun requestHome(witness: SessionWitness, fallback: HomeFallback = HomeFallback.SAVINGS_AND_BASE): String {
         fun read(path: String) = callOwned(witness, "GET", path, null, null, publishProvenance = false)
         try {
             return read(HOME_WALLET_PATH)
         } catch (error: ApiFailure) {
-            if (!error.isLegacyHomeSelectorRejection()) throw error
+            if (fallback == HomeFallback.NONE || !error.isLegacyHomeSelectorRejection()) throw error
         }
         try {
             return read(HOME_SAVINGS_PATH)
         } catch (error: ApiFailure) {
-            if (!allowBaseFallback || !error.isLegacyHomeSelectorRejection()) throw error
+            if (fallback != HomeFallback.SAVINGS_AND_BASE || !error.isLegacyHomeSelectorRejection()) throw error
         }
         return read("/home")
     }

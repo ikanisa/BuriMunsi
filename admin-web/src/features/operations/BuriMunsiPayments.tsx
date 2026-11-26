@@ -3,62 +3,21 @@ import {Link, useLocation, useNavigate, useSearchParams} from 'react-router';
 import {AdminRequestError} from '../../api/client';
 import {useSession} from '../../session/SessionProvider';
 import {canDisplaySessionRecords, canReadSmsEvidence} from '../../session/sessionContext';
-import {Button, Card, ErrorState, LoadingState, PageHeader, StatusBadge} from '../../ui';
-import {MomoCell, MomoTable} from './MomoRecordViews';
+import {Button, Card, ErrorState, LoadingState, PageHeader} from '../../ui';
 import {Facts} from './OperationsRecords';
 import {ReceiverSmsPanel} from './ReceiverSmsPanel';
 import {CanonicalPaymentEvidence} from './CanonicalPaymentEvidence';
 import {PaymentAllocationWizard} from './PaymentAllocationWizard';
 import {FinancialAnalysisTable, type FinancialColumn} from './FinancialAnalysisTable';
 import {PaymentTotalsSummary} from './PaymentFlowTotals';
-import {PaymentTermIcon} from './PaymentTermIcon';
+import {AllocationStatus, PaymentDirection, buriMunsiPaymentsPath, buriMunsiSmsPath, paymentAmount, recordedText} from './BuriMunsiPaymentRows';
 import {initialColumnFilters, type ColumnFilter, type FinancialSort} from './financialAnalysisModel';
 import {type PaymentAnalysisQuery} from '../../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
 import {buriMunsiPayment, paymentAllocation, paymentCounterpartyEvidence, paymentDirection, paymentId, paymentInstant, paymentMemberName, paymentMemberNumber, paymentTime, readCanonicalPaymentAnalysis, type BuriMunsiPayment} from './canonicalPaymentAnalysis';
-import {useOperationRead} from './useOperationRead';
-import './operations.css';
-import './paymentsWorkspace.css';
+import {useOperationRead, type OperationReadState} from './useOperationRead';
 
-export {buriMunsiPayment};
-export type {BuriMunsiPayment};
 const maxSearchLength = 80;
 const amountFormat = new Intl.NumberFormat('en-RW');
-const amount = (value: number | null) => value === null ? '—' : 'RWF ' + amountFormat.format(value);
-const recordedText = (value: string | null | undefined) => value?.trim() ? value : null;
-export const buriMunsiPaymentsPath = '/admin/payments';
-export const buriMunsiSmsPath = buriMunsiPaymentsPath + '?view=sms';
-export const buriMunsiPaymentPath = (id: string) => buriMunsiPaymentsPath + '?' + new URLSearchParams({payment: id});
-
-function PaymentDirection({direction}: {direction: BuriMunsiPayment['direction']}) {
-  return <span className="payment-direction" data-payment-flow={direction}>
-    <PaymentTermIcon term={direction} /><span aria-hidden="true">{direction === 'incoming' ? 'IN' : 'OUT'}</span>
-  </span>;
-}
-
-function AllocationStatus({row, search, text = false}: {row: BuriMunsiPayment; search?: URLSearchParams; text?: boolean}) {
-  const allocated = row.state === 'allocated';
-  const label = allocated ? 'Allocated' : 'Unallocated';
-  const badge = <StatusBadge tone={allocated ? 'success' : 'warning'}>
-    {text ? label : <PaymentTermIcon term={row.state} />}
-  </StatusBadge>;
-  if (row.state !== 'unallocated' || row.canAllocate !== true) return badge;
-  const next = new URLSearchParams(search);
-  next.set('allocate', row.id); next.delete('view'); next.delete('source');
-  return <Link className="payment-allocation-link" to={buriMunsiPaymentsPath + '?' + next}
-    state={{allocationReturn: row.id}} preventScrollReset aria-haspopup="dialog"
-    aria-label={text ? 'Allocate to member' : 'Unallocated – allocate payment ' + (recordedText(row.ftId) ?? row.id)}>{badge}</Link>;
-}
-
-export function BuriMunsiPaymentRows({rows, onSelect}: {rows: BuriMunsiPayment[]; onSelect?: (paymentId: string) => void}) {
-  return <MomoTable name="Payments" headings={['Reference', 'IN/OUT', 'Amount', 'Member', 'Status', 'Payment time']} compact>
-    {rows.map(row => <tr key={row.id}><MomoCell label="Reference">{onSelect
-      ? <button type="button" className="operations-link" onClick={() => onSelect(row.id)}>{row.ftId ?? 'View payment'}</button>
-      : <Link className="operations-link" to={buriMunsiPaymentPath(row.id)}>{row.ftId ?? 'View payment'}</Link>}</MomoCell>
-      <MomoCell label="IN/OUT"><PaymentDirection direction={row.direction} /></MomoCell><MomoCell label="Amount">{amount(row.amountRwf)}</MomoCell>
-      <MomoCell label="Member">{paymentMemberName(row) ?? '—'}</MomoCell><MomoCell label="Status"><AllocationStatus row={row} /></MomoCell>
-      <MomoCell label="Payment time">{paymentTime(row.atRaw)}</MomoCell></tr>)}
-  </MomoTable>;
-}
 
 export function BuriMunsiPayments() {
   const session = useSession(), [params, setParams] = useSearchParams();
@@ -99,7 +58,7 @@ const categoryBookmarks = [{key:'allocation',kind:'category'},{key:'direction',k
 function ScopedPaymentRecords() {
   const {epoch, request, user} = useSession(), [params, setParams] = useSearchParams();
   const location = useLocation(), navigate = useNavigate();
-  const [confirmation, setConfirmation] = useState(''), [allocationRevision, setAllocationRevision] = useState(0);
+  const [confirmation, setConfirmation] = useState(''), [detailRevision, setDetailRevision] = useState(0);
   const canReadSms = canReadSmsEvidence(user), group = user?.adminIdentity?.collectionId;
   const allocating = params.getAll('allocate').length === 1 ? paymentId.safeParse(params.get('allocate')).data : undefined;
   const selected = params.get('view') === 'sms' ? undefined : paymentId.safeParse(params.get('payment')).data;
@@ -127,6 +86,13 @@ function ScopedPaymentRecords() {
     {invalidResponse:'Matching payments and totals could not be confirmed. Please refresh.'});
   const data = result?.status === 'success' ? result.value : null;
   const rows = data?.items ?? [];
+  const scopedGroup = group ?? rows[0]?.groupId;
+  const detailRead = usePaymentDetail(selected, scopedGroup, !!group || !!result,
+    rows.find(row => row.id === selected)?.version, JSON.stringify([payload, detailRevision]));
+  const refresh = () => {
+    retry();
+    if (selected) setDetailRevision(value => value + 1);
+  };
   function changeCriteria(nextFilters:ReadonlyMap<string,ColumnFilter>,nextSort:FinancialSort) {
     setFilters(nextFilters); setSort(nextSort);
     if (page > 1) {setResettingOffset(true); changePage(1);}
@@ -164,18 +130,17 @@ function ScopedPaymentRecords() {
   ];
   if (canReadSms) columns.push({key:'sms',label:'SMS evidence',kind:'category',value:r=>r.sourceId ? 'linked' : 'none',
     options:[{value:'linked',label:'Linked'},{value:'none',label:'None linked'}],render:r=>r.sourceId ? rowButton(r,'Review linked SMS') : 'None linked'});
-  const scopedGroup = group ?? rows[0]?.groupId;
-  const detail = selected ? <PaymentDetail key={JSON.stringify([selected,rows.find(row=>row.id===selected)?.version,allocationRevision])}
-    id={selected} group={scopedGroup} search={params} onClose={() => show()} /> : null;
+  const detail = selected ? <PaymentDetail key={selected} group={scopedGroup} {...detailRead}
+    search={params} onClose={() => show()} /> : null;
   const actions = <>{query && <Button onClick={() => {
     const next = new URLSearchParams(params);
     next.delete('q'); next.delete('offset');
     setParams(next);
   }}>Clear search “{query}”</Button>}
-    <Button icon="refresh" onClick={retry}>Refresh</Button></>;
+    <Button icon="refresh" onClick={refresh}>Refresh</Button></>;
   return <Card className="operations-records">
     {confirmation && !allocating && <p className="operations-note" role="status">{confirmation}</p>}
-    {result?.status === 'error' && <ErrorState message={result.message} onRetry={retry} />}
+    {result?.status === 'error' && <ErrorState message={result.message} onRetry={refresh} />}
     <FinancialAnalysisTable label="Payments" rows={rows} columns={columns} rowKey={r=>r.id}
       remote={{filters,sort,total:data?.totalCount ?? 0,matching:data?.matchingCount ?? 0,busy:!result || result.status==='error',onCriteria:changeCriteria}}
       actions={actions} summary={data ? () => <><PaymentTotalsSummary {...data.directionTotalsRwf} missing={data.missing} />
@@ -183,20 +148,40 @@ function ScopedPaymentRecords() {
       pageSize={25} page={page} onPageChange={changePage} expanded={selected && detail ? {key:selected,content:detail} : null} />
     {selected && result && !rows.some(r=>r.id===selected) && detail}
     {allocating && <PaymentAllocationWizard key={JSON.stringify([epoch,scopedGroup,allocating])} id={allocating} group={scopedGroup}
-      onClose={closeAllocation} onStale={retry} onAllocated={() => {
-        setConfirmation('Payment allocated.'); setAllocationRevision(value=>value+1); closeAllocation(); retry();
+      onClose={closeAllocation} onStale={refresh} onAllocated={() => {
+        setConfirmation('Payment allocated.'); closeAllocation(); refresh();
       }} />}
   </Card>;
 }
 
-function PaymentDetail({id: paymentKey, group, search, onClose}: {id: string; group?: string; search: URLSearchParams; onClose: () => void}) {
-  const {epoch, request, user} = useSession();
+function usePaymentDetail(paymentKey: string | undefined, group: string | undefined, enabled: boolean,
+  seenVersion: number | undefined, listContext: string) {
+  const {epoch, request} = useSession();
   const load = useCallback(async (signal: AbortSignal) => {
     const payment = buriMunsiPayment.parse(await request('burimunsi/payments/'+paymentKey, {signal}));
     if (payment.id !== paymentKey || group && payment.groupId !== group) throw new Error('The payment changed.');
     return payment;
   }, [group, paymentKey, request]);
-  const {result, retry} = useOperationRead(JSON.stringify([epoch, group, paymentKey]), true, load);
+  const selection = JSON.stringify([epoch, group, paymentKey, listContext]);
+  const [visit, setVisit] = useState({selection, index: 0});
+  if (visit.selection !== selection) setVisit({selection, index: visit.index + 1});
+  const scope = JSON.stringify([selection, visit.index]);
+  const first = useOperationRead(scope, enabled && !!paymentKey, load);
+  const olderThanList = (result: OperationReadState<BuriMunsiPayment> | null) =>
+    result?.status === 'success' && seenVersion !== undefined && result.value.version < seenVersion;
+  // A concurrent read can finish with an older version than the list. Only that case needs a second GET.
+  const outdated = olderThanList(first.result);
+  const newer = useOperationRead(JSON.stringify([scope, seenVersion]), outdated, load);
+  const current = outdated ? newer : first;
+  if (olderThanList(current.result)) {
+    return {result: {status: 'error' as const, key: scope, message: 'The payment changed. Refresh to verify its details.'}, retry: current.retry};
+  }
+  return current;
+}
+
+function PaymentDetail({group, search, onClose, result, retry}: {group?: string; search: URLSearchParams; onClose: () => void;
+  result: OperationReadState<BuriMunsiPayment> | null; retry: () => void}) {
+  const {user} = useSession();
   const payment = result?.status === 'success' ? result.value : null;
   const evidenceGroup = payment?.groupId ?? group;
   const recordedParty = payment ? paymentCounterpartyEvidence(payment) : null;
@@ -208,7 +193,7 @@ function PaymentDetail({id: paymentKey, group, search, onClose}: {id: string; gr
       <div>{payment && <AllocationStatus row={payment} search={search} text />}<Button onClick={onClose}>Close</Button></div>
     </header>
     {!result ? <LoadingState label="Loading payment" /> : result.status === 'error' ? <ErrorState message={result.message} onRetry={retry} /> :
-      payment && <><Facts items={[['Amount', amount(payment.amountRwf)], ['IN/OUT', <PaymentDirection direction={payment.direction} />],
+      payment && <><Facts items={[['Amount', paymentAmount(payment.amountRwf)], ['IN/OUT', <PaymentDirection direction={payment.direction} />],
         ['Time', paymentTime(payment.atRaw)],
         ...(member ? [['Member', member] as [string,string]] : []),
         ...(memberPhone ? [['Member phone', memberPhone] as [string,string]] : [])]} />

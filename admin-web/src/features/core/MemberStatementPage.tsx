@@ -2,7 +2,8 @@ import {useCallback, useState} from 'react';
 import {Button, Card, EmptyState, ErrorState, LoadingState, PageHeader} from '../../ui';
 import {paymentTime} from '../operations/canonicalPaymentAnalysis';
 import {useOperationRead} from '../operations/useOperationRead';
-import {canReadMemberStatement, memberStatementPageSize, readMemberStatement, statementAmount, type MemberStatementPosition} from './memberStatement';
+import {canReadMemberStatement, memberStatementPageSize, readMemberStatement, readMemberStatementPage,
+  statementAmount, type MemberStatementPosition, type ProfileMembership} from './memberStatement';
 import {isId} from './contracts';
 import type {FeatureAccess} from './types';
 import './core.css';
@@ -11,17 +12,22 @@ export function MemberStatementPage({id, expectedGroup, returnTo, actorId, autho
   FeatureAccess & {id: string; expectedGroup?: string; returnTo?: string}) {
   const allowed = isId(id) && canReadMemberStatement(permissions);
   const scope = JSON.stringify([authorityKey, id, expectedGroup]);
-  const [selected, setSelected] = useState<(MemberStatementPosition & {scope: string}) | null>(null);
-  const offset = selected?.scope === scope ? selected.offset : 0;
-  const revision = selected?.scope === scope ? selected.revision : undefined;
-  const load = useCallback((signal: AbortSignal) => readMemberStatement(request, signal, id, actorId, expectedGroup, {offset, revision}),
-    [request, id, actorId, expectedGroup, offset, revision]);
-  const {result, retry} = useOperationRead(JSON.stringify([scope, offset, revision]), allowed, load,
+  const [selected, setSelected] = useState<(MemberStatementPosition & {scope: string; membership: ProfileMembership; name: string | null}) | null>(null);
+  const position = selected?.scope === scope ? selected : null;
+  const offset = position?.offset ?? 0;
+  const load = useCallback(async (signal: AbortSignal) => {
+    if (!position) return readMemberStatement(request, signal, id, actorId, expectedGroup, {offset: 0});
+    const {membership, name} = position;
+    const statement = await readMemberStatementPage(request, signal, id, membership, position);
+    return {...statement, membership, name};
+  }, [request, id, actorId, expectedGroup, position]);
+  const {result, retry} = useOperationRead(JSON.stringify([scope, offset, position?.revision]), allowed, load,
     {invalidResponse: 'The membership or its complete payment history could not be verified.'});
   const data = result?.status === 'success' ? result.value : null;
   const pages = Math.max(1, Math.ceil((data?.totalCount ?? 0) / memberStatementPageSize));
   const current = offset / memberStatementPageSize + 1;
-  const changePage = (next: number) => data && setSelected({scope, offset: (next - 1) * memberStatementPageSize, revision: data.revision});
+  const changePage = (next: number) => data && setSelected({scope, offset: (next - 1) * memberStatementPageSize,
+    revision: data.revision, membership: data.membership, name: data.name});
   const restart = () => {
     setSelected(null);
     retry();

@@ -12,6 +12,7 @@ object Transport {
  val calls=CopyOnWriteArrayList<Request>()
  var handler:(Request)->String={error("No transport fixture")}
  var sessionHome:((Request)->String)?=null
+ var sessionHomeSavings:((Request)->String)?=null
  var loginHome:((Request)->String)?=null
 }
 class ApiClient(origin:String,val installationId:String,token:()->String?,val installationProfile:String?=null) {
@@ -23,6 +24,8 @@ class ApiClient(origin:String,val installationId:String,token:()->String?,val in
  fun call(method:String,path:String,token:String?=null,body:JSONObject?=null,recoveryOrigin:String?=null,contractContext:Map<String,Any?> = emptyMap()):String {
   val request=Request(method,path,token,body,recoveryOrigin,contractContext)
   Transport.calls.add(request)
+  if(method=="GET"&&path=="/v1/burimunsi/session?include=home_savings")
+   return Transport.sessionHomeSavings?.invoke(request)?:throw ApiFailure("invalid_query",400)
   if(method=="GET"&&path=="/v1/burimunsi/session?include=home")
    return Transport.sessionHome?.invoke(request)?:throw ApiFailure("invalid_query",400)
   if(method=="POST"&&path=="/v1/burimunsi/session/login?include=home")

@@ -9,7 +9,7 @@ import {readMemberListing} from './postgres-member-listing.js';
 import {nativePaymentListingScope,paymentAllocationFilterSql,paymentReferenceSql,paymentsSql,readCanonicalHome} from './postgres-payment-reads.js';
 import {projectLedger,projectMember,projectPayment} from './postgres-record-projections.js';
 import {claimPhonePinReadSnapshot} from './phone-pin-request.js';
-import {paymentListingRows,paymentRecord,readPayment as readPaymentRecord,readPayments,readPaymentsHome} from './postgres-payments.js';
+import {paymentListingRows,paymentRecord,readOptionalPaymentsHome,readPayment as readPaymentRecord,readPayments,readPaymentsHome} from './postgres-payments.js';
 
 const membersSql=includeBalance=>`SELECT u.id,m.collection_id,u.full_name,u.momo_number,m.active,m.revision,u.revision AS person_revision,m.joined_at
  ${includeBalance?',coalesce((SELECT sum(l.amount_minor) FROM app.ledger_entries l WHERE l.collection_id=m.collection_id AND l.member_id=m.user_id),0) AS balance':''}
@@ -79,8 +79,11 @@ export class PostgresRecordsStore {
             WHERE s.collection_id=$1 AND c.installation_id=$2`,[g,installationId]))[0];
           return r?{id:r.id,groupId:g,installationId:r.installation_id,active:r.enabled&&r.status==='active'&&!r.revoked_at&&pgInteger(r.version)===pgInteger(r.binding_version)}:null;
         },
-        canonicalHome:async(g,{includeSavings=false,includeWallet=false}={})=>{
-          scope(g);return this.paymentsOnly?readPaymentsHome(sql,g,at,projection(),{includeSavings,includeWallet}):readCanonicalHome(sql,g,at,auto);
+        canonicalHome:async(g,{includeSavings=false,includeWallet=false,optionalSavings=false}={})=>{
+          scope(g);
+          if(!this.paymentsOnly)return readCanonicalHome(sql,g,at,auto);
+          if(optionalSavings)return readOptionalPaymentsHome(sql,g,at,projection());
+          return readPaymentsHome(sql,g,at,projection(),{includeSavings,includeWallet});
         },
         memberListingRevision:async g=>{
           scope(g);

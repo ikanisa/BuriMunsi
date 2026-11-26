@@ -95,7 +95,8 @@ import rw.ikanisa.burimunsi.core.*
             when {
                 totals != null -> HomeWalletOverview(totals,
                     smsAllowed = s.operator?.let { it.role == Role.ADMIN && Capability.SMS.key in it.capabilities } == true)
-                s.homeSavingsLoading && home.savings == null -> BuriInlineLoading("Loading payment totals")
+                s.homeSavingsLoading -> BuriInlineLoading("Loading payment totals")
+                s.homeWalletUnavailable -> HomeWalletOverview(null,smsAllowed=false)
                 else -> HomeSavingsOverview(home.savings)
             }
         }

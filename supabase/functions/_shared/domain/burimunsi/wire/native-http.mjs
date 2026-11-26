@@ -2,6 +2,12 @@ import { BuriError, requireThat } from "../errors.js";
 import { ContractViolation, parseWire } from "./runtime.mjs";
 import { MAX_NATIVE_REQUEST_BYTES, readNativeBody } from "./request-boundary.mjs";
 
+const phonePinRecordsPath = /^\/v1\/burimunsi\/(?:home|payments(?:\/[A-Za-z0-9_-]+)?|members(?:\/[A-Za-z0-9_-]+)?)$/;
+export function isPhonePinRecordRead(path, search) {
+  return phonePinRecordsPath.test(path) || path === '/v1/burimunsi/session' &&
+    (search === '?include=home' || search === '?include=home_savings');
+}
+
 export function requireNativeHttpsOrigin(origin) {
   const configured = new URL(origin);
   requireThat(configured.protocol === "https:" && configured.origin === origin, "tls_origin_required", 503);

@@ -74,12 +74,14 @@ export async function readPaymentsHome(sql,groupId,asOf,projection,{includeSavin
       'SELECT latest_wallet_balance_rwf::text FROM private.burimunsi_home_savings($1)';
     query=`WITH counts AS (${counts}) SELECT counts.*,(${wallet}) AS latest_sms_balance FROM counts`;
   }
-  const totalsRows=await sql.unsafe(query,[groupId]);
-  requireThat(totalsRows.length===1,'invalid_snapshot',503);
-  const [totals]=totalsRows;
-  const rows=await sql.unsafe(display+newest+' LIMIT 3',[groupId]);
+  const rows=await sql.unsafe(`WITH home_totals AS (${query}), totals AS (
+    SELECT home_totals.*,count(*) OVER () AS summary_rows FROM home_totals
+  ), recent AS (${display}${newest} LIMIT 3)
+  SELECT totals.*,recent.* FROM totals LEFT JOIN recent ON true ORDER BY recent.page_at DESC,recent.id DESC`,[groupId]);
+  const [totals]=rows;
+  requireThat(totals&&pgInteger(totals.summary_rows,{code:'invalid_snapshot'})===1,'invalid_snapshot',503);
   const home={paymentCount:pgInteger(totals.payments),memberCount:pgInteger(totals.members),
-    unallocatedCount:pgInteger(totals.unallocated),recentPayments:rows.map(row=>paymentRecord(row,projection)),asOf};
+    unallocatedCount:pgInteger(totals.unallocated),recentPayments:rows.filter(row=>row.id!=null).map(row=>paymentRecord(row,projection)),asOf};
   if(showTotals){
     return {...home,paymentTotals:projectHomePaymentTotals({incomingRwf:totals.incoming,outgoingRwf:totals.outgoing,
       ...(showSmsBalance&&{latestSmsBalanceRwf:wholeRwf(totals.latest_sms_balance)})},showSmsBalance)};
@@ -88,6 +90,27 @@ export async function readPaymentsHome(sql,groupId,asOf,projection,{includeSavin
   return {...home,savings:{lifetimeContributionsRwf:wholeRwf(totals.lifetime_contributions),
     outgoingPaymentsRwf:wholeRwf(totals.outgoing),latestWalletBalanceRwf:wholeRwf(totals.latest_wallet_balance),
     reconciliationStatus:totals.reconciliation_status}};
+}
+
+// Keep the verified snapshot and earlier role/session locks when only an
+// optional statement runs over budget. ROLLBACK TO also restores its timeout.
+async function optionalPaymentRead(sql,milliseconds,read,mayOmit=()=>false) {
+  await sql.unsafe(`SAVEPOINT burimunsi_optional_read; SET LOCAL statement_timeout='${milliseconds}ms'`);
+  let value=null;
+  try {
+    value=await read();
+  } catch(error) {
+    const budgetExceeded=error?.code==='57014'&&error.message==='canceling statement due to statement timeout';
+    if(!budgetExceeded&&!mayOmit(error))throw error;
+  }
+  await sql.unsafe('ROLLBACK TO SAVEPOINT burimunsi_optional_read; RELEASE SAVEPOINT burimunsi_optional_read');
+  return value;
+}
+
+export async function readOptionalPaymentsHome(sql,groupId,asOf,projection) {
+  const enhanced=await optionalPaymentRead(sql,450,()=>readPaymentsHome(sql,groupId,asOf,projection,{includeSavings:true}),
+    error=>error?.code==='42883'||error?.code==='invalid_snapshot');
+  return enhanced??readPaymentsHome(sql,groupId,asOf,projection);
 }
 
 export async function readPayment(sql,groupId,id,projection) {
@@ -119,6 +142,27 @@ export async function readPayments(sql,groupId,{q='',status=null,direction=null,
 export const MEMBER_STATEMENT_PAGE_SIZE = 25;
 // Preserve the previous maximum of 100,000 offset plus a final 100-row read.
 export const MEMBER_STATEMENT_MAX_ROWS = 100_100;
+
+export async function readOptionalMemberPaymentBalance(sql,groupId,memberId,membershipId) {
+  return optionalPaymentRead(sql,500,async()=>{
+    const [row]=await sql.unsafe(`WITH membership AS MATERIALIZED (
+      SELECT m.id FROM app.memberships m
+      JOIN app.collections g ON g.id=m.collection_id AND g.status='active'
+      JOIN app.users u ON u.id=m.user_id AND u.member_type IN ('app','direct')
+      WHERE m.collection_id=$1 AND m.user_id=$2 AND m.id=$3
+    ), movements AS MATERIALIZED (
+      SELECT CASE WHEN p.direction='incoming' THEN p.amount_rwf ELSE -p.amount_rwf END AS net_rwf
+      FROM burimunsi.payments p CROSS JOIN membership WHERE p.collection_id=$1 AND p.member_id=$2
+      LIMIT ($4::int+1)
+    ) SELECT membership.id AS membership_id,totals.* FROM membership CROSS JOIN LATERAL (
+      SELECT count(*)::int AS total_count,coalesce(sum(net_rwf),0)::text AS closing_rwf FROM movements
+    ) totals`,[groupId,memberId,membershipId,MEMBER_STATEMENT_MAX_ROWS]);
+    requireThat(row?.membership_id===membershipId,'member_statement_unavailable',404);
+    if(pgInteger(row.total_count,{minimum:0})>MEMBER_STATEMENT_MAX_ROWS)return null;
+    requireThat(typeof row.closing_rwf==='string'&&/^(0|-?[1-9]\d{0,30})$/.test(row.closing_rwf),'invalid_snapshot',503);
+    return {groupId,memberId,membershipId,closingRwf:row.closing_rwf};
+  });
+}
 
 export async function readMemberPaymentStatement(sql, groupId, memberId, {offset, revision}) {
   const limit = MEMBER_STATEMENT_PAGE_SIZE;

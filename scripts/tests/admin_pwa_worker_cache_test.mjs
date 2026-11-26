@@ -22,6 +22,7 @@ function worker({ name = 'collect-admin-current', redirectAsset = null, mismatch
       this.method = options.method ?? 'GET';
       this.mode = options.mode ?? 'same-origin';
       this.cache = options.cache;
+      this.priority = options.priority;
       this.credentials = options.credentials;
       this.redirect = options.redirect;
     }
@@ -161,6 +162,7 @@ assert.equal(normal.skipped, false);
 assert.equal(normal.requests.length, 2);
 for (const request of normal.requests) {
   assert.equal(request.cache, 'reload');
+  assert.equal(request.priority, 'low');
   assert.equal(request.credentials, 'omit');
   assert.equal(request.redirect, 'error');
 }

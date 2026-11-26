@@ -12,6 +12,7 @@ import kotlinx.coroutines.withContext
 import rw.ikanisa.burimunsi.core.ContractFailure
 import rw.ikanisa.burimunsi.core.ListingQuery
 import rw.ikanisa.burimunsi.core.ListingTarget
+import rw.ikanisa.burimunsi.core.Operator
 import rw.ikanisa.burimunsi.core.SnapshotFreshness
 import rw.ikanisa.burimunsi.core.checkContract
 import rw.ikanisa.burimunsi.core.export.ExportCancelledException
@@ -47,6 +48,7 @@ internal class NativeListingDownloads(
     private val runExport: (suspend () -> Unit) -> Unit,
     private val setOperationLabel: (String) -> Unit,
     private val onSessionInvalid: () -> Unit,
+    private val onProfileRevalidated: (Operator) -> Unit,
 ) {
     private data class PreparedDownload(
         val request: DownloadRequest,
@@ -208,12 +210,15 @@ internal class NativeListingDownloads(
             try {
                 feedback = UiExportFeedback(UiExportPhase.WRITING, format, name, canCancel = true)
                 setOperationLabel("Checking download access")
-                io {
+                val profile = io {
                     check()
-                    repository().refreshSession()
+                    val current = repository().refreshSession()
                     check()
                     prepared.validateLocal()
+                    current
                 }
+                check()
+                onProfileRevalidated(profile)
                 setOperationLabel("Saving download")
                 io {
                     check()

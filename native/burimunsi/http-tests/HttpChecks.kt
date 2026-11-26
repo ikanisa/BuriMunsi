@@ -32,6 +32,7 @@ private class Connection(url:URL):HttpURLConnection(url){
         .put("requestId",url.path.substringBeforeLast('/').substringAfterLast('/')).put("fingerprint",getRequestProperty("X-BuriMunsi-Handoff-Fingerprint"))
         .put("state","unknown").put("ack",JSONObject.NULL)
     url.path.endsWith("/session/login")->JSONObject().put("token","a".repeat(64)).put("expiresAt",System.currentTimeMillis()+3600000).put("profile",profile)
+    url.path.endsWith("/session")->JSONObject().put("expiresAt",System.currentTimeMillis()+3600000).put("profile",profile)
     url.path.endsWith("/recovery")->JSONObject().put("protocol","burimunsi.operation-recovery.v1").put("requestId",url.path.substringBeforeLast('/').substringAfterLast('/'))
         .put("state","pending").put("originDigest",getRequestProperty("X-BuriMunsi-Operation-Origin")).put("groupId","group-1").put("actorId","actor-1").put("installationId","installation-1")
     url.path.endsWith("/staff-resolution")->JSONObject().put("protocol","burimunsi.operation-recovery.v1").put("requestId",url.path.substringBeforeLast('/').substringAfterLast('/'))
@@ -536,6 +537,23 @@ fun main(){
  Wire.reply=Reply(transform={v->v.getJSONObject("data").put("groupId","group-1")})
  val missingHome=runCatching{native.call("POST",bundledLogin,body=loginBody,contractContext=loginContext)}.exceptionOrNull() as ApiFailure
  ck("missing requested Home is an uncertain contract failure",missingHome.uncertain&&missingHome.code=="contract_context")
+ val savingsSnapshot=JSONObject("""{"lifetimeContributionsRwf":17,"outgoingPaymentsRwf":0,"latestWalletBalanceRwf":null,"reconciliationStatus":"unavailable"}""")
+ val homeSession="/v1/burimunsi/session?include=home_savings"
+ fun bundledSession(path:String)=JSONObject(native.call("GET",path,token="a".repeat(64),contractContext=scope))
+ Wire.reply=Reply(transform={v->v.getJSONObject("data").put("home",JSONObject(homeData.toString()).put("savings",savingsSnapshot))})
+ val savingsSession=bundledSession(homeSession)
+ ck("one authenticated session GET validates core Home and optional savings",
+    savingsSession.getJSONObject("home").getJSONObject("savings").getInt("outgoingPaymentsRwf")==0&&
+        Wire.last?.url?.query=="include=home_savings"&&Wire.last?.getRequestProperty("X-BuriMunsi-Group")=="group-1")
+ ck("legacy session never accepts unrequested bundled savings",
+    (runCatching{bundledSession("/v1/burimunsi/session?include=home")}.exceptionOrNull() as? ApiFailure)?.code=="contract_context")
+ Wire.reply=Reply(transform={v->v.getJSONObject("data").put("home",homeData)})
+ ck("bundled savings can be unavailable while the standalone Home remains valid",
+    bundledSession(homeSession).getJSONObject("home").getInt("paymentCount")==17)
+ val incompleteSavings=JSONObject(savingsSnapshot.toString()).put("reconciliationStatus","reconciled")
+ Wire.reply=Reply(transform={v->v.getJSONObject("data").put("home",JSONObject(homeData.toString()).put("savings",incompleteSavings))})
+ ck("nested reconciled savings require the same amounts as the direct Home selector",
+    (runCatching{bundledSession(homeSession)}.exceptionOrNull() as? ApiFailure)?.code=="contract_state")
  val cloud="https://rrlduytparvsjfmegalh.supabase.co";val publishable="sb_publishable_"+"p".repeat(24)
  val otherInstall="00000000-0000-4000-8000-000000000088"
  val secondAdminPhone=ApiClient.phonePin("https://test.invalid",otherInstall,"internal_receiver","/functions/v1/collect-api"){"e".repeat(64)}

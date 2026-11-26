@@ -13,9 +13,8 @@ internal class NativeSessionBootstrap(
     private val readJournal: () -> JournalKnowledge,
 ) {
     class Grant(val operator: Operator, val group: String, val revision: Long,
-        val home: Home? = null, val homeSavedAt: Long? = null)
-    class Restored(val grant: Grant?, val navigation: RestorationDecision, val home: Home? = null,
-        val homeSavedAt: Long? = null, val recovery: Recovery? = null)
+        val home: Home? = null, val homeSavedAt: Long? = null, val homeSavingsRequested: Boolean = false)
+    class Restored(val grant: Grant?, val navigation: RestorationDecision, val recovery: Recovery? = null)
 
     sealed interface Recovery {
         data object PasscodePending : Recovery
@@ -41,8 +40,12 @@ internal class NativeSessionBootstrap(
         return retryForeground
     }
 
-    private fun bind(profile: Operator, home: Home? = null, homeSavedAt: Long? = null): Grant =
-        repository.withCurrentProfile(profile) { group, revision -> Grant(profile, group, revision, home, homeSavedAt) }
+    private fun bind(profile: Operator): Grant =
+        repository.withCurrentProfile(profile) { group, revision -> Grant(profile, group, revision) }
+    private fun bind(result: NativeRepository.Restoration): Grant =
+        repository.withCurrentProfile(result.operator) { group, revision ->
+            Grant(result.operator, group, revision, result.home, result.homeSavedAt, result.homeSavingsRequested)
+        }
 
     /** The validated group, role and generation must still own the UI publication after any suspension. */
     fun <T> withCurrent(grant: Grant, publish: () -> T): T =
@@ -77,19 +80,16 @@ internal class NativeSessionBootstrap(
             return Restored(null, ScreenRestoration.decide(null, null, "", clock(), receiver, readJournal()),
                 recovery = recover(owner, group))
         }
-        val grant = combined?.operator?.let { bind(it) }
+        val grant = combined?.let(::bind)
         if (grant != null && savedScope == null) bookmark = readCheckpoint()
         val navigation = ScreenRestoration.decide(bookmark, grant?.operator, grant?.group.orEmpty(),
             clock(), receiver, readJournal())
-        val acceptHome = navigation.route == Route.HOME
-        return Restored(grant?.takeIf { navigation.route != Route.LOGIN }, navigation,
-            combined?.home?.takeIf { acceptHome }, combined?.homeSavedAt)
+        return Restored(grant?.takeIf { navigation.route != Route.LOGIN }, navigation)
     }
 
-    fun login(phone: String, pin: String): Grant =
-        repository.loginForHome(phone,pin).let{bind(it.operator,it.home,it.homeSavedAt)}
+    fun login(phone: String, pin: String): Grant = bind(repository.loginForHome(phone,pin))
     fun refresh(): Grant = bind(repository.refreshSession())
-    fun refreshHome(): Grant = repository.refreshHome().let { bind(it.operator, it.home, it.homeSavedAt) }
+    fun refreshHome(): Grant = bind(repository.refreshHome())
 
     fun recover(owner: String, group: String?): Recovery {
         if (repository.hasPendingPasscode()) return Recovery.PasscodePending

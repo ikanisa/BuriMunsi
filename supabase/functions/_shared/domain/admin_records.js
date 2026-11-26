@@ -2,6 +2,7 @@ import {first,uuid,integer,now} from './core.js';
 import {coreStatuses,coreOrdering,coreSearch} from './admin_search.js';
 import {marker,contributionBasis,collectedBasis,fail,unavailable,iso,exact,amountString} from './admin_record_values.js';
 import {lists,rosterSource,membershipSql,membershipRow,scopedMembershipRow,payeeSql,payeeRow,ledgerSql,ledgerRow,evidenceMetadataSql,evidenceMetadata} from './admin_record_sources.js';
+import {compileSql} from '../postgres-compatibility-sql.js';
 
 // These read adapters receive an already authorized D1 binding from the route.
 export {marker,permission,lists,list,filters,overview,operatingDetail,relatedPage,ledgerSql,ledgerRow,evidenceMetadataSql,evidenceMetadata,exact,iso,fail,unavailable};
@@ -86,6 +87,25 @@ function allowedOperations(type,resource,account,receiverLocked=false){
  else if(type==='transactions'&&['reconciled','confirmed'].includes(resource.status)&&resource.allocated_amount_rwf===resource.amount_rwf)add('reverseTransaction','payments.reconcile');
  return allowed;
 }
+
+export async function readScopedMemberProfile(sql,account,memberId,groupId){
+ const {text,values}=compileSql(`WITH eligible AS MATERIALIZED (
+   ${membershipSql({recordNumber:true})} WHERE m.user_id=? AND m.collection_id=?
+    AND g.status='active' AND u.member_type IN ('app','direct')
+ ), person AS MATERIALIZED (${rosterSource.query} AND m.user_id=?)
+ SELECT person.*,pg_catalog.to_jsonb(eligible) AS member_membership
+ FROM eligible JOIN person ON person.id=eligible.user_id`,[memberId,groupId,groupId,memberId]);
+ const rows=await sql.unsafe(text,values);
+ if(!rows.length)fail(404,'not_found','This record was not found.');
+ const [row]=rows,m=row.member_membership;
+ if(rows.length!==1||row.id!==memberId||m?.user_id!==memberId||m.group_id!==groupId)
+  fail(503,'invalid_source_data','Membership information is unavailable.');
+ const resource=rosterSource.row(row),membership=scopedMembershipRow(m);
+ return {...marker,resource_type:'members',resource,current_actor_id:account.id,can_manage:false,
+  allowed_operations:[],related:{memberships:[membership]},
+  related_pages:{memberships:{total:1,limit:25,offset:0,next_offset:null}},related_truncated:false};
+}
+
 async function operatingDetail(env,account,type,resourceId,url,{rosterGroupId=null}={}){
  const relation=url.searchParams.get('relation'),f=filters(url,['relation','limit','offset']);
  if(!relation&&(url.searchParams.has('limit')||url.searchParams.has('offset')))fail(400,'invalid_filter','Choose a related record page.');

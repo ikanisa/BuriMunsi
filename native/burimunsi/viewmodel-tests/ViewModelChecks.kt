@@ -1,5 +1,6 @@
 package rw.ikanisa.burimunsi.viewmodeltests
 import android.app.Application
+import androidx.lifecycle.onFixtureMain
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.*
 import rw.ikanisa.burimunsi.ui.*
@@ -78,7 +79,7 @@ fun main()=runBlocking{
  m.navigate(Route.HOME);idle();m.openSheet(Sheet.AUDIT);idle()
  ck("privileged activity loaded before permission change",m.state.audit?.items?.isNotEmpty()==true)
  Fixture.refreshedRole=Role.STAFF;Fixture.refreshedCaps=setOf(Capability.READ.key,Capability.ENROLL.key)
- m.refreshSession();idle()
+ m.onFixtureMain{refreshSession()};idle()
  ck("permission downgrade clears privileged panel and data",m.state.operator?.role==Role.STAFF&&m.state.sheet==null&&m.state.audit==null&&m.state.raw==null&&m.state.staff==null)
  m.back();idle();m.openSheet(Sheet.AUDIT);idle()
  ck("revoked activity cannot return through navigation memory",m.state.sheet==null&&m.state.audit==null)

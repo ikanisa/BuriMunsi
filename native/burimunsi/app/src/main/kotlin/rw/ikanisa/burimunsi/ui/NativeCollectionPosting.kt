@@ -51,10 +51,11 @@ internal class NativeCollectionPosting(private val repository: NativeRepository)
 
     fun readPayment(operator: Operator, id: String, allocatedFromVersion: Long?): PaymentRead {
         repository.withCurrentProfile(operator) { _, _ -> Unit }
-        val payment = repository.payment(id)
+        val snapshot = repository.paymentRecord(id)
+        val payment = snapshot.value
         return repository.withCurrentProfile(operator) { _, _ ->
             if (payment.id != id || allocatedFromVersion != null && payment.version <= allocatedFromVersion) throw ApiFailure("record_unavailable")
-            PaymentRead(payment, repository.lastReadFromCache, repository.lastReadSavedAt, allocatedFromVersion)
+            PaymentRead(payment, snapshot.offline, snapshot.savedAt, allocatedFromVersion)
         }
     }
 

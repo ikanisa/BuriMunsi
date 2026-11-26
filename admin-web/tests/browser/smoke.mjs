@@ -268,7 +268,7 @@ try {
   await memberRecords.getByRole('columnheader', {name: 'Mobile number', exact: true}).waitFor();
   const memberHeadings = await memberRecords.getByRole('columnheader').allTextContents();
   assert.deepEqual(memberHeadings.filter(name => /number|phone|WhatsApp/i.test(name)), ['Mobile number']);
-  const scopedDetail = member => page.waitForResponse(response => response.url() === origin + '/api/admin/operations/members/' + member.id && response.ok());
+  const scopedDetail = member => page.waitForResponse(response => response.url() === origin + '/api/admin/operations/members/' + member.id + '?include=balance' && response.ok());
   await Promise.all([scopedDetail(fixtureInactiveMember), inactiveRow.getByRole('button', {name:'View ' + fixtureInactiveMember.public_id}).click()]);
   await page.getByRole('heading', {name: 'Record details',exact:true}).waitFor();
   await page.getByText('Mobile number', {exact: true}).locator('+ dd').waitFor();
@@ -285,6 +285,14 @@ try {
   await memberSearch.fill(fixtureMember.display_name);
   await page.getByRole('button', {name: 'Search', exact: true}).click();
   const memberRow = page.getByRole('row').filter({hasText: fixtureMember.display_name});
+  const memberReads = [];
+  const recordMemberRead = request => {
+    const url = new URL(request.url());
+    if (url.origin === origin && (url.pathname === '/api/admin/operations/members/' + fixtureMember.id || url.searchParams.has('statement'))) {
+      memberReads.push(url.pathname + url.search);
+    }
+  };
+  page.on('request',recordMemberRead);
   await Promise.all([scopedDetail(fixtureMember), memberRow.getByRole('button', {name: `View ${fixtureMember.public_id}`, exact: true}).click()]);
   await page.getByRole('heading', {name: 'Record details', exact: true}).waitFor();
   await page.getByText(fixtureMember.display_name, {exact: true}).waitFor();
@@ -299,9 +307,13 @@ try {
       url.searchParams.get('memberId') === fixtureMember.id && url.searchParams.get('offset') === '25';
   });
   await page.getByRole('button',{name:'Next',exact:true}).click();
-  assert.match(new URL((await nextStatementPage).url()).searchParams.get('revision') ?? '',/^[a-f0-9]{64}$/);
+  const nextStatementUrl = new URL((await nextStatementPage).url());
+  assert.match(nextStatementUrl.searchParams.get('revision') ?? '',/^[a-f0-9]{64}$/);
   const lastMovement = statement.getByRole('row').filter({hasText:'STATEMENT-26'});
   await lastMovement.waitFor();
+  page.off('request',recordMemberRead);
+  assert.deepEqual(memberReads, ['/api/admin/operations/members/' + fixtureMember.id + '?include=balance',
+    '/api/admin/operations/members/' + fixtureMember.id + '?include=statement', nextStatementUrl.pathname + nextStatementUrl.search]);
   assert.deepEqual((await lastMovement.getByRole('cell').allTextContents()).slice(2),['1,000','—','4,000']);
   await page.setViewportSize({width:320,height:720});
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));

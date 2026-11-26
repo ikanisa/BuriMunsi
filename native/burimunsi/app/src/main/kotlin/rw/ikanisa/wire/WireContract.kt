@@ -274,13 +274,14 @@ class WireContract(private val product: String, private val version: String,
                 val unallocated = (snapshot["unallocatedCount"] as Number).toLong()
                 if (recent.size > total || unallocated > total) reject("CONTRACT_STATE")
             }
-            if (operation in setOf("home", "homeSavings", "homeWallet")) home(d)
-            if (operation == "homeSavings") {
-                val savings = objectValue(d["savings"])
+            fun homeSavings(snapshot: Map<String, Any?>) {
+                val savings = objectValue(snapshot["savings"])
                 if (savings["reconciliationStatus"] != "unavailable" &&
                     listOf("lifetimeContributionsRwf", "outgoingPaymentsRwf", "latestWalletBalanceRwf").any { savings[it] == null })
                     reject("CONTRACT_STATE")
             }
+            if (operation in setOf("home", "homeSavings", "homeWallet")) home(d)
+            if (operation == "homeSavings") homeSavings(d)
             if (operation == "homeWallet") {
                 val totals = objectValue(d["paymentTotals"])
                 val balance = (totals["latestSmsBalanceRwf"] as? Number)?.toLong()
@@ -296,7 +297,16 @@ class WireContract(private val product: String, private val version: String,
             if (operation == "session" || operation == "login") {
                 val included = d.containsKey("home")
                 if (included != (expected["includeHome"] == true)) reject("CONTRACT_CONTEXT")
-                d["home"]?.let { home(objectValue(it)) }
+                d["home"]?.let {
+                    val snapshot = objectValue(it)
+                    val savingsAllowed = operation == "session" && expected["includeHomeSavings"] == true
+                    if (savingsAllowed && !snapshot.containsKey("paymentCount")) reject("CONTRACT_STATE")
+                    if (snapshot.containsKey("savings")) {
+                        if (!savingsAllowed) reject("CONTRACT_CONTEXT")
+                        homeSavings(snapshot)
+                    }
+                    home(snapshot)
+                }
             }
             if (d.containsKey("groupId") && d["groupId"] != b["groupId"]) reject("CONTRACT_IDENTITY")
             if (operation in listOf("payment", "paymentDetailV1", "member", "rawSms") && d["id"] != expected["recordId"]) reject("CONTRACT_IDENTITY")

@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {readPaymentsHome} from '../../domain/burimunsi/postgres-payments.js';
+import {readOptionalPaymentsHome,readPaymentsHome} from '../../domain/burimunsi/postgres-payments.js';
 
 const group = 'group-1';
 const asOf = '2026-11-26T00:00:00Z';
-const counts = {payments: '0', members: '0', unallocated: '0'};
+const counts = {payments: '0', members: '0', unallocated: '0', summary_rows: '1', id: null};
 const summary = {lifetime_contributions: '1000.00', outgoing: '250', latest_wallet_balance: '750.000',
   reconciliation_status: 'reconciled'};
 const home = {paymentCount: 0, memberCount: 0, unallocatedCount: 0, recentPayments: [], asOf};
@@ -14,7 +14,7 @@ function recordedSql(totals) {
   const sql = {async unsafe(query, params) {
     assert.deepEqual(params, [group]);
     queries.push(query);
-    return queries.length === 1 ? totals : [];
+    return totals;
   }};
   return {sql, queries};
 }
@@ -22,7 +22,8 @@ function recordedSql(totals) {
 test('legacy Home reads keep their original shape without consulting savings', async () => {
   const {sql, queries} = recordedSql([counts]);
   assert.deepEqual(await readPaymentsHome(sql, group, asOf, {}), home);
-  assert.equal(queries.length, 2);
+  assert.equal(queries.length, 1);
+  assert.match(queries[0], /LIMIT 3/);
   assert.doesNotMatch(queries[0], /private\.burimunsi_home_savings|sum\(amount_rwf\)/);
 });
 
@@ -32,7 +33,7 @@ test('enhanced Home reads the scoped summary and outgoing in the same SQL statem
     ...home, savings: {lifetimeContributionsRwf: 1000, outgoingPaymentsRwf: 250, latestWalletBalanceRwf: 750,
       reconciliationStatus: 'reconciled'},
   });
-  assert.equal(queries.length, 2);
+  assert.equal(queries.length, 1);
   assert.match(queries[0], /sum\(amount_rwf\) FILTER \(WHERE direction='outgoing'\)/);
   assert.match(queries[0], /private\.burimunsi_home_savings\(\$1\)/);
 });
@@ -98,9 +99,31 @@ test('wallet projection rejects malformed movement totals and malformed balance 
 
 test('malformed numeric evidence and absent or duplicate summary rows fail closed', async () => {
   const row = {...counts, ...summary};
-  for (const totals of [[], [row, row], [{...row, latest_wallet_balance: '999999999999999.01'}],
+  for (const totals of [[], [{...row, summary_rows: '2'}], [{...row, latest_wallet_balance: '999999999999999.01'}],
     [{...row, lifetime_contributions: '-1'}]]) {
     const {sql} = recordedSql(totals);
     await assert.rejects(readPaymentsHome(sql, group, asOf, {}, {includeSavings: true}), /invalid_snapshot/);
+  }
+});
+
+test('optional savings budget restores the snapshot settings while authority failures stay fatal', async () => {
+  for(const error of [Object.assign(Error('canceling statement due to statement timeout'),{code:'57014'}),
+    Object.assign(Error('out of date database schema'),{code:'42883'}),Object.assign(Error('access denied'),{code:'42501'}),
+    Object.assign(Error('canceling statement due to user request'),{code:'57014'})]){
+    const queries=[];
+    const sql={async unsafe(query){
+      queries.push(query);
+      if(query.includes('private.burimunsi_home_savings'))throw error;
+      return [counts];
+    }};
+    if(error.code==='42501'||error.message.endsWith('user request')){
+      await assert.rejects(readOptionalPaymentsHome(sql,group,asOf,{}),e=>e===error);
+      assert.equal(queries.length,2);
+      continue;
+    }
+    assert.deepEqual(await readOptionalPaymentsHome(sql,group,asOf,{}),home);
+    assert.match(queries[0],/^SAVEPOINT .*statement_timeout='450ms'$/);
+    assert.match(queries[2],/^ROLLBACK TO SAVEPOINT .*RELEASE SAVEPOINT /);
+    assert.doesNotMatch(queries[3],/burimunsi_home_savings/);
   }
 });

@@ -26,13 +26,13 @@ import rw.ikanisa.burimunsi.core.HomeSavings
 import rw.ikanisa.burimunsi.core.HomeWalletTotals
 
 @Composable
-internal fun HomeWalletOverview(totals: HomeWalletTotals, smsAllowed: Boolean) {
+internal fun HomeWalletOverview(totals: HomeWalletTotals?, smsAllowed: Boolean) {
     val t = LocalUiText.current
     val format = NumberFormat.getIntegerInstance(t.locale)
-    val showSms = totals.smsBalanceVisible && smsAllowed
-    val incoming = format.format(totals.incomingRwf)
+    val showSms = totals?.smsBalanceVisible == true && smsAllowed
+    val incoming = totals?.let { format.format(it.incomingRwf) }
     val label = t("Cumulative incoming payments")
-    val description = "$label · $incoming " + t("RWF")
+    val description = "$label · " + (incoming?.let { "$it " + t("RWF") } ?: t("Unavailable"))
     Column(Modifier.fillMaxWidth().padding(top=12.dp,bottom=4.dp),
         horizontalAlignment=Alignment.CenterHorizontally, verticalArrangement=Arrangement.spacedBy(8.dp)) {
         Column(Modifier.clearAndSetSemantics { heading(); contentDescription=description },
@@ -40,11 +40,11 @@ internal fun HomeWalletOverview(totals: HomeWalletTotals, smsAllowed: Boolean) {
             Text(label, color=BuriTheme.Muted, fontSize=15.sp, textAlign=TextAlign.Center)
             SavingsAmount(incoming,primary=true,ink=BuriTheme.Text,unitInk=BuriTheme.Muted)
         }
-        val outgoing = format.format(totals.outgoingRwf)
-        val balance = totals.latestSmsBalanceRwf?.let { format.format(it) }
+        val outgoing = totals?.let { format.format(it.outgoingRwf) }
+        val balance = totals?.latestSmsBalanceRwf?.let { format.format(it) }
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             if (!showSms) WalletCard(outgoing, wallet=false, modifier=Modifier.fillMaxWidth())
-            else if (maxWidth < 278.dp * LocalDensity.current.fontScale || maxOf(outgoing.length, balance?.length ?: 0) > 16) {
+            else if (maxWidth < 278.dp * LocalDensity.current.fontScale || maxOf(outgoing?.length ?: 0, balance?.length ?: 0) > 16) {
                 Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
                     WalletCard(outgoing, wallet=false, modifier=Modifier.fillMaxWidth())
                     WalletCard(balance, wallet=true, modifier=Modifier.fillMaxWidth())
@@ -54,7 +54,7 @@ internal fun HomeWalletOverview(totals: HomeWalletTotals, smsAllowed: Boolean) {
                 WalletCard(balance, wallet=true, modifier=Modifier.weight(1f))
             }
         }
-        val gap = totals.walletGapRwf
+        val gap = totals?.walletGapRwf
         if (showSms && gap != null && gap.signum() != 0) {
             val value = format.format(gap) + " " + t("RWF")
             Text(t("Wallet difference") + " · " + value, color=BuriTheme.Muted, fontSize=14.sp,

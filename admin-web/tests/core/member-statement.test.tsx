@@ -14,6 +14,7 @@ const membership = {id: internal, user_id: person.id, group_id: group, group_tit
 const detail = {contract_version: 2, model: 'canonical_evidence_ledger', current_actor_id: actor,
   resource_type: 'members', can_manage: false, resource: person, related: {memberships: [membership]}, related_truncated: false};
 const grants = ['users.read', 'collections.read', 'payments.read'];
+const profilePath = 'operations/members/' + person.id;
 const time = '2026-11-24T12:00:00Z';
 const revision = 'c'.repeat(64);
 function payment(n: number, incoming = true, amount = n + 1) {
@@ -29,7 +30,8 @@ function statement(rows: ReturnType<typeof payment>[], offset = 0) {
 }
 function source(rows: ReturnType<typeof payment>[], profile: Record<string, unknown> = detail) {
   return vi.fn(async (path: string) => {
-    if (path === 'operations/members/' + person.id) return profile;
+    if (path === profilePath + '?include=statement') return {...profile, member_statement: statement(rows)};
+    if (path === profilePath) return profile;
     const [resource, search] = path.split('?'), q = new URLSearchParams(search);
     expect(resource).toBe('burimunsi/payments');
     expect(q.get('memberId')).toBe(person.id);
@@ -48,8 +50,7 @@ describe('scoped member statement', () => {
     const api = source(rows);
     const signal = new AbortController().signal;
     const result = await readMemberStatement(api, signal, person.id, actor, group, {offset: 0});
-    expect(api.mock.calls.map(([path]) => path)).toEqual(['operations/members/' + person.id,
-      'burimunsi/payments?statement=1&memberId=' + person.id + '&offset=0']);
+    expect(api.mock.calls.map(([path]) => path)).toEqual([profilePath + '?include=statement']);
     expect(result.items).toHaveLength(25);
     expect(result.items[0]).toMatchObject({ftId: 'FT-0000', atRaw: time, balanceRwf: 100n});
     expect(result.closingRwf).toBe(100n);
@@ -84,6 +85,33 @@ describe('scoped member statement', () => {
     }
   });
 
+  it('falls back only for an older server’s explicit unsupported filter and still proves membership before requesting money', async () => {
+    const current = source([payment(1)]);
+    const signal = new AbortController().signal;
+    const request = vi.fn(async (path: string) => {
+      if (path.endsWith('?include=statement')) throw new AdminRequestError('Unsupported', {statusCode: 400, code: 'invalid_filter'});
+      return current(path);
+    });
+    expect((await readMemberStatement(request, signal, person.id, actor, group, {offset: 0})).closingRwf).toBe(2n);
+    expect(request.mock.calls.map(([path]) => path)).toEqual([profilePath + '?include=statement', profilePath,
+      'burimunsi/payments?statement=1&memberId=' + person.id + '&offset=0']);
+    const denied = vi.fn(async () => {throw new AdminRequestError('Denied', {statusCode: 403, code:'access_denied'});});
+    await expect(readMemberStatement(denied, signal, person.id, actor, group, {offset: 0})).rejects.toThrow('Denied');
+    expect(denied).toHaveBeenCalledTimes(1);
+    await expect(readMemberStatement(async () => ({...detail, member_statement: {...statement([]), membershipId:'foreign'}}),
+      signal, person.id, actor, group, {offset: 0})).rejects.toThrow('The statement scope changed.');
+  });
+
+  it.each([internal, 'foreign-membership'])('shows a joined balance only for the verified membership %s', async membershipId => {
+    const request = vi.fn();
+    render(<MemoryRouter><MemberMemberships detail={{...detail, member_balance: {
+      groupId:group, memberId:person.id, membershipId, closingRwf:'25',
+    }}} memberId={person.id} expectedGroup={group} authorityKey="staff" permissions={grants}
+      request={request} returnTo="/admin/members" /></MemoryRouter>);
+    expect(screen.getByRole('link', {name:'Open member statement, total balance ' + (membershipId===internal?'RWF 25':'Unavailable')})).toBeVisible();
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it('shows the issued record number and makes a fully scoped balance available to a permitted Staff reader', async () => {
     const request = source([payment(1, true, 25), payment(2, false, 5)]);
     const view = render(<MemoryRouter><MemberMemberships detail={detail} memberId={person.id} expectedGroup={group}
@@ -116,15 +144,17 @@ describe('scoped member statement', () => {
     expect(within(screen.getByRole('table', {name: 'Member transactions'})).getAllByRole('row')).toHaveLength(2);
     expect(within(last).getAllByRole('cell').map(cell => cell.textContent).slice(2))
       .toEqual(['4', '—', '96']);
+    expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenLastCalledWith('burimunsi/payments?statement=1&memberId=' + person.id + '&offset=25&revision=' + revision,
       {signal: expect.any(AbortSignal)});
   });
 
   it('clears a stale later page and retries from the first page without the old revision', async () => {
+    const rows = Array.from({length: 26}, (_, i) => payment(i, true, 4));
     const request = vi.fn(async (path: string) => {
-      if (path === 'operations/members/' + person.id) return detail;
       if (path.includes('offset=25')) throw new AdminRequestError('Conflict', {code: 'member_statement_changed', statusCode: 409});
-      return statement(Array.from({length: 26}, (_, i) => payment(i, true, 4)));
+      if (path === profilePath + '?include=statement') return {...detail, member_statement: statement(rows)};
+      throw new Error('Unexpected read');
     });
     render(<MemoryRouter><MemberStatementPage {...props} request={request} /></MemoryRouter>);
     fireEvent.click(await screen.findByRole('button', {name: 'Next'}));
@@ -133,7 +163,7 @@ describe('scoped member statement', () => {
     fireEvent.click(screen.getByRole('button', {name: 'Try again'}));
     expect(await screen.findByText('Page 1 of 2')).toBeInTheDocument();
     const next = request.mock.calls.at(-1)?.[0];
-    expect(next).toMatch(/offset=0$/);
+    expect(next).toBe(profilePath + '?include=statement');
     expect(next).not.toContain('revision');
   });
 });

@@ -90,6 +90,12 @@ internal class NativePagedRestoration(
         id: (T) -> String,
         readNext: suspend (String) -> Read<Page<T>>,
     ): Restored<T> {
+        withCurrent(request) {}
+        val firstDecision = PagedRestoration.decide(
+            request.route,request.index,request.offset,first.value.items.size,first.value.nextCursor,
+            1,first.offline,SnapshotFreshness.reusable(first.savedAt,clock()),request.smsSearchNotice,
+        )
+        if(!firstDecision.fetchNext)return Restored(first,firstDecision)
         val records = PageIntegrity.Accumulator(first.value,id)
         var offline=first.offline
         var savedAt=first.savedAt
