@@ -9,7 +9,7 @@ import {changeAccountPassword, completePasswordSetup} from './passwordActions';
 import {OTP, sensitiveVerificationDeadline} from './sessionPolicy';
 import {MANAGED_MFA_TRANSITION_QUALIFIED} from './mfaQualification';
 import type {PasswordChangeOutcome, SessionSnapshot} from './sessionContext';
-import {readAdminSession, readSessionEmailProof, type SessionReadback} from './sessionReadback';
+import {readAdminSession, readSessionEmailProof, type SessionHomeBootstrap, type SessionReadback} from './sessionReadback';
 import {parsePasscodeProof, parsePhoneLoginSession, type AdminUser} from './sessionResponses';
 import {PASSCODE} from './phonePasscode';
 import {LOGOUT_INTENT_PREFIX, readLogoutIntents} from './logoutIntent';
@@ -25,6 +25,10 @@ const PHONE_SESSION_REFRESH_MS = 120_000;
 const SESSION_RETRY_DELAYS_MS = [2_000, 8_000, 20_000] as const;
 const SESSION_RECOVERY_WINDOW_MS = 45_000;
 const SESSION_RECHECK_FAILED = 'Account access could not be rechecked. Try again.';
+const STARTUP_HOME_MS = 10_000;
+
+type InitialHome = {value: SessionHomeBootstrap; isCurrentRoute: () => boolean};
+type PendingInitialHome = InitialHome & {key: string; csrf: string; epoch: number; revision: number; expires: number};
 
 interface BackgroundSessionCheck {
   deadline: number;
@@ -50,6 +54,8 @@ export class AdminSessionController {
   private expiryTimer: ReturnType<typeof setTimeout> | undefined;
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
   private recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+  private startupHome: PendingInitialHome | null = null;
+  private startupHomeTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly signInFlow = new AdminSignIn({
     config: () => this.config,
     request: (...args) => this.api.request(...args),
@@ -155,6 +161,13 @@ export class AdminSessionController {
     this.expiryTimer = undefined;
     this.refreshTimer = undefined;
     this.recoveryTimer = undefined;
+    this.clearStartupHome();
+  }
+
+  private clearStartupHome() {
+    clearTimeout(this.startupHomeTimer);
+    this.startupHomeTimer = undefined;
+    this.startupHome = null;
   }
 
   /** Retire all current transport responses and readbacks. */
@@ -251,7 +264,7 @@ export class AdminSessionController {
     return this.api.request(path, options);
   };
 
-  private install(user: AdminUser) {
+  private install(user: AdminUser, initialHome?: InitialHome) {
     const unchanged = this.config.phonePasscodeOnly && this.snapshot.status === 'authenticated' &&
       JSON.stringify(this.user) === JSON.stringify(user);
     const key = authorityKey(user);
@@ -282,18 +295,38 @@ export class AdminSessionController {
       void this.restoreSession(undefined, background).catch(() => undefined);
     };
     this.refreshTimer = setTimeout(tick, refreshMs);
+    if (initialHome && initialHome.isCurrentRoute() && this.csrfToken) {
+      const expires = Math.min(Date.parse(user.expiresAt), Date.now() + STARTUP_HOME_MS);
+      this.startupHome = {...initialHome, expires, key, csrf: this.csrfToken, epoch, revision: this.readRevision};
+      this.startupHomeTimer = setTimeout(() => this.clearStartupHome(), Math.max(0, expires - Date.now()));
+    }
     if (!unchanged) this.emit('authenticated', undefined, false);
   }
 
-  private async publishSession(user: AdminUser, csrf: string | null | undefined, current: () => boolean): Promise<boolean> {
+  private async publishSession(user: AdminUser, csrf: string | null | undefined, current: () => boolean, initialHome?: InitialHome): Promise<boolean> {
     if (!current() || !(await this.bindPending(user, current)) || !current() ||
         this.fencePendingLogout() || this.fencePendingMfa()) return false;
     if (csrf !== undefined) this.csrfToken = csrf;
-    this.install(user);
+    this.install(user, initialHome);
     return this.user === user && this.snapshot.status === 'authenticated';
   }
 
   readonly refresh = async (): Promise<void> => {await this.restoreSession();};
+
+  readonly start = async (isCurrentHomeRoute?: () => boolean): Promise<void> => {
+    const firstHome = this.readRevision === 0 && this.config.backend === 'supabase' && this.config.phonePasscodeOnly &&
+      isCurrentHomeRoute?.() ? isCurrentHomeRoute : undefined;
+    await this.restoreSession(undefined, undefined, firstHome);
+  };
+
+  readonly takeStartupHome = (): SessionHomeBootstrap | null => {
+    const pending = this.startupHome, user = this.user;
+    this.clearStartupHome();
+    if (!pending || !user || pending.expires <= Date.now() || !pending.isCurrentRoute() ||
+        pending.revision !== this.readRevision || pending.key !== authorityKey(user) || pending.csrf !== this.csrfToken ||
+        !this.isCurrentAuthority(pending.epoch, user.id, user.sessionId)) return null;
+    return pending.value;
+  };
 
   private closeUnavailableSession(message: string) {
     this.invalidateAuthority();
@@ -328,8 +361,9 @@ export class AdminSessionController {
     return true;
   }
 
-  private async restoreSession(readback?: SessionReadback, background?: BackgroundSessionCheck): Promise<boolean> {
+  private async restoreSession(readback?: SessionReadback, background?: BackgroundSessionCheck, firstHome?: () => boolean): Promise<boolean> {
     if (readback?.isCurrent && !readback.isCurrent()) return false;
+    this.clearStartupHome();
     this.observeRetainedSessions();
     if (this.fencePendingLogout()) throw new AdminRequestError('Sign-out is not confirmed. Complete sign-out before signing in again.', {outcomeUnknown: true});
     if (this.config.backend === 'supabase') {
@@ -354,7 +388,7 @@ export class AdminSessionController {
     const revision = ++this.readRevision;
     const current = () => epoch === this.epoch && revision === this.readRevision && (readback?.isCurrent?.() ?? true);
     try {
-      const session = await readAdminSession(this.api.request, this.config.backend, current);
+      const session = await readAdminSession(this.api.request, this.config.backend, current, firstHome?.());
       if (!session || !current()) return false;
       if (background && this.user && Date.parse(this.user.expiresAt) <= Date.now()) {
         this.unauthorized();
@@ -392,7 +426,8 @@ export class AdminSessionController {
         if (!current()) return false;
         user = {...user, emailVerifiedAt: this.emailVerification.sessionProof(verifiedAt)};
       }
-      return await this.publishSession(user, session.csrfToken, current);
+      const initialHome = firstHome && session.homeBootstrap ? {value: session.homeBootstrap, isCurrentRoute: firstHome} : undefined;
+      return await this.publishSession(user, session.csrfToken, current, initialHome);
     } catch (failure) {
       if (!current()) return false;
       if (background && isTemporarySessionFailure(failure)) {

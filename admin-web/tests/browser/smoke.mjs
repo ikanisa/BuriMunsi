@@ -25,7 +25,8 @@ execFileSync(process.execPath, [join(root, 'admin-web/scripts/build-admin.mjs'),
 const modulePath = process.env.PLAYWRIGHT_CORE_PATH;
 const { chromium } = await import(modulePath ? pathToFileURL(resolve(modulePath)).href : 'playwright-core');
 const server = spawn(process.execPath, [fileURLToPath(new URL('./fixture-server.mjs', import.meta.url)), artifact], {
-  env: { COLLECT_FIXTURE_PORT: url.port, COLLECT_FIXTURE_SIGN_IN: '1', COLLECT_FIXTURE_LEGACY_SESSIONS: legacySessions ? '1' : '0' },
+  env: { COLLECT_FIXTURE_PORT: url.port, COLLECT_FIXTURE_SIGN_IN: '1', COLLECT_FIXTURE_LEGACY_SESSIONS: legacySessions ? '1' : '0',
+    COLLECT_FIXTURE_SESSION_HOME: legacySessions ? '0' : '1' },
   stdio: ['ignore', 'pipe', 'inherit'],
 });
 const exited = new Promise(resolveExit => server.once('close', resolveExit));
@@ -189,8 +190,19 @@ try {
   const cookies = await desktop.context.cookies(origin);
   assert(cookies.some(cookie => cookie.name === 'collect_fixture_session' && cookie.httpOnly));
   assert(!String(await page.evaluate(() => document.cookie)).includes('collect_fixture_session'));
+  const homePath='/api/admin/burimunsi/home';
+  const reloadReads=[];
+  const recordReload=request=>{
+    const target=new URL(request.url());
+    if(target.origin===origin && [sessionPath,homePath].includes(target.pathname)) {
+      reloadReads.push([target.pathname,request.headers()['x-burimunsi-session-home'] ?? null]);
+    }
+  };
+  page.on('request',recordReload);
   await page.reload();
-  await overview.waitFor();
+  await page.getByRole('heading',{name:'Recent payments',exact:true}).waitFor();
+  page.off('request',recordReload);
+  assert.deepEqual(reloadReads,legacySessions ? [[sessionPath,'1'],[homePath,null]] : [[sessionPath,'1']]);
   await page.goto(origin + '/admin/security/verify-passcode?returnTo=%2Fadmin');
   await overview.waitFor();
   assert.equal(new URL(page.url()).hash, '#/admin');

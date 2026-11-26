@@ -1,9 +1,11 @@
 import {adminCookieToken, validateAdminOrigin} from '../admin-security.js';
-import {BURIMUNSI_ADMIN_ORIGIN, BURIMUNSI_PRODUCT_MODE} from '../burimunsi-standalone.js';
+import {BURIMUNSI_ADMIN_ORIGIN, BURIMUNSI_PRODUCT_MODE, BURIMUNSI_SESSION_HOME_HEADER} from '../burimunsi-standalone.js';
 import {ApiError, digest, first, json, readJson} from './core.js';
 import {adminCookie, adminPublicUser} from './admin_accounts_legacy.js';
 import {newAdminCookieToken} from './admin_bff_tokens.js';
-import {adminPasscodeProof, attestAdminPasscodeAccount, phoneOperatorRoleAllowsPermission} from './admin_email_policy.js';
+import {activePhoneOperator, adminPasscodeProof, attestAdminPasscodeAccount, phoneOperatorRoleAllowsPermission} from './admin_email_policy.js';
+import {BURI_ADMIN_PRIVATE_HEADERS} from './admin_burimunsi_authority.js';
+import {paymentsContext,readScopedAdminHome} from './admin_burimunsi_payment_scope.js';
 import {nativePinHasher} from './burimunsi/native-secrets.js';
 import {PIN_ITERATIONS} from './burimunsi/pin.js';
 import {normalizePhone, requirePin} from './burimunsi/values.js';
@@ -44,15 +46,19 @@ async function sqlResult(env, query, ...values) {
   return row.result;
 }
 
-export async function firstBrowserPasscodeRead(env,query,...values) {
-  const db=env.DB;
-  if(typeof db.withAdminSessionRead!=='function')return first(env,query,...values);
-  const result=await db.withAdminSessionRead(tx=>db.statement(tx,db.prepare(query).bind(...values)));
+async function firstBrowserSessionRow(db,tx,query,values) {
+  const result=await db.statement(tx,db.prepare(query).bind(...values));
   if(result.results.length>1)throw unavailable();
   return result.results[0]??null;
 }
 
-export async function browserPasscodeSession(request, env, required = true) {
+export async function firstBrowserPasscodeRead(env,query,...values) {
+  const db=env.DB;
+  if(typeof db.withAdminSessionRead!=='function')return first(env,query,...values);
+  return db.withAdminSessionRead(tx=>firstBrowserSessionRow(db,tx,query,values));
+}
+
+async function readBrowserPasscodeAccount(request,env,required,tx) {
   const origin = originFor(request, env);
   const token = adminCookieToken(request);
   if (!token) {
@@ -65,7 +71,8 @@ export async function browserPasscodeSession(request, env, required = true) {
   // reserving the write circuit before the locked read has checked the cookie.
   const statement='SELECT private.burimunsi_browser_pin_session(?,?,?) AS result';
   const reader=request.method==='GET'?firstBrowserPasscodeRead:first;
-  const row=await reader(env,statement,group,hash,origin);
+  const row=tx?await firstBrowserSessionRow(env.DB,tx,statement,[group,hash,origin]):
+    await reader(env,statement,group,hash,origin);
   if(!row||!Object.hasOwn(row,'result'))throw unavailable();
   const result=row.result;
   if (result === null) {
@@ -80,15 +87,21 @@ export async function browserPasscodeSession(request, env, required = true) {
   // The configured browser operator role caps older platform grants on every
   // request, including cookies issued before the standalone role policy.
   const permissions = result.permissions.filter(permission => phoneOperatorRoleAllowsPermission(result.operatorRole, permission));
-  const account = attestAdminPasscodeAccount({
+  return attestAdminPasscodeAccount({
     id: result.adminId, principal_id: result.principalId, email: result.email, role: result.storageRole,
     auth_version: result.authVersion, auth_session_id: result.sessionId, public_id: result.publicId,
     origin, token_hash: hash, expires_at: result.expiresAt, auth_at: result.verifiedAt,
     issued_assurance_level: 1, issued_mfa_at: null, issued_mfa_factor_id: null,
     permissions, csrfToken: await csrfToken(token),
   }, {...result, permissions});
-  env.DB.setBrowserPasscodeAccount(account);
-  env.ADMIN_ACCOUNT = account;
+}
+
+export async function browserPasscodeSession(request, env, required = true) {
+  const account=await readBrowserPasscodeAccount(request,env,required);
+  if(account){
+    env.DB.setBrowserPasscodeAccount(account);
+    env.ADMIN_ACCOUNT=account;
+  }
   return account;
 }
 
@@ -108,6 +121,46 @@ function publicSession(account) {
       principalId: proof.principalId, collectionId: proof.collectionId, role: 'admin',
     }} : {}),
   };
+}
+
+async function browserSessionWithHome(request,env) {
+  const db=env.DB;
+  if(!adminCookieToken(request)||typeof db.withLockedReadSnapshot!=='function')
+    return json(publicSession(await browserPasscodeSession(request,env,false)));
+  let snapshot;
+  try {
+    snapshot=await db.withLockedReadSnapshot(async sql=>{
+      const account=await readBrowserPasscodeAccount(request,env,false,sql);
+      const proof=activePhoneOperator(account);
+      if(!proof||!account.permissions.includes('overview.read')||!account.permissions.includes('payments.read')||request.signal.aborted)
+        return {account};
+      try {
+        await sql.unsafe("SET LOCAL statement_timeout='450ms'; SET LOCAL lock_timeout='150ms'");
+        const [binding]=await sql.unsafe('SELECT private.burimunsi_browser_pin_set_context($1,$2,$3) AS result',
+          [proof.collectionId,account.token_hash,account.origin]);
+        if(binding?.result!==true)return {account};
+        const paymentScope=paymentsContext(env,account);
+        const home=await readScopedAdminHome(sql,paymentScope,{bootstrap:true});
+        return {account,home,collectionId:paymentScope.groupId};
+      } catch {
+        // The optional read is last. The locked snapshot always rolls back,
+        // including an aborted SQL statement, before it can return the account.
+        return {account};
+      }
+    });
+  } catch(error) {
+    // A concurrent identity edit can make the repeatable-read resolver fail.
+    // Recheck the base session once using its normal read-committed path.
+    if(error?.code!=='40001'||request.signal.aborted)throw error;
+    return json(publicSession(await browserPasscodeSession(request,env,false)));
+  }
+  const {account,home,collectionId}=snapshot;
+  const session=publicSession(account);
+  const proof=activePhoneOperator(account);
+  if(!home||!proof||collectionId!==proof.collectionId||request.signal.aborted)return json(session);
+  return json({...session,homeCollectionId:proof.collectionId,
+    homeBootstrap:{version:1,actorId:session.user.id,sessionId:session.user.sessionId,collectionId,home}},
+    200,BURI_ADMIN_PRIVATE_HEADERS);
 }
 
 function normalizedCredentials(body, phone) {
@@ -156,6 +209,7 @@ export async function handleBrowserPasscode(request, env, path) {
   const group = collectionFor(env);
   if (new URL(request.url).search) throw new ApiError(400, 'invalid_request', 'Invalid sign-in request.');
   if (path === '/auth/session' && request.method === 'GET') {
+    if(request.headers.get(BURIMUNSI_SESSION_HOME_HEADER)==='1')return browserSessionWithHome(request,env);
     const account = await browserPasscodeSession(request, env, false);
     return json(publicSession(account));
   }
