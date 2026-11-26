@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.provider.Settings
 import app.cool.mobile.BuildConfig
 import rw.ikanisa.burimunsi.core.*
+import rw.ikanisa.burimunsi.core.ObservationCandidate.InboxDisposition
 import rw.ikanisa.burimunsi.data.NativeRepository
 import rw.ikanisa.burimunsi.storage.SecureStore
 import org.json.JSONObject
@@ -60,7 +61,7 @@ internal object ObservationCapture {
     enum class Result { STORED, DUPLICATE, FILTERED, FULL, UNAVAILABLE, AMBIGUOUS }
     private fun permitted(context:Context)=context.checkSelfPermission(Manifest.permission.READ_SMS)==PackageManager.PERMISSION_GRANTED&&
         context.checkSelfPermission(Manifest.permission.RECEIVE_SMS)==PackageManager.PERMISSION_GRANTED
-    fun candidate(context:Context,session:ObservationSessionOwner,profileFingerprint:String,sender:String,body:String):Boolean? {
+    fun candidate(context:Context,session:ObservationSessionOwner,profileFingerprint:String,sender:String,body:String):InboxDisposition? {
         if(BuildConfig.IS_QUALIFICATION||!BuildConfig.IS_GATEWAY||!permitted(context))return null
         val app=context.applicationContext
         return try{NativeRepository.withObservationOwner(app,session){group,account->
@@ -68,7 +69,7 @@ internal object ObservationCapture {
             if(config.paused(owner)||config.consent(owner)?.canCapture(permitted(app))!=true)return@withObservationOwner null
             val profile=config.profile(owner,System.currentTimeMillis())?:return@withObservationOwner null
             if(profile.fingerprint()!=profileFingerprint)return@withObservationOwner null
-            ObservationCandidate.accepts(sender,body,profile.receipt)
+            ObservationCandidate.inboxDisposition(sender,body,profile.receipt)
         }}catch(_:Exception){null}
     }
     fun retain(context:Context,session:ObservationSessionOwner,profileFingerprint:String,stableSourceId:String,sender:String,body:String,mode:String,complete:Boolean,
@@ -89,10 +90,11 @@ internal object ObservationCapture {
             val androidId=Settings.Secure.getString(app.contentResolver,Settings.Secure.ANDROID_ID)?:return@withObservationOwner Result.UNAVAILABLE
             val stableKey=ObservationSourceIdentity.reinstallStable(androidId,collection,rowId,inboxReceivedAt?:return@withObservationOwner Result.UNAVAILABLE)
             if(confirmedMissingKey!=null&&confirmedMissingKey!=stableKey)return@withObservationOwner Result.UNAVAILABLE
-            if(HeldRecoveryJournal.protects(app,owner,installation,Values.sha256(androidId),stableKey))
+            val disposition=ObservationCandidate.inboxDisposition(sender,body,profile.receipt)
+            if(disposition==InboxDisposition.EXCLUDED)return@withObservationOwner Result.FILTERED
+            if(disposition!=InboxDisposition.MIXED_CREDENTIALS&&HeldRecoveryJournal.protects(app,owner,installation,Values.sha256(androidId),stableKey))
                 return@withObservationOwner Result.AMBIGUOUS
-            if(!ObservationCandidate.accepts(sender,body,profile.receipt))return@withObservationOwner Result.FILTERED
-            if(!ObservedReceiptEvidence.matches(body,profile.receipt)){
+            if(disposition==InboxDisposition.MIXED_CREDENTIALS||!ObservedReceiptEvidence.matches(body,profile.receipt)){
                 val control=config.controlState(owner)
                 val review=AndroidUnclassifiedSmsStore(app,collection,account,installation,Values.sha256(androidId),{
                     permitted(app)&&!control.paused&&config.controlState(owner)==control&&config.consent(owner)==consent&&

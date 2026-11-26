@@ -3,6 +3,7 @@ package app.cool.mobile.receiver_sms
 import android.content.Context
 import app.cool.mobile.receiver_sms.ObservationRecovery.Backfill
 import org.json.JSONObject
+import rw.ikanisa.burimunsi.core.ObservationCandidate.InboxDisposition
 import rw.ikanisa.burimunsi.core.ObservationConsentState
 import rw.ikanisa.burimunsi.core.ObservationOwner
 import rw.ikanisa.burimunsi.core.ObservationProfile
@@ -98,14 +99,17 @@ internal class ObservationInboxBackfill(
                 val sent=if(sentCol<0||it.isNull(sentCol))null else it.getLong(sentCol).takeIf{v->v>0}
                 val sub=if(subCol<0||it.isNull(subCol))null else it.getInt(subCol).takeIf{v->v>=0}
                 val candidate=ObservationCapture.candidate(app,session,fingerprint,sender,body)?:return@synchronized Backfill.BLOCKED
-                val eligible=candidate&&!ReceiptCandidate.accepts(sender,body,profile.receipt)
-                val advanced=if(eligible)ObservationLegacyOwnership.withDecision(app,owner,id,received,sender,body,sub){decision->
+                val eligible=candidate==InboxDisposition.CANDIDATE&&!ReceiptCandidate.accepts(sender,body,profile.receipt)
+                fun retain()=ObservationCapture.retain(app,session,fingerprint,"inbox:$id",sender,body,"catch_up",false,
+                    sent?.let{v->Instant.ofEpochMilli(v).toString()},received?.let{v->Instant.ofEpochMilli(v).toString()},sub)
+                val advanced=if(candidate==InboxDisposition.MIXED_CREDENTIALS)ObservationLegacyOwnership.withoutControlTransition(app){
+                    retain()==ObservationCapture.Result.AMBIGUOUS&&!stopped()&&advanceBackfill(session,profile,consent,control,position,id)
+                }?:false else if(eligible)ObservationLegacyOwnership.withDecision(app,owner,id,received,sender,body,sub){decision->
                     val retained=when(decision){
                         ObservationLegacyOwnership.Decision.HOLD,ObservationLegacyOwnership.Decision.OTHER_SIM->true
                         ObservationLegacyOwnership.Decision.OWNED->{ObservationLegacyOwnership.retained(app,sender,body,sent,received,sub);true}
                         ObservationLegacyOwnership.Decision.UNOWNED->{
-                            val result=ObservationCapture.retain(app,session,fingerprint,"inbox:$id",sender,body,"catch_up",false,
-                                sent?.let{v->Instant.ofEpochMilli(v).toString()},received?.let{v->Instant.ofEpochMilli(v).toString()},sub)
+                            val result=retain()
                             result!=ObservationCapture.Result.FULL&&result!=ObservationCapture.Result.UNAVAILABLE
                         }
                     }

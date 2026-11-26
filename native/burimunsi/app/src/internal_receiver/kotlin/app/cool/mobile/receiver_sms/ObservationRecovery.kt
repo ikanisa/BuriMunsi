@@ -3,6 +3,7 @@ package app.cool.mobile.receiver_sms
 import android.content.Context
 import org.json.JSONObject
 import rw.ikanisa.burimunsi.core.ObservationCandidate
+import rw.ikanisa.burimunsi.core.ObservationCandidate.InboxDisposition
 import rw.ikanisa.burimunsi.core.ObservedReceiptEvidence
 import rw.ikanisa.burimunsi.core.ObservationJournal
 import rw.ikanisa.burimunsi.core.ObservationOwner
@@ -107,9 +108,15 @@ internal class ObservationRecovery(context:Context) {
                 val body=if(it.isNull(bodyCol))"" else it.getString(bodyCol)
                 val sent=if(sentCol<0||it.isNull(sentCol))null else it.getLong(sentCol).takeIf{v->v>0}
                 val sub=if(subCol<0||it.isNull(subCol))null else it.getInt(subCol).takeIf{v->v>=0}
-                val key=heldInboxSourceKey(device,owner.collectionId,id,received)
                 val candidate=ObservationCapture.candidate(app,session,profile.fingerprint(),sender,body)?:return Scan.BLOCKED
-                val advanced=if(key in keys||!candidate)ObservationLegacyOwnership.withoutControlTransition(app){save(position,id)}?:false
+                fun retain()=ObservationCapture.retain(app,session,profile.fingerprint(),"inbox:$id",sender,body,"catch_up",false,
+                    sent?.let{v->Instant.ofEpochMilli(v).toString()},Instant.ofEpochMilli(received).toString(),sub)
+                val key=heldInboxSourceKey(device,owner.collectionId,id,received)
+                val advanced=if(candidate==InboxDisposition.MIXED_CREDENTIALS)ObservationLegacyOwnership.withoutControlTransition(app){
+                    // Only the encrypted row locator may survive a mixed message.
+                    retain()==ObservationCapture.Result.AMBIGUOUS&&save(position,id)
+                }?:false else if(key in keys||candidate==InboxDisposition.EXCLUDED)
+                    ObservationLegacyOwnership.withoutControlTransition(app){save(position,id)}?:false
                 else ObservationLegacyOwnership.withDecision(app,owner,id,received,sender,body,sub){decision->
                     val retained=when(decision){
                         // The online audit verifies protected sources independently.
@@ -123,8 +130,7 @@ internal class ObservationRecovery(context:Context) {
                             val duplicate=journal.ifRevision(seen.revision){existing!=null&&existing.inboxRowId==id&&
                                 existing.bodySha256==Values.sha256(body)}==true
                             if(duplicate)true else{
-                                val result=ObservationCapture.retain(app,session,profile.fingerprint(),"inbox:$id",sender,body,"catch_up",false,
-                                    sent?.let{v->Instant.ofEpochMilli(v).toString()},receivedAt,sub)
+                                val result=retain()
                                 result!=ObservationCapture.Result.FULL&&result!=ObservationCapture.Result.UNAVAILABLE
                             }
                         }
@@ -176,7 +182,7 @@ internal class ObservationRecovery(context:Context) {
                 val sub=if(subColumn<0||it.isNull(subColumn))null else it.getInt(subColumn).takeIf{value->value>=0}
                 if(received==null||!relevance.mayMatch(sender,body,sent,sub))continue
                 val candidate=ObservationCapture.candidate(app,session,fingerprint,sender,body)?:return@synchronized
-                if(candidate)ObservationLegacyOwnership.withDecision(app,session.owner,id,received,sender,body,sub){decision->
+                if(candidate==InboxDisposition.CANDIDATE)ObservationLegacyOwnership.withDecision(app,session.owner,id,received,sender,body,sub){decision->
                     if(decision==ObservationLegacyOwnership.Decision.UNOWNED&&!stopped())
                         ObservationCapture.correlateExisting(app,session,fingerprint,id,sender,body,sent,received,sub)
                 }

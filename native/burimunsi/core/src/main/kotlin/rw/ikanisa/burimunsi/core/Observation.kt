@@ -48,14 +48,27 @@ object ObservationCandidate {
         """(?<![\p{L}\p{N}_])(?:payment|paid|transfer(?:red)?|transaction|receipt|reversal|reversed|withdrawal|deposit|balance|amount|paiement|retrait|versement|virement|montant|solde|amafaranga|kwishyura|kwakira|yasubijwe)(?![\p{L}\p{N}_])""",
         RegexOption.IGNORE_CASE,
     )
+    private fun validBody(body: String): Boolean =
+        body.toByteArray(Charsets.UTF_8).size in 1..3000 && !bodyControls.containsMatchIn(body)
+
+    private fun possiblyFinancial(body: String, profile: ReceiptProfile): Boolean =
+        possibleFinancialLanguage.containsMatchIn(body) ||
+            (profile.currencyAliases + profile.incomingPrefixes + profile.transactionIdPrefixes).any {
+                it.isNotBlank() && body.contains(it, ignoreCase = true)
+            }
+
     /** Known credential-only rows are outside the receipt census. A mixed
      * financial/credential row is withheld and remains unconfirmed. */
     fun excludeFromFinancialCensus(sender: String, body: String, profile: ReceiptProfile): Boolean =
-        body.toByteArray(Charsets.UTF_8).size in 1..3000 && !bodyControls.containsMatchIn(body) &&
-            hasCredentials(sender, body) && !possibleFinancialLanguage.containsMatchIn(body) &&
-            (profile.currencyAliases + profile.incomingPrefixes + profile.transactionIdPrefixes).none {
-                it.isNotBlank() && body.contains(it, ignoreCase = true)
-            }
+        validBody(body) && hasCredentials(sender, body) && !possiblyFinancial(body, profile)
+
+    enum class InboxDisposition { EXCLUDED, CANDIDATE, MIXED_CREDENTIALS }
+
+    fun inboxDisposition(sender: String, body: String, profile: ReceiptProfile): InboxDisposition {
+        if (!senderAllowed(sender, profile) || !validBody(body)) return InboxDisposition.EXCLUDED
+        if (!hasCredentials(sender, body)) return InboxDisposition.CANDIDATE
+        return if (possiblyFinancial(body, profile)) InboxDisposition.MIXED_CREDENTIALS else InboxDisposition.EXCLUDED
+    }
 
     fun senderAllowed(sender:String,profile:ReceiptProfile):Boolean {
         if(profile.version.isBlank()||profile.version=="unverified"||profile.senders.isEmpty()||profile.senders.size>30||
@@ -64,8 +77,7 @@ object ObservationCandidate {
             profile.senders.any{it.lowercase(Locale.ROOT)==sender.lowercase(Locale.ROOT)}
     }
     fun accepts(sender:String,body:String,profile:ReceiptProfile):Boolean =
-        senderAllowed(sender,profile)&&
-            body.toByteArray(Charsets.UTF_8).size in 1..3000&&!bodyControls.containsMatchIn(body)&&!hasCredentials(sender,body)
+        senderAllowed(sender,profile)&&validBody(body)&&!hasCredentials(sender,body)
 }
 
 /** A candidate receipt is evidence only: it does not identify a wallet or a ledger credit. */

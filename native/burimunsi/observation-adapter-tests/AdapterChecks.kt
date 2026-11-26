@@ -492,7 +492,7 @@ fun main(args:Array<String>) {
   val retained=pending(adminA).map{it.observation}
   check(retained.map{it.rawBody}==listOf(body,body+" Never share your PIN.",body+" Verification complete."))
   val held=SecureStore.data.entries.single{it.key.startsWith("unclassified-sms-")}.value
-  check(held=="1|0\n9:$time\n18:$time")
+  check(held=="1|0\n9:$time\n16:$time\n18:$time")
   check(SecureStore.data.values.none{it.contains(outgoing)||it.contains(Values.sha256(outgoing))})
   check(retained.all{it.sourceMode=="catch_up"&&!it.complete&&it.inboxReceivedAt!=null})
   check(cursor(e.context)!=null)
@@ -503,13 +503,15 @@ fun main(args:Array<String>) {
    .put("profileFingerprint",fingerprint).put("lastId",3000L))
   SecureStore(e.context,"observation-cursors").write(JSONObject().put("items",prior).toString())
   e.context.contentResolver.rows=listOf(row(100,body),row(1100,"You have sent 100 RWF. FT Id: 55667788."),row(2000,body),
-   row(2500,"Provider notice"),row(3001,"You have sent 500 RWF. FT Id: 99887766."))
+   row(2500,"Provider notice"),row(2600,body+" OTP 1234"),row(3001,"You have sent 500 RWF. FT Id: 99887766."))
   check(ObservationRecovery(e.context).backfill()==ObservationRecovery.Backfill.COMPLETE)
   check(pending(adminA).map{it.observation.rawBody}==listOf("You have sent 100 RWF. FT Id: 55667788."))
+  val backfilled=SecureStore.data.entries.single{it.key.startsWith("unclassified-sms-")}.value
+  check(backfilled=="1|0\n2500:$time\n2600:$time") { "unexpected fixture locators: $backfilled" }
   check(ObservationRecovery(e.context).backfill()==ObservationRecovery.Backfill.COMPLETE)
   ObservationRecovery(e.context).scan()
   check(pending(adminA).map{it.observation.rawBody}==listOf("You have sent 100 RWF. FT Id: 55667788.","You have sent 500 RWF. FT Id: 99887766."))
-  check(SecureStore.data.entries.single{it.key.startsWith("unclassified-sms-")}.value=="1|0\n2500:$time")
+  check(SecureStore.data.entries.single{it.key.startsWith("unclassified-sms-")}.value=="1|0\n2500:$time\n2600:$time")
  }
  test("backfill permission loss does not advance its protected cursor") {
   val e=setup();val fingerprint=ObservationConfigStore(e.context).profile(adminA,System.currentTimeMillis())!!.fingerprint()
@@ -1569,6 +1571,21 @@ fun main(args:Array<String>) {
   val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
   check(!result.completed&&e.repository.requests.size==1&&e.repository.requests.single().rawBody==body)
   check(e.repository.reconciliationBatches.flatten().none{it.sourceKey==cloudKey(adminA,1299)})
+ }
+ test("a mixed SMS removed after capture keeps only its original scoped locator and cannot clear coverage") {
+  val e=setup();val mixed=body+" OTP 1234";val mixedId=1308L
+  val resolver=e.context.contentResolver
+  resolver.rows=listOf(row(mixedId,mixed))
+  check(ObservationRecovery(e.context).scanStatus()==ObservationRecovery.Scan.COMPLETE)
+  val held=SecureStore.data.entries.single{it.key.startsWith("unclassified-sms-")}
+  check(held.value=="1|0\n$mixedId:$time"&&pending(adminA).isEmpty())
+  val device=Values.sha256("1234567890abcdef")
+  check(!AndroidUnclassifiedSmsStore(e.context,adminB.collectionId,adminB.accountId,installation,device,{true}).hasUnresolved())
+  resolver.rows=emptyList();ObservationInboxRevision.changed()
+  check(!ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false}).completed)
+  check(SecureStore.data[held.key]=="1|0\n$mixedId:$time"&&e.repository.requests.isEmpty())
+  check(e.repository.reconciliationBatches.flatten().isEmpty())
+  check(SecureStore.data.values.none{it.contains(mixed)||it.contains(Values.sha256(mixed))})
  }
  test("unclassified approved sender text blocks census confirmation without transmitting a fingerprint") {
   for(newest in listOf(false,true)){
