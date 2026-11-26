@@ -121,5 +121,47 @@
       "stage": "scoped_admin_outcomes",
       "elapsedMs": 3865.315
     }
-  ]
+  ],
+  "concurrentAdminReceivers": {
+    "environment": "Isolated PostgreSQL 17. Two authenticated Admin sources submitted the same test transfer concurrently. The gateway and carrier callback were simulated.",
+    "regression": "scripts/supabase/cloud-release/burimunsi-automatic-receipt-e2e.test.mjs",
+    "distinctPhoneSources": 2,
+    "providerTransfers": 1,
+    "payments": 1,
+    "ledgerCredits": 1,
+    "amountRwf": 1000,
+    "eligiblePayerObligations": 1,
+    "gatewayTransmissions": 1,
+    "gatewayRequests": [
+      "POST",
+      "GET same original message ID"
+    ],
+    "adminPayerState": [
+      "unknown",
+      "delivered"
+    ],
+    "scopedCensus": [
+      {
+        "status": "verified",
+        "candidates": 2
+      },
+      {
+        "status": "incomplete",
+        "extraReceiptOn": "second phone"
+      },
+      {
+        "status": "verified",
+        "candidates": 3
+      }
+    ]
+  },
+  "deployedDriverRegression": {
+    "driver": "postgres@3.4.7",
+    "original": "42501 consent_changed",
+    "staleConsent": 403,
+    "checkpoint": 200,
+    "processingStatus": 200,
+    "page": 200,
+    "missing": "incomplete"
+  }
 }
