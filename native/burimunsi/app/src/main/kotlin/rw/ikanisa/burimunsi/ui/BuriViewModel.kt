@@ -1214,15 +1214,15 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         receiverStatus.refreshHealth()
     }
 
-    /** Only a legacy bundle needs a separate optional read. A late reply may
-     * not own a later route/session. */
+    /** A bundle that omitted savings gets one background read. A complete or
+     * partial savings object already carries the server's reported facts. */
     private fun showBundledHome(grant: NativeSessionBootstrap.Grant, base: Home, savedAt: Long?) {
         sessionBootstrap.withCurrent(grant) { showHome(base,false,savedAt) }
         fun stillShowingBase() = foreground && !state.offline && SnapshotFreshness.reusable(savedAt,clock()) &&
             state.route == Route.HOME && state.sheet == null &&
             state.home === base && state.operator === grant.operator && hasAccess(Capability.READ) &&
             (queuedNavigation == null || queuedNavigation?.first == Route.HOME)
-        if (grant.homeSavingsRequested || base.savings != null || !stillShowingBase()) return
+        if (base.savings != null || !stillShowingBase()) return
         val records = repo()
         state = state.copy(homeSavingsLoading = true)
         viewModelScope.launch {

@@ -51,7 +51,7 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
     fun restore(): Operator? = sessions.restore()?.operator
 
     internal class Restoration(
-        val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null,val homeSavingsRequested:Boolean=false,
+        val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null,
     )
 
     internal fun restoreForHome(wantsHome:(String?,String)->Boolean):Restoration? {
@@ -62,7 +62,7 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
 
     private fun withHome(verified:NativeSessions.ProfileRead,revision:Long):Restoration {
         val snapshot=verified.home?.let{records.acceptRestoredHome(verified.operator,it,revision)}
-        return Restoration(verified.operator,snapshot?.first,snapshot?.second,verified.homeSavingsRequested)
+        return Restoration(verified.operator,snapshot?.first,snapshot?.second)
     }
 
     internal fun refreshHome():Restoration {

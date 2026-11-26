@@ -13,7 +13,7 @@ internal class NativeSessionBootstrap(
     private val readJournal: () -> JournalKnowledge,
 ) {
     class Grant(val operator: Operator, val group: String, val revision: Long,
-        val home: Home? = null, val homeSavedAt: Long? = null, val homeSavingsRequested: Boolean = false)
+        val home: Home? = null, val homeSavedAt: Long? = null)
     class Restored(val grant: Grant?, val navigation: RestorationDecision, val recovery: Recovery? = null)
 
     sealed interface Recovery {
@@ -44,7 +44,7 @@ internal class NativeSessionBootstrap(
         repository.withCurrentProfile(profile) { group, revision -> Grant(profile, group, revision) }
     private fun bind(result: NativeRepository.Restoration): Grant =
         repository.withCurrentProfile(result.operator) { group, revision ->
-            Grant(result.operator, group, revision, result.home, result.homeSavedAt, result.homeSavingsRequested)
+            Grant(result.operator, group, revision, result.home, result.homeSavedAt)
         }
 
     /** The validated group, role and generation must still own the UI publication after any suspension. */

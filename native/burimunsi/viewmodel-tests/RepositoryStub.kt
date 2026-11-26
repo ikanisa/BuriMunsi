@@ -117,7 +117,7 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDis
  fun restore():Operator?{Fixture.restoreReads++;Fixture.restoreEntered?.countDown();
   check(Fixture.restoreBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false)
   Fixture.restoreFailure?.let{throw it};return operator}
- internal class Restoration(val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null,val homeSavingsRequested:Boolean=false)
+ internal class Restoration(val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null)
  internal fun restoreForHome(wantsHome:(String?,String)->Boolean):Restoration?=restore()?.let{
   val include=wantsHome(it.id,collectionId)
   Restoration(it,Fixture.restoredHome.takeIf{include},Fixture.restoredHomeSavedAt.takeIf{include})

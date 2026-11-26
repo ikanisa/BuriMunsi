@@ -117,7 +117,7 @@ internal class NativeSessions(
         if(ownedWitness==witness)clearMemoryOperator()
     }
 
-    class ProfileRead(val operator:Operator,val home:JSONObject?=null,val homeSavingsRequested:Boolean=false)
+    class ProfileRead(val operator:Operator,val home:JSONObject?=null)
 
     fun restore(includeHome:Boolean=false,wantsHome:(String?,String)->Boolean={_,_->true}):ProfileRead?{
         // Snapshot, validate and attach under one process-wide lock. A second
@@ -247,24 +247,24 @@ internal class NativeSessions(
         val witness=ownedSession()
         return synchronized(sessionRefreshLock){refreshSessionLocked(witness,expectedOwner=null,includeHome)}
     }
-    private fun readSession(witness:SessionWitness,includeHome:Boolean):Pair<JSONObject,Boolean> {
+    private fun readSession(witness:SessionWitness,includeHome:Boolean):JSONObject {
         fun read(path:String) = JSONObject(requestOwned(witness,"GET",path))
         fun ApiFailure.selectorRejected() = status==400 && !uncertain && code in setOf("invalid_query","contract_query")
         if(includeHome&&api.resolvesLoginScope){
             if(homeSavingsRejectedAt?.let { System.nanoTime()-it < TimeUnit.MINUTES.toNanos(5) } != true) {
-                try { return read("/session?include=$SESSION_HOME_SAVINGS_INCLUDE") to true }
+                try { return read("/session?include=$SESSION_HOME_SAVINGS_INCLUDE") }
                 catch(e:ApiFailure) {
                     if(!e.selectorRejected())throw e
                     homeSavingsRejectedAt = System.nanoTime()
                 }
             }
-            try { return read("/session?include=home") to false }
+            try { return read("/session?include=home") }
             catch(e:ApiFailure) { if(!e.selectorRejected())throw e }
         }
-        return read("/session") to false
+        return read("/session")
     }
     private fun refreshSessionLocked(witness:SessionWitness,expectedOwner:String?,includeHome:Boolean=false):ProfileRead {
-        val (j,homeSavingsRequested)=try{readSession(witness,includeHome)}catch(e:ApiFailure){
+        val j=try{readSession(witness,includeHome)}catch(e:ApiFailure){
             if(e.status==403&&confirmedSessionDenial(e)){authority.invalidateIfCurrent(witness,::clearLocalOperator);throw ApiFailure("session_unavailable",401)}
             throw e
         }
@@ -296,7 +296,7 @@ internal class NativeSessions(
             if(savedProfile!=null&&!profile.hasSameAccess(savedProfile)){
                 authority.renewGrant(witness){ownedWitness=it}
             }else authority.confirmObservationCurrent(witness)
-            ProfileRead(profile,j.optJSONObject("home"),homeSavingsRequested)
+            ProfileRead(profile,j.optJSONObject("home"))
         }
     }
     private fun saveSession(encoded:String){

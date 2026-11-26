@@ -9,6 +9,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -339,7 +340,7 @@ private suspend fun bundledHomeRestores() {
     }
 }
 
-private suspend fun savingsBundleRestoresInOneRead(includesSavings:Boolean) {
+private suspend fun savingsBundleRestoresInOneRead() {
     val scenario = SessionScenario()
     scenario.signIn(scenario.repository())
     Transport.calls.clear()
@@ -351,7 +352,7 @@ private suspend fun savingsBundleRestoresInOneRead(includesSavings:Boolean) {
         entered.countDown()
         check(release.await(5,TimeUnit.SECONDS))
         val home = JSONObject(normal(request.copy(path="/v1/burimunsi/home")))
-        if(includesSavings)home.put("savings",JSONObject().put("lifetimeContributionsRwf",8400L)
+        home.put("savings",JSONObject().put("lifetimeContributionsRwf",8400L)
             .put("outgoingPaymentsRwf",0L).put("latestWalletBalanceRwf",JSONObject.NULL)
             .put("reconciliationStatus","unavailable"))
         JSONObject(normal(request.copy(path="/v1/burimunsi/session"))).put("home",home).toString()
@@ -363,7 +364,7 @@ private suspend fun savingsBundleRestoresInOneRead(includesSavings:Boolean) {
         check(model.state.operator==null&&!model.presentation.showRecords)
         release.countDown()
         idle(model)
-        check(model.state.home?.paymentCount==0&&model.state.home?.savings==savings.takeIf{includesSavings})
+        check(model.state.home?.paymentCount==0&&model.state.home?.savings==savings)
         check(model.presentation.showRecords&&!model.state.homeSavingsLoading)
         check(Transport.calls.map{it.path}==listOf(SAVINGS_SESSION_PATH))
         val before=Transport.calls.size
@@ -372,6 +373,113 @@ private suspend fun savingsBundleRestoresInOneRead(includesSavings:Boolean) {
         check(Transport.calls.drop(before).map{it.path}==listOf(SAVINGS_SESSION_PATH))
     } finally {
         release.countDown()
+        stop(model)
+        Transport.sessionHomeSavings=null
+    }
+}
+
+private enum class OmittedSavings { RESTORE, NAVIGATE, NARROW_GRANT, SWITCH_ACCOUNT }
+
+private suspend fun omittedSavingsUsesOneBackgroundRead(outcome:OmittedSavings) {
+    val scenario=SessionScenario()
+    scenario.capabilities=listOf(Capability.READ,Capability.ALLOCATE)
+    val original=scenario.repository()
+    scenario.signIn(original)
+    Transport.calls.clear()
+    val originalToken=scenario.token
+    val normal=Transport.handler
+    val sessionEntered=CountDownLatch(1)
+    val sessionRelease=CountDownLatch(1)
+    val savingsEntered=CountDownLatch(1)
+    val savingsRelease=CountDownLatch(1)
+    val firstSavings=java.util.concurrent.atomic.AtomicBoolean()
+    val leaked=java.util.concurrent.atomic.AtomicBoolean()
+    val savings=HomeSavings(8425L,3100L,9000L,"unavailable")
+    Transport.sessionHomeSavings={ request ->
+        val home=JSONObject(normal(request.copy(path="/v1/burimunsi/home")))
+        if(request.token==originalToken){
+            sessionEntered.countDown()
+            check(sessionRelease.await(5,TimeUnit.SECONDS))
+        }else home.put("savings",JSONObject().put("lifetimeContributionsRwf",16L)
+            .put("outgoingPaymentsRwf",0L).put("latestWalletBalanceRwf",JSONObject.NULL)
+            .put("reconciliationStatus","unavailable"))
+        JSONObject(normal(request.copy(path="/v1/burimunsi/session"))).put("home",home).toString()
+    }
+    Transport.handler={ request ->
+        when {
+            request.path==SAVINGS_HOME_PATH&&firstSavings.compareAndSet(false,true)->{
+                savingsEntered.countDown()
+                check(savingsRelease.await(5,TimeUnit.SECONDS))
+                JSONObject(normal(request.copy(path="/v1/burimunsi/home")))
+                    .put("savings",JSONObject().put("lifetimeContributionsRwf",8425L)
+                        .put("outgoingPaymentsRwf",3100L).put("latestWalletBalanceRwf",9000L)
+                        .put("reconciliationStatus","unavailable")).toString()
+            }
+            request.path.contains("/members?")->pageFixture(memberFixture(scenario.group))
+            else->normal(request)
+        }
+    }
+    val model=BuriViewModel(scenario.app)
+    var replacement:BuriViewModel?=null
+    try {
+        check(sessionEntered.await(5,TimeUnit.SECONDS))
+        val resident=model.onFixtureMain{onForeground();viewModelScope.coroutineContext[Job]!!.children.toSet()}
+        sessionRelease.countDown()
+        check(savingsEntered.await(5,TimeUnit.SECONDS))
+        idle(model)
+        val fallbacks=model.viewModelScope.coroutineContext[Job]!!.children.filter{it !in resident}.toList()
+        check(fallbacks.isNotEmpty())
+        check(model.presentation.showRecords&&!model.state.busy&&model.state.home?.paymentCount==0&&
+            model.state.home?.savings==null&&model.state.homeSavingsLoading)
+        check(Transport.calls.map{it.path}==listOf(SAVINGS_SESSION_PATH,SAVINGS_HOME_PATH))
+        val savedAt=model.state.savedAt
+        if(outcome!=OmittedSavings.RESTORE){
+            androidx.compose.runtime.snapshots.Snapshot.onCommittedValue={ value ->
+                if(value is rw.ikanisa.burimunsi.ui.UiState && value.home?.savings==savings)leaked.set(true)
+            }
+        }
+        when(outcome){
+            OmittedSavings.RESTORE->Unit
+            OmittedSavings.NAVIGATE->{
+                model.onFixtureMain{navigate(Route.MEMBERS)}
+                idle(model)
+                check(model.state.route==Route.MEMBERS&&model.state.members?.items?.size==1&&model.presentation.showRecords)
+            }
+            OmittedSavings.NARROW_GRANT->{
+                scenario.role="staff"
+                scenario.capabilities=listOf(Capability.READ)
+                original.refreshSession()
+                withTimeout(4_000){
+                    while(model.state.operator?.capabilities!=setOf(Capability.READ.key)||model.state.busy)delay(2)
+                }
+            }
+            OmittedSavings.SWITCH_ACCOUNT->{
+                original.logout()
+                scenario.owner="operator-b";scenario.group="group-b";scenario.token="b".repeat(64)
+                scenario.signIn(scenario.repository())
+                replacement=BuriViewModel(scenario.app)
+                idle(replacement)
+                check(replacement.state.operator?.id==scenario.owner&&replacement.state.home?.savings?.lifetimeContributionsRwf==16L)
+            }
+        }
+        savingsRelease.countDown()
+        withTimeout(5_000){fallbacks.joinAll()}
+        if(outcome==OmittedSavings.RESTORE){
+            check(model.state.home?.savings==savings&&!model.state.homeSavingsLoading&&model.state.savedAt==savedAt)
+            check(Transport.calls.map{it.path}==listOf(SAVINGS_SESSION_PATH,SAVINGS_HOME_PATH))
+        }else{
+            check(!leaked.get()&&model.state.home?.savings!=savings)
+            when(outcome){
+                OmittedSavings.NAVIGATE->check(model.state.route==Route.MEMBERS&&model.state.home==null&&
+                    Transport.calls.count{it.path==SAVINGS_HOME_PATH}==1)
+                OmittedSavings.SWITCH_ACCOUNT->check(model.state.operator==null&&!model.presentation.showRecords)
+                else->Unit
+            }
+        }
+    } finally {
+        androidx.compose.runtime.snapshots.Snapshot.onCommittedValue=null
+        sessionRelease.countDown();savingsRelease.countDown()
+        replacement?.let{stop(it)}
         stop(model)
         Transport.sessionHomeSavings=null
     }
@@ -933,8 +1041,11 @@ fun main() = runBlocking {
         "a delayed Payments reply cannot cross a same-actor narrower grant" to suspend { delayedRecordReadCannotCrossBoundary(Route.PAYMENTS,Replacement.SAME_OWNER) },
         "Home, lists and details publish while encrypted display writes are blocked" to suspend { freshRowsPublishWhileRecordCacheIsBlocked() },
         "a paired session and Home response restores and caches the authorized snapshot" to suspend { bundledHomeRestores() },
-        "cold Home and foreground Home each read profile and savings in one request" to suspend { savingsBundleRestoresInOneRead(true) },
-        "a bounded optional savings failure draws Home without issuing duplicate work" to suspend { savingsBundleRestoresInOneRead(false) },
+        "cold and resumed Home each use one request when the bundle has even partial savings" to suspend { savingsBundleRestoresInOneRead() },
+        "omitted savings draws usable Home and fills all amounts from one background read" to suspend { omittedSavingsUsesOneBackgroundRead(OmittedSavings.RESTORE) },
+        "omitted savings does not block another tab or publish late on it" to suspend { omittedSavingsUsesOneBackgroundRead(OmittedSavings.NAVIGATE) },
+        "omitted savings cannot publish from a narrower grant's old authority" to suspend { omittedSavingsUsesOneBackgroundRead(OmittedSavings.NARROW_GRANT) },
+        "omitted savings cannot publish after account and collection replacement" to suspend { omittedSavingsUsesOneBackgroundRead(OmittedSavings.SWITCH_ACCOUNT) },
         "warm Payments, Members and details need only one current-profile request after resume" to suspend { warmRoutesReuseVerifiedAuthority() },
         "a restored Settings destination never requests unused Home records" to suspend { settingsRestoreSkipsUnusedHome() },
         "bundled sign-in displays the confirmed base without repeating login or plain Home" to suspend { loginHomeRequests(include=true) },
