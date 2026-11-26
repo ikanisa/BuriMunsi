@@ -12,8 +12,8 @@ export function useOperationRead<T>(
   key: string,
   enabled: boolean,
   load: (signal: AbortSignal) => Promise<T>,
-  {pollMs, collectionId, live = false, retainDuringRefresh = false, invalidResponse = 'The workspace response could not be verified.'}:
-    {pollMs?: number; collectionId?: string; live?: boolean; retainDuringRefresh?: boolean; invalidResponse?: string} = {},
+  {pollMs, collectionId, live = false, retainDuringRefresh = false, reuseSettledOnResume = false, invalidResponse = 'The workspace response could not be verified.'}:
+    {pollMs?: number; collectionId?: string; live?: boolean; retainDuringRefresh?: boolean; reuseSettledOnResume?: boolean; invalidResponse?: string} = {},
 ) {
   const suspended = useContext(InteractionSuspendedContext);
   const [read, setRead] = useState<{scope: string; result: OperationReadState<T>} | null>(null);
@@ -22,15 +22,20 @@ export function useOperationRead<T>(
   const lastStarted = useRef(0);
   const queuedChange = useRef<string | null>(null);
   const attemptKey = `${key}:${attempt}`;
+  const settledBeforePause = useRef<string | null>(null);
+  const canResumeRead = suspended && reuseSettledOnResume && enabled && read?.scope === key && read.result.key === attemptKey;
 
   useEffect(() => {
     if (suspended) {
+      settledBeforePause.current = canResumeRead ? attemptKey : null;
       flight.current?.controller.abort();
       flight.current = null;
       queuedChange.current = null;
       return;
     }
-    if (!enabled) return;
+    const alreadySettled = settledBeforePause.current === attemptKey;
+    settledBeforePause.current = null;
+    if (!enabled || alreadySettled) return;
     let pending = flight.current;
     if (!pending || pending.key !== attemptKey || pending.controller.signal.aborted) {
       pending?.controller.abort();
@@ -65,7 +70,7 @@ export function useOperationRead<T>(
       // React's development replay attaches again before this microtask.
       queueMicrotask(() => {if (!current.readers) current.controller.abort();});
     };
-  }, [attemptKey, enabled, invalidResponse, key, load, suspended]);
+  }, [attemptKey, canResumeRead, enabled, invalidResponse, key, load, suspended]);
 
   const retry = useCallback(() => {
     if (!suspended && (!pollMs || !flight.current)) setAttempt(value => value + 1);

@@ -38,10 +38,13 @@
 }
 .payment-detail-evidence {
   display: grid;
-  gap: .65rem;
-  padding-block-start: .75rem;
+  gap: .3rem;
+  min-inline-size: 0;
+  padding-block-start: .6rem;
   border-block-start: 1px solid var(--admin-line);
 }
+.payment-detail-evidence p { margin: 0; }
+.payment-sms-body { white-space: pre-wrap; overflow-wrap: anywhere; }
 .payment-detail-disclosure summary {
   padding-block: .3rem;
   color: var(--admin-accent-ink);

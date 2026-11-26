@@ -5,7 +5,7 @@ export const fixtureAdminId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 export const fixtureInitialPasscode = '2468';
 const roles = {
   admin: ['overview.read', 'collections.read', 'users.read', 'receivers.read', 'receivers.manage', 'payments.read',
-    'ledger.read', 'reconciliations.read', 'sms.read', 'gateway.read', 'account.manage', 'admin_users.read', 'admin_users.manage'],
+    'ledger.read', 'reconciliations.read', 'sms.read', 'sms.reveal', 'gateway.read', 'account.manage', 'admin_users.read', 'admin_users.manage'],
   staff: ['overview.read'],
 };
 const cookieKey = 'collect_fixture_session';

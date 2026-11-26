@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { installLocalNetworkFence } from './local-network-fence.cjs';
 import { qualifyPhoneTeam } from './phone-team.mjs';
 import { qualifyPaymentAuthority } from './payment-authority.mjs';
-import { fixtureInactiveMember, fixtureMember, fixtureOutgoingPayment, fixturePayment, fixtureSmsEvidenceId } from './operator-read-fixture.mjs';
+import { fixtureInactiveMember, fixtureMember, fixtureOriginalSms, fixtureOutgoingPayment, fixturePayment, fixtureSmsEvidenceId } from './operator-read-fixture.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const artifact = resolve(root, process.argv[2] ?? process.env.ADMIN_PWA_BUILD_DIR ?? 'build/admin-web-fixture');
@@ -398,16 +398,18 @@ try {
   const captureLinkedSms = request => {
     const url=new URL(request.url());
     if (url.origin===origin && (url.pathname.includes('/sms-evidence') || url.pathname.startsWith('/api/admin/momo/observations'))) {
-      linkedSmsReads.push([request.method(),url.pathname,url.search,request.postData()]);
+      linkedSmsReads.push([request.method(),url.pathname,url.search,request.headers()['x-collect-review-reason'] ?? null]);
     }
   };
   page.on('request',captureLinkedSms);
   await paymentRow(fixturePayment).getByRole('button', {name: 'Review linked SMS', exact: true}).click();
   const paymentDetail = page.getByRole('region', {name: 'Payment details', exact: true});
   await paymentDetail.getByText(fixturePayment.ftId, {exact: true}).waitFor();
-  await paymentDetail.getByRole('region', {name:'Linked SMS', exact:true}).getByText('Parsed', {exact:true}).waitFor();
+  await paymentDetail.getByRole('region', {name:'Original SMS', exact:true}).getByText(fixtureOriginalSms, {exact:true}).waitFor();
   page.off('request',captureLinkedSms);
-  assert.deepEqual(linkedSmsReads,[['GET','/api/admin/burimunsi/payments/'+fixturePayment.id+'/sms-evidence','',null]]);
+  assert.deepEqual(linkedSmsReads,[['GET','/api/admin/burimunsi/payments/'+fixturePayment.id+'/sms-evidence','',null],
+    ['GET','/api/admin/momo/observations/'+fixtureSmsEvidenceId+'/content','?collectionId='+fixturePayment.groupId,'View SMS from payment details']]);
+  assert.equal(await paymentDetail.getByRole('textbox').count(),0);
 
   await paymentDetail.getByText('Unallocated', {exact: true}).waitFor();
   await paymentDetail.getByRole('button', {name: 'Close', exact: true}).click();
@@ -416,7 +418,8 @@ try {
   await paymentRow(fixtureOutgoingPayment).getByRole('button', {name: fixtureOutgoingPayment.ftId, exact: true}).click();
   await paymentDetail.getByText(fixtureOutgoingPayment.ftId, {exact: true}).waitFor();
   await paymentDetail.getByText('RWF 5,000', {exact: true}).waitFor();
-  assert.equal(await paymentDetail.getByRole('region', {name:'Linked SMS', exact:true}).count(), 0);
+  assert.equal(await paymentDetail.getByRole('region', {name:'Original SMS', exact:true}).count(), 0);
+  assert.equal(await paymentDetail.getByText(fixtureOriginalSms,{exact:true}).count(),0);
   assert.equal(await paymentDetail.getByText(fixtureSmsEvidenceId, {exact: true}).count(), 0);
   await page.setViewportSize({width: 320, height: 640});
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);

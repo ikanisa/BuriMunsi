@@ -6,11 +6,11 @@ import {canDisplaySessionRecords, canReadSmsEvidence} from '../../session/sessio
 import {CompactText, Button, Card, ErrorState, LoadingState, PageHeader} from '../../ui';
 import {Facts} from './OperationsRecords';
 import {ReceiverSmsPanel} from './ReceiverSmsPanel';
-import {CanonicalPaymentEvidence} from './CanonicalPaymentEvidence';
+import {CanonicalPaymentEvidence, mayViewPaymentSms} from './CanonicalPaymentEvidence';
 import {PaymentAllocationWizard} from './PaymentAllocationWizard';
 import {FinancialAnalysisTable, type FinancialColumn} from './FinancialAnalysisTable';
 import {PaymentTotalsSummary} from './PaymentFlowTotals';
-import {AllocationStatus, PaymentDirection, buriMunsiPaymentsPath, buriMunsiSmsPath, paymentAmount, recordedText} from './BuriMunsiPaymentRows';
+import {AllocationStatus, PaymentDirection, buriMunsiPaymentsPath, paymentAmount, recordedText} from './BuriMunsiPaymentRows';
 import {initialColumnFilters, type ColumnFilter, type FinancialSort} from './financialAnalysisModel';
 import {type PaymentAnalysisQuery} from '../../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
 import {buriMunsiPayment, paymentAllocation, paymentCounterpartyEvidence, paymentDirection, paymentId, paymentInstant, paymentMemberName, paymentMemberNumber, paymentTime, readCanonicalPaymentAnalysis, type BuriMunsiPayment} from './canonicalPaymentAnalysis';
@@ -130,8 +130,9 @@ function ScopedPaymentRecords() {
     {key:'memberNumber',label:'Member phone',kind:'text',value:paymentMemberNumber},
   ];
   if (canReadSms) columns.push({key:'sms',label:'SMS evidence',kind:'category',value:r=>r.sourceId ? 'linked' : 'none',
-    options:[{value:'linked',label:'Linked'},{value:'none',label:'None linked'}],render:r=>r.sourceId ? rowButton(r,'Review linked SMS') : 'None linked'});
-  const detail = selected ? <PaymentDetail key={selected} group={scopedGroup} {...detailRead}
+    options:[{value:'linked',label:'Linked'},{value:'none',label:'None linked'}],render:r=>!r.sourceId ? 'None linked' :
+      mayViewPaymentSms(user,r.groupId) ? rowButton(r,'Review linked SMS') : 'Linked'});
+  const detail = selected ? <PaymentDetail key={selected} {...detailRead}
     search={params} onClose={() => show()} /> : null;
   const actions = <>{query && <Button onClick={() => {
     const next = new URLSearchParams(params);
@@ -180,11 +181,10 @@ function usePaymentDetail(paymentKey: string | undefined, group: string | undefi
   return current;
 }
 
-function PaymentDetail({group, search, onClose, result, retry}: {group?: string; search: URLSearchParams; onClose: () => void;
+function PaymentDetail({search, onClose, result, retry}: {search: URLSearchParams; onClose: () => void;
   result: OperationReadState<BuriMunsiPayment> | null; retry: () => void}) {
   const {user} = useSession();
   const payment = result?.status === 'success' ? result.value : null;
-  const evidenceGroup = payment?.groupId ?? group;
   const recordedParty = payment ? paymentCounterpartyEvidence(payment) : null;
   const member = payment && paymentMemberName(payment);
   const memberPhone = payment && paymentMemberNumber(payment);
@@ -204,9 +204,8 @@ function PaymentDetail({group, search, onClose, result, retry}: {group?: string;
             ...(recordedParty.number ? [['Number or code', recordedParty.number] as [string,string]] : []),
           ]} />
         </details>}
-        {payment.sourceId && canReadSmsEvidence(user) && (evidenceGroup
-          ? <CanonicalPaymentEvidence key={payment.sourceId} paymentId={payment.id} group={evidenceGroup} sourceId={payment.sourceId} />
-          : <Link className="operations-link" to={buriMunsiSmsPath}>Open M-Money SMS</Link>)}
+        {payment.sourceId && payment.groupId && <CanonicalPaymentEvidence key={payment.sourceId} paymentId={payment.id}
+          group={payment.groupId} sourceId={payment.sourceId} />}
         {user && payment.groupId && payment.state === 'allocated' && payment.canAllocate === true && <Link className="operations-link"
           to={buriMunsiPaymentsPath + '?' + new URLSearchParams({...Object.fromEntries(search),allocate:payment.id})}
           state={{allocationReturn:payment.id}} preventScrollReset aria-haspopup="dialog">

@@ -7,7 +7,7 @@ import path from 'node:path';
 import {versionedStatic} from '../../../deploy/platform-admin/src/static-recovery.js';
 import {createPaymentCommitFixture} from './payment-commit-fixture.mjs';
 import {createPhoneAccountFixture, fixtureAdminId} from './phone-account-fixture.mjs';
-import {fixtureMembers, fixtureMembership, fixtureMomoDetail, fixtureMomoRecord, fixtureOutgoingPayment, fixturePayment, fixtureSmsEvidenceId,
+import {fixtureMembers, fixtureMembership, fixtureMomoDetail, fixtureMomoRecord, fixtureOutgoingPayment, fixturePayment, fixtureSmsEvidenceId, fixtureOriginalSms, fixtureOriginalDigest,
   readBuriMunsiPayments, readMemberList, readMemberStatementFixture, readMomoList} from './operator-read-fixture.mjs';
 
 const baseline = path.resolve(process.argv[2] ?? '');
@@ -157,7 +157,15 @@ createServer(async (request, response) => {
       const paymentId=evidencePayment[1];
       return json(response,200,{paymentId,groupId:'fixture-group',evidence:paymentId===fixturePayment.id ?
         {requestId:fixturePayment.id,sourceId:fixtureSmsEvidenceId,admittedAt:fixturePayment.atRaw,retentionState:'retained',
-          bodySha256:'b'.repeat(64),processing:'parsed',paymentReference:null,payerStatus:null,payerReason:null}:null});
+          bodySha256:fixtureOriginalDigest,processing:'parsed',paymentReference:null,payerStatus:null,payerReason:null}:null});
+    }
+    if (url.pathname === `/api/admin/momo/observations/${fixtureSmsEvidenceId}/content`) {
+      if (!sms || !phoneAccounts.hasPermission(session,'sms.reveal')) return json(response,403,{error:{code:'forbidden'}});
+      const reason=request.headers['x-collect-review-reason'];
+      if (url.searchParams.size !== 1 || url.searchParams.get('collectionId') !== fixturePayment.groupId ||
+          typeof reason !== 'string' || reason.trim().length < 8 || reason.length > 500) return json(response,400,{error:{code:'invalid_fixture'}});
+      return json(response,200,{contractVersion:1,collectionId:fixturePayment.groupId,sourceId:fixtureSmsEvidenceId,sourceKind:'observation',
+        retentionState:'retained',rawSender:'Fixture M-Money',rawBody:fixtureOriginalSms,bodySha256:fixtureOriginalDigest});
     }
     const payment = [fixturePayment, fixtureOutgoingPayment].find(item => url.pathname === '/api/admin/burimunsi/payments/' + item.id);
     if (payment) return payments ? json(response, 200, visiblePayment(payment)) : json(response, 403, {error:{code:'forbidden'}});
@@ -168,7 +176,7 @@ createServer(async (request, response) => {
       contractVersion:1,collectionId:'fixture-group',nextCursor:null,asOf:fixturePayment.atRaw,
       inboxCheck:{state:'unknown',checkedAt:null,candidateCount:null,missingCount:null,pendingCount:null,headsMatch:null},
       items:[{requestId:fixturePayment.id,sourceId:fixtureSmsEvidenceId,admittedAt:fixturePayment.atRaw,retentionState:'retained',
-        bodySha256:'b'.repeat(64),processing:'parsed',paymentReference:null,payerStatus:null,payerReason:null}],
+        bodySha256:fixtureOriginalDigest,processing:'parsed',paymentReference:null,payerStatus:null,payerReason:null}],
     }) : json(response, 403, {error:{code:'forbidden'}});
     if (url.pathname === '/api/admin/core/overview') return json(response, 200, overview);
     if (['/api/admin/core/members', '/api/admin/core/users'].includes(url.pathname) || /^\/api\/admin\/operations\/(members|users)\//.test(url.pathname)) {
