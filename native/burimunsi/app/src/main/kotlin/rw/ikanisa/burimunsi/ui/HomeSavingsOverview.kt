@@ -68,17 +68,15 @@ private fun WalletCard(value: String?, wallet: Boolean, modifier: Modifier) {
     val t = LocalUiText.current
     val label = if (wallet) t("Latest MoMo SMS balance") else t("Cumulative outgoing payments")
     val amount = value?.let { it + " " + t("RWF") } ?: t("Unavailable")
-    val ink = if (wallet) Color(0xFF292447) else Color(0xFF15274C)
     Column(modifier.heightIn(min=64.dp)
-        .background(if (wallet) Color(0xFFEBE8FF) else Color(0xFFE2EBFF),RoundedCornerShape(18.dp))
+        .background(BuriTheme.Tone,RoundedCornerShape(18.dp))
         .clearAndSetSemantics { contentDescription = "$label · $amount" }.padding(12.dp),
         horizontalAlignment=Alignment.CenterHorizontally, verticalArrangement=Arrangement.spacedBy(4.dp,Alignment.CenterVertically)) {
         Row(horizontalArrangement=Arrangement.spacedBy(5.dp),verticalAlignment=Alignment.CenterVertically) {
-            Glyph(if(wallet)R.drawable.ic_home_wallet else R.drawable.ic_home_outgoing,null,
-                if(wallet)Color(0xFF55459B)else Color(0xFF2753A3),18)
-            Text(label,color=ink,fontSize=13.sp,lineHeight=17.sp,fontWeight=FontWeight.Medium)
+            Glyph(if(wallet)R.drawable.ic_home_wallet else R.drawable.ic_home_outgoing,null,BuriTheme.Text,18)
+            Text(label,color=BuriTheme.Text,fontSize=13.sp,lineHeight=17.sp,fontWeight=FontWeight.Medium)
         }
-        SavingsAmount(value,primary=false,ink=ink,unitInk=ink)
+        SavingsAmount(value,primary=false,ink=BuriTheme.Text,unitInk=BuriTheme.Text)
     }
 }
 
@@ -132,16 +130,15 @@ private fun SavingsCard(savings:HomeSavings?,wallet:Boolean,modifier:Modifier) {
         savings.showsRecordedOutgoing() -> t("Recorded outgoing payments")
         else -> t("Total outgoing payments")
     }
-    val amount=value?.let { money(it,t.locale)+" "+t("RWF") } ?: t("Unavailable")
+    val formatted=value?.let { money(it,t.locale) }
+    val amount=formatted?.let { it+" "+t("RWF") } ?: t("Unavailable")
     val description="$label · $amount"
-    val ink=if(wallet)Color(0xFF292447)else Color(0xFF15274C)
     Row(modifier.heightIn(min=60.dp)
-        .background(if(wallet)Color(0xFFEBE8FF)else Color(0xFFE2EBFF),RoundedCornerShape(18.dp))
+        .background(BuriTheme.Tone,RoundedCornerShape(18.dp))
         .clearAndSetSemantics { contentDescription=description }.padding(horizontal=6.dp,vertical=12.dp),
         verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(5.dp,Alignment.CenterHorizontally)) {
-        Glyph(if(wallet)R.drawable.ic_home_wallet else R.drawable.ic_home_outgoing,null,
-            if(wallet)Color(0xFF55459B)else Color(0xFF2753A3),24)
-        SavingsAmount(value?.let { money(it,t.locale) },primary=false,ink=ink,unitInk=ink,modifier=Modifier.weight(1f,fill=false))
+        Glyph(if(wallet)R.drawable.ic_home_wallet else R.drawable.ic_home_outgoing,null,BuriTheme.Text,24)
+        SavingsAmount(formatted,primary=false,ink=BuriTheme.Text,unitInk=BuriTheme.Text,modifier=Modifier.weight(1f,fill=false))
     }
 }
 

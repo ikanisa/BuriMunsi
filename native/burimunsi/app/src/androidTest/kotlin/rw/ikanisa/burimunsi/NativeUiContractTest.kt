@@ -280,7 +280,7 @@ class NativeUiContractTest {
     }
     @Test fun overviewKeepsReportedUnallocatedCountAndAllPaymentsAction(){
         val c=FakeController(Route.HOME,Role.STAFF)
-        val initial=c.state.home!!.copy(unallocatedCount=1)
+        val initial=c.state.home!!.copy(memberCount=128,unallocatedCount=1)
         fun useSavings(savings:HomeSavings?){c.state=c.state.copy(home=initial.copy(savings=savings))}
         val reconciled=HomeSavings(lifetimeContributionsRwf=10000,outgoingPaymentsRwf=2500,
             latestWalletBalanceRwf=7500,reconciliationStatus="reconciled")
@@ -315,6 +315,10 @@ class NativeUiContractTest {
         ui.onNodeWithContentDescription("Lifetime member contributions",substring=true).assertDoesNotExist()
         ui.runOnIdle { c.state=c.state.copy(homeWalletUnavailable=false) }
         val list=ui.onNode(hasScrollToIndexAction())
+        list.performScrollToNode(hasContentDescription("Members · 128"))
+        ui.onNodeWithContentDescription("Members · 128").assertIsDisplayed()
+        ui.onNode(hasText("Members") and hasAnyAncestor(hasScrollToIndexAction()),useUnmergedTree=true).assertDoesNotExist()
+        ui.onNodeWithText("As of ",substring=true).assertDoesNotExist()
         list.performScrollToNode(hasContentDescription("1 unallocated"))
         ui.onNodeWithContentDescription("1 unallocated").assertHasClickAction()
         list.performScrollToNode(hasContentDescription("All payments"))
