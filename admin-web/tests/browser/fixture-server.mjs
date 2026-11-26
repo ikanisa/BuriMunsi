@@ -9,8 +9,22 @@ import {createPhoneAccountFixture, fixtureAdminId} from './phone-account-fixture
 import {fixtureMembers, fixtureMomoDetail, fixtureMomoRecord, fixtureOutgoingPayment, fixturePayment, fixtureSmsEvidenceId,
   readBuriMunsiPayments, readMemberList, readMomoList} from './operator-read-fixture.mjs';
 
-const root = path.resolve(process.argv[2] ?? '');
+const baseline = path.resolve(process.argv[2] ?? '');
+let root = baseline;
 if (!process.argv[2] || !(await fs.stat(root)).isDirectory()) throw new Error('Provide a candidate directory.');
+if (process.argv[3]) {
+  if (!process.send) throw new Error('Two-version fixture requires a private IPC channel.');
+  const candidate = path.resolve(process.argv[3]);
+  for (const artifact of [baseline, candidate]) {
+    const meta = JSON.parse(await fs.readFile(path.join(artifact, 'version.json')));
+    if (meta.backend !== 'unconfigured') throw new Error('Expected synthetic Admin artifacts.');
+  }
+  process.on('message', label => {
+    if (label !== 'baseline' && label !== 'candidate') return;
+    root = label === 'baseline' ? baseline : candidate;
+    process.send(label);
+  });
+}
 const port = Number(process.env.COLLECT_FIXTURE_PORT ?? 4173);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid fixture port.');
 const origin = `http://127.0.0.1:${port}`;
@@ -172,11 +186,12 @@ createServer(async (request, response) => {
   let relative;
   try {relative = decodeURIComponent(url.pathname).replace(/^\/+/, '');} catch {response.writeHead(400); return response.end();}
   if (!relative || relative === 'index.html' || /^admin(?:\/[^.]*)?$/.test(relative)) relative = 'index.html';
-  const target = path.resolve(root, relative);
-  if (!target.startsWith(`${root}${path.sep}`)) {response.writeHead(403); return response.end();}
+  const selected = root;
+  const target = path.resolve(selected, relative);
+  if (!target.startsWith(`${selected}${path.sep}`)) {response.writeHead(403); return response.end();}
   try {
     const data = await fs.readFile(target);
     response.writeHead(200, {'Content-Type': mime[path.extname(target)] ?? 'application/octet-stream', 'Cache-Control': 'no-store'});
     response.end(request.method === 'HEAD' ? undefined : data);
-  } catch {response.writeHead(404, {'Content-Type': 'text/plain'}); response.end('Not found');}
+  } catch {response.writeHead(404, {'Content-Type': 'text/plain', 'Cache-Control': 'no-store'}); response.end('Not found');}
 }).listen(port, '127.0.0.1', () => console.log(`Synthetic Admin fixture listening on ${origin}`));
