@@ -474,9 +474,21 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
     JOIN private.storage_payload_reservations j ON j.object_key=o.object_key AND j.plaintext_sha256=r.object_sha256
     JOIN private.burimunsi_allocation_receipts a ON a.payment_id=p.id AND a.collection_id=p.collection_id
     WHERE p.collection_id=$1 AND p.id=$2`,[group,source.sourceId]);
-   return {manifest,entry};
+   // Totals must come from the persisted integer records, not from receipt text
+   // or JS rounding. Compare exact row identity in addition to aggregate totals.
+   const {rows:totals}=await client.query(`SELECT direction,allocation_state,count(*)::text AS count,
+      sum(amount_rwf)::text AS amount FROM burimunsi.payments WHERE collection_id=$1
+      GROUP BY direction,allocation_state ORDER BY 1,2`,[group]);
+   const {rows:payments}=await client.query(`SELECT id,provider_reference,direction,amount_rwf::text AS amount,
+     member_id,allocation_state,version::text,sms_source_id FROM burimunsi.payments WHERE collection_id=$1 ORDER BY id`,[group]);
+   const {rows:[ledger]}=await client.query(`SELECT count(*)::text AS entries,coalesce(sum(amount_minor),0)::text AS amount
+      FROM app.ledger_entries WHERE collection_id=$1`,[group]);
+   return {manifest,entry,totals,payments,ledger};
   };
   const before=await snapshot(f.client);
+  assert.ok(before.payments.some(row=>row.direction==='outgoing'));
+  assert.ok(before.payments.some(row=>row.direction==='incoming'));
+  assert.deepEqual(before.ledger,{entries:'0',amount:'0'});
   assert.equal(before.manifest.delivery_count,2);
   assert.equal(before.manifest.ledger_count,0);
   assert.ok(before.manifest.raw_count>0&&before.manifest.parse_count>0);
@@ -506,6 +518,14 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
    assert.deepEqual(await identity(restored),{db:target,data:c.data,cluster:c.clusterName,socket_only:true});
    const after=await snapshot(restored);
    assert.deepEqual(after,before);
+   for(const total of after.totals){
+    const matching=after.payments.filter(row=>row.direction===total.direction&&row.allocation_state===total.allocation_state);
+    assert.equal(total.count,String(matching.length));
+    assert.equal(total.amount,matching.reduce((sum,row)=>sum+BigInt(row.amount),0n).toString());
+   }
+   await assert.rejects(restored.query('UPDATE burimunsi.payments SET amount_rwf=amount_rwf WHERE collection_id=$1',[group]),
+    error=>error?.code==='25006');
+   t.diagnostic('Restored standalone payment totals: '+JSON.stringify(after.totals)+'; legacy ledger entries and net amount remain zero');
    assert.equal(sha(await readFile(archive)),archiveSha);
    assert.equal(checkObject(after,objectBackup),true);
    const restoredBody=await decrypt(runtime.env,objectBackup.get(key).toString('utf8'),
@@ -1269,6 +1289,40 @@ test('two Admin receipt sources concurrently reporting the same network transfer
   await checkNotice('unknown');
   await sms.carrierDelivered();assert.equal((await sms.drain()).gateway_state,'delivered');assert.equal((await sms.drain()).processed,0);
   assert.deepEqual(sms.requests,['POST','GET']);await checkNotice('delivered');
+  await t.test('isolated legacy ledger restore keeps the one positive credit and cannot dispatch',async t=>{
+   const c=f.cluster,target='burimunsi_legacy_restore_fixture',archive=join(c.root,'burimunsi-legacy-synthetic.dump');
+   const local=(name,args)=>execFileSync(join(c.bin,name),['-h',c.socket,'-p',String(c.port),'-U',c.initialUser,...args],{
+    env:{...c.env,PGCONNECT_TIMEOUT:'3'},timeout:15000,maxBuffer:1048576,stdio:['ignore','pipe','pipe']});
+   const custody=async client=>{
+    const {rows:ledger}=await client.query(`SELECT id,payment_id,kind,amount_minor::text AS amount,
+       currency,evidence_id,reverses_entry_id FROM app.ledger_entries WHERE collection_id=$1 ORDER BY id`,[group]);
+    const {rows:[sum]}=await client.query(`SELECT coalesce(sum(amount_minor),0)::text AS amount
+       FROM app.ledger_entries WHERE collection_id=$1 AND kind='contribution'`,[group]);
+    const {rows:[jobs]}=await client.query(`SELECT count(*)::text AS count FROM collect_sms.messages`);
+    return {ledger,sum,jobs};
+   };
+   const expected=await custody(f.client);
+   assert.equal(expected.sum.amount,'1000');
+   assert.equal(expected.ledger.length,1);
+   assert.equal(expected.ledger[0].kind,'contribution');
+   local('pg_dump',['-Fc','-f',archive,'-d','postgres']);
+   await f.client.query('CREATE DATABASE '+target+' TEMPLATE template0');
+   const restored=new pg.Client({host:c.socket,port:c.port,database:target,user:c.initialUser});
+   try {
+    local('pg_restore',['--exit-on-error','--single-transaction','-d',target,archive]);
+    await restored.connect();
+    const {rows:[env]}=await restored.query(`SELECT current_database() AS db,current_setting('data_directory') AS data,
+     INET_SERVER_ADDR() IS NULL AS socket_only`);
+    assert.deepEqual(env,{db:target,data:c.data,socket_only:true});
+    await restored.query("SET ROLE postgres; SET default_transaction_read_only = 'on'");
+    assert.deepEqual(await custody(restored),expected);
+    assert.deepEqual(sms.requests,['POST','GET']);
+    t.diagnostic('Restored historical ledger: exact original evidence and one synthetic RWF 1000 credit; no gateway replay');
+   } finally {
+    await restored.end();
+    await f.client.query('DROP DATABASE '+target);
+   }
+  });
   async function verifyInbox(flow,inputs){
    const items=inputs.map(v=>({sourceKey:v.sourceKey,bodySha256:sha(v.rawBody),rawSender:v.rawSender,
     serviceCentreAt:v.serviceCentreAt,inboxReceivedAt:v.inboxReceivedAt,subscriptionId:v.subscriptionId}));

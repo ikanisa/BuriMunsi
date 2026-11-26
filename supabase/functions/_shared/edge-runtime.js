@@ -3,6 +3,27 @@ import {sqlFenceBackend} from './application-fence.js';
 import {assertRuntimeDeployment, prepareDeploymentCheck} from './deployment-database.js';
 import {connection, fenceConnection} from './postgres-connections.js';
 import {PostgresDatabase} from './postgres.js';
+import {sha256} from './domain/burimunsi/values.js';
+
+const unresolvedReasons = new Set(['lease_lost', 'work_lost', 'dispatch_unconfirmed']);
+const admissionId = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+async function observeUnresolvedWork(work, reason) {
+  try {
+    const [id, epoch] = work.tuple();
+    if (typeof id !== 'string' || !admissionId.test(id) || !Number.isSafeInteger(epoch) || epoch < 1) return;
+    console.warn(JSON.stringify({
+      service: 'collect_platform_api',
+      event: 'application_work_unresolved',
+      scope: 'application_only',
+      admission_sha256: await sha256(id),
+      epoch,
+      reason: unresolvedReasons.has(reason) ? reason : 'unclassified',
+    }));
+  } catch {
+    // This observation cannot change the recorded outcome or the response.
+  }
+}
 
 // Keep the lifecycle stage with the request. Both entry points report failures
 // using these same labels and keep the admission open for background work.
@@ -52,15 +73,19 @@ export class EdgeRuntimeWork {
   }
 
   finish() {
-    if (!this.work) return;
-    const done = this.work.finish().catch(() => {
-      console.error(JSON.stringify({
+    const work = this.work;
+    if (!work) return;
+    const done = work.finish().then(result => {
+      if (result?.state === 'unresolved') return observeUnresolvedWork(work, result.reason);
+    }).catch(() => {
+      observeFailure(console.error, JSON.stringify({
         service: 'collect_platform_api',
         event: 'application_work_close_unconfirmed',
         scope: 'application_only',
       }));
     });
     if (typeof EdgeRuntime !== 'undefined') EdgeRuntime.waitUntil(done);
+    return done;
   }
 }
 

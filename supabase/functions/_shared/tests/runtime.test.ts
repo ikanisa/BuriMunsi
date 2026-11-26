@@ -8,6 +8,8 @@ import {normalizeRuntimeEnv,isGoogleProviderNavigation,COLLECT_SUPABASE_ORIGIN,C
 import {callbackResult} from '../domain/google_auth.js';
 import {createHandler as actualRuntimeHandler} from '../serve.js';
 import {createPlatformHealthReporter} from '../domain/observability.js';
+import {EdgeRuntimeWork} from '../edge-runtime.js';
+import {sha256} from '../domain/burimunsi/values.js';
 import {verifyToken} from './helpers/module-auth-http.js';
 fencedTest('actual default Deno environment readers admit preflight and deny unauthenticated jobs',async()=>{
  const preflight=await createHandler('collect-api')(new Request(COLLECT_SUPABASE_ORIGIN+'/functions/v1/collect-api/health',{method:'OPTIONS'}));
@@ -42,6 +44,40 @@ fencedTest('runtime failure diagnostics retain only bounded stages, known reason
   assertEquals(event,{service:'collect_platform_api',schema_version:1,event:'runtime_unavailable',component:'platform',status:503,request_id:body.request_id,source_id:'unknown',elapsed_ms:event.elapsed_ms,stage:'environment',reason:'unclassified',configured:{supabase_origin:false,injected_database:false,custom_database:false,publishable_dictionary:false,secret_dictionary:false}});
   assertEquals(JSON.stringify(captured).includes(credential),false);
  }finally{console.error=originalLogger;}
+});
+
+fencedTest('a committed unresolved admission has redacted correlation and no retry', async () => {
+ const runtime = new EdgeRuntimeWork(), id = crypto.randomUUID(), epoch = 95;
+ const logs: string[] = [];
+ const warn = console.warn, error = console.error;
+ const privateDetail = 'fixture request data';
+ let closes = 0;
+ try {
+  console.warn = console.error = (line: string) => { logs.push(line); };
+  runtime.work = {tuple: () => [id, epoch, privateDetail], async finish() {
+   closes++;
+   return {state: 'unresolved', reason: 'lease_lost', privateDetail};
+  }};
+  await runtime.finish();
+  assertEquals(closes, 1);
+  assertEquals(logs.map(line => JSON.parse(line)), [{
+   service: 'collect_platform_api', event: 'application_work_unresolved', scope: 'application_only',
+   admission_sha256: await sha256(id), epoch, reason: 'lease_lost',
+  }]);
+  assertEquals(logs[0].includes(id) || logs[0].includes(privateDetail), false);
+
+  logs.length = 0;
+  runtime.work = {tuple: () => { throw new Error(privateDetail); }, async finish() {
+   throw new Error(privateDetail);
+  }};
+  await runtime.finish();
+  assertEquals(logs.map(line => JSON.parse(line)), [{
+   service: 'collect_platform_api', event: 'application_work_close_unconfirmed', scope: 'application_only',
+  }]);
+ } finally {
+  console.warn = warn;
+  console.error = error;
+ }
 });
 fencedTest('transport rejection profiles expose only closed request transport classes',()=>{
  const secret='synthetic-credential-never-log',request=new Request('http://'+COLLECT_PROJECT_REF+'.supabase.co/functions/v1/admin-api/api/admin/auth/session?'+secret+'='+secret,{headers:{Authorization:'Bearer '+secret,Origin:'https://'+secret+'.example','Sec-Fetch-Site':secret}});
