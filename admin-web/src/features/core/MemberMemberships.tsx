@@ -3,7 +3,7 @@ import {Link} from 'react-router';
 import {Button, Card} from '../../ui';
 import {useOperationRead} from '../operations/useOperationRead';
 import {label} from './contracts';
-import {canReadMemberStatement, memberStatementPath, profileMembership, readMembershipMovements, statementAmount, type ProfileMembership} from './memberStatement';
+import {canReadMemberStatement, memberStatementPath, profileMembership, readMemberStatementPage, statementAmount, type ProfileMembership} from './memberStatement';
 import type {FeatureAccess} from './types';
 
 type MembershipProps = Pick<FeatureAccess, 'request' | 'permissions' | 'authorityKey'> & {
@@ -12,13 +12,12 @@ type MembershipProps = Pick<FeatureAccess, 'request' | 'permissions' | 'authorit
 
 function MembershipBalance({membership, memberId, request, authorityKey, returnTo}:
   Pick<MembershipProps, 'memberId' | 'request' | 'authorityKey' | 'returnTo'> & {membership: ProfileMembership}) {
-  const groupId = membership.groupId;
+  const {groupId, id} = membership;
   const load = useCallback(async (signal: AbortSignal) => {
-    if (!groupId) throw new Error('Missing group.');
-    return (await readMembershipMovements(request, signal, memberId, groupId)).closing;
-  }, [request, memberId, groupId]);
-  const {result, retry} = useOperationRead(JSON.stringify([authorityKey, groupId, memberId]), !!groupId, load);
-  if (!groupId) return <>Unavailable</>;
+    return (await readMemberStatementPage(request, signal, memberId, {id, groupId})).closingRwf;
+  }, [request, memberId, groupId, id]);
+  const {result, retry} = useOperationRead(JSON.stringify([authorityKey, groupId, memberId, id]), !!groupId && !!id, load);
+  if (!groupId || !id) return <>Unavailable</>;
   if (!result) return <span role="status">Loading balance</span>;
   const amount = statementAmount(result.status === 'success' ? result.value : null, true);
   const query = returnTo === '/admin/members' ? '' : '?' + new URLSearchParams({returnTo});

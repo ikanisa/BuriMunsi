@@ -6,14 +6,16 @@ import {ApiError,json,readJson} from './core.js';
 import {lockCollectMutation} from '../postgres-mutation-lock.js';
 import {BuriError,requireThat} from './burimunsi/errors.js';
 import {PostgresNativeAuthority} from './burimunsi/postgres-authority.js';
-import {assignPayment,readPayment,readPaymentAnalysisRows,readPayments,readPaymentsHome,setPaymentsScope} from './burimunsi/postgres-payments.js';
+import {assignPayment,readPayment,readPaymentAnalysisRows,readPayments,readPaymentsHome,setPaymentsScope,
+  readMemberPaymentStatement,MEMBER_STATEMENT_PAGE_SIZE,MEMBER_STATEMENT_MAX_ROWS} from './burimunsi/postgres-payments.js';
 import {analyzeCanonicalPaymentRows,parsePaymentAnalysisQuery} from './burimunsi/payment-analysis-shared.mjs';
 import {canonicalJson,exactKeys,requireId,requireRequestId,sha256} from './burimunsi/values.js';
 
 const base='/api/admin/burimunsi/';
 const operation='burimunsi.allocate';
 const scopeSql=`SELECT a.id,a.role,'payments.allocate'=ANY(a.capabilities) AS can_allocate,
- (resolved.actor->'permissions' ? 'sms.read') AND ('sms.read'=ANY(a.capabilities)) AS can_read_sms
+ (resolved.actor->'permissions' ? 'sms.read') AND ('sms.read'=ANY(a.capabilities)) AS can_read_sms,
+ resolved.actor->'permissions' ?& ARRAY['users.read','collections.read'] AS can_read_statement
  FROM private.burimunsi_browser_pin_session($1,$2,$3) AS resolved(actor)
  JOIN private.burimunsi_accounts a ON a.id=$4::uuid AND a.collection_id=$1
  WHERE resolved.actor->>'collectionId'=a.collection_id AND resolved.actor->>'accountId'=a.id::text
@@ -24,14 +26,14 @@ const scopeSql=`SELECT a.id,a.role,'payments.allocate'=ANY(a.capabilities) AS ca
    AND private.assert_actor('payments.read',NULL,NULL,1::bigint,NULL::bigint)=a.principal_user_id
  FOR SHARE OF a`;
 
-function query(url,allowed) {
+function query(url,allowed,{maxOffset=100000}={}) {
   const values={};
   for(const [key,value] of url.searchParams){
     requireThat(allowed.includes(key)&&!Object.hasOwn(values,key),'invalid_query');
     values[key]=value;
   }
   requireThat(values.q===undefined||values.q.length<=80,'invalid_query');
-  for(const [key,fallback,max] of [['limit',25,100],['offset',0,100000]]){
+  for(const [key,fallback,max] of [['limit',25,100],['offset',0,maxOffset]]){
     if(!allowed.includes(key))continue;
     const raw=values[key];
     requireThat(raw===undefined||/^\d{1,6}$/.test(raw)&&Number(raw)<=max&&(key!=='limit'||Number(raw)>0),'invalid_query');
@@ -62,6 +64,7 @@ export async function adminBuriMunsiPayments(request,env) {
     const actor=rows[0];
     return {showSms:actor.role==='admin'&&account.permissions.includes('sms.read'),
       canAnalyzeSms:actor.role==='admin'&&actor.can_read_sms===true&&account.permissions.includes('sms.read'),
+      canReadStatement:actor.can_read_statement===true,
       canAllocate:actor.can_allocate===true};
   };
   const evidenceMatch=/^payments\/([A-Za-z0-9_-]+)\/sms-evidence$/.exec(path.slice(base.length));
@@ -101,6 +104,18 @@ export async function adminBuriMunsiPayments(request,env) {
     }else if(request.method==='GET'&&relative==='home'){
       query(url,[]);
       result=await db.withLockedReadSnapshot(async sql=>readPaymentsHome(sql,groupId,new Date().toISOString(),await scoped(sql)));
+    }else if(request.method==='GET'&&relative==='payments'&&url.searchParams.has('statement')){
+      const {statement,memberId,offset,revision}=query(url,['statement','memberId','offset','revision'],{maxOffset:MEMBER_STATEMENT_MAX_ROWS-1});
+      requireThat(statement==='1'&&memberId&&offset%MEMBER_STATEMENT_PAGE_SIZE===0&&
+        (revision===undefined?offset===0:/^[0-9a-f]{64}$/.test(revision)),'invalid_query');
+      requireThat(account.permissions.includes('users.read')&&account.permissions.includes('collections.read'),'access_denied',403);
+      result=await db.withLockedReadSnapshot(async sql=>{
+        await sql.unsafe("SET LOCAL statement_timeout='1250ms'");
+        requireThat((await scoped(sql)).canReadStatement,'access_denied',403);
+        const page=await readMemberPaymentStatement(sql,groupId,memberId,{offset,revision});
+        await authority.assertOwned();
+        return page;
+      });
     }else if(request.method==='GET'&&relative==='payments'){
       const filters=query(url,['status','direction','memberId','q','limit','offset']);
       result=await db.withLockedReadSnapshot(async sql=>{
@@ -194,6 +209,10 @@ export async function adminBuriMunsiPayments(request,env) {
     if(error instanceof ApiError)throw error;
     if(error instanceof BuriError&&error.code==='payment_analysis_scope_too_large')
       throw new ApiError(503,error.code,'This collection is too large for exact payment analysis.');
+    if(error instanceof BuriError&&error.code==='member_statement_scope_too_large')
+      throw new ApiError(503,error.code,'This membership is too large for a complete statement.');
+    if(error instanceof BuriError&&error.code==='member_statement_changed')
+      throw new ApiError(409,error.code,'The statement changed. Refresh to review the current transactions.');
     if(error instanceof BuriError)throw new ApiError(error.status,error.code,'Check the payment or chosen member and try again.');
     if(error?.code==='42501')throw new ApiError(403,'permission_required','This Payments action is unavailable.');
     throw new ApiError(503,'payments_unavailable','The Payments result could not be confirmed.');

@@ -142,20 +142,31 @@ try {
   async function openAllocation(page) {
     await page.getByRole('link', {name:'Payments',exact:true}).click();
     await page.getByRole('button', {name:fixturePayment.ftId,exact:true}).click();
-    await page.getByRole('heading', {name:'Payment details',exact:true}).waitFor();
+    const wizardEntry = page.getByRole('link',{name:'Allocate to member',exact:true});
+    const inlineEntry = page.getByRole('combobox',{name:'Member',exact:true});
+    await wizardEntry.or(inlineEntry).first().waitFor();
+    if (await wizardEntry.count()) {
+      await wizardEntry.click();
+      return page.getByRole('dialog',{name:'Allocate payment',exact:true});
+    }
+    return null;
   }
   async function submitInterruptedAllocation(page) {
-    await openAllocation(page);
+    const wizard = await openAllocation(page);
     const detailUrl = page.url();
-    const body = page.getByRole('region', {name:'Original allocation request'});
-    await page.getByRole('combobox', {name:'Member',exact:true}).selectOption(fixtureMember.id);
-    await page.getByRole('button', {name:'Allocate',exact:true}).click();
+    const body = wizard ?? page.getByRole('region', {name:'Original allocation request'});
+    await (wizard ?? page).getByRole('combobox', {name:'Member',exact:true}).selectOption(fixtureMember.id);
+    if (wizard) {
+      await wizard.getByRole('button',{name:'Review allocation',exact:true}).click();
+      await wizard.getByRole('button',{name:'Confirm allocation',exact:true}).click();
+    } else await page.getByRole('button', {name:'Allocate',exact:true}).click();
     await body.getByText('Allocation was not confirmed. Check the original request before trying again.',{exact:true}).waitFor();
     const code = (await body.locator('code').textContent())?.trim();
     assert.match(code,/^[0-9a-f-]{36}$/);
     const result = await allocationEvidence();
     assert.deepEqual({writes:result.writes,effects:result.effects,lookupMatches:result.lookupMatches},
       {writes:1,effects:1,lookupMatches:[]});
+    if (wizard) await wizard.getByRole('button',{name:'Cancel',exact:true}).click();
     await page.getByRole('link', {name:'Home',exact:true}).click();
     await page.getByRole('heading', {name:'Home',exact:true}).waitFor();
     return {detailUrl, code};
@@ -163,7 +174,12 @@ try {
   async function checkInterruptedAllocation(page,{detailUrl,code}) {
     assert.equal(new URL(detailUrl).origin,origin);
     await page.goto(detailUrl,{waitUntil:'domcontentloaded'});
-    const body = page.getByRole('region',{name:'Original allocation request'});
+    const wizard = page.getByRole('dialog',{name:'Allocate payment',exact:true});
+    const inline = page.getByRole('region',{name:'Original allocation request'});
+    const openRecovery = page.getByRole('link',{name:'Review allocation request',exact:true});
+    await wizard.or(inline).or(openRecovery).first().waitFor();
+    if ((!await wizard.count()) && (!await inline.count())) await openRecovery.click();
+    const body = wizard.or(inline).first();
     const original = body.getByText(code,{exact:true});
     await original.waitFor();
     const check = body.getByRole('button',{name:'Check request',exact:true});
@@ -179,6 +195,13 @@ try {
     await page.getByRole('region',{name:'Payment details'}).getByText('Allocated',{exact:true}).waitFor();
     assert.equal(await body.count(),0);
     assert.equal(await page.getByRole('button',{name:'Allocate',exact:true}).count(),0);
+    if (await openRecovery.count()) {
+      await openRecovery.click();
+      await wizard.getByText('This payment is already allocated to ' + fixtureMember.display_name + '.',{exact:true}).waitFor();
+      assert.equal(await wizard.getByRole('button',{name:'Check request',exact:true}).count(),0);
+      assert.equal(await wizard.getByText(code,{exact:true}).count(),0);
+      await wizard.getByRole('button',{name:'Close',exact:true}).click();
+    }
     const result = await allocationEvidence();
     assert.deepEqual({writes:result.writes,effects:result.effects,lookupMatches:result.lookupMatches},
       {writes:1,effects:1,lookupMatches:[true,true]});

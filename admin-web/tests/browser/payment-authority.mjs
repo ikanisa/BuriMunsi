@@ -67,14 +67,19 @@ export async function qualifyPaymentAuthority({origin, open, staffPin, installed
     await heading('Home').waitFor();
     await page.getByRole('link',{name:'Payments',exact:true}).click();
     await oldRecord.click();
+    await page.getByRole('link',{name:'Allocate to member',exact:true}).click();
+    const dialog = page.getByRole('dialog',{name:'Allocate payment',exact:true});
     const paymentLink = page.url();
     assert.equal(new URLSearchParams(new URL(paymentLink).hash.split('?')[1]).get('payment'),fixturePayment.id);
-    await page.getByRole('combobox',{name:'Member',exact:true}).selectOption(fixtureMember.id);
-    await button('Allocate').click();
+    assert.equal(new URLSearchParams(new URL(paymentLink).hash.split('?')[1]).get('allocate'),fixturePayment.id);
+    await dialog.getByRole('combobox',{name:'Member',exact:true}).selectOption(fixtureMember.id);
+    await dialog.getByRole('button',{name:'Review allocation',exact:true}).click();
+    await dialog.getByRole('button',{name:'Confirm allocation',exact:true}).click();
     await heading('Original allocation request').waitFor();
     assert.match(requestKey,/^[0-9a-f-]{36}$/);
     await page.getByText(requestKey,{exact:true}).waitFor();
-    await button('Close').click();
+    await dialog.getByRole('button',{name:'Cancel',exact:true}).click();
+    await dialog.waitFor({state:'hidden'});
     holdNext = true;
     await button('Refresh').click();
     await Promise.race([late.promise, new Promise((_, reject) => {

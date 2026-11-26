@@ -7,8 +7,8 @@ import path from 'node:path';
 import {versionedStatic} from '../../../deploy/platform-admin/src/static-recovery.js';
 import {createPaymentCommitFixture} from './payment-commit-fixture.mjs';
 import {createPhoneAccountFixture, fixtureAdminId} from './phone-account-fixture.mjs';
-import {fixtureMembers, fixtureMomoDetail, fixtureMomoRecord, fixtureOutgoingPayment, fixturePayment, fixtureSmsEvidenceId,
-  readBuriMunsiPayments, readMemberList, readMomoList} from './operator-read-fixture.mjs';
+import {fixtureMembers, fixtureMembership, fixtureMomoDetail, fixtureMomoRecord, fixtureOutgoingPayment, fixturePayment, fixtureSmsEvidenceId,
+  readBuriMunsiPayments, readMemberList, readMemberStatementFixture, readMomoList} from './operator-read-fixture.mjs';
 
 const baseline = path.resolve(process.argv[2] ?? '');
 let root = baseline;
@@ -133,6 +133,13 @@ createServer(async (request, response) => {
     }
     if (url.pathname === '/api/admin/burimunsi/payments') {
       if (!payments) return json(response, 403, {error:{code:'forbidden'}});
+      if (url.searchParams.has('statement')) {
+        if (!['users.read','collections.read'].every(permission => phoneAccounts.hasPermission(session,permission))) {
+          return json(response,403,{error:{code:'forbidden'}});
+        }
+        const {status, body} = readMemberStatementFixture(url.searchParams);
+        return json(response,status,body);
+      }
       const result = readBuriMunsiPayments(url.searchParams, sms);
       return result ? json(response, 200, result) : json(response, 400, {error:{code:'invalid_fixture'}});
     }
@@ -167,7 +174,7 @@ createServer(async (request, response) => {
       if (!member) return json(response, 403, {error: {code: 'expected_group_roster'}});
       return json(response, 200, {contract_version: 2, model: 'canonical_evidence_ledger', resource_type: 'members',
         current_actor_id: fixtureAdminId, can_manage: false, resource: member, related_truncated: false,
-        related: {memberships: [{id: '93939393-9393-4393-8393-939393939393', group_title: 'Synthetic group', role: 'member', status: member.membership_status}]}});
+        related: {memberships: [fixtureMembership(member)]}});
     }
     if (url.pathname === '/api/admin/momo/transactions' ||
         url.pathname === `/api/admin/momo/transactions/${fixtureMomoRecord.id}`) {

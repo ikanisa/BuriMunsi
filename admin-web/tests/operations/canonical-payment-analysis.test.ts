@@ -1,5 +1,5 @@
 import {describe, expect, it, vi} from 'vitest';
-import {buriMunsiPayment, paymentInstant, paymentTime, readCanonicalPaymentAnalysis, readAllCanonicalPayments, paymentCounterpartyEvidence, paymentMemberName, paymentMemberNumber} from '../../src/features/operations/canonicalPaymentAnalysis';
+import {buriMunsiPayment, paymentInstant, paymentTime, readCanonicalPaymentAnalysis, paymentCounterpartyEvidence, paymentMemberName, paymentMemberNumber} from '../../src/features/operations/canonicalPaymentAnalysis';
 import {analyzeCanonicalPaymentRows,parsePaymentAnalysisQuery,type PaymentAnalysisQuery}
   from '../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
 
@@ -13,14 +13,6 @@ const row = (i: number) => ({
 const input:PaymentAnalysisQuery={q:'FT reference',offset:0,limit:25,filters:[],sort:{key:'time',direction:'desc'}};
 const response={items:[row(0),row(1),...Array.from({length:23},(_,i)=>row(i+2))],totalCount:105,matchingCount:27,offset:0,limit:25,asOf:at,missing:1,
   directionTotalsRwf:{incoming:'9007199254740993',outgoing:null}};
-function page(offset: number, totalCount: number) {
-  const items = Array.from({length:Math.min(100, Math.max(0, totalCount - offset))}, (_, i) => row(offset + i));
-  return {offset, limit:100, totalCount, items, asOf:at, nextOffset:offset + items.length < totalCount ? offset + items.length : null};
-}
-function offsetOf(path: string) {
-  return Number(new URLSearchParams(path.split('?')[1]).get('offset'));
-}
-
 describe('canonical payment analysis source', () => {
   it('admits unknown or safe whole RWF amounts and rejects imprecise, negative or fractional values', () => {
     for (const amountRwf of [null, 0, Number.MAX_SAFE_INTEGER]) {
@@ -81,68 +73,6 @@ describe('canonical payment analysis source', () => {
       expect(()=>parsePaymentAnalysisQuery({...input,filters:[{...base,key:'amount',min}]},true)).toThrow(TypeError);
     }
     expect(parsePaymentAnalysisQuery({...input,filters:[{...base,key:'amount',min:'1.1e3'}]},true).filters[0].min).toBe('1.1e3');
-  });
-});
-
-describe('complete payment statement source', () => {
-  it('loads each page in the same collection, preserving real zero, unknown and identifier digits', async () => {
-    const request = vi.fn(async (path: string) => page(offsetOf(path), 205));
-    const signal = new AbortController().signal;
-    const rows = await readAllCanonicalPayments(request, signal, 'FT reference', 'group-a');
-    expect(rows).toHaveLength(205);
-    expect(rows[0]).toMatchObject({amountRwf:0, payerPhoneRaw:'000007'});
-    expect(rows[1]).toMatchObject({ftId:null, amountRwf:null});
-    expect(rows[204].id).toBe('payment-204');
-    expect(request.mock.calls).toEqual([0,100,200].map(offset =>
-      ['burimunsi/payments?limit=100&offset=' + offset + '&q=FT+reference',{signal}]));
-  });
-
-  it.each([
-    [true, true, true], [true, false, false], [false, true, false], [true, undefined, false],
-    [undefined, true, false], [undefined, undefined, false],
-  ] as const)('attaches only an allocation grant confirmed on every page (%s, %s)', async (first, last, expected) => {
-    const request = async (path: string) => {
-      const offset = offsetOf(path), data = page(offset, 101);
-      return {...data, canAllocate: offset === 0 ? first : last,
-        items: data.items.map(item => ({...item, canAllocate: !expected}))};
-    };
-    const rows = await readAllCanonicalPayments(request, new AbortController().signal);
-    expect(rows).toHaveLength(101);
-    expect(rows.every(item => item.canAllocate === expected)).toBe(true);
-  });
-
-  it('starts again from the first page on a changed total and never combines separate reads', async () => {
-    let call = 0;
-    const request = vi.fn(async (path: string) => page(offsetOf(path), ++call === 1 ? 102 : 101));
-    const rows = await readAllCanonicalPayments(request, new AbortController().signal);
-    expect(request.mock.calls.map(([path]) => offsetOf(path))).toEqual([0,100,0,100]);
-    expect(rows.map(value => value.id)).toEqual(Array.from({length:101}, (_, i) => 'payment-' + i));
-  });
-
-  it('rejects persistent overlaps, a malformed next offset and cross-collection data', async () => {
-    const overlapping = vi.fn(async (path: string) => {
-      const value = page(offsetOf(path), 101);
-      if (value.offset) value.items = [row(1)];
-      return value;
-    });
-    const signal = new AbortController().signal;
-    await expect(readAllCanonicalPayments(overlapping, signal)).rejects.toThrow();
-    expect(overlapping).toHaveBeenCalledTimes(4);
-    await expect(readAllCanonicalPayments(async () => ({...page(0,101),nextOffset:42}), signal)).rejects.toThrow();
-    const foreign = vi.fn(async () => ({...page(0,1),items:[{...row(0),groupId:'another-group'}]}));
-    await expect(readAllCanonicalPayments(foreign, signal, '', 'group-a')).rejects.toThrow();
-    expect(foreign).toHaveBeenCalledTimes(1);
-  });
-
-  it('aborts between pages without retaining an incomplete result or restarting', async () => {
-    const controller = new AbortController();
-    const request = vi.fn(async (path: string) => {
-      const offset = offsetOf(path);
-      if (offset === 100) controller.abort();
-      return page(offset, 205);
-    });
-    await expect(readAllCanonicalPayments(request, controller.signal)).rejects.toMatchObject({name:'AbortError'});
-    expect(request).toHaveBeenCalledTimes(2);
   });
 });
 

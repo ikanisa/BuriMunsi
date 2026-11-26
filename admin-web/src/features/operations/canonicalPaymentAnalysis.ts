@@ -48,52 +48,6 @@ export function paymentCounterpartyEvidence(row: BuriMunsiPayment) {
   };
 }
 
-const batchSize = 100;
-const pageSchema = z.object({items: z.array(buriMunsiPayment).max(batchSize), totalCount: count,
-  offset: count, limit: z.literal(batchSize), nextOffset: count.nullable(), canAllocate: z.boolean().optional(),
-  asOf: z.string().refine(value => Number.isFinite(Date.parse(value)))});
-class PaymentListChanged extends Error {}
-
-async function readPages(request: AdminRequest, signal: AbortSignal, query: string, expectedGroup?: string, memberId?: string) {
-  const rows: BuriMunsiPayment[] = [], seen = new Set<string>();
-  let total: number | undefined, offset = 0, firstGroup: string | undefined;
-  let canAllocate = true;
-  for (;;) {
-    signal.throwIfAborted();
-    const search = new URLSearchParams({limit: String(batchSize), offset: String(offset)});
-    if (query) search.set('q', query);
-    if (memberId) search.set('memberId', memberId);
-    const page = pageSchema.parse(await request('burimunsi/payments?' + search, {signal}));
-    signal.throwIfAborted();
-    canAllocate = canAllocate && page.canAllocate === true;
-    total ??= page.totalCount;
-    const more = offset + page.items.length < total;
-    if (page.totalCount !== total || page.offset !== offset || page.items.length !== Math.min(batchSize, total - offset) ||
-        page.nextOffset !== (more ? offset + batchSize : null)) throw new PaymentListChanged();
-    for (const row of page.items) {
-      if (expectedGroup && row.groupId !== expectedGroup) throw new Error('Payment collection changed.');
-      if (memberId && (row.memberId !== memberId || row.state !== 'allocated')) throw new Error('Payment membership changed.');
-      if (!rows.length) firstGroup = row.groupId;
-      if (row.groupId !== firstGroup || seen.has(row.id)) throw new PaymentListChanged();
-      rows.push(row); seen.add(row.id);
-    }
-    if (page.nextOffset === null) return rows.map(row => ({...row, canAllocate}));
-    if (page.nextOffset > 100_000) throw new Error('The complete set exceeds the supported payment offset.');
-    offset = page.nextOffset;
-  }
-}
-
-export async function readAllCanonicalPayments(request: AdminRequest, signal: AbortSignal, query = '', expectedGroup?: string, memberId?: string) {
-  if (memberId !== undefined && (!paymentId.safeParse(memberId).success || !paymentId.safeParse(expectedGroup).success)) {
-    throw new Error('A group and member are required for this statement.');
-  }
-  try { return await readPages(request, signal, query, expectedGroup, memberId); }
-  catch (error) {
-    if (!(error instanceof PaymentListChanged) || signal.aborted) throw error;
-    return readPages(request, signal, query, expectedGroup, memberId);
-  }
-}
-
 const decimal = z.string().regex(/^(0|[1-9]\d{0,30})$/).transform(value => BigInt(value));
 const analysisResponse = z.object({
   items: z.array(buriMunsiPayment).max(25), totalCount: count, matchingCount: count, offset: count, limit: z.literal(25),

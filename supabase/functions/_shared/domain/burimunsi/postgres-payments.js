@@ -70,6 +70,59 @@ export async function readPayments(sql,groupId,{q='',status=null,direction=null,
   return {items,totalCount,offset,limit,nextOffset:offset+items.length<totalCount?offset+items.length:null};
 }
 
+export const MEMBER_STATEMENT_PAGE_SIZE = 25;
+// Preserve the previous maximum of 100,000 offset plus a final 100-row read.
+export const MEMBER_STATEMENT_MAX_ROWS = 100_100;
+
+export async function readMemberPaymentStatement(sql, groupId, memberId, {offset, revision}) {
+  const limit = MEMBER_STATEMENT_PAGE_SIZE;
+  // The revision covers ordered transaction content, including any change
+  // that leaves the row count unchanged. Every page's balance and closing
+  // total use that same complete, bounded snapshot.
+  const rows = await sql.unsafe(`WITH membership AS MATERIALIZED (
+    SELECT m.id FROM app.memberships m
+    JOIN app.collections g ON g.id=m.collection_id AND g.status='active'
+    JOIN app.users u ON u.id=m.user_id AND u.member_type IN ('app','direct')
+    WHERE m.collection_id=$1 AND m.user_id=$2
+  ), movements AS MATERIALIZED (
+    SELECT p.id,p.direction,p.amount_rwf,p.provider_reference,p.source_time,
+      coalesce(p.occurred_at,p.created_at) AS page_at,
+      CASE WHEN p.direction='incoming' THEN p.amount_rwf ELSE -p.amount_rwf END AS net_rwf
+    FROM burimunsi.payments p CROSS JOIN membership
+    WHERE p.collection_id=$1 AND p.member_id=$2
+    LIMIT ($5::int+1)
+  ), totals AS (
+    SELECT count(*)::int AS total_count,coalesce(sum(net_rwf),0)::text AS closing_rwf,
+      encode(sha256(convert_to(coalesce(string_agg(encode(sha256(convert_to(jsonb_build_array(
+        id,direction,amount_rwf,provider_reference,source_time,extract(epoch FROM page_at)
+      )::text,'UTF8')),'hex'),'' ORDER BY page_at,id),''),'UTF8')),'hex') AS movements_sha256
+    FROM movements
+  ), statement AS (
+    SELECT membership.id AS membership_id,total_count,closing_rwf,
+      encode(sha256(convert_to(jsonb_build_array($1::text,$2::text,membership.id,movements_sha256)::text,'UTF8')),'hex') AS revision
+    FROM membership CROSS JOIN totals
+  )
+  SELECT statement.*,page.* FROM statement LEFT JOIN LATERAL (
+    SELECT id,direction,amount_rwf,provider_reference,source_time,page_at,
+      sum(net_rwf) OVER (ORDER BY page_at,id ROWS UNBOUNDED PRECEDING)::text AS balance_rwf
+    FROM movements
+    WHERE statement.total_count<=$5 AND ($6::text IS NULL OR statement.revision=$6)
+    ORDER BY page_at,id LIMIT $4 OFFSET $3
+  ) page ON true ORDER BY page.page_at,page.id`, [groupId, memberId, offset, limit, MEMBER_STATEMENT_MAX_ROWS, revision ?? null]);
+  requireThat(rows.length, 'member_statement_unavailable', 404);
+  const summary = rows[0];
+  const totalCount = pgInteger(summary.total_count, {minimum: 0});
+  requireThat(totalCount <= MEMBER_STATEMENT_MAX_ROWS, 'member_statement_scope_too_large', 503);
+  requireThat(!revision || summary.revision === revision, 'member_statement_changed', 409);
+  requireThat(offset === 0 || offset < totalCount, 'invalid_query');
+  const items = rows.filter(row => row.id != null).map(row => ({
+    id: row.id, direction: row.direction, amountRwf: pgInteger(row.amount_rwf, {minimum: 1}),
+    atRaw: row.source_time || iso(row.page_at), ftId: row.provider_reference, balanceRwf: row.balance_rwf,
+  }));
+  return {groupId, memberId, membershipId: summary.membership_id, totalCount, offset, limit,
+    revision: summary.revision, closingRwf: summary.closing_rwf, items};
+}
+
 // Bound the scan before applying text search. A broad collection over the
 // reviewed limit returns no projection, never totals for a truncated sample.
 export const PAYMENT_ANALYSIS_LIMIT=5000;

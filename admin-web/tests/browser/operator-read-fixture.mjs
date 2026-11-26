@@ -1,6 +1,7 @@
 // Synthetic read-only walkthrough records for the loopback browser harness.
 // IDs, names, amounts, and evidence below are invented; this is not bank evidence.
 import core from '../core/canonical-core-fixtures.json' with {type: 'json'};
+import {createHash} from 'node:crypto';
 
 export const fixtureMember = {
   ...core.members.rows[0], membership_status: 'active', title: '900001', public_id: '900001',
@@ -12,6 +13,11 @@ export const fixtureInactiveMember = {...fixtureMember, id:inactiveId, person_id
   title:'900002', public_id:'900002', subtitle:'Synthetic member Eric', display_name:'Synthetic member Eric',
   membership_status:'inactive', active_groups:0, amount:'0 groups'};
 export const fixtureMembers = {...core.members, rows:[fixtureMember, fixtureInactiveMember], total:2};
+export function fixtureMembership(member) {
+  return {id:member.id===fixtureMember.id?'93939393-9393-4393-8393-939393939393':'96969696-9696-4696-8696-969696969696',
+    user_id:member.id, group_id:'fixture-group', group_title:'Synthetic group', role:'member',
+    status:member.membership_status, membership_record_number:member.id===fixtureMember.id?'100000000001':'100000000002'};
+}
 
 const time = '2026-11-16T10:00:00.000Z';
 const transactionId = '90909090-9090-4090-8090-909090909090';
@@ -81,6 +87,24 @@ export const fixturePayment = {
 export const fixtureOutgoingPayment = {
   ...fixturePayment, id: '94949494-9494-4494-8494-949494949494', direction: 'outgoing', ftId: 'MOMO-SYNTHETIC-OUT', sourceId: null,
 };
+export function readMemberStatementFixture(params) {
+  const member = fixtureMembers.rows.find(row => row.id === params.get('memberId'));
+  if (!member) return {status:404, body:{error:{code:'member_statement_unavailable'}}};
+  const membership = fixtureMembership(member), offset = Number(params.get('offset') ?? 0), limit = 25;
+  if (params.get('statement') !== '1' || ![0,25].includes(offset) || offset && !params.get('revision')) {
+    return {status:400, body:{error:{code:'invalid_fixture'}}};
+  }
+  // This statement scenario is independent of the two-payment list walkthrough.
+  const movement = index => index === 25 ? {direction:'outgoing', amountRwf:1000, balanceRwf:'4000'} :
+    {direction:'incoming', amountRwf:200, balanceRwf:String((index + 1) * 200)};
+  const items = member.id === fixtureMember.id ? Array.from({length:26},(_,index) => ({
+    id:'statement-' + index, atRaw:time, ftId:'STATEMENT-' + String(index + 1).padStart(2,'0'), ...movement(index),
+  })) : [];
+  const revision = createHash('sha256').update(JSON.stringify([membership.id,items])).digest('hex');
+  if (params.has('revision') && params.get('revision') !== revision) return {status:409, body:{error:{code:'member_statement_changed'}}};
+  return {status:200, body:{groupId:membership.group_id,memberId:member.id,membershipId:membership.id,totalCount:items.length,
+    closingRwf:items.at(-1)?.balanceRwf ?? '0',revision,offset,limit,items:items.slice(offset,offset+limit)}};
+}
 export function readBuriMunsiPayments(params, sms) {
   const q = (params.get('q') ?? '').toLowerCase(), status = params.get('status'), direction = params.get('direction');
   const limit = Number(params.get('limit')), offset = Number(params.get('offset') ?? 0);
