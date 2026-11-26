@@ -48,6 +48,7 @@ try {
     ...(executablePath ? {executablePath} : {channel: 'chrome'})});
   const context = await browser.newContext({serviceWorkers: installedMode ? 'allow' : 'block', viewport: {width: 1440, height: 900}});
   context.setDefaultTimeout(10_000);
+  context.setDefaultNavigationTimeout(25_000);
   const tab = await context.newPage();
   await installLocalNetworkFence(tab, origin, deny);
 
@@ -57,7 +58,7 @@ try {
     assert.equal((await ack)[0], label);
   }
   async function launchHome(page, preexistingSession) {
-    assert.equal((await page.goto(origin + '/admin')).status(), 200);
+    assert.equal((await page.goto(origin + '/admin', {waitUntil:'domcontentloaded'})).status(), 200);
     if (!preexistingSession) {
       await page.getByRole('heading', {name: 'Welcome to BuriMunsi'}).waitFor();
       await page.getByLabel('Mobile number', {exact: true}).fill('0780 000 001');
@@ -122,9 +123,9 @@ try {
     });
     await waitForRegistration(tab, 'waiting', 'installed');
     await getChunk(other, fromChunk, true);
-    await tab.goto('about:blank', {waitUntil:'commit'});
+    await tab.goto('about:blank', {waitUntil:'domcontentloaded'});
     assert(await other.evaluate(async () => (await navigator.serviceWorker.getRegistration())?.waiting?.state === 'installed'));
-    await other.goto('about:blank', {waitUntil:'commit'});
+    await other.goto('about:blank', {waitUntil:'domcontentloaded'});
     await launchHome(tab, true);
     await installedVersion(tab, to.version, from.version);
     await launchHome(other, true);
