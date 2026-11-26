@@ -44,15 +44,17 @@ export async function qualifyPaymentAuthority({origin, open, staffPin, installed
       if (switched && (url.pathname.startsWith(api) || (requestKey && request.headers()['idempotency-key'] === requestKey))) seenAfterSwitch.push(url.pathname);
     });
     await context.route(isPath(api + '/analysis'), async route => {
-      if (!holdNext) return route.fallback();
+      const shouldHold = holdNext;
       holdNext = false;
       const beforeSwitch = await route.fetch();
       const payload = await beforeSwitch.json();
-      assert.equal(beforeSwitch.status(),200,'Capture the initial Admin response before signing out.');
+      assert.equal(beforeSwitch.status(),200,'Expected the signed-in Admin’s Payments response.');
+      const items = payload.items.map(row => row.id === fixturePayment.id ? {...row,canAllocate:true} : row);
+      if (!shouldHold) return route.fulfill({response:beforeSwitch,json:{...payload,items}});
       late.resolve();
       await release.promise;
       // An aborted old request may already have lost its browser recipient.
-      try {await route.fulfill({response:beforeSwitch,json:{...payload,items:payload.items.map(row=>({...row,ftId:originalMarker}))}});}
+      try {await route.fulfill({response:beforeSwitch,json:{...payload,items:items.map(row=>({...row,ftId:originalMarker}))}});}
       catch {assert.equal(route.request().method(),'POST');}
       finally {delivered.resolve();}
     });
@@ -67,12 +69,13 @@ export async function qualifyPaymentAuthority({origin, open, staffPin, installed
     await heading('Home').waitFor();
     await page.getByRole('link',{name:'Payments',exact:true}).click();
     await oldRecord.click();
-    await page.getByRole('link',{name:'Allocate to member',exact:true}).click();
+    await page.getByRole('link',{name:'Unallocated – allocate payment ' + fixturePayment.ftId,exact:true}).click();
     const dialog = page.getByRole('dialog',{name:'Allocate payment',exact:true});
     const paymentLink = page.url();
     assert.equal(new URLSearchParams(new URL(paymentLink).hash.split('?')[1]).get('payment'),fixturePayment.id);
     assert.equal(new URLSearchParams(new URL(paymentLink).hash.split('?')[1]).get('allocate'),fixturePayment.id);
-    await dialog.getByRole('combobox',{name:'Member',exact:true}).selectOption(fixtureMember.id);
+    await dialog.getByRole('button',{name:'Select suggested member ' + fixtureMember.display_name,exact:true}).click();
+    assert.equal(await dialog.getByRole('combobox',{name:'Member',exact:true}).inputValue(),fixtureMember.id);
     await dialog.getByRole('button',{name:'Review allocation',exact:true}).click();
     await dialog.getByRole('button',{name:'Confirm allocation',exact:true}).click();
     await heading('Original allocation request').waitFor();
