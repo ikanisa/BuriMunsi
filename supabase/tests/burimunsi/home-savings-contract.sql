@@ -16,6 +16,7 @@ CREATE ROLE authenticated;
 CREATE ROLE service_role;
 CREATE ROLE collect_importer;
 CREATE ROLE collect_runtime;
+CREATE ROLE collect_sms_runtime;
 CREATE SCHEMA collect_ops;
 CREATE SCHEMA app;
 CREATE SCHEMA private;
@@ -39,6 +40,18 @@ $$;
 CREATE FUNCTION private.burimunsi_pin_context() RETURNS TABLE(collection_id text,capabilities text[]) LANGUAGE sql AS $$
   SELECT current_setting('fixture.actor_collection'),string_to_array(current_setting('fixture.actor_capabilities'),',')
   WHERE nullif(current_setting('fixture.actor_collection',true),'') IS NOT NULL
+$$;
+CREATE TABLE private.burimunsi_accounts (id uuid PRIMARY KEY, collection_id text, principal_user_id text,
+  role text, active boolean, removed boolean, capabilities text[]);
+INSERT INTO private.burimunsi_accounts VALUES
+  ('f3000000-0000-4000-8000-000000000003','home','fixture-admin','admin',true,false,ARRAY['records.read','sms.read']);
+CREATE FUNCTION private.burimunsi_browser_pin_context() RETURNS jsonb LANGUAGE sql AS $$
+  SELECT CASE WHEN nullif(current_setting('fixture.browser_role',true),'') IS NOT NULL THEN
+    jsonb_build_object('collectionId','home','accountId','f3000000-0000-4000-8000-000000000003',
+      'principalId','fixture-admin','operatorRole',current_setting('fixture.browser_role',true)) END
+$$;
+CREATE FUNCTION private.burimunsi_browser_pin_assert_actor(text,text,text,bigint,bigint) RETURNS text LANGUAGE sql AS $$
+  SELECT 'fixture-admin' WHERE $1=ANY(string_to_array(current_setting('fixture.browser_permissions',true),','))
 $$;
 CREATE TABLE app.collections(id text PRIMARY KEY,status text,currency text);
 CREATE TABLE app.momo_receiving_accounts(id text PRIMARY KEY,provider text,status text,currency text,timezone text);
@@ -150,6 +163,16 @@ INSERT INTO private.burimunsi_auto_sms_jobs (source_id,collection_id,receiving_a
 
 \ir ../../migrations/20261126152453_burimunsi_home_savings.sql
 
+WITH source AS (
+  SELECT pg_read_file(:'source_root'||'/supabase/migrations/20261126150200_burimunsi_admin_sms_payment_scope.sql') AS body
+), locate AS (
+  SELECT body,strpos(body,'CREATE FUNCTION private._burimunsi_assert_browser_sms_payments_read(') AS start FROM source
+)
+SELECT substr(body,start,strpos(substr(body,start),'$guard$;')+length('$guard$;')-1)
+FROM locate WHERE start>0
+\gexec
+\ir ../../migrations/20261126170200_burimunsi_admin_home_sms_balance.sql
+
 DO $backfill$
 BEGIN
   IF (SELECT count(*) FROM private.burimunsi_payment_wallet_observations)<>1 OR
@@ -247,6 +270,39 @@ BEGIN
   END IF;
 END;
 $latest$;
+COMMIT;
+
+BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SET LOCAL ROLE collect_runtime;
+SET LOCAL collect.edge_verified='true';
+SET LOCAL burimunsi.collection_id='home';
+SET LOCAL fixture.browser_role='admin';
+SET LOCAL fixture.browser_permissions='payments.read,sms.read';
+DO $web_read$
+BEGIN
+  IF private.burimunsi_admin_home_sms_balance('home') IS DISTINCT FROM 0::numeric THEN
+    RAISE EXCEPTION 'The latest verified zero balance was not available to Browser Admin';
+  END IF;
+  BEGIN
+    PERFORM private.burimunsi_admin_home_sms_balance('other');
+    RAISE EXCEPTION 'A different collection balance was disclosed';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  IF has_function_privilege('private._burimunsi_latest_wallet_sms_balance(text,text)','EXECUTE') THEN
+    RAISE EXCEPTION 'The underlying SMS balance helper was directly accessible';
+  END IF;
+  PERFORM set_config('fixture.browser_role','staff',true);
+  BEGIN
+    PERFORM private.burimunsi_admin_home_sms_balance('home');
+    RAISE EXCEPTION 'Staff could read the SMS balance';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  PERFORM set_config('fixture.browser_role','admin',true);
+  PERFORM set_config('fixture.browser_permissions','payments.read',true);
+  BEGIN
+    PERFORM private.burimunsi_admin_home_sms_balance('home');
+    RAISE EXCEPTION 'An Admin without the SMS grant could read the SMS balance';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+END;
+$web_read$;
 COMMIT;
 
 -- The provider statement lines are built independently of the database

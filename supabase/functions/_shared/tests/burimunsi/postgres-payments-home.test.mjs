@@ -45,6 +45,21 @@ test('real zero, missing evidence and over-range totals remain distinct', async 
     reconciliationStatus: 'unavailable'});
 });
 
+test('Admin Home reports exact directional totals and limits SMS balance to the authorized projection', async () => {
+  const totals = {...counts, incoming:'9007199254740993', outgoing:'0', latest_sms_balance:'0'};
+  const granted = recordedSql([totals]);
+  assert.deepEqual(await readPaymentsHome(granted.sql, group, asOf, {canAnalyzeSms:true}, {adminTotals:true}), {
+    ...home, paymentTotals:{incomingRwf:'9007199254740993',outgoingRwf:'0',latestSmsBalanceRwf:0},
+  });
+  assert.match(granted.queries[0], /sum\(amount_rwf\) FILTER \(WHERE direction='incoming'\)/);
+  assert.match(granted.queries[0], /private\.burimunsi_admin_home_sms_balance\(\$1\)/);
+  const restricted = recordedSql([totals]);
+  assert.deepEqual(await readPaymentsHome(restricted.sql, group, asOf, {canAnalyzeSms:false}, {adminTotals:true}), {
+    ...home, paymentTotals:{incomingRwf:'9007199254740993',outgoingRwf:'0'},
+  });
+  assert.doesNotMatch(restricted.queries[0], /private\.burimunsi_admin_home_sms_balance/);
+});
+
 test('malformed numeric evidence and absent or duplicate summary rows fail closed', async () => {
   const row = {...counts, ...summary};
   for (const totals of [[], [row, row], [{...row, latest_wallet_balance: '999999999999999.01'}],

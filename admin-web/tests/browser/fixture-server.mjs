@@ -115,6 +115,7 @@ createServer(async (request, response) => {
     if (url.pathname === '/api/admin/burimunsi/home') return json(response, 200, {
       paymentCount:payments ? 2 : 0, memberCount:1, unallocatedCount:payments ? 2 : 0,
       recentPayments:payments ? [fixturePayment, fixtureOutgoingPayment].map(visiblePayment) : [], asOf:fixturePayment.atRaw,
+      ...(payments && {paymentTotals:{incomingRwf:'5000',outgoingRwf:'5000',...(sms && {latestSmsBalanceRwf:0})}}),
     });
     if (paymentAnalysis) {
       if (!payments) return json(response,403,{error:{code:'forbidden'}});

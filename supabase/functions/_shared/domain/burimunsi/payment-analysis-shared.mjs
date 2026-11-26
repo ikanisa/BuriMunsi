@@ -79,12 +79,23 @@ export function analyzeFinancialRows(rows, columns, filters, sort) {
 }
 
 
+const recordedContact = value => typeof value === 'string' && value.trim() ? value : null;
+export function paymentMemberName(row) {
+  return (row.memberId ? recordedContact(row.memberName) : null) ?? recordedContact(row.payerNameRaw);
+}
+export function paymentMemberNumber(row) {
+  return (row.memberId ? recordedContact(row.memberPhone) : null) ?? recordedContact(row.payerPhoneRaw);
+}
+
 const columns = [
   {key:'reference', kind:'text', value:r=>r.ftId},
   {key:'time', kind:'date', value:r=>paymentInstant(r.atRaw)},
   {key:'amount', kind:'number', value:r=>r.amountRwf},
   {key:'direction', kind:'category', value:r=>r.direction, choices:['incoming','outgoing']},
   {key:'allocation', kind:'category', value:r=>r.state, choices:['allocated','unallocated']},
+  {key:'memberName', kind:'text', value:paymentMemberName},
+  {key:'memberNumber', kind:'text', value:paymentMemberNumber},
+  // Keep the original query keys for already open Admin releases.
   {key:'counterparty', kind:'text', value:r=>r.payerNameRaw},
   {key:'member', kind:'text', value:r=>r.memberName},
   {key:'counterpartyId', kind:'text', value:r=>r.payerPhoneRaw},

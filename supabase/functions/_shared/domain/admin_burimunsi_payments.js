@@ -76,15 +76,15 @@ export async function adminBuriMunsiPayments(request,env) {
       if(request.method!=='POST')throw new ApiError(404,'not_found','This Payments action does not exist.');
       query(url,[]);
       const input=await readJson(request,8192);
-      const {rows,amounts,query:criteria,showSms,asOf}=await db.withLockedReadSnapshot(async sql=>{
+      const {rows,amounts,query:criteria,showSms,canAllocate,asOf}=await db.withLockedReadSnapshot(async sql=>{
         await sql.unsafe("SET LOCAL statement_timeout='1250ms'");
-        const {canAnalyzeSms:showSms}=await scoped(sql);
+        const {canAnalyzeSms:showSms,canAllocate}=await scoped(sql);
         let criteria;
         try{criteria=parsePaymentAnalysisQuery(input,showSms);}
         catch(error){if(error instanceof TypeError)requireThat(false,'invalid_payment_analysis',400);throw error;}
         const snapshot=await readPaymentAnalysisRows(sql,groupId,{q:criteria.q,showSms});
         await authority.assertOwned();
-        return {...snapshot,query:criteria,showSms,asOf:new Date().toISOString()};
+        return {...snapshot,query:criteria,showSms,canAllocate,asOf:new Date().toISOString()};
       });
       // Work on authorized in-memory projections after SQL and its locks have
       // ended. Membership, ordering, count, totals and page use the same rows.
@@ -99,11 +99,15 @@ export async function adminBuriMunsiPayments(request,env) {
       }
       const {offset,limit}=criteria;
       await authority.assertOwned();
-      result={items:matched.slice(offset,offset+limit),totalCount:rows.length,matchingCount:matched.length,
+      result={items:matched.slice(offset,offset+limit).map(row=>({...row,canAllocate})),totalCount:rows.length,matchingCount:matched.length,
         directionTotalsRwf:{incoming:incoming.toString(),outgoing:outgoing.toString()},missing:0,offset,limit,asOf};
     }else if(request.method==='GET'&&relative==='home'){
       query(url,[]);
-      result=await db.withLockedReadSnapshot(async sql=>readPaymentsHome(sql,groupId,new Date().toISOString(),await scoped(sql)));
+      result=await db.withLockedReadSnapshot(async sql=>{
+        const projection=await scoped(sql);
+        const home=await readPaymentsHome(sql,groupId,new Date().toISOString(),projection,{adminTotals:true});
+        return {...home,recentPayments:home.recentPayments.map(row=>({...row,canAllocate:projection.canAllocate}))};
+      });
     }else if(request.method==='GET'&&relative==='payments'&&url.searchParams.has('statement')){
       const {statement,memberId,offset,revision}=query(url,['statement','memberId','offset','revision'],{maxOffset:MEMBER_STATEMENT_MAX_ROWS-1});
       requireThat(statement==='1'&&memberId&&offset%MEMBER_STATEMENT_PAGE_SIZE===0&&

@@ -38,21 +38,34 @@ export function paymentRecord(row,{showSms=false}={}) {
   };
 }
 
-export async function readPaymentsHome(sql,groupId,asOf,projection,{includeSavings=false}={}) {
+export async function readPaymentsHome(sql,groupId,asOf,projection,{includeSavings=false,adminTotals=false}={}) {
+  const showSmsBalance = adminTotals && projection.canAnalyzeSms;
+  const movementTotals = adminTotals ? `,
+    coalesce(sum(amount_rwf) FILTER (WHERE direction='incoming'),0)::text AS incoming,
+    coalesce(sum(amount_rwf) FILTER (WHERE direction='outgoing'),0)::text AS outgoing` :
+    includeSavings ? ", (sum(amount_rwf) FILTER (WHERE direction='outgoing'))::text AS outgoing" : '';
   const counts=`SELECT count(*) AS payments,
     count(*) FILTER (WHERE allocation_state='unallocated') AS unallocated,
-    (SELECT count(*) FROM app.memberships WHERE collection_id=$1 AND active=1) AS members
-    ${includeSavings?", (sum(amount_rwf) FILTER (WHERE direction='outgoing'))::text AS outgoing":""}
+    (SELECT count(*) FROM app.memberships WHERE collection_id=$1 AND active=1) AS members${movementTotals}
     FROM burimunsi.payments WHERE collection_id=$1`;
-  const totalsRows=await sql.unsafe(includeSavings?`WITH counts AS (${counts})
+  const query=includeSavings?`WITH counts AS (${counts})
     SELECT counts.*,s.lifetime_contributions_rwf::text AS lifetime_contributions,
       s.latest_wallet_balance_rwf::text AS latest_wallet_balance,s.reconciliation_status
-    FROM counts CROSS JOIN private.burimunsi_home_savings($1) s`:counts,[groupId]);
+    FROM counts CROSS JOIN private.burimunsi_home_savings($1) s`:showSmsBalance?`WITH counts AS (${counts})
+    SELECT counts.*,private.burimunsi_admin_home_sms_balance($1)::text AS latest_sms_balance FROM counts`:counts;
+  const totalsRows=await sql.unsafe(query,[groupId]);
   requireThat(totalsRows.length===1,'invalid_snapshot',503);
   const [totals]=totalsRows;
   const rows=await sql.unsafe(display+newest+' LIMIT 3',[groupId]);
   const home={paymentCount:pgInteger(totals.payments),memberCount:pgInteger(totals.members),
     unallocatedCount:pgInteger(totals.unallocated),recentPayments:rows.map(row=>paymentRecord(row,projection)),asOf};
+  if(adminTotals){
+    for (const value of [totals.incoming,totals.outgoing]) {
+      requireThat(typeof value==='string'&&/^(0|[1-9]\d{0,37})$/.test(value),'invalid_snapshot',503);
+    }
+    return {...home,paymentTotals:{incomingRwf:totals.incoming,outgoingRwf:totals.outgoing,
+      ...(showSmsBalance && {latestSmsBalanceRwf:wholeRwf(totals.latest_sms_balance)})}};
+  }
   if(!includeSavings)return home;
   return {...home,savings:{lifetimeContributionsRwf:wholeRwf(totals.lifetime_contributions),
     outgoingPaymentsRwf:wholeRwf(totals.outgoing),latestWalletBalanceRwf:wholeRwf(totals.latest_wallet_balance),

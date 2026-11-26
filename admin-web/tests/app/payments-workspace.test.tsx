@@ -22,7 +22,8 @@ const accountId = '22222222-2222-4222-8222-222222222222';
 const momoRef = 'MOMO-FIXTURE-01';
 const time = '2026-10-18T08:00:00.000Z';
 const buriPayment = {id:momoId,groupId:'fixture-group',version:1,direction:'incoming',amountRwf:5000,atRaw:time,ftId:momoRef,
-  payerNameRaw:'Fixture payer',payerPhoneRaw:'000071',memberId:null,memberName:null,memberPhone:null,state:'unallocated',sourceId:null as string|null};
+  payerNameRaw:'Fixture payer',payerPhoneRaw:'000071',memberId:null,memberName:null,memberPhone:null,state:'unallocated',
+  sourceId:null as string|null,canAllocate:false};
 const outgoing = {...buriPayment,id:accountId,direction:'outgoing',ftId:'MOMO-OUT-FIXTURE',
   state:'allocated',memberId:currentActor,memberName:'Fixture member'};
 const query99:PaymentAnalysisQuery={q:'',filters:[],sort:{key:'time',direction:'desc'},offset:0,limit:25};
@@ -269,6 +270,31 @@ describe('consolidated Payments routes',()=>{
 });
 
 describe('BuriMunsi phone Payments', () => {
+  it('shows cumulative incoming and outgoing plus the latest authorized SMS balance, including real zero', async () => {
+    mock.authMethod = 'phone_passcode';
+    mock.request.mockResolvedValue({paymentCount:2,memberCount:5,unallocatedCount:1,recentPayments:[buriPayment,outgoing],asOf:time,
+      paymentTotals:{incomingRwf:'9007199254740993',outgoingRwf:'5000',latestSmsBalanceRwf:0}});
+    const admin = visit('/admin', ['overview.read','payments.read','sms.read']);
+    expect(await screen.findByRole('link',{name:/Cumulative incoming payments.*RWF 9,007,199,254,740,993/}))
+      .toHaveAttribute('href','/admin/payments?direction=incoming');
+    expect(screen.getByRole('link',{name:/Cumulative outgoing payments.*RWF 5,000/}))
+      .toHaveAttribute('href','/admin/payments?direction=outgoing');
+    expect(screen.getByText('Latest MoMo SMS balance',{selector:'dt span'}).closest('dl')).toHaveTextContent('RWF 0');
+    admin.unmount();
+    visit('/admin', ['overview.read','payments.read','sms.read'], 'staff');
+    expect(await screen.findByText('Cumulative incoming payments')).toBeVisible();
+    expect(screen.queryByText('Latest MoMo SMS balance')).not.toBeInTheDocument();
+  });
+
+  it('keeps unknown SMS balance distinct from zero cumulative movements', async () => {
+    mock.authMethod = 'phone_passcode';
+    mock.request.mockResolvedValue({paymentCount:0,memberCount:0,unallocatedCount:0,recentPayments:[],asOf:time,
+      paymentTotals:{incomingRwf:'0',outgoingRwf:'0',latestSmsBalanceRwf:null}});
+    visit('/admin', ['overview.read','payments.read','sms.read']);
+    expect(await screen.findByRole('link',{name:/Cumulative incoming payments.*RWF 0/})).toBeVisible();
+    expect(await screen.findByText('Unavailable',{selector:'dd'})).toBeVisible();
+  });
+
   it('shows both directions together and links recent Home payments to the same workspace', async () => {
     mock.authMethod = 'phone_passcode';
     mock.request.mockImplementation(async (path: string) => path === 'burimunsi/home'
@@ -282,7 +308,13 @@ describe('BuriMunsi phone Payments', () => {
     expect(called('momo/observations')).toHaveLength(0);
     fireEvent.click(screen.getByRole('link',{name:'View all payments'}));
     expect(await screen.findByRole('button',{name:'MOMO-OUT-FIXTURE'})).toBeVisible();
-    expect(screen.getByRole('columnheader',{name:'Counterparty number / code'})).toBeVisible();
+    expect(screen.getByRole('columnheader',{name:'Member'})).toBeVisible();
+    expect(screen.getByRole('columnheader',{name:'Member phone',exact:true})).toBeVisible();
+    expect(screen.getAllByRole('columnheader')).toHaveLength(7);
+    expect(screen.queryByRole('columnheader',{name:/Counterparty|Member number/})).not.toBeInTheDocument();
+    expect(within(screen.getByRole('row',{name:/MOMO-FIXTURE-01/})).getByText('Fixture payer')).toBeVisible();
+    expect(within(screen.getByRole('row',{name:/MOMO-OUT-FIXTURE/})).getByText('000071')).toBeVisible();
+    expect(screen.queryByRole('link',{name:/Unallocated.*allocate payment/})).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader',{name:'SMS evidence'})).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button',{name:'Filter Allocation'}));
     const filters = within(screen.getByRole('dialog',{name:'Filter Allocation'}));
@@ -302,7 +334,7 @@ describe('BuriMunsi phone Payments', () => {
     });
     visit('/admin/payments?offset=25',['payments.read'],'staff');
     expect(await screen.findByRole('button',{name:'FT-25'})).toBeVisible();
-    fireEvent.click(screen.getByRole('button',{name:'Sort Amount (RWF) ascending'}));
+    fireEvent.click(screen.getByRole('button',{name:'Sort Amount ascending'}));
     fireEvent.click(await screen.findByRole('button',{name:'FT-104'}));
     const detail = within(await screen.findByRole('region',{name:'Payment details'}));
     expect(await detail.findByText('pay-104')).toBeVisible();
@@ -577,15 +609,17 @@ describe('BuriMunsi phone Payments', () => {
         applied = true;
         return {paymentId:momoId,memberId:accountId,state:'allocated',version:2};
       }
-      return path.endsWith(momoId) ? {...(applied ? changed : buriPayment),canAllocate:true} : buriPage([applied ? changed : buriPayment]);
+      return path.endsWith(momoId) ? {...(applied ? changed : buriPayment),canAllocate:true}
+        : buriPage([{...(applied ? changed : buriPayment),canAllocate:true}]);
     });
     visit('/admin/payments?payment='+momoId,['payments.read'],'staff');
-    // The analysis record omits a write capability; the dialog verifies it with the scoped detail read.
-    fireEvent.click(await screen.findByRole('link',{name:'Unallocated – allocate payment '+momoRef}));
+    const row = await screen.findByRole('row',{name:/MOMO-FIXTURE-01/});
+    fireEvent.click(within(row).getByRole('link',{name:'Unallocated – allocate payment '+momoRef}));
     const member = await screen.findByRole('combobox',{name:'Member'});
     const dialog = within(screen.getByRole('dialog',{name:'Allocate payment'}));
     fireEvent.change(member,{target:{value:accountId}});
     fireEvent.click(dialog.getByRole('button',{name:'Review allocation'}));
+    expect(attempts).toBe(0);
     fireEvent.click(dialog.getByRole('button',{name:'Confirm allocation'}));
     expect(await dialog.findByText(/Allocation was not confirmed/)).toBeVisible();
     expect(dialog.queryByRole('button',{name:'Retry allocation'})).not.toBeInTheDocument();

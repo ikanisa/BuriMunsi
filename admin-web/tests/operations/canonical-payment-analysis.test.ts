@@ -111,6 +111,24 @@ describe('member and counterparty presentation', () => {
     expect(paymentMemberName({...unassigned, payerNameRaw: null})).toBeNull();
     expect(paymentMemberNumber({...unassigned, payerPhoneRaw: '  '})).toBeNull();
   });
+
+  it('sorts and filters the merged values across assigned and unassigned rows with the same fields as the table', () => {
+    const filter = {presence:'any',text:'',min:'',max:'',choices:[]} as const;
+    const recorded = {...row(2),payerNameRaw:'Ada',payerPhoneRaw:'07***4567'};
+    const blank = {...row(3),payerNameRaw:' ',payerPhoneRaw:' '};
+    const distinct = {...assigned,payerNameRaw:'Ada',payerPhoneRaw:'07***4567'};
+    const rows = [distinct,blank,recorded];
+    const byMember = {key:'memberName',direction:'asc'} as const;
+    const query = parsePaymentAnalysisQuery({...input,sort:byMember,filters:[]},false);
+    expect(analyzeCanonicalPaymentRows(rows,query.filters,query.sort,false).map(row=>row.id))
+      .toEqual([recorded.id,distinct.id,blank.id]);
+    for (const [key,text] of [['memberName','Ada'],['memberNumber','***4567']]) {
+      const criteria = parsePaymentAnalysisQuery({...input,filters:[{...filter,key,text}]},false);
+      expect(analyzeCanonicalPaymentRows(rows,criteria.filters,criteria.sort,false).map(row=>row.id)).toEqual([recorded.id]);
+    }
+    const legacy = parsePaymentAnalysisQuery({...input,filters:[{...filter,key:'counterparty',text:'Ada'}]},false);
+    expect(analyzeCanonicalPaymentRows(rows,legacy.filters,legacy.sort,false).map(row=>row.id)).toEqual([distinct.id,recorded.id]);
+  });
 });
 
 describe('payment time in Kigali', () => {

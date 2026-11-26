@@ -13,8 +13,10 @@ import {useOperationRead} from '../operations/useOperationRead';
 import './overview.css';
 
 const count = z.number().int().nonnegative();
+const totalRwf = z.string().regex(/^(0|[1-9]\d{0,37})$/).transform(value => BigInt(value));
 const snapshot = z.object({
   paymentCount: count, memberCount: count, unallocatedCount: count, recentPayments: z.array(buriMunsiPayment),
+  paymentTotals: z.object({incomingRwf:totalRwf,outgoingRwf:totalRwf,latestSmsBalanceRwf:count.nullish()}).optional(),
   asOf: z.string().refine(value => Number.isFinite(Date.parse(value))),
 }).refine(value => value.unallocatedCount <= value.paymentCount && value.recentPayments.length <= value.paymentCount &&
   new Set(value.recentPayments.map(row => row.id)).size === value.recentPayments.length);
@@ -23,10 +25,15 @@ const smsHealthLabels = {
   incomplete: 'Sync pending', verified: 'Last inbox check matched',
 } as const;
 
-function Figure({label, icon, value, to}: {label: string; icon: string; value: number; to?: string}) {
-  const content = <dl><dt title={label}><Icon name={icon} /><span className="admin-sr-only">{label}</span></dt><dd>{value.toLocaleString('en-RW')}</dd></dl>;
-  return to ? <Link className="overview-metric overview-metric-card overview-metric-card--link" to={to}>{content}</Link> :
-    <div className="overview-metric overview-metric-card">{content}</div>;
+const amountFormat = new Intl.NumberFormat('en-RW');
+
+function Figure({label, icon, value, to, currency = false}:
+  {label: string; icon: string; value: number | bigint | null; to?: string; currency?: boolean}) {
+  const className = 'overview-metric overview-metric-card' + (currency ? ' overview-metric-card--currency' : '');
+  const content = <dl><dt title={label}><Icon name={icon} /><span className={currency ? undefined : 'admin-sr-only'}>{label}</span></dt>
+    <dd>{value === null ? 'Unavailable' : (currency ? 'RWF ' : '') + amountFormat.format(value)}</dd></dl>;
+  return to ? <Link className={className + ' overview-metric-card--link'} to={to}>{content}</Link> :
+    <div className={className}>{content}</div>;
 }
 
 export function BuriMunsiHome() {
@@ -34,10 +41,12 @@ export function BuriMunsiHome() {
   const visible = canDisplaySessionRecords(session) && !!user?.permissions.includes('overview.read');
   const payments = !!user?.permissions.includes('payments.read');
   const load = useCallback(async (signal: AbortSignal) => snapshot.parse(await request('burimunsi/home', {signal})), [request]);
-  const {result, retry} = useOperationRead(`${epoch}:burimunsi-home`, visible, load);
-  const collection = visible && user && canReadSmsEvidence(user) && hasScopedAdminAuthority(user) ? user.adminIdentity?.collectionId : undefined;
+  const sms = canReadSmsEvidence(user);
+  const collection = visible && user && sms && hasScopedAdminAuthority(user) ? user.adminIdentity?.collectionId : undefined;
   const authority=JSON.stringify([epoch,user?.id,user?.sessionId,user?.role,collection,[...(user?.permissions ?? [])].sort()]);
+  const {result, retry} = useOperationRead('burimunsi-home:' + authority, visible, load);
   const showInbox=!!collection && session.status==='authenticated';
+  const totals = result?.status === 'success' ? result.value.paymentTotals : undefined;
   const [inboxRefresh,setInboxRefresh]=useState(0);
   return <><PageHeader title="Home" actions={<Button icon="refresh" aria-label="Refresh Home" onClick={()=>{retry();setInboxRefresh(value=>value+1);}} />} />
     {showInbox && <HomeInboxStatus key={authority} collection={collection} refresh={inboxRefresh} />}
@@ -49,6 +58,14 @@ export function BuriMunsiHome() {
             <Figure label="Members" icon="users" value={result.value.memberCount} to={user?.permissions.includes('users.read') ? '/admin/members' : undefined} />
             {payments && <Figure label="Unallocated" icon="unlinked" value={result.value.unallocatedCount} to={buriMunsiPaymentsPath + '?status=unallocated'} />}
           </div>
+          {payments && <div className="overview-metrics overview-payment-metrics">
+            <Figure label="Cumulative incoming payments" icon="incoming" value={totals?.incomingRwf ?? null}
+              to={buriMunsiPaymentsPath + '?direction=incoming'} currency />
+            <Figure label="Cumulative outgoing payments" icon="outgoing" value={totals?.outgoingRwf ?? null}
+              to={buriMunsiPaymentsPath + '?direction=outgoing'} currency />
+            {sms && <Figure label="Latest MoMo SMS balance" icon="message" value={totals?.latestSmsBalanceRwf ?? null}
+              to={showInbox ? buriMunsiSmsPath : undefined} currency />}
+          </div>}
         </section>
         {payments && <Card className="operations-records"><div className="operations-toolbar"><h2>Recent payments</h2>
           <Link className="operations-link" to={buriMunsiPaymentsPath}>View all payments</Link></div>

@@ -2,7 +2,7 @@ import {z} from 'zod';
 import type {AdminRequest} from '../../api/client';
 import {normalizeLoginPhone} from '../../session/phonePasscode';
 import {paymentInstant, type PaymentAnalysisQuery} from '../../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
-export {paymentInstant};
+export {paymentInstant, paymentMemberName, paymentMemberNumber} from '../../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
 
 export const paymentId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,159}$/);
 export const paymentDirection = z.enum(['incoming', 'outgoing']);
@@ -18,14 +18,6 @@ export type BuriMunsiPayment = z.infer<typeof buriMunsiPayment>;
 
 function recorded(value: string | null | undefined): string | null {
   return value?.trim() ? value : null;
-}
-
-export function paymentMemberName(row: BuriMunsiPayment): string | null {
-  return (row.memberId ? recorded(row.memberName) : null) ?? recorded(row.payerNameRaw);
-}
-
-export function paymentMemberNumber(row: BuriMunsiPayment): string | null {
-  return (row.memberId ? recorded(row.memberPhone) : null) ?? recorded(row.payerPhoneRaw);
 }
 
 function nameForComparison(value: string) {

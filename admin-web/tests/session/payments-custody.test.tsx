@@ -15,9 +15,9 @@ const paymentRoute='/admin/payments', api='/api/admin/burimunsi/payments';
 const group='synthetic-group';
 const sessionPath='/api/admin/auth/session';
 const oldPayment={id:'first-payment',groupId:group,version:1,direction:'incoming',amountRwf:5000,atRaw:time,
-  ftId:'PRIVILEGED-FIXTURE-FIRST',payerNameRaw:'Privileged fixture payer',memberId:null,memberName:null,state:'unallocated',sourceId:null};
+  ftId:'PRIVILEGED-FIXTURE-FIRST',payerNameRaw:'Privileged fixture payer',memberId:null,memberName:null,state:'unallocated',sourceId:null,canAllocate:true};
 const latePayment={...oldPayment,id:'late-payment',ftId:'PRIVILEGED-FIXTURE-LATE',amountRwf:9010};
-const newPayment={...oldPayment,id:'new-payment',ftId:'RESTRICTED-FIXTURE',payerNameRaw:'Safe fixture payer',amountRwf:31};
+const newPayment={...oldPayment,id:'new-payment',ftId:'RESTRICTED-FIXTURE',payerNameRaw:'Safe fixture payer',amountRwf:31,canAllocate:false};
 const memberId='synthetic-member';
 const who={id:'admin-one',sessionId:'session-one',email:'synthetic-admin@example.test',role:'admin',principalId:'principal-one',
   permissions:['payments.read','sms.read'],assuranceLevel:1,mfaAt:null,authMethod:'phone_passcode',phone:'+250780000001',accountId:'20202020-2020-4020-8020-202020202020',

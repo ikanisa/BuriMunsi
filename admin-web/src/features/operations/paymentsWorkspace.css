@@ -5,6 +5,20 @@
 .overview-metric-card dt { position: relative; }
 .payment-term-icon .admin-icon, .overview-metric-card dt .admin-icon { width: 1.5rem; height: 1.5rem; }
 .payment-allocation-link:focus-visible { outline: 2px solid var(--admin-focus); outline-offset: 2px; }
+.payment-direction {
+  display: inline-flex;
+  align-items: center;
+  gap: .25rem;
+  padding: .2rem .4rem;
+  border-radius: .375rem;
+  font-size: .75rem;
+  font-weight: 700;
+  background: var(--payment-flow-surface);
+}
+.payment-direction .payment-term-icon .admin-icon { width: 1rem; height: 1rem; }
+.payment-direction, .payment-flow-amount { color: var(--payment-flow-ink); }
+[data-payment-flow="incoming"] { --payment-flow-ink: var(--admin-success); --payment-flow-surface: var(--admin-success-surface); }
+[data-payment-flow="outgoing"] { --payment-flow-ink: var(--admin-accent-ink); --payment-flow-surface: var(--admin-accent-surface); }
 .payments-nav { display: flex; flex-wrap: wrap; gap: .5rem; margin-block: .5rem 1rem; }
 .payments-nav a { display: inline-flex; align-items: center; justify-content: center; min-block-size: 44px; padding: .25rem .875rem; border-radius: 999px; text-decoration: none; font-weight: 600; }
 .payments-nav a[aria-current="page"] { background: var(--admin-accent-surface); color: var(--admin-accent-ink); text-decoration: underline; text-underline-offset: .25em; }
