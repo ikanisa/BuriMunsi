@@ -217,7 +217,7 @@ describe('payment allocation wizard', () => {
     const request = api(data), ui = open(request);
     expect(await screen.findByText(message)).toBeVisible();
     expect(request.mock.calls.map(([url]) => url)).toEqual([path]);
-    expect(ui.onStale).toHaveBeenCalledOnce();
+    await waitFor(() => expect(ui.onStale).toHaveBeenCalledOnce());
     expect(screen.getByRole('button',{name:'Close'})).toBeEnabled();
   });
 
@@ -239,7 +239,7 @@ describe('payment allocation wizard', () => {
     const ui = open(request), dialog = await review();
     fireEvent.click(dialog.getByRole('button',{name:'Confirm allocation'}));
     expect(await dialog.findByText(/allocation access changed/)).toBeVisible();
-    expect(ui.onStale).toHaveBeenCalledOnce();
+    await waitFor(() => expect(ui.onStale).toHaveBeenCalledOnce());
     expect(ui.onAllocated).not.toHaveBeenCalled();
     expect(dialog.queryByRole('button',{name:'Retry allocation'})).not.toBeInTheDocument();
     expect(request.mock.calls.filter(([,options]) => options?.method === 'POST')).toHaveLength(1);
