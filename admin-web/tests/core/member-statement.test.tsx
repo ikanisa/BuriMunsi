@@ -5,7 +5,7 @@ import {describe, expect, it, vi} from 'vitest';
 import {AdminRequestError} from '../../src/api/client';
 import {CoreRecordPage} from '../../src/features/core/CoreRecordPage';
 import {MemberStatementPage} from '../../src/features/core/MemberStatementPage';
-import {readMemberStatement, readMemberStatementPage} from '../../src/features/core/memberStatement';
+import {readCompleteMemberStatement, readMemberStatement, readMemberStatementPage} from '../../src/features/core/memberStatement';
 import {memberStatementCsv} from '../../src/features/core/memberStatementDownload';
 import type {AdminRequest} from '../../src/features/core/types';
 import fixture from './canonical-core-fixtures.json';
@@ -47,7 +47,122 @@ function source(rows: ReturnType<typeof payment>[], profile: Record<string, unkn
 const props = {id: person.id, expectedGroup: group, permissions: grants, actorId: actor, principalId: null,
   role: 'staff' as const, authorityKey: 'signed-in-staff', financialModel: 'canonical_evidence_ledger' as const, navigate: vi.fn()};
 
+function editFilter(label: string, inputs: Readonly<Record<string, string>>) {
+  fireEvent.click(screen.getByRole('button', {name:'Filter ' + label}));
+  const dialog = within(screen.getByRole('dialog', {name:'Filter ' + label}));
+  for (const [field, value] of Object.entries(inputs)) fireEvent.change(dialog.getByLabelText(field), {target:{value}});
+  fireEvent.click(dialog.getByRole('button', {name:'Apply filter'}));
+}
+
+function references() {
+  return within(screen.getByRole('table', {name:'Member transactions'})).queryAllByRole('button', {name:/^View transaction/})
+    .map(button => button.textContent);
+}
+
 describe('scoped member statement', () => {
+  it('combines Kigali date, reference and credit filters across pinned pages, preserving the actual balance and complete CSV', async () => {
+    const rows = Array.from({length: 51}, (_, i) => payment(i, i !== 49, i === 49 ? 1 : i === 50 ? 3 : 4));
+    for (const [index, sourceTime] of [[48,'2026-11-24T21:59:59Z'],[49,'2026-11-24T22:00:00Z'],
+      [50,'2026-11-25T21:59:59Z']] as const) {
+      rows[index].ftId = 'Late-' + index; rows[index].atRaw = sourceTime;
+    }
+    const request = source(rows);
+    const view = render(<MemoryRouter><CoreRecordPage {...props} area="members" scopedMember request={request} /></MemoryRouter>);
+    await screen.findByRole('table',{name:'Member transactions'});
+    for (const label of ['Date (Kigali)','Reference','Debit (RWF)','Credit (RWF)','Balance (RWF)']) {
+      expect(screen.getByRole('button',{name:'Sort ' + label + ' ascending'})).toBeVisible();
+      expect(screen.getByRole('button',{name:'Filter ' + label})).toHaveAttribute('aria-haspopup','dialog');
+    }
+    fireEvent.click(screen.getByRole('button',{name:'Filter Reference'}));
+    fireEvent.click(screen.getByRole('button',{name:'Cancel'}));
+    expect(request.mock.calls).toHaveLength(1);
+    editFilter('Reference', {Contains:'LATE-'});
+    await screen.findByText('3 of 51 records');
+    expect(references()).toEqual(['Late-48','Late-49','Late-50']);
+    editFilter('Date (Kigali)', {From:'2026-11-25', Through:'2026-11-25'});
+    expect(references()).toEqual(['Late-49','Late-50']);
+    editFilter('Credit (RWF)', {Minimum:'3', Maximum:'3'});
+    expect(references()).toEqual(['Late-50']);
+    expect(screen.getByText('Closing balance').nextElementSibling).toHaveTextContent('RWF 198');
+    fireEvent.click(screen.getByRole('button',{name:'View transaction Late-50'}));
+    const facts = within(screen.getByRole('dialog',{name:'Transaction details'}));
+    expect(facts.getByText('Running balance').nextElementSibling).toHaveTextContent('RWF 198');
+    fireEvent.click(facts.getByRole('button',{name:'Close dialog'}));
+
+    const create = vi.fn<typeof URL.createObjectURL>(() => 'blob:https://example.test/full'), revoke = vi.fn<typeof URL.revokeObjectURL>();
+    vi.stubGlobal('URL', class extends URL {static createObjectURL = create; static revokeObjectURL = revoke;});
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    try {
+      fireEvent.click(screen.getByRole('button',{name:'Download statement'}));
+      await screen.findByRole('link',{name:'Download statement'});
+      const csv = await new Response(await (create.mock.calls[0][0] as Blob).arrayBuffer()).text();
+      expect(csv.match(/^Transaction,/gm)).toHaveLength(51);
+      expect(csv.indexOf('"FT-0000"')).toBeLessThan(csv.indexOf('"Late-50"'));
+      expect(csv).toContain('"Late-49",1,,195');
+      expect(csv).toContain('Closing balance,,,,,198');
+      expect(request.mock.calls.map(([path])=>path)).toEqual([profilePath+'?include=statement',
+        ...[25,50].map(offset=>'burimunsi/payments?statement=1&memberId='+person.id+'&offset='+offset+'&revision='+revision)]);
+      fireEvent.click(screen.getByRole('button',{name:'Clear all filters'}));
+      expect(screen.getByText('51 records')).toBeVisible();
+      fireEvent.click(screen.getByRole('button',{name:'Next page'}));
+      expect(references()).toContain('Late-49');
+      expect(request.mock.calls).toHaveLength(3);
+    } finally {
+      view.unmount();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('sorts every column with stable ties, distinguishes blank sides, and compares adjacent balances beyond Number precision', async () => {
+    const rows = [payment(0,true,Number.MAX_SAFE_INTEGER),payment(1,true,1),payment(2,true,1),payment(3,false,Number.MAX_SAFE_INTEGER)];
+    rows[0].atRaw = 'provider time unknown';
+    rows[1].atRaw = '2026-11-26T11:00:00Z';
+    rows[2].atRaw = '2026-11-24T23:00:00Z';
+    rows[3].atRaw = '2026-11-25T01:00:00+02:00';
+    const request = source(rows);
+    render(<MemoryRouter><MemberStatementPage {...props} request={request} /></MemoryRouter>);
+    await screen.findByRole('table',{name:'Member transactions'});
+    const sort = (action: string) => fireEvent.click(screen.getByRole('button',{name:'Sort ' + action}));
+    sort('Date (Kigali) ascending');
+    expect(references()).toEqual(['FT-0002','FT-0003','FT-0001','FT-0000']);
+    sort('Reference ascending'); sort('Reference descending');
+    expect(references()).toEqual(['FT-0003','FT-0002','FT-0001','FT-0000']);
+    sort('Debit (RWF) ascending');
+    expect(references()).toEqual(['FT-0003','FT-0000','FT-0001','FT-0002']);
+    sort('Credit (RWF) ascending');
+    expect(references()).toEqual(['FT-0001','FT-0002','FT-0000','FT-0003']);
+    sort('Balance (RWF) ascending'); sort('Balance (RWF) descending');
+    expect(references()).toEqual(['FT-0002','FT-0001','FT-0000','FT-0003']);
+    editFilter('Balance (RWF)',{Minimum:'9007199254740993',Maximum:'9007199254740993'});
+    expect(references()).toEqual(['FT-0002']);
+    expect(screen.getByText('9,007,199,254,740,993')).toBeVisible();
+    fireEvent.click(screen.getByRole('button',{name:'Clear all filters'}));
+    fireEvent.click(screen.getByRole('button',{name:'Filter Credit (RWF)'}));
+    fireEvent.click(screen.getByLabelText('Blank only'));
+    fireEvent.click(screen.getByRole('button',{name:'Apply filter'}));
+    expect(references()).toEqual(['FT-0003']);
+    expect(screen.getByText('Closing balance').nextElementSibling).toHaveTextContent('RWF 2');
+    expect(request.mock.calls).toHaveLength(1);
+  });
+
+  it('hides partial matches when history changes mid-filter and refreshes from a newly verified first page', async () => {
+    const rows = Array.from({length: 26}, (_, i) => payment(i));
+    const regular = source(rows);
+    const request = vi.fn(async (path: string) => {
+      if (path.includes('offset=25')) throw new AdminRequestError('Changed', {code:'member_statement_changed',statusCode:409});
+      return regular(path);
+    });
+    render(<MemoryRouter><MemberStatementPage {...props} request={request} /></MemoryRouter>);
+    await screen.findByRole('table',{name:'Member transactions'});
+    editFilter('Reference',{Contains:'FT-'});
+    expect(await screen.findByRole('alert')).toHaveTextContent('The statement changed.');
+    expect(references()).toEqual([]);
+    expect(screen.queryByText(/of 26 records/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button',{name:'Try again'}));
+    expect(await screen.findByRole('button',{name:'View transaction FT-0000'})).toBeVisible();
+    expect(request.mock.calls.at(-1)?.[0]).toBe(profilePath+'?include=statement');
+  });
+
   it('opens an inline credit by keyboard, preserves the balance link and returns focus without another request', async () => {
     const user = userEvent.setup(), request = source([payment(1, true, 1250), payment(2, false, 100)]);
     render(<MemoryRouter><CoreRecordPage {...props} area="members" scopedMember request={request} /></MemoryRouter>);
@@ -96,7 +211,7 @@ describe('scoped member statement', () => {
     const first = await readMemberStatement(request, signal, person.id, actor, group, {offset:0});
     const middle = await readMemberStatementPage(request, signal, person.id, first.membership, {offset:25, revision});
     request.mockClear();
-    const csv = await memberStatementCsv(middle, first.membership, request, signal);
+    const csv = memberStatementCsv(await readCompleteMemberStatement(middle, first.membership, request, signal));
     expect(csv).toContain('Opening balance,,,,,0\r\nTransaction,"24 Nov 2026, 14:00:00","\'=first,""quoted""",,4,4');
     expect(csv).toContain('"FT-line1\nline2",,4,8');
     expect(csv).toContain('Transaction,"24 Nov 2026, 14:00:00","FT-0050",4,,196\r\nClosing balance,,,,,196\r\n');
@@ -125,7 +240,7 @@ describe('scoped member statement', () => {
     const signal = new AbortController().signal;
     const first = await readMemberStatement(data, signal, person.id, actor, group, {offset:0});
     const stale = vi.fn(async () => {throw new AdminRequestError('Changed', {code:'member_statement_changed',statusCode:409});});
-    await expect(memberStatementCsv(first, first.membership, stale, signal)).rejects.toThrow('The statement changed');
+    await expect(readCompleteMemberStatement(first, first.membership, stale, signal)).rejects.toThrow('The statement changed');
   });
 
   it('starts a real CSV download for a verified empty statement and revokes the link when the view closes', async () => {
@@ -152,19 +267,23 @@ describe('scoped member statement', () => {
     }
   });
 
-  it('aborts a running export on authority loss and discards any late page', async () => {
+  it('shares one history read for a simultaneous analysis and download, and discards both on authority loss', async () => {
     const rows = Array.from({length:26}, (_, i) => payment(i));
     const regular = source(rows);
     let signal: AbortSignal | undefined, release: (() => void) | undefined;
-    const request: AdminRequest = async (path, options) => {
+    const request = vi.fn<AdminRequest>(async (path, options) => {
       if (!path.includes('offset=25')) return regular(path);
       signal = options?.signal;
       await new Promise<void>(resolve => {release = resolve;});
       return statement(rows, 25);
-    };
+    });
     const view = render(<MemoryRouter><MemberStatementPage {...props} request={request} /></MemoryRouter>);
     fireEvent.click(await screen.findByRole('button', {name:'Download statement'}));
     await waitFor(() => expect(signal).toBeDefined());
+    fireEvent.click(screen.getByRole('button', {name:'Sort Reference ascending'}));
+    expect(screen.getByRole('status')).toHaveTextContent('Loading complete member statement');
+    expect(references()).toEqual([]);
+    expect(request.mock.calls.filter(([path])=>path.includes('offset=25'))).toHaveLength(1);
     view.rerender(<MemoryRouter><MemberStatementPage {...props} authorityKey="new-session" permissions={['users.read']} request={request} /></MemoryRouter>);
     expect(signal?.aborted).toBe(true);
     await act(async () => {release?.();});
@@ -187,7 +306,7 @@ describe('scoped member statement', () => {
     expect(screen.queryByRole('button', {name:'Check person change request'})).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', {name:'Memberships'})).not.toBeInTheDocument();
     expect(request.mock.calls.map(([path]) => path)).toEqual([profilePath + '?include=statement']);
-    fireEvent.click(screen.getByRole('button', {name:'Next'}));
+    fireEvent.click(screen.getByRole('button', {name:'Next page'}));
     expect(await screen.findByRole('row', {name:/FT-0025/})).toBeVisible();
     expect(screen.getByText('Record ID').nextElementSibling).toHaveTextContent(number);
     expect(request.mock.calls.map(([path]) => path)).toEqual([profilePath + '?include=statement',
@@ -310,7 +429,7 @@ describe('scoped member statement', () => {
     const first = within(table.getByRole('row', {name: /FT-0000/}));
     expect(first.getByText(time)).toBeVisible();
     expect(first.getAllByRole('cell').map(cell => cell.textContent).slice(2)).toEqual(['—', '4', '4']);
-    fireEvent.click(screen.getByRole('button', {name: 'Next'}));
+    fireEvent.click(screen.getByRole('button', {name: 'Next page'}));
     const last = await screen.findByRole('row', {name: /FT-0025/});
     expect(within(screen.getByRole('table', {name: 'Member transactions'})).getAllByRole('row')).toHaveLength(2);
     expect(within(last).getAllByRole('cell').map(cell => cell.textContent).slice(2))
@@ -328,7 +447,7 @@ describe('scoped member statement', () => {
       throw new Error('Unexpected read');
     });
     render(<MemoryRouter><MemberStatementPage {...props} request={request} /></MemoryRouter>);
-    fireEvent.click(await screen.findByRole('button', {name: 'Next'}));
+    fireEvent.click(await screen.findByRole('button', {name: 'Next page'}));
     expect(await screen.findByRole('alert')).toHaveTextContent('The statement changed.');
     expect(screen.queryByRole('table', {name: 'Member transactions'})).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', {name: 'Try again'}));

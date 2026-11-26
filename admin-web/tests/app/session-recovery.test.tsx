@@ -122,11 +122,16 @@ describe('Admin navigation for the current session', () => {
     });
   it('takes old People list bookmarks to the same filtered member roster', async () => {
     const {requests} = openAdmin('/admin/users?search=Group+One&sort=public_id_asc&status=suspended&unknown=drop',
-      {phonePasscodeOnly:true, session: {user: {...account, ...phoneIdentity(), permissions: ['users.read']}}});
+      {phonePasscodeOnly:true, session: {user: {...account, ...phoneIdentity(), permissions: ['users.read']}},
+        read:url => url.pathname.endsWith('/core/members') ? reply({...core.members,rows:[],total:0}) : undefined});
     await screen.findByRole('heading', {name: 'Members'});
     expect(router.state.location.pathname + router.state.location.search).toBe('/admin/members?search=Group+One&sort=public_id_asc');
-    expect(screen.getByRole('textbox', {name: 'Search Members'})).toHaveValue('Group One');
-    expect(within(screen.getByRole('combobox', {name: 'Status'})).getAllByRole('option').map(option => option.textContent)).toEqual(['All statuses', 'Active', 'Inactive']);
+    expect(await screen.findByRole('textbox', {name: 'Search Members'})).toHaveValue('Group One');
+    fireEvent.click(screen.getByRole('button',{name:'Filter Status'}));
+    const picker = within(screen.getByRole('dialog',{name:'Filter Status'}));
+    expect(picker.getByRole('checkbox',{name:'Active'})).not.toBeChecked();
+    expect(picker.getByRole('checkbox',{name:'Inactive'})).not.toBeChecked();
+    fireEvent.click(picker.getByRole('button',{name:'Cancel'}));
     expect(screen.queryByRole('link', {name: 'All people'})).not.toBeInTheDocument();
     expect(screen.queryByRole('link', {name: 'Group members'})).not.toBeInTheDocument();
     expect(screen.queryByRole('link', {name: 'Add member'})).not.toBeInTheDocument();
@@ -152,16 +157,23 @@ describe('Admin navigation for the current session', () => {
       session:{user:{...account, financialModel:model, permissions:['users.read'], ...(phone || passcode ? phoneIdentity() : {})}},
       read(url) {
         calls.push(url);
-        if (url.pathname === '/api/admin/core/members' && url.searchParams.get('status') === status &&
+        if (url.pathname === '/api/admin/core/members' && url.searchParams.get('status') === (scoped ? null : status) &&
             url.searchParams.get('directory') === (scoped ? 'roster' : null)) return reply({...metadata, rows:[row], total:1});
         if (url.pathname === '/api/admin/operations/' + resource + '/' + row.id) return reply({...metadata,
           current_actor_id:account.id, resource_type:resource, resource:row, can_manage:false, related:{}, related_truncated:false});
         return reply({error:{code:'unexpected_directory_contract'}},403);
       }});
     const member = await screen.findByRole('row', {name:new RegExp(row.public_id)});
-    const statusOptions = within(screen.getByRole('combobox',{name:'Status'})).getAllByRole('option').map(option => option.textContent);
-    expect(statusOptions).toEqual(scoped ? ['All statuses','Active','Inactive'] : journals ?
-      ['All statuses','Invited','Active','Suspended','Closed'] : ['All statuses','Active','Suspended','Deleted']);
+    if (scoped) {
+      fireEvent.click(screen.getByRole('button',{name:'Filter Status'}));
+      const picker = within(screen.getByRole('dialog',{name:'Filter Status'}));
+      expect(picker.getByRole('checkbox',{name:'Inactive'})).toBeChecked();
+      expect(picker.getByRole('checkbox',{name:'Active'})).not.toBeChecked();
+      fireEvent.click(picker.getByRole('button',{name:'Cancel'}));
+    } else {
+      const options = within(screen.getByRole('combobox',{name:'Status'})).getAllByRole('option').map(option => option.textContent);
+      expect(options).toEqual(journals ? ['All statuses','Invited','Active','Suspended','Closed'] : ['All statuses','Active','Suspended','Deleted']);
+    }
     fireEvent.click(within(member).getByRole('button',{name:'View ' + row.public_id}));
     await screen.findByRole('heading',{name:'Record details'});
     expect(screen.getByText('Status',{selector:'dt'}).nextElementSibling).toHaveTextContent(status[0].toUpperCase()+status.slice(1));

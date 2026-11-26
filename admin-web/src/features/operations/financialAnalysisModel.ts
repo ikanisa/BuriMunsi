@@ -1,8 +1,7 @@
 import type {ReactNode} from 'react';
-import {analyzeFinancialRows, comparable, dateValue, hasCriteria}
+import {analyzeFinancialRows as analyzePaymentRows, comparable, hasCriteria}
   from '../../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
-export {analyzeFinancialRows, hasCriteria};
-type Kind = FinancialColumn<unknown>['kind'];
+export {hasCriteria};
 
 export interface FinancialColumn<T> {
   key: string;
@@ -12,6 +11,10 @@ export interface FinancialColumn<T> {
   render?: (row: T) => ReactNode;
   options?: readonly {value: string; label: string}[];
   align?: 'start' | 'end';
+  exactInteger?: boolean;
+  matchText?: (value: string, query: string) => boolean;
+  filterable?: boolean;
+  sortable?: boolean;
 }
 export interface FinancialSort {key: string; direction: 'asc' | 'desc'}
 export interface ColumnFilter {
@@ -29,11 +32,62 @@ const numberFormat = new Intl.NumberFormat('en-GB', {maximumFractionDigits:20});
 const dateFormat = new Intl.DateTimeFormat('en-GB', {dateStyle:'medium', timeZone:'Africa/Kigali'});
 const timeFormat = new Intl.DateTimeFormat('en-GB', {dateStyle:'medium', timeStyle:'short', timeZone:'Africa/Kigali'});
 const dateOnly = /^\d{4}-\d{2}-\d{2}$/;
+
+function exactInteger(value: string | number | null) {
+  if (value === null) return null;
+  if (typeof value === 'number') return Number.isSafeInteger(value) ? BigInt(value) : null;
+  const raw = value.trim();
+  if (!/^[+-]?(?:\d{1,31}|\d{1,3}(?:,\d{3})+)$/u.test(raw)) return null;
+  const digits = raw.replaceAll(',', '');
+  return digits.replace(/^[+-]/u, '').length <= 31 ? BigInt(digits) : null;
+}
+
+export function analyzeFinancialRows<T>(rows: readonly T[], columns: readonly FinancialColumn<T>[],
+  filters: ColumnFilters, sort?: FinancialSort) {
+  const standardFilters = new Map(filters);
+  const customPredicates = columns.flatMap(column => {
+    if (column.filterable === false) standardFilters.delete(column.key);
+    const filter = standardFilters.get(column.key);
+    if (!filter || !hasCriteria(filter)) return [];
+    if (column.kind === 'number' && column.exactInteger) {
+      standardFilters.delete(column.key);
+      const min = exactInteger(filter.min), max = exactInteger(filter.max);
+      return [(row: T) => {
+        const value = exactInteger(column.value(row));
+        return filter.presence === 'blank' ? value === null :
+          value !== null && (min === null || value >= min) && (max === null || value <= max);
+      }];
+    }
+    const match = column.kind === 'text' ? column.matchText : undefined;
+    if (!match) return [];
+    standardFilters.delete(column.key);
+    const needle = filter.text.trim();
+    return [(row: T) => {
+      const value = comparable(column.value(row), 'text');
+      return filter.presence === 'blank' ? value === null : value !== null && (!needle || match(String(value), needle));
+    }];
+  });
+  const eligible = customPredicates.length ? rows.filter(row => customPredicates.every(test => test(row))) : rows;
+  const orderedColumn = sort && columns.find(column => column.key === sort.key && column.sortable !== false);
+  if (orderedColumn?.kind !== 'number' || !orderedColumn.exactInteger) {
+    return analyzePaymentRows(eligible, columns, standardFilters, orderedColumn ? sort : undefined);
+  }
+  const matching = analyzePaymentRows(eligible, columns, standardFilters);
+  const asc = sort?.direction === 'asc';
+  return matching.map(row => ({row, value: exactInteger(orderedColumn.value(row))})).sort((left, right) => {
+    const {value: a} = left, {value: b} = right;
+    if (a === b) return 0;
+    if (a === null) return 1;
+    if (b === null) return -1;
+    return (a < b) === asc ? -1 : 1;
+  }).map(entry => entry.row);
+}
+
 export function initialColumnFilters<T>(columns: readonly FinancialColumn<T>[], initial?: Readonly<Record<string,string>>): ColumnFilters {
   const filters = new Map<string,ColumnFilter>();
   for (const column of columns) {
     const value = initial && Object.hasOwn(initial,column.key) ? initial[column.key]?.trim() : '';
-    if (!value) continue;
+    if (!value || column.filterable === false) continue;
     if (column.kind === 'text') filters.set(column.key,{...emptyFilter,text:value});
     if (column.kind === 'category') filters.set(column.key,{...emptyFilter,choices:[value]});
   }
@@ -49,32 +103,35 @@ export function describeColumnFilter<T>(column: FinancialColumn<T>, filter: Colu
   }
   if (column.kind === 'number' || column.kind === 'date') {
     const calendar = column.kind === 'date';
-    const display = (raw: string) => calendar ? dateFormat.format(dateValue(raw)!) : numberFormat.format(Number(raw));
-    if (filter.min && filter.max && comparable(filter.min,column.kind) === comparable(filter.max,column.kind)) {
-      parts.push((calendar ? '' : '= ') + display(filter.min));
+    const comparableBound = (bound: string) => column.exactInteger ? exactInteger(bound) : comparable(bound, column.kind);
+    const min = comparableBound(filter.min), max = comparableBound(filter.max);
+    const display = (value: string | number | bigint) => calendar ? dateFormat.format(Number(value)) :
+      numberFormat.format(typeof value === 'bigint' ? value : Number(value));
+    if (min !== null && max !== null && min === max) {
+      parts.push((calendar ? '' : '= ') + display(min));
     } else {
-      if (filter.min) parts.push((calendar ? 'From ' : '≥ ') + display(filter.min));
-      if (filter.max) parts.push((calendar ? 'Through ' : '≤ ') + display(filter.max));
+      if (min !== null) parts.push((calendar ? 'From ' : '≥ ') + display(min));
+      if (max !== null) parts.push((calendar ? 'Through ' : '≤ ') + display(max));
     }
   }
   if (filter.presence === 'present') parts.push('Non-blank');
   return parts.join(' · ');
 }
-export function rangeError(filter: ColumnFilter, kind: Kind): string | undefined {
+export function rangeError(filter: ColumnFilter, {kind, exactInteger: wholeAmount}: Pick<FinancialColumn<unknown>, 'kind' | 'exactInteger'>): string | undefined {
   if (filter.presence === 'blank' || (kind !== 'date' && kind !== 'number')) return;
-  const from = comparable(filter.min,kind), through = comparable(filter.max,kind);
-  if (filter.min && from === null || filter.max && through === null) return kind === 'date' ? 'Enter a valid date.' : 'Enter a valid number.';
+  const parse = (value: string) => wholeAmount ? exactInteger(value) : comparable(value, kind);
+  const from = parse(filter.min), through = parse(filter.max);
+  if (filter.min && from === null || filter.max && through === null) {
+    return kind === 'date' ? 'Enter a valid date.' : wholeAmount ? 'Enter a whole number.' : 'Enter a valid number.';
+  }
   if (from !== null && through !== null && from > through) {
     return kind === 'date' ? 'Enter an end date on or after the start date.' : 'The maximum must be at least the minimum.';
   }
 }
 
-export function categoryChoices<T>(column: FinancialColumn<T>, rows: readonly T[], selected: readonly string[], remote = false) {
+export function categoryChoices<T>(column: FinancialColumn<T>, rows: readonly T[], selected: readonly string[]) {
   const options = new Map((column.options ?? []).map(item => [item.value,item.label]));
-  const values = new Set(selected);
-  // A server-filtered page contains only matching rows. Its declared choices
-  // remain selectable even if none of the current rows has that value.
-  if (remote) for (const value of options.keys()) values.add(value);
+  const values = new Set([...options.keys(), ...selected]);
   for (const row of rows) {
     const value = comparable(column.value(row),'category');
     if (value !== null) values.add(String(value));
@@ -83,9 +140,10 @@ export function categoryChoices<T>(column: FinancialColumn<T>, rows: readonly T[
 }
 
 export function formatAnalysisCell<T>(column: FinancialColumn<T>, row: T): string {
-  const raw = column.value(row), value = comparable(raw,column.kind);
+  const raw = column.value(row);
+  const value = column.kind === 'number' && column.exactInteger ? exactInteger(raw) : comparable(raw,column.kind);
   if (value === null) return '—';
   if (column.kind === 'date') return (typeof raw === 'string' && dateOnly.test(raw) ? dateFormat : timeFormat).format(Number(value));
-  if (column.kind === 'number') return numberFormat.format(Number(value));
+  if (column.kind === 'number') return numberFormat.format(typeof value === 'bigint' ? value : Number(value));
   return column.options?.find(option => option.value === value)?.label ?? String(value);
 }

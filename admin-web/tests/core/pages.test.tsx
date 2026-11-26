@@ -23,8 +23,13 @@ const base: Omit<FeatureAccess, 'request'> = {
 describe('Members refresh', () => {
   const props = {...base, area:'members' as const, scopedMember:true, permissions:['users.read']};
   function roster(name: string, total = 1) {
-    const member = {...fixture.members.rows[0], subtitle:name, display_name:name, membership_status:'active'};
-    return {...fixture.members, rows:[member], total};
+    const rows = Array.from({length:total}, (_,index) => {
+      const collectId = String(index + 1).padStart(6,'0'), id = '70000000-0000-4000-8000-' + collectId.padStart(12,'0');
+      const displayName = index === total - 1 ? name : 'Member ' + collectId;
+      return {...fixture.members.rows[0], id, person_id:id, collect_user_id:id, title:collectId, public_id:collectId,
+        subtitle:displayName, display_name:displayName, membership_status:'active'};
+    });
+    return {...fixture.members, rows, total};
   }
   function pending() {
     let resolve!: (value: unknown) => void, reject!: (error: unknown) => void;
@@ -69,21 +74,21 @@ describe('Members refresh', () => {
     render(<CoreListPage {...props} role="staff" request={request} navigate={navigate}
       locationSearch="?search=member&status=active&sort=public_id_asc&page=2" />);
     await screen.findByText('First member');
-    const region = screen.getByRole('region', {name:'Members records'});
+    const region = screen.getByRole('table', {name:'Members'});
     fireEvent.click(refreshButton());
     expect(refreshButton()).toBeDisabled();
     expect(refreshButton()).toHaveAttribute('aria-busy','true');
     expect(region).toHaveAttribute('aria-busy','true');
     expect(within(region).getByText('First member')).toBeVisible();
     expect(screen.getByRole('textbox',{name:'Search Members'})).toHaveValue('member');
-    expect(screen.getByRole('combobox',{name:'Status'})).toHaveValue('active');
-    expect(screen.getByRole('combobox',{name:'Sort by'})).toHaveValue('public_id_asc');
-    expect(screen.getByText('Showing 26–26 of 26')).toBeVisible();
+    expect(screen.getByRole('button',{name:'Edit Status filter'})).toHaveTextContent('Active');
+    expect(screen.getByRole('columnheader',{name:'Collect ID'})).toHaveAttribute('aria-sort','ascending');
+    expect(screen.getByText('Page 2 of 2')).toBeVisible();
     expect(screen.queryByText('Loading members')).not.toBeInTheDocument();
     fireEvent.click(refreshButton());
     expect(request.mock.calls.map(call=>call[0])).toEqual([
-      'core/members?search=member&status=active&limit=25&offset=25&sort=public_id_asc&country=RW&directory=roster',
-      'core/members?search=member&status=active&limit=25&offset=25&sort=public_id_asc&country=RW&directory=roster',
+      'core/members?directory=roster&country=RW&limit=100&offset=0&sort=created_at_asc',
+      'core/members?directory=roster&country=RW&limit=100&offset=0&sort=created_at_asc',
     ]);
     expect(navigate).not.toHaveBeenCalled();
     await act(async () => fresh.resolve(roster('Updated member',26)));
@@ -111,8 +116,7 @@ describe('Members refresh', () => {
 
   it.each([
     ['session', {authorityKey:'session-b'}], ['actor', {actorId:'22222222-2222-4222-8222-222222222222'}],
-    ['search', {locationSearch:'?search=different'}], ['activity', {locationSearch:'?status=inactive'}],
-    ['sort', {locationSearch:'?sort=public_id_desc'}], ['page', {locationSearch:'?page=2'}],
+    ['principal', {principalId:'22222222-2222-4222-8222-222222222222'}], ['role', {role:'staff' as const}],
   ] as const)('retires the previous rows and its late refresh when the %s changes', async (_, change) => {
     const old = pending(), next = pending();
     const request = vi.fn().mockResolvedValueOnce(roster('Previous member')).mockReturnValueOnce(old.promise).mockReturnValueOnce(next.promise);
@@ -126,7 +130,7 @@ describe('Members refresh', () => {
     expect(screen.queryByText('Superseded member')).not.toBeInTheDocument();
     expect(request.mock.calls[1][1].signal.aborted).toBe(true);
     await act(async () => next.resolve({...fixture.members, rows:[], total:0}));
-    expect(screen.getByText('No records found')).toBeVisible();
+    expect(screen.getByText('No records.')).toBeVisible();
   });
 
   it('removes the refresh control and pending rows when access is revoked', async () => {
@@ -208,8 +212,12 @@ describe('core list access and authority', () => {
     expect(within(row).getByText('Inactive')).toBeVisible();
     const query = new URL(request.mock.calls[0][0], 'https://fixture.invalid').searchParams;
     expect(query.get('directory')).toBe('roster');
-    expect(query.get('status')).toBe('inactive');
-    fireEvent.change(screen.getByRole('combobox', {name: 'Status'}), {target: {value: 'active'}});
+    expect(query.has('status')).toBe(false);
+    fireEvent.click(screen.getByRole('button',{name:'Filter Status'}));
+    const picker = within(screen.getByRole('dialog',{name:'Filter Status'}));
+    fireEvent.click(picker.getByRole('checkbox',{name:'Inactive'}));
+    fireEvent.click(picker.getByRole('checkbox',{name:'Active'}));
+    fireEvent.click(picker.getByRole('button',{name:'Apply filter'}));
     expect(navigate).toHaveBeenCalledWith('/admin/members?status=active');
   });
 
@@ -220,7 +228,7 @@ describe('core list access and authority', () => {
     render(<CoreListPage {...base} area="members" scopedMember permissions={['users.read']} request={request} locationSearch="?status=inactive" />);
     expect(await screen.findByText('Members are temporarily unavailable. Try again.')).toBeVisible();
     fireEvent.click(screen.getByRole('button', {name: 'Try again'}));
-    expect(await screen.findByText('No records found')).toBeVisible();
+    expect(await screen.findByText('No matching records.')).toBeVisible();
     expect(request.mock.calls[1][0]).toBe(request.mock.calls[0][0]);
   });
 

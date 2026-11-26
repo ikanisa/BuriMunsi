@@ -1,4 +1,4 @@
-import {listLocation, readFilters} from './coreListFilters';
+import {safeRosterReturn} from './memberRosterLocation';
 import {safePaymentListReturn} from '../operations/paymentLocations';
 import { useEffect, useState } from 'react';
 import { Button, Card, ErrorState, LoadingState, PageHeader } from '../../ui';
@@ -29,15 +29,15 @@ const fields: Record<CoreArea, readonly [string, string][]> = {
 
 function safeReturn(area: CoreArea, financialModel: FeatureAccess['financialModel'], scopedMember: boolean, raw?: string | null): string {
   const directory = scopedMember && financialModel === 'canonical_evidence_ledger' && (area === 'users' || area === 'members');
-  const fallback = directory ? '/admin/members' : `/admin/${area}`;
+  if (directory) return safeRosterReturn(raw);
+  const fallback = `/admin/${area}`;
   if (!raw || raw.length > 2000 || containsControl(raw, true) || raw.includes('\\') || raw.includes('#') || !raw.startsWith('/') || raw.startsWith('//')) return fallback;
   try {
     const url = new URL(raw, 'https://collect.invalid');
-    const expected = directory ? ['/admin/members', '/admin/users'].includes(url.pathname) : url.pathname === fallback;
-    if (url.origin !== 'https://collect.invalid' || !expected || url.hash) return fallback;
+    if (url.origin !== 'https://collect.invalid' || url.pathname !== fallback || url.hash) return fallback;
     const keys = [...url.searchParams.keys()];
     if (keys.some(key => !['search', 'status', 'sort', 'page'].includes(key)) || new Set(keys).size !== keys.length) return fallback;
-    return directory ? listLocation('members', readFilters(url.search, 'members', financialModel, true)) : `${url.pathname}${url.search}`;
+    return `${url.pathname}${url.search}`;
   } catch { return fallback; }
 }
 

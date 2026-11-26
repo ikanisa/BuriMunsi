@@ -1,19 +1,19 @@
 import type {SourceKind} from './memberRoster';
 
-export const workbookMime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+const workbookMime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const photoTypes = ['image/jpeg', 'image/png', 'image/webp'];
+const extensions: Record<string, string> = {csv:'text/csv', xlsx:workbookMime, pdf:'application/pdf',
+  jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', webp:'image/webp'};
+export const rosterFileAccept = [...Object.keys(extensions).map(ext => '.' + ext), ...new Set(Object.values(extensions))].join(',');
 const mb = 1024 * 1024;
 
-export function describeRosterFile(file: File, photoOnly: boolean): {source: SourceKind; mimeType: string} {
+export function describeRosterFile(file: File): {source: SourceKind; mimeType: string} {
   const extension = file.name.split('.').pop()?.toLowerCase();
-  const extensions: Record<string, string> = {csv:'text/csv', xlsx:workbookMime, pdf:'application/pdf',
-    jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', webp:'image/webp'};
   const reported = file.type.toLowerCase().split(';')[0];
   const type = !reported || reported === 'application/octet-stream' || (reported === 'application/vnd.ms-excel' && extension === 'csv')
     ? extensions[extension ?? ''] : reported;
   let source: SourceKind;
   if (photoTypes.includes(type)) source = 'image';
-  else if (photoOnly) throw new Error('Choose a JPEG, PNG or WebP photo.');
   else if (type === 'application/pdf') source = 'pdf';
   else if (type === workbookMime) source = 'xlsx';
   else if (['text/csv','text/comma-separated-values','application/csv','text/plain'].includes(type)) source = 'csv';

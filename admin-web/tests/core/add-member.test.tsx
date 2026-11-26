@@ -8,6 +8,7 @@ import {AddMemberPage} from '../../src/features/core/AddMemberPage';
 import {canAddMember} from '../../src/features/core/addMemberAccess';
 import {ENROLLMENT_PATH, validateMember} from '../../src/features/core/memberEnrollment';
 import {disclosureVersion, IMPORT_PATH, SUGGESTIONS_PATH} from '../../src/features/core/memberRoster';
+import {describeRosterFile} from '../../src/features/core/rosterFile';
 import {PENDING_KEY} from '../../src/features/core/pendingAttempt';
 import type {AdminUser} from '../../src/session/sessionResponses';
 
@@ -195,13 +196,13 @@ const candidate = {id:'candidate-one',candidateId:'candidate-one',groupId:collec
   latestSeenAt:'2026-11-26T05:00:00Z',sourceCount:2};
 const candidates = {items:[candidate],nextCursor:null,revision:'r1',totalCount:1,asOf:'2026-11-26T05:00:00Z'};
 
-describe('Android member entry paths on the web', () => {
+describe('member entry methods on the web', () => {
   it('opens the scoped method picker, restores focus on dismissal and reopens without fetching suggestions or files', async () => {
     const request = vi.fn<AdminRequest>().mockResolvedValue(scope), user = userEvent.setup();
     open(request);
     const methods = within(await screen.findByRole('dialog',{name:'Add member'}));
     expect(methods.getByRole('list',{name:'Enrollment methods'})).toBeVisible();
-    expect(methods.getAllByRole('listitem')).toHaveLength(5);
+    expect(methods.getAllByRole('listitem').map(row=>row.textContent)).toEqual(['Suggested from MoMo','Add manually','Import member list']);
     expect(methods.getByRole('button',{name:'Close dialog'})).toHaveFocus();
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
@@ -217,24 +218,41 @@ describe('Android member entry paths on the web', () => {
     expect(request.mock.calls.map(([path])=>path)).toEqual([ENROLLMENT_PATH]);
   });
 
-  it('offers five native methods, and camera and photo pickers never upload on selection', async () => {
+  it('opens one native file picker for images and documents, requests OCR only for the selected source and never uploads on selection', async () => {
     const request = vi.fn<AdminRequest>().mockResolvedValue(scope); open(request);
-    for (const method of ['Suggested from MoMo','Add manually','Take a photo of the list','Choose a photo','Import member list']) {
-      expect(await screen.findByRole('button', {name:method})).toBeInTheDocument();
-    }
     const picker = vi.spyOn(HTMLInputElement.prototype, 'click');
-    fireEvent.click(screen.getByRole('button', {name:'Take a photo of the list'}));
-    expect(picker.mock.instances).toContain(screen.getByLabelText('Roster photo'));
+    fireEvent.click(await screen.findByRole('button', {name:'Import member list'}));
+    const input = screen.getByLabelText('Roster file');
+    expect(picker.mock.instances).toEqual([input]);
     picker.mockRestore();
-    expect(screen.getByLabelText('Roster photo')).toHaveAttribute('capture','environment');
+    expect(document.querySelectorAll('input[type="file"]')).toHaveLength(1);
+    expect(input).not.toHaveAttribute('capture');
+    expect(input).not.toHaveAttribute('multiple');
+    const accepts = input.getAttribute('accept')!.split(',');
+    for (const type of ['.csv','.xlsx','.pdf','.jpeg','.jpg','.png','.webp','image/jpeg','image/png','image/webp',
+      'text/csv','application/pdf','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']) expect(accepts).toContain(type);
     const image = new File(['synthetic PNG'], 'list.png', {type:'image/png'});
-    fireEvent.change(screen.getByLabelText('Roster photo'), {target:{files:[image]}});
+    fireEvent.change(input, {target:{files:[image]}});
     expect(screen.getByRole('button', {name:'Send to OpenAI for preview'})).toHaveAccessibleDescription(/Sending this file to OpenAI/);
-    fireEvent.click(screen.getByRole('button', {name:'Back'}));
-    fireEvent.click(screen.getByRole('button', {name:'Choose a photo'}));
-    expect(screen.getByLabelText('Roster photo')).not.toHaveAttribute('capture');
+    fireEvent.change(input, {target:{files:[csv()]}});
     expect(screen.queryByRole('button', {name:'Send to OpenAI for preview'})).not.toBeInTheDocument();
+    expect(screen.getByRole('button', {name:'Preview file'})).toBeEnabled();
+    fireEvent.change(input, {target:{files:[new File(['x'], 'list.gif', {type:'image/gif'})]}});
+    expect(screen.getByRole('alert')).toHaveTextContent('Choose a CSV');
+    expect(screen.getByRole('button', {name:'Preview file'})).toBeDisabled();
     expect(request.mock.calls.some(([,options])=>options?.method === 'POST')).toBe(false);
+  });
+
+  it('keeps document and image validation limits when the system picker provides only an extension', () => {
+    for (const [suffix, source, maxMb] of [['csv','csv',2],['xlsx','xlsx',5],['pdf','pdf',5],
+      ['JPG','image',20],['jpeg','image',20],['PNG','image',20],['webp','image',20]] as const) {
+      const file = new File(['x'], 'list.' + suffix, {type:'application/octet-stream'});
+      Object.defineProperty(file, 'size', {configurable:true,value:maxMb*1024*1024});
+      expect(describeRosterFile(file).source).toBe(source);
+      Object.defineProperty(file, 'size', {value:maxMb*1024*1024+1});
+      expect(()=>describeRosterFile(file)).toThrow('up to ' + maxMb + ' MB');
+    }
+    expect(()=>describeRosterFile(new File([], 'empty.csv'))).toThrow('nonempty');
   });
 
   it('previews CSV, edits and excludes rows, and imports only explicitly reviewed identities', async () => {
@@ -376,7 +394,7 @@ describe('roster import outcomes', () => {
     expect(screen.queryByRole('dialog',{name:'Add member'})).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button',{name:'Choose a method'}));
     const methods = within(screen.getByRole('dialog',{name:'Add member'}));
-    expect(methods.getAllByRole('listitem')).toHaveLength(4);
+    expect(methods.getAllByRole('listitem').map(row=>row.textContent)).toEqual(['Suggested from MoMo','Import member list']);
     expect(methods.queryByRole('button',{name:'Add manually'})).not.toBeInTheDocument();
     returnedRows = [previewRow(1, 'Unrelated name')]; await previewCsv(); await approveRow(1);
     fireEvent.click(screen.getByRole('button',{name:'Retry original import'})); await screen.findByText(/Use the same rows/);

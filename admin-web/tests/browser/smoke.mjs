@@ -323,30 +323,48 @@ try {
   const memberSearch = page.getByLabel('Search Members', {exact: true});
   await memberSearch.waitFor();
   assert.equal(await page.getByRole('navigation', {name: 'Member directory views'}).count(), 0);
-  const memberStatus = page.getByRole('combobox', {name: 'Status', exact: true});
-  assert.deepEqual(await memberStatus.locator('option').allTextContents(), ['All statuses', 'Active', 'Inactive']);
-  const inactiveRoster = page.waitForResponse(response => {
-    const url = new URL(response.url());
-    return url.origin === origin && url.pathname === '/api/admin/core/members' &&
-      url.searchParams.get('directory') === 'roster' && url.searchParams.get('status') === 'inactive' && response.ok();
-  });
-  await memberStatus.selectOption('inactive');
-  await inactiveRoster;
-  const inactiveRow = page.getByRole('row').filter({hasText: fixtureInactiveMember.display_name});
+  const membersTable = page.getByRole('table', {name: 'Members', exact: true});
+  const activeRow = membersTable.getByRole('row').filter({hasText: fixtureMember.display_name});
+  const inactiveRow = membersTable.getByRole('row').filter({hasText: fixtureInactiveMember.display_name});
+  await inactiveRow.waitFor();
+  await membersTable.getByRole('button',{name:'Sort Collect ID ascending',exact:true}).click();
+  await membersTable.locator('th[aria-label="Collect ID"][aria-sort="ascending"]').waitFor();
+  const memberIds = () => membersTable.locator('tbody tr td:first-child').allTextContents();
+  assert.deepEqual(await memberIds(), ['900001','900002']);
+  await membersTable.getByRole('button',{name:'Sort Collect ID descending',exact:true}).click();
+  await membersTable.locator('th[aria-label="Collect ID"][aria-sort="descending"]').waitFor();
+  assert.deepEqual(await memberIds(), ['900002','900001']);
+  const searchMember = async value => {
+    await memberSearch.fill(value);
+    await memberSearch.press('Enter');
+  };
+  await searchMember('eric   SYNTHETIC');
+  await activeRow.waitFor({state:'hidden'});
+  await inactiveRow.waitFor();
+  await searchMember('+250 78-000-0901');
+  await inactiveRow.waitFor({state:'hidden'});
+  await activeRow.waitFor();
+  await searchMember('');
+  await inactiveRow.waitFor();
+  const filterMemberStatus = membersTable.getByRole('button',{name:'Filter Status',exact:true});
+  const memberStatus = page.getByRole('dialog',{name:'Filter Status',exact:true});
+  const applyMemberStatus = () => memberStatus.getByRole('button',{name:'Apply filter',exact:true}).click();
+  await filterMemberStatus.click();
+  await memberStatus.getByRole('checkbox',{name:'Inactive',exact:true}).check();
+  await applyMemberStatus();
+  await activeRow.waitFor({state:'hidden'});
   await inactiveRow.getByRole('cell', {name: 'Inactive', exact:true}).waitFor();
-  const memberRecords = page.getByRole('region', {name: 'Members records', exact: true});
-  await memberRecords.getByRole('columnheader', {name: 'Mobile number', exact: true}).waitFor();
-  const memberHeadings = await memberRecords.getByRole('columnheader').allTextContents();
+  const memberHeadings = await membersTable.getByRole('columnheader').evaluateAll(headers => headers.map(header => header.getAttribute('aria-label')));
   assert.deepEqual(memberHeadings.filter(name => /number|phone|WhatsApp/i.test(name)), ['Mobile number']);
   const refreshedRoster = page.waitForResponse(response => {
     const url = new URL(response.url());
     return url.origin === origin && url.pathname === '/api/admin/core/members' &&
-      url.searchParams.get('directory') === 'roster' && url.searchParams.get('status') === 'inactive' && response.ok();
+      url.searchParams.get('directory') === 'roster' && url.searchParams.get('limit') === '100' && response.ok();
   });
   await page.getByRole('button', {name: 'Refresh Members', exact: true}).click();
   await refreshedRoster;
   await inactiveRow.getByRole('cell', {name: 'Inactive', exact:true}).waitFor();
-  assert.equal(await memberStatus.inputValue(), 'inactive');
+  assert.equal(new URLSearchParams(new URL(page.url()).hash.split('?')[1]).get('status'), 'inactive');
   const scopedDetail = member => page.waitForResponse(response => response.url() === origin + '/api/admin/operations/members/' + member.id + '?include=statement' && response.ok());
   await Promise.all([scopedDetail(fixtureInactiveMember), inactiveRow.getByRole('button', {name:'View ' + fixtureInactiveMember.public_id}).click()]);
   await page.getByRole('heading', {name: 'Record details',exact:true}).waitFor();
@@ -355,15 +373,16 @@ try {
   assert.deepEqual(contactLabels.filter(name => /number|phone|WhatsApp/i.test(name)), ['Mobile number']);
   assert.equal(await page.getByText('Status', {exact:true}).locator('+ dd').textContent(), 'Inactive');
   await page.getByRole('button', {name:'Back to members',exact:true}).click();
-  assert.equal(await memberStatus.inputValue(), 'inactive');
-  await memberStatus.selectOption('active');
-  await page.getByRole('row').filter({hasText: fixtureMember.display_name}).waitFor();
-  await memberSearch.fill('No synthetic member matches');
-  await page.getByRole('button', {name: 'Search', exact: true}).click();
-  await page.getByText('No records found', {exact: true}).waitFor();
-  await memberSearch.fill(fixtureMember.display_name);
-  await page.getByRole('button', {name: 'Search', exact: true}).click();
-  const memberRow = page.getByRole('row').filter({hasText: fixtureMember.display_name});
+  await filterMemberStatus.click();
+  assert.equal(await memberStatus.getByRole('checkbox',{name:'Inactive',exact:true}).isChecked(),true);
+  await memberStatus.getByRole('checkbox',{name:'Inactive',exact:true}).uncheck();
+  await memberStatus.getByRole('checkbox',{name:'Active',exact:true}).check();
+  await applyMemberStatus();
+  await activeRow.waitFor();
+  await searchMember('No synthetic member matches');
+  await page.getByText('No matching records.', {exact: true}).waitFor();
+  await searchMember(fixtureMember.display_name);
+  const memberRow = activeRow;
   const memberReads = [];
   const recordMemberRead = request => {
     const url = new URL(request.url());
@@ -386,7 +405,7 @@ try {
     return url.origin === origin && url.pathname === '/api/admin/burimunsi/payments' && url.searchParams.get('statement') === '1' &&
       url.searchParams.get('memberId') === fixtureMember.id && url.searchParams.get('offset') === '25';
   });
-  await page.getByRole('button',{name:'Next',exact:true}).click();
+  await page.getByRole('button',{name:'Next page',exact:true}).click();
   const nextStatementUrl = new URL((await nextStatementPage).url());
   assert.match(nextStatementUrl.searchParams.get('revision') ?? '',/^[a-f0-9]{64}$/);
   const lastMovement = statement.getByRole('row').filter({hasText:'STATEMENT-26'});
@@ -403,6 +422,18 @@ try {
   await page.keyboard.press('Escape');
   await transactionDetails.waitFor({state:'hidden'});
   assert.equal(await statementRowButton.evaluate(element=>document.activeElement===element),true);
+  await statement.getByRole('button',{name:'Sort Balance (RWF) ascending',exact:true}).click();
+  await statement.getByRole('button',{name:'Sort Balance (RWF) descending',exact:true}).click();
+  const topMovement = statement.locator('tbody tr').first();
+  await topMovement.getByRole('button',{name:'View transaction STATEMENT-25',exact:true}).waitFor();
+  assert.deepEqual((await topMovement.getByRole('cell').allTextContents()).slice(2),['—','200','5,000']);
+  await statement.getByRole('button',{name:'Filter Debit (RWF)',exact:true}).click();
+  const debitFilter = page.getByRole('dialog',{name:'Filter Debit (RWF)',exact:true});
+  await debitFilter.getByLabel('Minimum',{exact:true}).fill('1,000');
+  await debitFilter.getByRole('button',{name:'Apply filter',exact:true}).click();
+  await lastMovement.waitFor();
+  await statement.getByRole('row').filter({hasText:'STATEMENT-25'}).waitFor({state:'hidden'});
+  assert.deepEqual((await lastMovement.getByRole('cell').allTextContents()).slice(2),['1,000','—','4,000']);
   const statementDownload = page.waitForEvent('download');
   await page.getByRole('button',{name:'Download statement',exact:true}).click();
   const downloadedStatement = await statementDownload;
@@ -426,6 +457,22 @@ try {
   await page.waitForURL(url => url.hash === '#/admin/members?' + personBookmark);
   await page.getByRole('row').filter({hasText: fixtureMember.display_name}).waitFor();
   assert.equal(await memberSearch.inputValue(), fixtureMember.display_name);
+
+  await page.getByRole('link',{name:'Add member',exact:true}).click();
+  const memberMethods = page.getByRole('dialog',{name:'Add member',exact:true}).getByRole('list',{name:'Enrollment methods',exact:true});
+  await memberMethods.waitFor();
+  assert.deepEqual(await memberMethods.getByRole('button').allTextContents(),
+    ['Suggested from MoMo','Add manually','Import member list']);
+  const [rosterChooser] = await Promise.all([page.waitForEvent('filechooser'),
+    memberMethods.getByRole('button',{name:'Import member list',exact:true}).click()]);
+  assert.equal(rosterChooser.isMultiple(),false);
+  const rosterFile = page.getByLabel('Roster file',{exact:true});
+  await rosterFile.waitFor();
+  assert.equal(await page.locator('main input[type="file"]').count(),1);
+  assert.equal(await rosterFile.getAttribute('capture'),null);
+  const rosterFormats = (await rosterFile.getAttribute('accept')).toLowerCase();
+  assert.match(rosterFormats,/csv/);
+  assert.match(rosterFormats,/image\/png|\.png/);
 
   await nav.getByRole('link', {name: 'Payments', exact: true}).click();
   await page.getByRole('button', {name: 'Filter FT reference', exact: true}).click();

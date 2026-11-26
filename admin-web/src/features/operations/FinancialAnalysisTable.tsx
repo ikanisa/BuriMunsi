@@ -7,6 +7,9 @@ import {analyzeFinancialRows, categoryChoices, describeColumnFilter, emptyFilter
 import './financialAnalysis.css';
 
 export type {FinancialColumn, FinancialSort} from './financialAnalysisModel';
+type AnalysisCriteria = {filters: ReadonlyMap<string,ColumnFilter>; sort: FinancialSort;
+  onCriteria: (filters: ReadonlyMap<string,ColumnFilter>,sort: FinancialSort) => void};
+
 export interface FinancialAnalysisTableProps<T> {
   rows: readonly T[];
   columns: readonly FinancialColumn<T>[];
@@ -20,8 +23,12 @@ export interface FinancialAnalysisTableProps<T> {
   onPageChange?: (page: number) => void;
   summary?: (matching: readonly T[]) => ReactNode;
   actions?: ReactNode;
-  remote?: {filters: ReadonlyMap<string,ColumnFilter>; sort: FinancialSort; total: number | null; matching: number | null;
-    refreshing?: boolean; error?: ReactNode; onCriteria: (filters: ReadonlyMap<string,ColumnFilter>,sort: FinancialSort)=>void};
+  search?: ReactNode;
+  unfilteredTotal?: number;
+  refreshing?: boolean;
+  loadingLabel?: string;
+  criteria?: AnalysisCriteria;
+  remote?: AnalysisCriteria & {total: number | null; matching: number | null; refreshing?: boolean; error?: ReactNode};
 }
 
 function FilterEditor<T>({column, rows, active, close, apply, remote}: {
@@ -30,12 +37,13 @@ function FilterEditor<T>({column, rows, active, close, apply, remote}: {
   const [draft,setDraft] = useState<ColumnFilter>(active);
   const [error,setError] = useState('');
   const formId = useId();
-  const options = useMemo(() => column.kind === 'category' ? categoryChoices(column,rows,active.choices,remote) : [],[column,rows,active.choices,remote]);
+  const options = useMemo(() => column.kind === 'category' ? categoryChoices(column,rows,active.choices) : [],[column,rows,active.choices]);
+  const wholeAmount = column.kind === 'number' && column.exactInteger;
   const update = (changes: Partial<ColumnFilter>) => {setDraft(current => ({...current,...changes})); setError('');};
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    const invalid = remote && column.kind==='number' && draft.presence!=='blank' &&
-      (!validPaymentAmountBound(draft.min) || !validPaymentAmountBound(draft.max)) ? 'Enter a number that can be compared exactly.' : rangeError(draft,column.kind);
+    const invalid = remote && column.kind==='number' && !wholeAmount && draft.presence!=='blank' &&
+      (!validPaymentAmountBound(draft.min) || !validPaymentAmountBound(draft.max)) ? 'Enter a number that can be compared exactly.' : rangeError(draft,column);
     if (invalid) {setError(invalid); return;}
     apply(draft.presence === 'blank' ? {...emptyFilter,presence:'blank'} : {...draft,text:draft.text.trim()});
   };
@@ -52,12 +60,13 @@ function FilterEditor<T>({column, rows, active, close, apply, remote}: {
             checked={draft.presence === value} onChange={() => update({presence:value})} />{label}</label>)}
       </fieldset>
       {draft.presence !== 'blank' && <>
-        {column.kind === 'text' && <label>Contains<input className="admin-input" type="search" autoComplete="off" maxLength={remote ? 200 : undefined}
+        {column.kind === 'text' && <label>Contains<input className="admin-input" type="search" autoComplete="off" maxLength={200}
           value={draft.text} onChange={event => update({text:event.target.value})} /></label>}
         {range && <div className="financial-filter-range">
           {(['min','max'] as const).map((key,index) => <label key={key}>
             {column.kind === 'date' ? ['From','Through'][index] : ['Minimum','Maximum'][index]}
-            <input className="admin-input" type={column.kind} step={column.kind === 'number' ? 'any' : undefined}
+            <input className="admin-input" type={wholeAmount ? 'text' : column.kind} step={column.kind === 'number' && !wholeAmount ? 'any' : undefined}
+              maxLength={wholeAmount ? 42 : undefined}
               value={draft[key]} onChange={event => update({[key]:event.target.value})}
               aria-invalid={error ? true : undefined} aria-describedby={error ? formId + '-error' : undefined} />
           </label>)}
@@ -75,11 +84,13 @@ function FilterEditor<T>({column, rows, active, close, apply, remote}: {
 }
 
 export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, initialFilters, expanded, label='Payment activity',
-    pageSize=25, page, onPageChange, summary, actions, remote}: FinancialAnalysisTableProps<T>) {
+    pageSize=25, page, onPageChange, summary, actions, search, unfilteredTotal, refreshing, loadingLabel='Loading payments',
+    criteria, remote}: FinancialAnalysisTableProps<T>) {
+  const controller = remote ?? criteria;
   const [localSort,setSort] = useState(initialSort);
-  const sort=remote?.sort ?? localSort;
+  const sort=controller?.sort ?? localSort;
   const [localFilters,setFilters] = useState(() => initialColumnFilters(columns,initialFilters));
-  const filters=remote?.filters ?? localFilters;
+  const filters=controller?.filters ?? localFilters;
   const [editing,setEditing] = useState<string | null>(null);
   const filterOpener = useRef<HTMLButtonElement | null>(null), filterHeaders = useRef(new Map<string,HTMLButtonElement>());
   const [navigation,setNavigation] = useState<{position:number; given?:number; revealed?:string}>({position:page ?? 1,given:page});
@@ -89,7 +100,7 @@ export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, i
   useFocusScope(maximized,panel,() => setMaximized(false),expandControl);
   const matching = useMemo(() => remote ? rows : analyzeFinancialRows(rows,columns,filters,sort),[rows,columns,filters,sort,remote]);
   const size = Number.isSafeInteger(pageSize) && pageSize > 0 ? pageSize : 25;
-  const total = remote ? remote.total : rows.length, matched = remote ? remote.matching : matching.length;
+  const total = remote ? remote.total : unfilteredTotal ?? rows.length, matched = remote ? remote.matching : matching.length;
   const count = matched === null ? null : Math.max(1,Math.ceil(matched / size));
   const selected = expanded?.key;
   const selectedIndex = !remote && selected && selected !== navigation.revealed ? matching.findIndex(row => rowKey(row) === selected) : -1;
@@ -102,8 +113,9 @@ export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, i
   }
   const offset = (current - 1) * size;
   const visible = remote ? rows : matching.slice(offset,offset + size);
-  const activeColumns = columns.filter(column => filters.has(column.key));
-  const editor = columns.find(column => column.key === editing);
+  const activeColumns = columns.filter(column => column.filterable !== false && filters.has(column.key));
+  const filteredResults = activeColumns.length > 0 || total !== null && matched !== null && total !== matched;
+  const editor = columns.find(column => column.key === editing && column.filterable !== false);
   const changePage = (next: number) => {
     if (page === undefined) setNavigation(previous => ({...previous,position:next}));
     else if (next !== page) onPageChange?.(next);
@@ -118,7 +130,7 @@ export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, i
   const apply = (column: string, filter: ColumnFilter) => {
     const next = new Map(filters);
     if (hasCriteria(filter)) next.set(column,filter); else next.delete(column);
-    if (remote) remote.onCriteria(next,remote.sort);
+    if (controller) controller.onCriteria(next,controller.sort);
     else {setFilters(next); changePage(1);}
     setEditing(null);
     // Clearing a filter removes its chip. The column still provides a keyboard return destination.
@@ -127,20 +139,21 @@ export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, i
     }
   };
   const clearAll = () => {
-    if (remote) remote.onCriteria(new Map(),remote.sort);
+    if (controller) controller.onCriteria(new Map(),controller.sort);
     else {setFilters(new Map()); changePage(1);}
   };
   const sortBy = (column: FinancialColumn<T>, direction: FinancialSort['direction']) => {
     const next = {key:column.key,direction};
-    if (remote) remote.onCriteria(filters,next);
+    if (controller) controller.onCriteria(filters,next);
     else {setSort(next); changePage(1);}
   };
   const loading = count === null && !remote?.error;
   return <div ref={panel} className={'financial-analysis' + (maximized ? ' financial-analysis--expanded' : '')}
     role={maximized ? 'dialog' : undefined} aria-modal={maximized || undefined} aria-label={maximized ? label : undefined}>
     <div className="financial-analysis-tools">
+      {search}
       {total !== null && matched !== null && <span className="financial-analysis-count" role="status">
-        {activeColumns.length ? matched + ' of ' + total : total}{total === 1 ? ' record' : ' records'}</span>}
+        {filteredResults ? matched + ' of ' + total + ' records' : total + (total === 1 ? ' record' : ' records')}</span>}
       <button ref={expandControl} type="button" className="financial-analysis-expand" onClick={() => setMaximized(value => !value)}
         aria-label={maximized ? 'Restore table' : 'Expand table'} aria-expanded={maximized}>
         <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d={maximized ?
@@ -160,24 +173,25 @@ export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, i
       <button type="button" className="financial-analysis-clear" onClick={clearAll}>Clear all filters</button>
     </div>}
     <div className="financial-analysis-scroll" role="region" aria-label={label + ' table scroll area'} tabIndex={0}>
-      <table className="financial-analysis-grid" aria-label={label} aria-busy={loading || remote?.refreshing || undefined}>
+      <table className="financial-analysis-grid" aria-label={label} aria-busy={loading || refreshing || remote?.refreshing || undefined}>
         <thead><tr>{columns.map((column,index) => {
-          const selectedSort = sort?.key === column.key ? sort.direction : undefined;
+          const selectedSort = column.sortable !== false && sort?.key === column.key ? sort.direction : undefined;
           const next = selectedSort === 'asc' ? 'desc' : 'asc';
-          const filtered = filters.has(column.key), filteredId = instance + '-filtered-' + index;
+          const filtered = column.filterable !== false && filters.has(column.key), filteredId = instance + '-filtered-' + index;
           return <th key={column.key} scope="col" aria-label={column.label}
             className={column.align === 'end' || !column.align && column.kind === 'number' ? 'financial-analysis-number' : undefined}
             aria-sort={selectedSort ? selectedSort === 'asc' ? 'ascending' : 'descending' : undefined}>
             <div className="financial-analysis-heading">
+              {column.sortable === false ? <CompactText>{column.label}</CompactText> :
               <button type="button" className="financial-analysis-sort" onClick={() => sortBy(column,next)}
                 aria-label={'Sort ' + column.label + (next === 'asc' ? ' ascending' : ' descending')}>
                 <CompactText>{column.label}</CompactText><span className="financial-analysis-sort-mark" data-direction={selectedSort} aria-hidden="true">
                   {selectedSort === 'asc' ? '↑' : selectedSort === 'desc' ? '↓' : '↕'}</span>
-              </button>
-              <button type="button" className="financial-analysis-filter" data-filtered={filtered || undefined}
+              </button>}
+              {column.filterable !== false && <button type="button" className="financial-analysis-filter" data-filtered={filtered || undefined}
                 aria-label={'Filter ' + column.label} aria-haspopup="dialog" aria-expanded={editing === column.key}
                 ref={element => {if (element) filterHeaders.current.set(column.key,element); else filterHeaders.current.delete(column.key);}}
-                aria-describedby={filtered ? filteredId : undefined} onClick={event=>{filterOpener.current=event.currentTarget;setEditing(column.key);}}><Icon name="filter" /></button>
+                aria-describedby={filtered ? filteredId : undefined} onClick={event=>{filterOpener.current=event.currentTarget;setEditing(column.key);}}><Icon name="filter" /></button>}
               {filtered && <span className="financial-analysis-sr" id={filteredId}>Filter applied</span>}
             </div>
           </th>;
@@ -196,11 +210,11 @@ export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, i
           </td></tr>}</Fragment>;
         })}
         {!visible.length && count !== null && <tr><td colSpan={Math.max(1,columns.length)} className="financial-analysis-empty">
-          <span>{activeColumns.length ? 'No matching records.' : 'No records.'}</span></td></tr>}
+          <span>{filteredResults ? 'No matching records.' : 'No records.'}</span></td></tr>}
         </tbody>
       </table>
     </div>
-    {loading && <LoadingState label="Loading payments" layout="table" />}
+    {loading && <LoadingState label={loadingLabel} layout="table" />}
     {remote?.error}
     {summary && <div className="financial-analysis-summary admin-content-enter">{summary(matching)}</div>}
     {count !== null && count > 1 && <nav className="financial-analysis-pager" aria-label={label + ' pages'}>

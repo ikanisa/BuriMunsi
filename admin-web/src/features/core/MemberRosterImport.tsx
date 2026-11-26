@@ -121,7 +121,7 @@ export function MemberRosterImport({initialMode, fileInput, group, request, iden
         <Button variant="primary" onClick={()=>void register()} disabled={!verified.length || !!working} loading={working === 'saving'}>
           {pending ? 'Retry original import' : `Register verified members (${verified.length})`}</Button></div>
     </> : mode === 'suggestions' ? <RosterSuggestions {...{request,group}} onSelect={chooseCandidate} onBack={chooseAgain} />
-      : mode ? <RosterUpload key={mode} {...{mode,request,isCurrent,fileInput}} onPreview={preview} onBack={chooseAgain} />
+      : mode === 'file' ? <RosterUpload {...{request,isCurrent,fileInput}} onPreview={preview} onBack={chooseAgain} />
       : <EnrollmentMethods recovering fileInput={fileInput} choose={value=>{if (value !== 'manual') setMode(value);}} />)}
   </div>;
 }

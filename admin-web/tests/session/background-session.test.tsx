@@ -236,7 +236,8 @@ describe('scheduled Admin session checks', () => {
       expect({checks, searches, detailReads}).toEqual({checks: 5, searches: [''], detailReads: 0});
       fireEvent.click(screen.getByRole('button', {name: 'Search'}));
       await screen.findByRole('button', openRecord);
-      expect(searches).toEqual(['', 'recorded']);
+      expect(router.state.location.search).toBe('?search=recorded');
+      expect(searches).toEqual(['']);
       fireEvent.click(screen.getByRole('button', openRecord));
       await screen.findByRole('heading', {name: 'Record details'});
       expect(screen.getByText(member.display_name)).toBeVisible();

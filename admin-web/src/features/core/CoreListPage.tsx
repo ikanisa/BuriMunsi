@@ -3,8 +3,9 @@ import {Link} from 'react-router';
 import { useCallback, useMemo, useState, type ComponentProps } from 'react';
 import { CompactText, Button, Card, EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge } from '../../ui';
 import {useOperationRead} from '../operations/useOperationRead';
-import { containsControl, formatField, formatMoney, label, memberMobileNumber, parseCorePage, parseMemberRosterPage, paymentReference } from './contracts';
+import { containsControl, formatField, formatMoney, label, memberMobileNumber, parseCorePage, paymentReference } from './contracts';
 import { coreListAction } from './coreRecordActions';
+import {MemberRosterPage} from './MemberRosterPage';
 import {MemberDirectoryActions, MemberDirectoryViews} from './MemberDirectory';
 import {baseSorts, listLocation, listStatuses, readFilters, type Filters} from './coreListFilters';
 import type { CoreArea, DataRow, FeatureAccess, FinancialModel } from './types';
@@ -65,28 +66,29 @@ function columns(area: CoreArea, model: FinancialModel): { label: string; compac
   }
 }
 
-export function CoreListPage({ area, request, permissions, actorId, role, authorityKey, financialModel, navigate, locationSearch = '',
-  allowMutations = false, paymentsWorkspace = false, simplePayments = false, scopedMember = false, memberActions }: ListProps) {
+export function CoreListPage(props: ListProps) {
+  if (props.scopedMember && props.area === 'members' && props.financialModel === 'canonical_evidence_ledger') {
+    return <MemberRosterPage key={JSON.stringify([props.authorityKey,props.actorId,props.principalId,props.role])} {...props} />;
+  }
+  return <CoreList {...props} />;
+}
+
+function CoreList({ area, request, permissions, actorId, role, authorityKey, financialModel, navigate, locationSearch = '',
+  allowMutations = false, paymentsWorkspace = false, simplePayments = false }: ListProps) {
   const allowed = permissions.includes(CORE_PERMISSIONS[area]);
-  const roster = scopedMember && area === 'members' && financialModel === 'canonical_evidence_ledger';
-  const filter = useMemo(() => readFilters(locationSearch, area, financialModel, roster), [locationSearch, area, financialModel, roster]);
+  const filter = useMemo(() => readFilters(locationSearch, area, financialModel), [locationSearch, area, financialModel]);
   const [draftState, setDraftState] = useState({ base: filter.search, value: filter.search });
   const draft = draftState.base === filter.search ? draftState.value : filter.search;
   const offset = (filter.page - 1) * PAGE_SIZE;
   const query = new URLSearchParams({search: filter.search, status: filter.status, limit: String(PAGE_SIZE),
     offset: String(offset), sort: filter.sort, country: 'RW'});
-  if (roster) query.set('directory', 'roster');
   const path = `core/${area}?${query}`;
   const load = useCallback(async (signal: AbortSignal) => {
-    const data = await request(path, {signal}).catch((error: unknown) => {
-      const temporarilyUnavailable = roster && error instanceof AdminRequestError && error.statusCode === 503;
-      throw new AdminRequestError(temporarilyUnavailable ? 'Members are temporarily unavailable. Try again.' : recordsUnavailable);
-    });
-    return roster ? parseMemberRosterPage(data, PAGE_SIZE, offset, filter.status)
-      : parseCorePage(data, area, financialModel, PAGE_SIZE, offset, filter.status);
-  }, [request, path, roster, area, financialModel, offset, filter.status]);
+    const data = await request(path, {signal}).catch(() => {throw new AdminRequestError(recordsUnavailable);});
+    return parseCorePage(data, area, financialModel, PAGE_SIZE, offset, filter.status);
+  }, [request, path, area, financialModel, offset, filter.status]);
   const {result, retry, refreshing} = useOperationRead(JSON.stringify([authorityKey, actorId, financialModel, path]), allowed, load,
-    {retainDuringRefresh: roster, reuseSettledOnResume: roster, invalidResponse: recordsUnavailable});
+    {invalidResponse: recordsUnavailable});
   const page = result?.status === 'success' ? result.value : null;
 
   const update = (changes: Partial<Filters>) => navigate(listLocation(area, { ...filter, ...changes }, paymentsWorkspace));
@@ -95,11 +97,8 @@ export function CoreListPage({ area, request, permissions, actorId, role, author
   const title = memberDirectory ? 'Members' : AREA_TITLES[area];
   const action = coreListAction({area, role, permissions, financialModel, allowed, allowMutations});
   return <>
-    {!paymentsWorkspace && <PageHeader title={title} subtitle={descriptions[area]} actions={roster && allowed ? <>
-      <Button icon="refresh" aria-label="Refresh Members" title="Refresh Members" loading={!result || refreshing} onClick={retry} />
-      {memberActions && <MemberDirectoryActions {...memberActions} />}</> :
-      action ? <Button type="button" onClick={() => navigate(action.path)}>{action.label}</Button> : undefined} />}
-    {allowed && memberDirectory && !roster && <MemberDirectoryViews area={area} />}
+    {!paymentsWorkspace && <PageHeader title={title} subtitle={descriptions[area]} actions={action ? <Button type="button" onClick={() => navigate(action.path)}>{action.label}</Button> : undefined} />}
+    {allowed && memberDirectory && <MemberDirectoryViews area={area} />}
     {!allowed ? <ErrorState title="Access unavailable" message="Your account does not have permission to view this page." /> : <Card>
       <div className="core-toolbar">
         {!memberDirectory && !paymentsWorkspace && <div><h2>{AREA_TITLES[area]} list</h2><p>Search and review records</p></div>}
@@ -112,7 +111,7 @@ export function CoreListPage({ area, request, permissions, actorId, role, author
       </div>
       <div className="core-filters">
         <label>Status <select className="admin-input" value={filter.status} onChange={event => update({ status: event.target.value, page: 1 })}>
-          <option value="">All statuses</option>{listStatuses(area, financialModel, roster).map(value => <option key={value} value={value}>{label(value)}</option>)}
+          <option value="">All statuses</option>{listStatuses(area, financialModel).map(value => <option key={value} value={value}>{label(value)}</option>)}
         </select></label>
         <label>Sort by <select className="admin-input" value={filter.sort} onChange={event => update({ sort: event.target.value, page: 1 })}>
           {baseSorts[area].flatMap(([field, name]) => [<option key={`${field}_asc`} value={`${field}_asc`}>{name} · ascending</option>, <option key={`${field}_desc`} value={`${field}_desc`}>{name} · descending</option>])}
@@ -125,7 +124,7 @@ export function CoreListPage({ area, request, permissions, actorId, role, author
           <table className={paymentsWorkspace ? "admin-table operations-receipt-table" : "admin-table"} role="table"><thead role="rowgroup"><tr role="row">{tableColumns.map(column => <th role="columnheader" scope="col" key={column.label}><CompactText cell>{column.label}</CompactText></th>)}<th role="columnheader" scope="col">Status</th>{!paymentsWorkspace && <th role="columnheader" scope="col">Open</th>}</tr></thead>
             <tbody role="rowgroup">{page.rows.map(row => {
               const href = recordLocation(area, row.id, listLocation(area, filter, paymentsWorkspace));
-              const status = roster ? String(row.membership_status) : row.status;
+              const status = row.status;
               return <tr key={row.id} role="row">{tableColumns.map((column, index) => {
                 const value = column.value(row);
                 const text = column.compact ? <CompactText cell>{value}</CompactText> : value;

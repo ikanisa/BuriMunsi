@@ -119,6 +119,30 @@ export function parseStatementPage(raw: unknown, memberId: string, membership: P
   return result;
 }
 
+export type StatementPage = ReturnType<typeof parseStatementPage>;
+export type StatementPayment = StatementPage['items'][number];
+
+export async function readCompleteMemberStatement(current: StatementPage, membership: ProfileMembership, request: AdminRequest, signal: AbortSignal) {
+  const items: StatementPayment[] = [], ids = new Set<string>();
+  let running = 0n;
+  for (let offset = 0; offset < current.totalCount; offset += memberStatementPageSize) {
+    signal.throwIfAborted();
+    const page = offset === current.offset ? current : await readMemberStatementPage(request, signal, current.memberId, membership,
+      {offset, revision: current.revision});
+    if (page.totalCount !== current.totalCount || page.closingRwf !== current.closingRwf) throw new Error('The statement changed.');
+    for (const payment of page.items) {
+      running += BigInt(payment.amountRwf) * (payment.direction === 'incoming' ? 1n : -1n);
+      if (ids.has(payment.id) || running !== payment.balanceRwf) throw new Error('The transaction history could not be verified.');
+      ids.add(payment.id);
+      items.push(payment);
+    }
+  }
+  signal.throwIfAborted();
+  if (items.length !== current.totalCount || running !== current.closingRwf) throw new Error('The closing balance could not be verified.');
+  return {transactions: items, closingRwf: current.closingRwf};
+}
+export type CompleteMemberStatement = Awaited<ReturnType<typeof readCompleteMemberStatement>>;
+
 export async function readMemberStatement(request: AdminRequest, signal: AbortSignal, memberId: string, actorId: string,
   expectedGroup: string | undefined, position: MemberStatementPosition) {
   const initial = position.offset === 0 && position.revision === undefined;

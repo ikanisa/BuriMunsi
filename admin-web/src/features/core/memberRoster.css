@@ -1,0 +1,16 @@
+.member-roster-search {
+  display: flex;
+  flex: 0 1 22rem;
+  align-items: center;
+  gap: .25rem;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+.member-roster-search input {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  min-block-size: 2.25rem;
+}
+@container (max-width: 32rem) {
+  .member-roster-search { flex-basis: 100%; }
+}

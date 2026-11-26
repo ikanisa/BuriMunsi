@@ -109,6 +109,32 @@ describe('financial analysis grid',()=>{
     await user.click(button('Clear all filters')); expect(ids()).toHaveLength(6);
   });
 
+  it('sorts and filters adjacent large integer balances without rounding, leaving blanks last', async () => {
+    const movements = [
+      {id:'Above', balance:'900719925474099300000000001'},
+      {id:'Equal', balance:'900719925474099300000000000'},
+      {id:'Debit', balance:'-5000'},
+      {id:'Blank', balance:null},
+    ];
+    const statementColumns: FinancialColumn<(typeof movements)[number]>[] = [
+      {key:'id', label:'Reference', kind:'text', value:row=>row.id},
+      {key:'balance', label:'Balance', kind:'number', exactInteger:true, value:row=>row.balance},
+    ];
+    render(<FinancialAnalysisTable label="Payments" rows={movements} columns={statementColumns} rowKey={row=>row.id}/>);
+    const user = userEvent.setup();
+    await user.click(button('Sort Balance ascending'));
+    expect(ids()).toEqual(['Debit','Equal','Above','Blank']);
+    await user.click(button('Sort Balance descending'));
+    expect(ids()).toEqual(['Above','Equal','Debit','Blank']);
+    const {dialog} = await filter('Balance');
+    const bound = '900,719,925,474,099,300,000,000,000';
+    await user.type(dialog.getByLabelText('Minimum'), bound);
+    await user.type(dialog.getByLabelText('Maximum'), bound);
+    await user.click(dialog.getByRole('button',{name:'Apply filter'}));
+    expect(ids()).toEqual(['Equal']);
+    expect(button('Edit Balance filter')).toHaveTextContent('Balance = ' + bound);
+  });
+
   it('combines multiple category choices and preserves an already-applied filter on cancel or Escape',async()=>{
     render(sample({pageSize:10,initialFilters:{state:'pending',missing:'no effect'}}));
     expect(ids()).toEqual(['Three','Five']);

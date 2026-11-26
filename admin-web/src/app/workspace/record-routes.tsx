@@ -5,7 +5,7 @@ import {isValidId} from '../../features/operations/contracts';
 import {CORE_PERMISSIONS, type CoreArea} from '../../features/core/types';
 import {canAddMember} from '../../features/core/addMemberAccess';
 import {canReadMemberStatement} from '../../features/core/memberStatement';
-import {listLocation, readFilters} from '../../features/core/coreListFilters';
+import {readRosterCriteria, rosterLocation, safeRosterReturn} from '../../features/core/memberRosterLocation';
 import {useSession} from '../../session/SessionProvider';
 import {usesPhoneCanonicalRecords} from '../../session/sessionContext';
 import {UnavailablePage} from '../UnavailablePage';
@@ -40,7 +40,7 @@ function PeopleListRoute() {
   const {search} = useLocation();
   const session = useSession();
   if (!usesPhoneCanonicalRecords(session)) return <CoreListRoute area="users" />;
-  return <Navigate replace to={listLocation('members', readFilters(search, 'members', 'canonical_evidence_ledger', true))} />;
+  return <Navigate replace to={rosterLocation(readRosterCriteria(search))} />;
 }
 
 function MemberListRoute() {
@@ -68,8 +68,7 @@ function MemberStatementRoute() {
   const access = useAccess(), session = useSession(), {id = ''} = useParams(), {search} = useLocation();
   if (!usesPhoneCanonicalRecords(session)) return <UnavailablePage title="Member statement" />;
   const raw = new URLSearchParams(search).get('returnTo');
-  const returnTo = raw?.startsWith('/admin/members?') ? listLocation('members',
-    readFilters(raw.slice('/admin/members'.length), 'members', 'canonical_evidence_ledger', true)) : undefined;
+  const returnTo = raw ? safeRosterReturn(raw) : undefined;
   return <MemberStatementPage key={JSON.stringify([access.authorityKey, id])} {...access} id={id}
     returnTo={returnTo} expectedGroup={session.user?.adminIdentity?.collectionId} />;
 }

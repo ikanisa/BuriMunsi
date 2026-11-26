@@ -6,11 +6,11 @@ import {createHash} from 'node:crypto';
 export const fixtureMember = {
   ...core.members.rows[0], membership_status: 'active', title: '900001', public_id: '900001',
   subtitle: 'Synthetic member Ada', display_name: 'Synthetic member Ada',
-  phone_e164: null, email: null, whatsapp_number: null, momo_number: null, phone_masked: null,
+  phone_e164: null, email: null, whatsapp_number: null, momo_number: '0780000901', phone_masked: null,
 };
 const inactiveId = '94949494-9494-4494-8494-909090909090';
 export const fixtureInactiveMember = {...fixtureMember, id:inactiveId, person_id:inactiveId, collect_user_id:inactiveId,
-  title:'900002', public_id:'900002', subtitle:'Synthetic member Eric', display_name:'Synthetic member Eric',
+  title:'900002', public_id:'900002', subtitle:'Synthetic member Éric', display_name:'Synthetic member Éric', momo_number:null,
   membership_status:'inactive', active_groups:0, amount:'0 groups'};
 export const fixtureMembers = {...core.members, rows:[fixtureMember, fixtureInactiveMember], total:2};
 export function fixtureMembership(member) {
@@ -61,10 +61,12 @@ export const fixtureMomoPaymentsOnlyDetail = {
 
 export function readMemberList(params) {
   const search = (params.get('search') ?? '').toLowerCase(), status = params.get('status') ?? '';
-  const offset = Number(params.get('offset') ?? 0);
+  const offset = Number(params.get('offset') ?? 0), limit = Number(params.get('limit') ?? 25);
   const rows = fixtureMembers.rows.filter(member => (!search || `${member.display_name} ${member.public_id}`.toLowerCase().includes(search)) &&
     (!status || member.membership_status === status));
-  return {...fixtureMembers, rows: rows.slice(offset, offset + 25), total: rows.length};
+  if (params.get('sort') === 'created_at_asc') rows.sort((first, second) =>
+    first.created_at.localeCompare(second.created_at) || first.id.localeCompare(second.id));
+  return {...fixtureMembers, rows: rows.slice(offset, offset + limit), total: rows.length};
 }
 
 export function readMomoList(params) {

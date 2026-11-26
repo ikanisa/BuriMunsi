@@ -5,12 +5,10 @@ import {CompactText, Button, Dialog, ErrorState, Icon, LoadingState} from '../..
 import {useOperationRead} from '../operations/useOperationRead';
 import {disclosureVersion, IMPORT_PATH, readRosterPreview, readSuggestions, SUGGESTIONS_PATH,
   type PreviewRow, type RosterCandidate, type SourceKind} from './memberRoster';
-import {describeRosterFile, rosterFileBytes, workbookMime} from './rosterFile';
+import {describeRosterFile, rosterFileAccept, rosterFileBytes} from './rosterFile';
 
-export type UploadMode = 'camera' | 'photo' | 'file';
-export const methodLabels = {suggestions:'Suggested from MoMo', manual:'Add manually', camera:'Take a photo of the list',
-  photo:'Choose a photo', file:'Import member list'} as const;
-const icons = {suggestions:'users', manual:'edit', camera:'smartphone', photo:'layers', file:'file'} as const;
+export const methodLabels = {suggestions:'Suggested from MoMo', manual:'Add manually', file:'Import member list'} as const;
+const icons = {suggestions:'users', manual:'edit', file:'file'} as const;
 export type EnrollmentMode = keyof typeof methodLabels;
 export function EnrollmentMethods({choose, fileInput, recovering = false}: {choose: (mode: EnrollmentMode) => void;
   fileInput: RefObject<HTMLInputElement | null>; recovering?: boolean}) {
@@ -23,8 +21,8 @@ export function EnrollmentMethods({choose, fileInput, recovering = false}: {choo
     }
   }, [open]);
   function select(mode: EnrollmentMode) {
-    if (mode === 'manual' || mode === 'suggestions') {choose(mode); return;}
-    // The system file or camera picker must open during the operator's original gesture.
+    if (mode !== 'file') {choose(mode); return;}
+    // Open the system file picker during the operator's original gesture.
     flushSync(()=>choose(mode));
     fileInput.current?.click();
   }
@@ -91,7 +89,7 @@ function previewFailure(error: unknown) {
 }
 
 interface Selection {file: File; source: SourceKind; mimeType: string; flow: string;}
-export function RosterUpload({mode, fileInput, request, isCurrent, onPreview, onBack}: {mode: UploadMode;
+export function RosterUpload({fileInput, request, isCurrent, onPreview, onBack}: {
   fileInput: RefObject<HTMLInputElement | null>; request: AdminRequest;
   isCurrent: () => boolean; onPreview: (rows: PreviewRow[]) => void; onBack: () => void}) {
   const [selection, setSelection] = useState<Selection | null>(null), [error, setError] = useState('');
@@ -100,7 +98,7 @@ export function RosterUpload({mode, fileInput, request, isCurrent, onPreview, on
   function choose(file?: File) {
     flight.current?.abort(); flight.current = null; setWorking(false); setError(''); setSelection(null);
     if (!file) return;
-    try {setSelection({file, ...describeRosterFile(file, mode !== 'file'), flow:crypto.randomUUID()});}
+    try {setSelection({file, ...describeRosterFile(file), flow:crypto.randomUUID()});}
     catch (error) {setError(error instanceof Error ? error.message : 'Choose a supported roster file.');}
   }
   const needsOcr = selection?.source === 'image' || selection?.source === 'pdf';
@@ -120,12 +118,11 @@ export function RosterUpload({mode, fileInput, request, isCurrent, onPreview, on
       if (flight.current === controller) {flight.current = null; if (!controller.signal.aborted && isCurrent()) setWorking(false);}
     }
   }
-  return <section className="members-journey"><h2>{methodLabels[mode]}</h2>
-    <div className="admin-field"><label htmlFor="roster-file">{mode === 'file' ? 'Roster file' : 'Roster photo'}</label>
-      <input className="admin-input members-roster-file" ref={fileInput} id="roster-file" type="file" capture={mode === 'camera' ? 'environment' : undefined}
-        accept={mode === 'file' ? '.csv,.xlsx,.pdf,text/csv,application/pdf,' + workbookMime + ',image/jpeg,image/png,image/webp' : mode === 'camera' ? 'image/*' : 'image/jpeg,image/png,image/webp'}
+  return <section className="members-journey"><h2>{methodLabels.file}</h2>
+    <div className="admin-field"><label htmlFor="roster-file">Roster file</label>
+      <input className="admin-input members-roster-file" ref={fileInput} id="roster-file" type="file" accept={rosterFileAccept}
         onChange={e=>choose(e.target.files?.[0])} aria-describedby="roster-file-hint" />
-      <p id="roster-file-hint">{mode === 'file' ? 'CSV, Excel, PDF or photo. For a spreadsheet, include Name and Phone columns.' : 'Use a clear photo showing the names and full mobile numbers.'}</p></div>
+      <p id="roster-file-hint">Choose a CSV, Excel (.xlsx), PDF, JPEG, PNG or WebP file. For spreadsheets, include Name and Phone columns.</p></div>
     {selection && <div><strong className="admin-compact-text" title={selection.file.name}>{selection.file.name}</strong>
       {needsOcr && <p id="roster-disclosure">Sending this file to OpenAI permits text extraction for this preview. You can review and edit every row before registering members.</p>}
     </div>}

@@ -4,7 +4,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 export const fixtureAdminId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 export const fixtureInitialPasscode = '2468';
 const roles = {
-  admin: ['overview.read', 'collections.read', 'users.read', 'receivers.read', 'receivers.manage', 'payments.read',
+  admin: ['overview.read', 'collections.read', 'collections.manage', 'users.read', 'users.manage', 'roster.import', 'receivers.read', 'receivers.manage', 'payments.read',
     'ledger.read', 'reconciliations.read', 'sms.read', 'sms.reveal', 'gateway.read', 'account.manage', 'admin_users.read', 'admin_users.manage'],
   staff: ['overview.read'],
 };
