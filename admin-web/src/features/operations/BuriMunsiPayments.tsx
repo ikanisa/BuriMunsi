@@ -56,7 +56,7 @@ const defaultSort: FinancialSort={key:'time',direction:'desc'};
 const categoryBookmarks = [{key:'allocation',kind:'category'},{key:'direction',kind:'category'}] as const;
 
 function ScopedPaymentRecords() {
-  const {epoch, request, user} = useSession(), [params, setParams] = useSearchParams();
+  const {epoch, request, status, user} = useSession(), [params, setParams] = useSearchParams();
   const location = useLocation(), navigate = useNavigate();
   const [confirmation, setConfirmation] = useState(''), [detailRevision, setDetailRevision] = useState(0);
   const [allocationRevision, setAllocationRevision] = useState(0);
@@ -88,8 +88,16 @@ function ScopedPaymentRecords() {
   const data = result?.status === 'success' ? result.value : null;
   const rows = data?.items ?? [];
   const scopedGroup = group ?? rows[0]?.groupId;
-  const detailRead = usePaymentDetail(selected, scopedGroup, !!group || !!result,
-    rows.find(row => row.id === selected)?.version, JSON.stringify([payload, detailRevision, allocationRevision]));
+  const prefetchStaff = !group && user?.role === 'staff' && user.authMethod === 'phone_passcode';
+  const detailScopeConfirmed = !!group || result?.status === 'success' || !prefetchStaff && !!result;
+  const detailRead = usePaymentDetail(selected, {
+    requestGroup: prefetchStaff ? undefined : scopedGroup,
+    expectedGroup: scopedGroup,
+    start: detailScopeConfirmed || prefetchStaff && status === 'authenticated' && !result,
+    publish: detailScopeConfirmed,
+    seenVersion: rows.find(row => row.id === selected)?.version,
+    listContext: JSON.stringify([payload, detailRevision, allocationRevision]),
+  });
   const refresh = () => {
     retry();
     if (selected) setDetailRevision(value => value + 1);
@@ -131,7 +139,7 @@ function ScopedPaymentRecords() {
   ];
   if (canReadSms) columns.push({key:'sms',label:'SMS evidence',kind:'category',value:r=>r.sourceId ? 'linked' : 'none',
     options:[{value:'linked',label:'Linked'},{value:'none',label:'None linked'}],render:r=>r.sourceId ? rowButton(r,'Review linked SMS') : 'None linked'});
-  const detail = selected ? <PaymentDetail key={selected} group={scopedGroup} {...detailRead}
+  const detail = selected && detailScopeConfirmed ? <PaymentDetail key={selected} group={scopedGroup} {...detailRead}
     search={params} onClose={() => show()} /> : null;
   const actions = <>{query && <Button onClick={() => {
     const next = new URLSearchParams(params);
@@ -155,29 +163,44 @@ function ScopedPaymentRecords() {
   </Card>;
 }
 
-function usePaymentDetail(paymentKey: string | undefined, group: string | undefined, enabled: boolean,
-  seenVersion: number | undefined, listContext: string) {
+function usePaymentDetail(paymentKey: string | undefined,
+  {requestGroup, expectedGroup, start, publish, seenVersion, listContext}: {
+    requestGroup?: string; expectedGroup?: string; start: boolean; publish: boolean; seenVersion?: number; listContext: string;
+  }) {
   const {epoch, request} = useSession();
   const load = useCallback(async (signal: AbortSignal) => {
-    const payment = buriMunsiPayment.parse(await request('burimunsi/payments/'+paymentKey, {signal}));
-    if (payment.id !== paymentKey || group && payment.groupId !== group) throw new Error('The payment changed.');
+    signal.throwIfAborted();
+    const response = await request('burimunsi/payments/'+paymentKey, {signal});
+    signal.throwIfAborted();
+    const payment = buriMunsiPayment.parse(response);
+    if (payment.id !== paymentKey || requestGroup && payment.groupId !== requestGroup) throw new Error('The payment changed.');
     return payment;
-  }, [group, paymentKey, request]);
-  const selection = JSON.stringify([epoch, group, paymentKey, listContext]);
+  }, [requestGroup, paymentKey, request]);
+  // The server binds the GET to the current session. Staff wait for analysis
+  // before publishing it, without restarting the GET when the list proves scope.
+  const selection = JSON.stringify([epoch, requestGroup, paymentKey, listContext]);
   const [visit, setVisit] = useState({selection, index: 0});
   if (visit.selection !== selection) setVisit({selection, index: visit.index + 1});
   const scope = JSON.stringify([selection, visit.index]);
-  const first = useOperationRead(scope, enabled && !!paymentKey, load);
+  const first = useOperationRead(scope, start && !!paymentKey, load);
+  function qualified(result: OperationReadState<BuriMunsiPayment> | null): OperationReadState<BuriMunsiPayment> | null {
+    if (!publish) return null;
+    if (result?.status === 'success' && expectedGroup && result.value.groupId !== expectedGroup) {
+      return {status:'error',key:scope,message:'The workspace response could not be verified.'};
+    }
+    return result;
+  }
   const olderThanList = (result: OperationReadState<BuriMunsiPayment> | null) =>
     result?.status === 'success' && seenVersion !== undefined && result.value.version < seenVersion;
-  // A concurrent read can finish with an older version than the list. Only that case needs a second GET.
-  const outdated = olderThanList(first.result);
+  // Only an older, verified-scope response needs a second GET against the current list version.
+  const firstResult = qualified(first.result), outdated = olderThanList(firstResult);
   const newer = useOperationRead(JSON.stringify([scope, seenVersion]), outdated, load);
-  const current = outdated ? newer : first;
-  if (olderThanList(current.result)) {
-    return {result: {status: 'error' as const, key: scope, message: 'The payment changed. Refresh to verify its details.'}, retry: current.retry};
+  const result = outdated ? qualified(newer.result) : firstResult;
+  const retry = outdated ? newer.retry : first.retry;
+  if (olderThanList(result)) {
+    return {result:{status:'error' as const,key:scope,message:'The payment changed. Refresh to verify its details.'},retry};
   }
-  return current;
+  return {result,retry};
 }
 
 function PaymentDetail({group, search, onClose, result, retry}: {group?: string; search: URLSearchParams; onClose: () => void;

@@ -13,7 +13,7 @@ import coreFixture from '../core/canonical-core-fixtures.json';
 import reconciliationFixture from '../core/canonical-reconciliation-fixture.json';
 
 const mock = vi.hoisted(() => ({request:vi.fn(), permissions:[] as string[], status:'authenticated', role:'admin',
-  authMethod:undefined as AdminUser['authMethod'], scoped:false, sessionId:'fixture-session', currentAuthority: true}));
+  authMethod:undefined as AdminUser['authMethod'], scoped:false, sessionId:'fixture-session', epoch:1, currentAuthority: true}));
 const currentActor = reconciliationFixture.detail.current_actor_id;
 const currentPrincipal = reconciliationFixture.detail.current_principal_id;
 const momoId = '11111111-1111-4111-8111-111111111111';
@@ -50,7 +50,7 @@ const sessionUser = () => ({id:currentActor,sessionId:mock.sessionId,email:'fixt
 const isCurrentAuthority = () => mock.currentAuthority;
 vi.mock('../../src/session/SessionProvider',async original => ({
   ...await original<typeof import('../../src/session/SessionProvider')>(),
-  useSession:() => ({status:mock.status,epoch:1,user:sessionUser(),request:mock.request,isCurrentAuthority}),
+  useSession:() => ({status:mock.status,epoch:mock.epoch,user:sessionUser(),request:mock.request,isCurrentAuthority}),
 }));
 
 function RouteHarness() {
@@ -72,7 +72,7 @@ function pendingRead() {
   const promise = new Promise<unknown>((done, fail) => {resolve = done; reject = fail;});
   return {promise, resolve, reject};
 }
-afterEach(() => {mock.request.mockReset();mock.status='authenticated';mock.role='admin';mock.authMethod=undefined;mock.scoped=false;mock.sessionId='fixture-session';mock.currentAuthority=true;sessionStorage.clear();});
+afterEach(() => {mock.request.mockReset();mock.status='authenticated';mock.role='admin';mock.authMethod=undefined;mock.scoped=false;mock.sessionId='fixture-session';mock.epoch=1;mock.currentAuthority=true;sessionStorage.clear();});
 
 describe('consolidated Payments routes',()=>{
   it('makes the old payment list a guarded alias and returns through the new list with search preserved',async()=>{
@@ -628,6 +628,182 @@ describe('BuriMunsi phone Payments', () => {
     expect(screen.queryByRole('region',{name:'Original source access'})).not.toBeInTheDocument();
     expect(called('momo/observations')).toHaveLength(0);
     expect(called(evidencePath(momoId))).toHaveLength(1);
+  });
+
+  const selectedPaymentPath = 'burimunsi/payments/'+momoId;
+  const selectedPaymentUrl = '/admin/payments?payment='+momoId;
+  const detailRegion = () => screen.queryByRole('region',{name:'Payment details'});
+
+  it.each(['detail','analysis'] as const)('starts Staff Home detail with analysis and verifies it when %s finishes first', async first => {
+    mock.authMethod='phone_passcode';
+    const analysis=pendingRead(), detail=pendingRead();
+    const record={...linked,ftId:'Scoped detail reference'};
+    mock.request.mockImplementation((path:string) => {
+      if (path==='burimunsi/home') return Promise.resolve({
+        paymentCount:1,memberCount:1,unallocatedCount:1,recentPayments:[buriPayment],asOf:time,
+      });
+      if (path==='burimunsi/payments/analysis') return analysis.promise;
+      if (path===selectedPaymentPath) return detail.promise;
+      throw new Error('Unexpected request');
+    });
+    visit('/admin',['overview.read','payments.read','sms.read'],'staff');
+    fireEvent.click(await screen.findByRole('link',{name:momoRef}));
+    await waitFor(() => {
+      expect(called('burimunsi/payments/analysis')).toHaveLength(1);
+      expect(called(selectedPaymentPath)).toHaveLength(1);
+    });
+    if (first==='detail') {
+      await act(async()=>detail.resolve(record));
+      expect(detailRegion()).not.toBeInTheDocument();
+      expect(screen.queryByText(record.ftId)).not.toBeInTheDocument();
+      await act(async()=>analysis.resolve(buriPage([buriPayment])));
+    } else {
+      await act(async()=>analysis.resolve(buriPage([buriPayment])));
+      expect(called(selectedPaymentPath)[0][1].signal.aborted).toBe(false);
+      expect(screen.queryByText(record.ftId)).not.toBeInTheDocument();
+      await act(async()=>detail.resolve(record));
+    }
+    expect(await within(detailRegion()!).findByRole('heading',{name:record.ftId})).toBeVisible();
+    expect(called(selectedPaymentPath)).toHaveLength(1);
+    expect(called(evidencePath(momoId))).toHaveLength(0);
+    expect(screen.queryByRole('region',{name:'Linked SMS'})).not.toBeInTheDocument();
+  });
+
+  it.each([
+    {case:'foreign collection', delta:{groupId:'different-collection'}},
+    {case:'different payment', delta:{id:accountId}},
+  ])('withholds a prefetched Staff detail from a $case', async ({delta}) => {
+    mock.authMethod='phone_passcode';
+    const analysis=pendingRead();
+    mock.request.mockImplementation((path:string)=>path===selectedPaymentPath
+      ? Promise.resolve({...linked,...delta,ftId:'Unverified detail reference'}) : analysis.promise);
+    visit(selectedPaymentUrl,['payments.read','sms.read'],'staff');
+    await waitFor(()=>expect(called(selectedPaymentPath)).toHaveLength(1));
+    expect(detailRegion()).not.toBeInTheDocument();
+    await act(async()=>analysis.resolve(buriPage([buriPayment])));
+    expect(await within(detailRegion()!).findByRole('alert')).toHaveTextContent('The workspace response could not be verified.');
+    expect(screen.queryByText('Unverified detail reference')).not.toBeInTheDocument();
+    expect(called(selectedPaymentPath)).toHaveLength(1);
+    expect(called(evidencePath(momoId))).toHaveLength(0);
+  });
+
+  it.each(['denied','mixed groups'] as const)('drops Staff detail when analysis is %s', async failure => {
+    mock.authMethod='phone_passcode';
+    const analysis=pendingRead(), detail=pendingRead();
+    mock.request.mockImplementation((path:string)=>path===selectedPaymentPath ? detail.promise : analysis.promise);
+    visit(selectedPaymentUrl,['payments.read'],'staff');
+    await waitFor(()=>expect(called(selectedPaymentPath)).toHaveLength(1));
+    const signal=called(selectedPaymentPath)[0][1].signal;
+    await act(async()=>{
+      if (failure==='denied') analysis.reject(new AdminRequestError('Payment access changed.',{statusCode:403}));
+      else analysis.resolve(buriPage([buriPayment,{...outgoing,groupId:'different-collection'}]));
+    });
+    expect(await screen.findByRole('alert')).toBeVisible();
+    await waitFor(()=>expect(signal.aborted).toBe(true));
+    await act(async()=>detail.resolve({...linked,ftId:'Late unverified record'}));
+    expect(detailRegion()).not.toBeInTheDocument();
+    expect(screen.queryByText('Late unverified record')).not.toBeInTheDocument();
+    expect(called(selectedPaymentPath)).toHaveLength(1);
+  });
+
+  it('retries failed Staff analysis without reviving the retired detail', async () => {
+    mock.authMethod='phone_passcode';
+    const firstAnalysis=pendingRead(), retryAnalysis=pendingRead(), firstDetail=pendingRead(), retryDetail=pendingRead();
+    let analyses=0, details=0;
+    mock.request.mockImplementation((path:string)=>path===selectedPaymentPath
+      ? (++details===1 ? firstDetail.promise : retryDetail.promise)
+      : (++analyses===1 ? firstAnalysis.promise : retryAnalysis.promise));
+    visit(selectedPaymentUrl,['payments.read'],'staff');
+    await waitFor(()=>expect(called(selectedPaymentPath)).toHaveLength(1));
+    const retired=called(selectedPaymentPath)[0][1].signal;
+    await act(async()=>firstAnalysis.reject(new AdminRequestError('Analysis temporarily unavailable.',{statusCode:503})));
+    const error=await screen.findByRole('alert');
+    expect(error).toHaveTextContent('Analysis temporarily unavailable.');
+    expect(detailRegion()).not.toBeInTheDocument();
+    expect(screen.queryByText('Loading payment')).not.toBeInTheDocument();
+    fireEvent.click(within(error).getByRole('button',{name:'Try again'}));
+    await waitFor(()=>{
+      expect(retired.aborted).toBe(true);
+      expect(called('burimunsi/payments/analysis')).toHaveLength(2);
+      expect(called(selectedPaymentPath)).toHaveLength(2);
+    });
+    await act(async()=>firstDetail.resolve({...linked,ftId:'Retired attempt'}));
+    await act(async()=>retryAnalysis.resolve(buriPage([buriPayment])));
+    expect(screen.queryByText('Retired attempt')).not.toBeInTheDocument();
+    await act(async()=>retryDetail.resolve({...buriPayment,ftId:'Current attempt'}));
+    expect(await within(detailRegion()!).findByRole('heading',{name:'Current attempt'})).toBeVisible();
+    expect(called(selectedPaymentPath)).toHaveLength(2);
+  });
+
+  it.each([2,1])('checks version after Staff scope is known and qualifies a single retry returning v%i', async nextVersion => {
+    mock.authMethod='phone_passcode';
+    const analysis=pendingRead(), newer=pendingRead();
+    const first={...buriPayment,ftId:'Old detail'};
+    let reads=0;
+    mock.request.mockImplementation((path:string)=>path!==selectedPaymentPath ? analysis.promise :
+      ++reads===1 ? Promise.resolve(first) : newer.promise);
+    visit(selectedPaymentUrl,['payments.read'],'staff');
+    await waitFor(()=>expect(called(selectedPaymentPath)).toHaveLength(1));
+    await act(async()=>analysis.resolve(buriPage([{...buriPayment,version:2}])));
+    await waitFor(()=>expect(called(selectedPaymentPath)).toHaveLength(2));
+    expect(screen.queryByText(first.ftId)).not.toBeInTheDocument();
+    await act(async()=>newer.resolve({...first,ftId:'Retry detail',version:nextVersion}));
+    const confirmed=within(detailRegion()!);
+    if (nextVersion===2) expect(await confirmed.findByRole('heading',{name:'Retry detail'})).toBeVisible();
+    else {
+      expect(await confirmed.findByRole('alert')).toHaveTextContent('The payment changed.');
+      expect(confirmed.queryByText('Retry detail')).not.toBeInTheDocument();
+    }
+    expect(called(selectedPaymentPath)).toHaveLength(2);
+  });
+
+  it.each([['off-page',[outgoing]],['empty',[]]] as const)('keeps the exact Staff detail on an %s page', async (_case,rows) => {
+    mock.authMethod='phone_passcode';
+    const analysis=pendingRead();
+    mock.request.mockImplementation((path:string)=>path===selectedPaymentPath ? Promise.resolve(buriPayment) : analysis.promise);
+    visit(selectedPaymentUrl,['payments.read'],'staff');
+    await waitFor(()=>expect(called(selectedPaymentPath)).toHaveLength(1));
+    expect(detailRegion()).not.toBeInTheDocument();
+    await act(async()=>analysis.resolve(buriPage([...rows])));
+    expect(await within(detailRegion()!).findByRole('heading',{name:momoRef})).toBeVisible();
+    expect(called(selectedPaymentPath)).toHaveLength(1);
+  });
+
+  it('leaves the serial route for legacy sessions without a scope attestation', async () => {
+    mock.authMethod='phone_passcode';
+    const analysis=pendingRead();
+    mock.request.mockImplementation((path:string)=>path===selectedPaymentPath ? Promise.resolve(buriPayment) : analysis.promise);
+    visit(selectedPaymentUrl,['payments.read']);
+    await waitFor(()=>expect(called('burimunsi/payments/analysis')).toHaveLength(1));
+    expect(called(selectedPaymentPath)).toHaveLength(0);
+    await act(async()=>analysis.resolve(buriPage([outgoing])));
+    expect(await within(detailRegion()!).findByRole('heading',{name:momoRef})).toBeVisible();
+    expect(called(selectedPaymentPath)).toHaveLength(1);
+  });
+
+  it.each(['epoch','permission'] as const)('retires the in-flight Staff detail when %s changes', async change => {
+    mock.authMethod='phone_passcode';
+    const old=pendingRead(), current=pendingRead();
+    let reads=0;
+    mock.request.mockImplementation((path:string)=>path===selectedPaymentPath
+      ? ++reads===1 ? old.promise : current.promise : Promise.resolve(buriPage([buriPayment])));
+    const app=visit(selectedPaymentUrl,['payments.read'],'staff');
+    await waitFor(()=>expect(called(selectedPaymentPath)).toHaveLength(1));
+    const signal=called(selectedPaymentPath)[0][1].signal;
+    if (change==='epoch') mock.epoch++;
+    else mock.permissions=[];
+    app.rerender(<MemoryRouter initialEntries={[selectedPaymentUrl]}><RouteHarness /></MemoryRouter>);
+    await waitFor(()=>expect(signal.aborted).toBe(true));
+    await act(async()=>old.resolve({...linked,ftId:'Retired detail'}));
+    expect(screen.queryByText('Retired detail')).not.toBeInTheDocument();
+    if (change==='epoch') {
+      await waitFor(()=>expect(called(selectedPaymentPath)).toHaveLength(2));
+      await act(async()=>current.resolve({...buriPayment,ftId:'Current detail'}));
+      expect(await within(detailRegion()!).findByRole('heading',{name:'Current detail'})).toBeVisible();
+    } else {
+      expect(detailRegion()).not.toBeInTheDocument();
+      expect(called(selectedPaymentPath)).toHaveLength(1);
+    }
   });
 
   it('does not request linked evidence for Staff even if stale detail includes a link', async () => {
