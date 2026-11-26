@@ -144,9 +144,11 @@
 .financial-filter-form > label, .financial-filter-range label, .financial-filter-choices legend {color: var(--admin-muted); font-weight: 600;}
 .financial-filter-form .admin-input {inline-size: 100%; min-inline-size: 0;}
 .financial-filter-range {display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem;}
-.financial-filter-choices {display: grid; max-block-size: 15rem; margin: 0; padding: 0; border: 0; overflow: auto;}
-.financial-filter-choices label {display: flex; align-items: center; gap: .6rem; min-block-size: 2.25rem; overflow-wrap: anywhere;}
-.financial-filter-choices input {inline-size: 1rem; block-size: 1rem; accent-color: var(--admin-accent);}
+.financial-filter-choices {display: grid; min-inline-size: 0; margin: 0; padding: 0; border: 0;}
+.financial-filter-choices legend {margin-block-end: .25rem;}
+.financial-filter-choices label {display: flex; align-items: center; gap: .65rem; min-block-size: 2.75rem; padding-inline: .65rem; border-radius: .5rem; cursor: pointer; overflow-wrap: anywhere;}
+.financial-filter-choices label:has(:checked) {color: var(--admin-accent-ink); background: var(--admin-accent-surface);}
+.financial-filter-choices input {flex: none; inline-size: 1.125rem; block-size: 1.125rem; margin: 0; accent-color: var(--admin-accent);}
 .financial-analysis-sr {position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;}
 @media (max-width: 600px) {
   .financial-analysis-tools, .financial-analysis-filters, .financial-analysis-pager {padding-inline: .5rem;}

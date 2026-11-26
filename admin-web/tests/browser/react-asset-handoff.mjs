@@ -156,7 +156,13 @@ try {
     const wizard = await openAllocation(page);
     const detailUrl = page.url();
     const body = wizard ?? page.getByRole('region', {name:'Original allocation request'});
-    await (wizard ?? page).getByRole('combobox', {name:'Member',exact:true}).selectOption(fixtureMember.id);
+    const choose=(wizard ?? page).getByRole('button',{name:'Choose member',exact:true});
+    const legacy=(wizard ?? page).getByRole('combobox',{name:'Member',exact:true});
+    await choose.or(legacy).first().waitFor();
+    if (await choose.count()) {
+      await choose.click();
+      await page.getByRole('dialog',{name:'Select member',exact:true}).getByRole('button',{name:fixtureMember.display_name,exact:true}).click();
+    } else await legacy.selectOption(fixtureMember.id);
     if (wizard) {
       await wizard.getByRole('button',{name:'Review allocation',exact:true}).click();
       await wizard.getByRole('button',{name:'Confirm allocation',exact:true}).click();

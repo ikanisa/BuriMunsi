@@ -32,6 +32,7 @@
   cursor: pointer;
 }
 .members-enrollment-option:hover { background: var(--admin-surface-soft); }
+.members-enrollment-options > li:last-child .members-enrollment-option { border-block-end: 0; }
 .members-enrollment-option > .admin-icon:last-child { margin-inline-start: auto; inline-size: 1rem; }
 .members-enrollment-icon {
   display: grid;

@@ -1,5 +1,6 @@
 import {webcrypto} from 'node:crypto';
 import {act, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import {beforeEach, describe, expect, it, vi} from 'vitest';
 import {AdminRequestError, AdminTransportError, type AdminRequest, type JsonObject} from '../../src/api/contracts';
 import type {AdminUser} from '../../src/session/sessionResponses';
@@ -29,10 +30,14 @@ function open(request:AdminRequest, call = callbacks(), active = () => true) {
   session.read.mockReturnValue({user:actor,status:'authenticated',epoch:1,request,isCurrentAuthority:active});
   return {...render(<PaymentAllocationWizard id={payment.id} group={payment.groupId} {...call}/>), ...call};
 }
+async function openPicker() {
+  fireEvent.click(await screen.findByRole('button',{name:'Choose member'}));
+  return within(await screen.findByRole('dialog',{name:'Select member'}));
+}
 async function review() {
-  const select = await screen.findByRole('combobox',{name:'Member'});
+  const picker = await openPicker();
+  fireEvent.click(await picker.findByRole('button',{name:'Sample member · member-two'}));
   const dialog = within(screen.getByRole('dialog',{name:'Allocate payment'}));
-  fireEvent.change(select,{target:{value:second.id}});
   fireEvent.click(dialog.getByRole('button',{name:'Review allocation'}));
   expect(await dialog.findByRole('heading',{name:'Review allocation'})).toHaveFocus();
   return dialog;
@@ -50,8 +55,8 @@ describe('payment allocation wizard', () => {
     open(request);
     const hint = await screen.findByRole('button',{name:'Select suggested member Élise Kayira'});
     const dialog = within(screen.getByRole('dialog',{name:'Allocate payment'}));
-    const choice = dialog.getByRole('combobox',{name:'Member'});
-    expect(choice).toHaveValue('');
+    const choice = dialog.getByRole('button',{name:'Choose member'});
+    expect(choice).not.toHaveAttribute('aria-describedby');
     expect(dialog.getByText('Payer name').nextElementSibling).toHaveTextContent('E\u0301LISE KAYIRA');
     expect(dialog.getByText('Payer MoMo ending').nextElementSibling).toHaveTextContent(/^419$/);
     expect(dialog.getByText('Time').nextElementSibling).toHaveTextContent('10:22:11');
@@ -59,7 +64,7 @@ describe('payment allocation wizard', () => {
     expect(dialog.queryByText(/direction|time \(kigali\)|phone match/i)).not.toBeInTheDocument();
     expect(dialog.getByRole('button',{name:'Review allocation'})).toBeDisabled();
     fireEvent.click(hint);
-    expect(choice).toHaveValue(second.id);
+    expect(choice).toHaveAccessibleDescription(matching.name);
     fireEvent.click(dialog.getByRole('button',{name:'Review allocation'}));
     expect((await dialog.findByText('Member ID')).nextElementSibling).toHaveTextContent(second.id);
     expect(dialog.getByText('Payer MoMo ending').nextElementSibling).toHaveTextContent(/^419$/);
@@ -69,7 +74,7 @@ describe('payment allocation wizard', () => {
   it('labels an outgoing SMS recipient, preserves a masked leading-zero suffix and handles a missing name', async () => {
     const request = api({...payment,direction:'outgoing',payerNameRaw:' ',payerPhoneRaw:'078***0007'});
     open(request);
-    await screen.findByRole('combobox',{name:'Member'});
+    await screen.findByRole('button',{name:'Choose member'});
     expect(screen.getByText('Recipient name').nextElementSibling).toHaveTextContent('Not recorded');
     expect(screen.getByText('Recipient MoMo ending').nextElementSibling).toHaveTextContent(/^007$/);
     expect(screen.queryByRole('button',{name:/select suggested member/i})).not.toBeInTheDocument();
@@ -79,34 +84,35 @@ describe('payment allocation wizard', () => {
 
   it.each(['000071','FT000071','071','***71','***071x',null])('does not infer phone digits from %s', async identifier => {
     open(api({...payment,payerPhoneRaw:identifier}));
-    await screen.findByRole('combobox',{name:'Member'});
+    await screen.findByRole('button',{name:'Choose member'});
     expect(screen.getByText('Payer MoMo ending').nextElementSibling).toHaveTextContent('Not recorded');
   });
 
   it('keeps a number repeated in the SMS name field private and does not treat part of a name as an exact match', async () => {
     const number = '0780000419';
     const ui = open(api({...payment,payerNameRaw:number,payerPhoneRaw:number}));
-    await screen.findByRole('combobox',{name:'Member'});
+    await screen.findByRole('button',{name:'Choose member'});
     expect(screen.getByText('Payer name').nextElementSibling).toHaveTextContent('Not recorded');
     expect(screen.queryByText(number)).not.toBeInTheDocument();
     ui.unmount();
     open(api({...payment,payerNameRaw:'Sample'},[first]));
-    const choice=await screen.findByRole('combobox',{name:'Member'});
+    const choice=await screen.findByRole('button',{name:'Choose member'});
     expect(screen.queryByRole('button',{name:/select suggested member/i})).not.toBeInTheDocument();
-    expect(choice).toHaveValue('');
+    expect(choice).not.toHaveAttribute('aria-describedby');
   });
 
   it('keeps duplicate normalized names as manual choices and does not suggest a partial name', async () => {
     const request = api({...payment,payerNameRaw:'SAMPLE MEMBER',payerPhoneRaw:'xxx816'},
       [first,{id:second.id,name:'sample   member'},{id:'longer-member',name:'Sample Member Jones'}]);
     open(request);
-    const choice = await screen.findByRole('combobox',{name:'Member'});
-    expect(screen.getByText('Several group members match the SMS name. Choose the intended member.')).toBeVisible();
+    const choice = await screen.findByRole('button',{name:'Choose member'});
+    expect(await screen.findByText('Several group members match the SMS name. Choose the intended member.')).toBeVisible();
     expect(screen.queryByRole('button',{name:/select suggested member/i})).not.toBeInTheDocument();
-    expect(within(choice).getByRole('option',{name:'Sample member · member-one'})).toBeInTheDocument();
-    expect(within(choice).getByRole('option',{name:'sample member · member-two'})).toBeInTheDocument();
-    expect(choice).toHaveValue('');
+    expect(choice).not.toHaveAttribute('aria-describedby');
     expect(screen.getByRole('button',{name:'Review allocation'})).toBeDisabled();
+    const picker=await openPicker();
+    expect(picker.getByRole('button',{name:'Sample member · member-one'})).toHaveAttribute('aria-pressed','false');
+    expect(picker.getByRole('button',{name:'sample member · member-two'})).toHaveAttribute('aria-pressed','false');
   });
 
   it.each([false,true])('searches beyond the first 25 active members and avoids a single suggestion on a capped search (%s)', async capped => {
@@ -120,21 +126,22 @@ describe('payment allocation wizard', () => {
       return base(url,options);
     });
     open(request);
-    const choice=await screen.findByRole('combobox',{name:'Member'});
-    await within(choice).findByRole('option',{name});
-    expect(choice).toHaveValue('');
+    const picker=await openPicker();
+    await picker.findByRole('button',{name});
+    fireEvent.click(picker.getByRole('button',{name:'Cancel'}));
+    const choice=screen.getByRole('button',{name:'Choose member'});
+    expect(choice).not.toHaveAttribute('aria-describedby');
     if (capped) expect(screen.queryByRole('button',{name:/select suggested member/i})).not.toBeInTheDocument();
     else {
       fireEvent.click(screen.getByRole('button',{name:'Select suggested member ' + name}));
-      expect(choice).toHaveValue(target.id);
+      expect(choice).toHaveAccessibleDescription(name);
     }
     expect(request.mock.calls.some(([,options]) => options?.method === 'POST')).toBe(false);
   });
 
   it('reads the scoped payment first, reviews the exact selected member, and makes no write on Back or Cancel', async () => {
     const request = api(), ui = open(request);
-    const select = await screen.findByRole('combobox',{name:'Member'});
-    expect(within(select).getByRole('option',{name:'Sample member · member-two'})).toBeInTheDocument();
+    await screen.findByRole('button',{name:'Choose member'});
     expect(request.mock.calls.map(([url]) => url)).toEqual([path,'burimunsi/payments/members?q=&limit=25']);
     expect(screen.getByRole('button',{name:'Review allocation'})).toBeDisabled();
     const dialog = await review();
@@ -142,13 +149,36 @@ describe('payment allocation wizard', () => {
     expect(dialog.getByText('FT1000')).toBeVisible();
     expect(dialog.getByText(second.id)).toBeVisible();
     fireEvent.click(dialog.getByRole('button',{name:'Back'}));
-    expect(await dialog.findByRole('textbox',{name:'Search group members'})).toHaveFocus();
-    fireEvent.change(dialog.getByRole('textbox',{name:'Search group members'}),{target:{value:'Sample'}});
-    fireEvent.click(dialog.getByRole('button',{name:'Search'}));
+    expect(await dialog.findByRole('button',{name:'Choose member'})).toHaveFocus();
+    const picker=await openPicker();
+    const search=picker.getByRole('searchbox',{name:'Search group members'});
+    expect(search).toHaveFocus();
+    fireEvent.change(search,{target:{value:'Sample'}});
+    fireEvent.click(picker.getByRole('button',{name:'Search'}));
     await waitFor(() => expect(request).toHaveBeenCalledWith('burimunsi/payments/members?q=Sample&limit=25',{signal:expect.any(AbortSignal)}));
+    await userEvent.setup().keyboard('{Escape}');
+    expect(dialog.getByRole('button',{name:'Choose member'})).toHaveFocus();
+    expect(dialog.getByRole('button',{name:'Choose member'})).toHaveAccessibleDescription('Sample member · member-two');
     fireEvent.click(dialog.getByRole('button',{name:'Cancel'}));
     expect(ui.onClose).toHaveBeenCalledOnce();
     expect(request.mock.calls.some(([,opt]) => opt?.method === 'POST')).toBe(false);
+  });
+
+  it('selects a member with the keyboard, returns focus and keeps search and cancellation read-only',async()=>{
+    const user=userEvent.setup(), request=api();open(request);
+    const trigger=await screen.findByRole('button',{name:'Choose member'});
+    trigger.focus(); await user.keyboard('{Enter}');
+    const picker=within(await screen.findByRole('dialog',{name:'Select member'}));
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    expect(picker.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(picker.getByRole('searchbox',{name:'Search group members'})).toHaveFocus();
+    const secondChoice=await picker.findByRole('button',{name:'Sample member · member-two'});
+    secondChoice.focus();await user.keyboard('[Space]');
+    const restored=within(await screen.findByRole('dialog',{name:'Allocate payment'}));
+    expect(restored.getByRole('button',{name:'Choose member'})).toHaveFocus();
+    expect(restored.getByRole('button',{name:'Choose member'})).toHaveAccessibleDescription('Sample member · member-two');
+    expect(restored.getByRole('button',{name:'Review allocation'})).toBeEnabled();
+    expect(request.mock.calls.some(([,options]) => options?.method === 'POST')).toBe(false);
   });
 
   it('preserves an unconfirmed allocation across close and reopens with the identical key, member and version', async () => {

@@ -160,14 +160,24 @@ try {
   for (const [name, href] of [
     [/Cumulative incoming payments.*RWF 5,000/, '#/admin/payments?direction=incoming'],
     [/Cumulative outgoing payments.*RWF 5,000/, '#/admin/payments?direction=outgoing'],
-    [/Latest MoMo SMS balance.*RWF 0/, '#/admin/payments?view=sms'],
   ]) {
     const card = page.getByRole('link', {name});
     assert.equal(await card.getAttribute('href'), href);
     assert.equal(await card.locator('dt span').evaluate(label => getComputedStyle(label).clip), 'rect(0px, 0px, 0px, 0px)');
     paymentCardBackgrounds.add(await card.evaluate(element => getComputedStyle(element).backgroundColor));
   }
+  const walletCard = page.getByRole('button',{name:/Latest MoMo SMS balance.*RWF 0/});
+  assert.equal(await walletCard.locator('.admin-sr-only').evaluate(label=>getComputedStyle(label).clip),'rect(0px, 0px, 0px, 0px)');
+  paymentCardBackgrounds.add(await walletCard.evaluate(element=>getComputedStyle(element).backgroundColor));
   assert.equal(paymentCardBackgrounds.size, 3);
+  await walletCard.click();
+  const walletDetails = page.getByRole('dialog',{name:'Wallet details',exact:true});
+  await walletDetails.getByText('Latest verified SMS balance',{exact:true}).waitFor();
+  assert.equal(await walletDetails.getByText('Latest verified SMS balance',{exact:true}).locator('+ dd').textContent(),'RWF 0');
+  assert.equal(await walletDetails.getByRole('link',{name:'Open SMS inbox',exact:true}).getAttribute('href'),'#/admin/payments?view=sms');
+  await page.keyboard.press('Escape');
+  await walletDetails.waitFor({state:'hidden'});
+  assert.equal(await walletCard.evaluate(element=>document.activeElement===element),true);
   await page.setViewportSize({width:1007,height:825});
   const memberLabel = page.getByRole('region',{name:'Payments',exact:true}).getByRole('table').getByText(longMember,{exact:true});
   assert.equal(await memberLabel.getAttribute('title'),longMember);
@@ -385,6 +395,22 @@ try {
   assert.deepEqual(memberReads, ['/api/admin/operations/members/' + fixtureMember.id + '?include=statement',
     nextStatementUrl.pathname + nextStatementUrl.search]);
   assert.deepEqual((await lastMovement.getByRole('cell').allTextContents()).slice(2),['1,000','—','4,000']);
+  const statementRowButton = lastMovement.getByRole('button',{name:'View transaction STATEMENT-26',exact:true});
+  await statementRowButton.click();
+  const transactionDetails = page.getByRole('dialog',{name:'Transaction details',exact:true});
+  await transactionDetails.getByText('Debit',{exact:true}).waitFor();
+  assert.equal(await transactionDetails.getByText('Running balance',{exact:true}).locator('+ dd').textContent(),'RWF 4,000');
+  await page.keyboard.press('Escape');
+  await transactionDetails.waitFor({state:'hidden'});
+  assert.equal(await statementRowButton.evaluate(element=>document.activeElement===element),true);
+  const statementDownload = page.waitForEvent('download');
+  await page.getByRole('button',{name:'Download statement',exact:true}).click();
+  const downloadedStatement = await statementDownload;
+  assert.equal(downloadedStatement.suggestedFilename(),'burimunsi-member-statement.csv');
+  const exportedStatement = await readFile(await downloadedStatement.path(),'utf8');
+  assert.match(exportedStatement,/STATEMENT-01/);
+  assert.match(exportedStatement,/STATEMENT-26/);
+  assert.match(exportedStatement,/Closing balance[^\r\n]*4000/);
   await page.setViewportSize({width:320,height:720});
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   await page.getByRole('link', {name:/Open member statement/}).click();

@@ -1,10 +1,10 @@
-import {useCallback} from 'react';
+import {useCallback, useState} from 'react';
 import {Link} from 'react-router';
 import {z} from 'zod';
 import {useSession} from '../../session/SessionProvider';
 import {hasScopedAdminAuthority} from '../../session/ownerIdentity';
 import {canDisplaySessionRecords, canReadSmsEvidence} from '../../session/sessionContext';
-import {Button, Card, EmptyState, ErrorState, Icon, LoadingState, PageHeader, StatusBadge} from '../../ui';
+import {Button, Card, Dialog, EmptyState, ErrorState, Icon, LoadingState, PageHeader, StatusBadge} from '../../ui';
 import {BuriMunsiPaymentRows, buriMunsiPaymentsPath, buriMunsiSmsPath} from '../operations/BuriMunsiPaymentRows';
 import {buriMunsiPayment} from '../operations/canonicalPaymentAnalysis';
 import {useOperationRead} from '../operations/useOperationRead';
@@ -22,16 +22,64 @@ const snapshot = z.object({
 }).refine(value => value.unallocatedCount <= value.paymentCount && value.recentPayments.length <= value.paymentCount &&
   new Set(value.recentPayments.map(row => row.id)).size === value.recentPayments.length);
 const amountFormat = new Intl.NumberFormat('en-RW');
+type WalletTotals = z.output<typeof snapshot>['paymentTotals'];
 
-function Figure({label, icon, value, to, paymentMetric}:
+function amountRwf(value: number | bigint | null | undefined) {
+  return value == null ? 'Unavailable' : 'RWF ' + amountFormat.format(value);
+}
+
+function Figure({label, icon, value, to, onOpen, paymentMetric}:
   {label: string; icon: string; value: number | bigint | null; to?: string;
-    paymentMetric?: 'incoming' | 'outgoing' | 'sms-balance'}) {
+    onOpen?: () => void; paymentMetric?: 'incoming' | 'outgoing' | 'sms-balance'}) {
   const className = 'overview-metric overview-metric-card';
-  const formatted = value === null ? 'Unavailable' : (paymentMetric ? 'RWF ' : '') + amountFormat.format(value);
-  const content = <dl><dt title={label}><Icon name={icon} /><span className="admin-sr-only">{label}</span></dt>
-    <dd data-long-amount={paymentMetric && formatted.length > 15 ? true : undefined}>{formatted}</dd></dl>;
+  const formatted = paymentMetric ? amountRwf(value) : value === null ? 'Unavailable' : amountFormat.format(value);
+  const longAmount = paymentMetric && formatted.length > 15 ? true : undefined;
+  const iconLabel = <><Icon name={icon} /><span className="admin-sr-only">{label}</span></>;
+  if (onOpen) return <button type="button" className={className + ' overview-metric-opener'} data-payment-metric={paymentMetric}
+    title={label} aria-label={label + ' · ' + formatted} aria-haspopup="dialog" onClick={onOpen}>
+    <span className="overview-metric-icon">{iconLabel}</span>
+    <span className="overview-metric-value" data-long-amount={longAmount}>{formatted}</span>
+  </button>;
+  const content = <dl><dt title={label}>{iconLabel}</dt><dd data-long-amount={longAmount}>{formatted}</dd></dl>;
   return to ? <Link className={className + ' overview-metric-card--link'} data-payment-metric={paymentMetric} to={to}>{content}</Link> :
     <div className={className} data-payment-metric={paymentMetric}>{content}</div>;
+}
+
+function WalletOverview({totals, sms, interactive, canOpenSms}:
+  {totals: WalletTotals; sms: boolean; interactive: boolean; canOpenSms: boolean}) {
+  const [open, setOpen] = useState(false);
+  const balance = totals?.latestSmsBalanceRwf;
+  const gap = sms && balance != null ? totals?.walletGapRwf : null;
+  const discrepancy = gap != null && gap !== 0n;
+  const openDetails = interactive && sms ? () => setOpen(true) : undefined;
+  const difference = <StatusBadge tone="warning"><span>Wallet difference · {amountRwf(gap)}</span></StatusBadge>;
+  return <>
+    <div className="overview-metrics overview-payment-metrics">
+      <Figure label="Cumulative incoming payments" icon="incoming" value={totals?.incomingRwf ?? null}
+        to={buriMunsiPaymentsPath + '?direction=incoming'} paymentMetric="incoming" />
+      <Figure label="Cumulative outgoing payments" icon="outgoing" value={totals?.outgoingRwf ?? null}
+        to={buriMunsiPaymentsPath + '?direction=outgoing'} paymentMetric="outgoing" />
+      {sms && <Figure label="Latest MoMo SMS balance" icon="message" value={balance ?? null}
+        onOpen={openDetails} paymentMetric="sms-balance" />}
+    </div>
+    {discrepancy && <p className="overview-wallet-status" role="status">
+      {openDetails ? <button className="overview-wallet-trigger" type="button" aria-haspopup="dialog"
+        onClick={openDetails}>{difference}</button> : difference}
+    </p>}
+    {sms && interactive && <Dialog open={open} placement="picker" title="Wallet details" onClose={() => setOpen(false)}
+      footer={canOpenSms && <Link className="admin-btn admin-btn--primary overview-wallet-action" to={buriMunsiSmsPath}>
+        <Icon name="message" />Open SMS inbox</Link>}>
+      <dl className="overview-wallet-details">
+        <div className="overview-wallet-balance"><dt>Latest verified SMS balance</dt><dd>{amountRwf(balance)}</dd></div>
+        <div><dt>Cumulative incoming payments</dt><dd>{amountRwf(totals?.incomingRwf)}</dd></div>
+        <div><dt>Cumulative outgoing payments</dt><dd>{amountRwf(totals?.outgoingRwf)}</dd></div>
+        <div className="overview-wallet-difference" data-discrepancy={discrepancy || undefined}>
+          <dt>Wallet difference</dt><dd>{amountRwf(gap)}</dd>
+        </div>
+      </dl>
+      <p className="overview-wallet-basis">The difference is incoming payments minus outgoing payments minus the latest verified SMS balance.</p>
+    </Dialog>}
+  </>;
 }
 
 export function BuriMunsiHome() {
@@ -55,7 +103,6 @@ export function BuriMunsiHome() {
   const {result, retry, refreshing} = useOperationRead('burimunsi-home:' + authority, visible, load, {retainDuringRefresh: true});
   const canOpenSms=!!collection && session.status==='authenticated';
   const totals = result?.status === 'success' ? result.value.paymentTotals : undefined;
-  const walletGap = sms && totals?.latestSmsBalanceRwf != null ? totals.walletGapRwf : null;
   return <><PageHeader title="Home" actions={<Button icon="refresh" aria-label="Refresh Home" onClick={retry}
     loading={visible && (!result || refreshing)} />} />
     {!visible ? <ErrorState title="Access unavailable" message="Your account cannot view the group snapshot." /> :
@@ -67,17 +114,8 @@ export function BuriMunsiHome() {
             <Figure label="Members" icon="users" value={result.value.memberCount} to={user?.permissions.includes('users.read') ? '/admin/members' : undefined} />
             {payments && <Figure label="Unallocated" icon="unlinked" value={result.value.unallocatedCount} to={buriMunsiPaymentsPath + '?status=unallocated'} />}
           </div>
-          {payments && <div className="overview-metrics overview-payment-metrics">
-            <Figure label="Cumulative incoming payments" icon="incoming" value={totals?.incomingRwf ?? null}
-              to={buriMunsiPaymentsPath + '?direction=incoming'} paymentMetric="incoming" />
-            <Figure label="Cumulative outgoing payments" icon="outgoing" value={totals?.outgoingRwf ?? null}
-              to={buriMunsiPaymentsPath + '?direction=outgoing'} paymentMetric="outgoing" />
-            {sms && <Figure label="Latest MoMo SMS balance" icon="message" value={totals?.latestSmsBalanceRwf ?? null}
-              to={canOpenSms ? buriMunsiSmsPath : undefined} paymentMetric="sms-balance" />}
-          </div>}
-          {payments && walletGap != null && walletGap !== 0n && <p className="overview-wallet-status" role="status">
-            <StatusBadge tone="warning"><span>Wallet difference · RWF {amountFormat.format(walletGap)}</span></StatusBadge>
-          </p>}
+          {payments && <WalletOverview key={authority} totals={totals} sms={sms}
+            interactive={session.status === 'authenticated'} canOpenSms={canOpenSms} />}
         </section>
         {payments && <Card className="operations-records admin-content-enter"><div className="operations-toolbar"><h2>Recent payments</h2>
           <Link className="operations-link" to={buriMunsiPaymentsPath}>View all payments</Link></div>

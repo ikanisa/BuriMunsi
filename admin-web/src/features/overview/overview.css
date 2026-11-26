@@ -22,7 +22,8 @@ a.overview-evidence-card {
 }
 
 a.overview-metric-card:hover,
-a.overview-evidence-card:hover {
+a.overview-evidence-card:hover,
+.overview-metric-opener:hover {
   border-color: var(--admin-accent-ink);
 }
 
@@ -34,10 +35,61 @@ a.overview-evidence-card:hover {
 }
 
 .overview-metric dl { margin: 0; }
+.overview-metric-opener {
+  gap: 0;
+  border-color: transparent;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
 .overview-metric dt { color: var(--admin-muted); font-weight: 650; }
 .overview-payment-metrics { margin-block-start: .75rem; }
 .overview-wallet-status { margin: .5rem 0 0; overflow-wrap: anywhere; }
 .overview-wallet-status .admin-badge-dot { flex: none; }
+.overview-wallet-trigger {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--admin-radius);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.overview-wallet-trigger:hover .admin-badge { text-decoration: underline; }
+.overview-wallet-details { margin: 0; }
+.overview-wallet-details > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .25rem 1rem;
+  padding-block: .8rem;
+  border-bottom: 1px solid var(--admin-line);
+}
+.overview-wallet-details dt { color: var(--admin-muted); }
+.overview-wallet-details dd {
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  color: var(--admin-ink);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.overview-wallet-details .overview-wallet-balance {
+  display: grid;
+  padding-block-start: 0;
+}
+.overview-wallet-balance dd { font-size: clamp(1.6rem, 4vw, 2rem); line-height: 1.2; }
+.overview-wallet-details .overview-wallet-difference { border: 0; }
+.overview-wallet-difference[data-discrepancy] dd { color: var(--admin-warning); }
+.overview-wallet-basis { margin: 0; color: var(--admin-muted); font-size: .875rem; }
+.overview-wallet-action { text-decoration: none; }
 .overview-metric-card[data-payment-metric='incoming'] {
   background: var(--admin-success-surface);
   --overview-payment-icon: var(--admin-success);
@@ -50,8 +102,8 @@ a.overview-evidence-card:hover {
   background: light-dark(#f1ebff, #34284b);
   --overview-payment-icon: light-dark(#634296, #d9c7fa);
 }
-.overview-metric-card[data-payment-metric] dt { color: var(--overview-payment-icon); }
-.overview-metric dd {
+.overview-metric-card[data-payment-metric] :is(dt, .overview-metric-icon) { color: var(--overview-payment-icon); }
+.overview-metric :is(dd, .overview-metric-value) {
   margin: .2rem 0 0;
   font-size: clamp(1.35rem, 3vw, 2rem);
   line-height: 1.25;
@@ -63,12 +115,13 @@ a.overview-evidence-card:hover {
 .overview-metric--primary dd { font-size: clamp(1.45rem, 3.6vw, 2.3rem); }
 .overview-metric-card[data-payment-metric] { container-type: inline-size; }
 .overview-metric-card[data-payment-metric] dl { inline-size: 100%; }
-.overview-metric-card[data-payment-metric] dd {
+.overview-metric-card[data-payment-metric] :is(dd, .overview-metric-value) {
+  max-width: 100%;
   font-size: clamp(1.2rem, 2.65vw, 1.85rem);
   white-space: nowrap;
   overflow-x: auto;
 }
-.overview-metric-card dd[data-long-amount] { font-size: clamp(.875rem, 8cqi, 1.85rem); }
+.overview-metric-card[data-payment-metric] [data-long-amount] { font-size: clamp(.875rem, 8cqi, 1.85rem); }
 .overview-refresh { min-width: 44px; min-height: 44px; padding-inline: 0; justify-content: center; }
 .overview-refresh .admin-icon, .overview-sms-row > .admin-icon { width: 22px; height: 22px; }
 

@@ -325,8 +325,24 @@ describe('BuriMunsi phone Payments', () => {
       .toHaveAttribute('href','/admin/payments?direction=incoming');
     expect(screen.getByRole('link',{name:/Cumulative outgoing payments.*RWF 5,000/}))
       .toHaveAttribute('href','/admin/payments?direction=outgoing');
-    expect(screen.getByText('Latest MoMo SMS balance',{selector:'dt span'}).closest('dl')).toHaveTextContent('RWF 0');
-    expect(screen.getByText('Wallet difference · RWF 9,007,199,254,735,993')).toBeVisible();
+    const balance = screen.getByRole('button',{name:'Latest MoMo SMS balance · RWF 0'});
+    const difference = screen.getByRole('button',{name:'Wallet difference · RWF 9,007,199,254,735,993'});
+    for (const trigger of [balance,difference]) {
+      expect(trigger).toHaveAttribute('aria-haspopup','dialog');
+      trigger.focus();
+      fireEvent.click(trigger);
+      const details = within(screen.getByRole('dialog',{name:'Wallet details'}));
+      for (const [label,amount] of [
+        ['Cumulative incoming payments','RWF 9,007,199,254,740,993'],
+        ['Cumulative outgoing payments','RWF 5,000'],['Latest verified SMS balance','RWF 0'],
+        ['Wallet difference','RWF 9,007,199,254,735,993'],
+      ]) expect(details.getByText(label,{selector:'dt'}).nextElementSibling).toHaveTextContent(amount);
+      expect(details.queryByRole('link',{name:'Open SMS inbox'})).not.toBeInTheDocument();
+      fireEvent.keyDown(document,{key:'Escape'});
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(trigger).toHaveFocus();
+    }
+    expect(called('burimunsi/home')).toHaveLength(1);
     admin.unmount();
     visit('/admin', ['overview.read','payments.read','sms.read'], 'staff');
     expect(await screen.findByRole('link',{name:/Cumulative incoming payments/})).toBeVisible();
@@ -340,8 +356,14 @@ describe('BuriMunsi phone Payments', () => {
       paymentTotals:{incomingRwf:'0',outgoingRwf:'0',latestSmsBalanceRwf:null}});
     visit('/admin', ['overview.read','payments.read','sms.read']);
     expect(await screen.findByRole('link',{name:/Cumulative incoming payments.*RWF 0/})).toBeVisible();
-    expect(await screen.findByText('Unavailable',{selector:'dd'})).toBeVisible();
+    const balance = screen.getByRole('button',{name:'Latest MoMo SMS balance · Unavailable'});
+    expect(balance).toBeVisible();
     expect(screen.queryByText(/Wallet difference/)).not.toBeInTheDocument();
+    fireEvent.click(balance);
+    const details = within(screen.getByRole('dialog',{name:'Wallet details'}));
+    for (const label of ['Latest verified SMS balance','Wallet difference']) {
+      expect(details.getByText(label,{selector:'dt'}).nextElementSibling).toHaveTextContent('Unavailable');
+    }
   });
 
   it('keeps the verified Home snapshot until the requested refresh settles', async () => {
@@ -363,7 +385,12 @@ describe('BuriMunsi phone Payments', () => {
     expect(screen.queryByText('Loading Home')).not.toBeInTheDocument();
     fireEvent.click(refresh);
     expect(called('burimunsi/home')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button',{name:'Wallet difference · RWF -1'}));
+    const details = within(screen.getByRole('dialog',{name:'Wallet details'}));
+    expect(details.getByText('Wallet difference',{selector:'dt'}).nextElementSibling).toHaveTextContent('RWF -1');
     await act(async () => held.resolve({...home,paymentTotals:{...totals,outgoingRwf:totals.incomingRwf,walletGapRwf:'0'}}));
+    expect(details.getByText('Wallet difference',{selector:'dt'}).nextElementSibling).toHaveTextContent('RWF 0');
+    fireEvent.click(details.getByRole('button',{name:'Close dialog'}));
     expect(await screen.findByRole('link',{name:/Cumulative outgoing payments.*RWF 9,007,199,254,740,992/})).toBeVisible();
     expect(screen.queryByText(/Wallet difference/)).not.toBeInTheDocument();
     expect(refresh).toBeEnabled();
@@ -379,12 +406,15 @@ describe('BuriMunsi phone Payments', () => {
     mock.request.mockResolvedValueOnce({...home,paymentTotals:{...totals,latestSmsBalanceRwf:10}})
       .mockReturnValueOnce(prior.promise).mockReturnValueOnce(current.promise);
     const app = visit('/admin',['overview.read','payments.read','sms.read']);
-    const balance = await screen.findByRole('link',{name:/Latest MoMo SMS balance.*RWF 10/});
+    const balance = await screen.findByRole('button',{name:/Latest MoMo SMS balance.*RWF 10/});
     fireEvent.click(screen.getByRole('button',{name:'Refresh Home'}));
     expect(balance).toBeVisible();
+    fireEvent.click(balance);
+    expect(screen.getByRole('dialog',{name:'Wallet details'})).toBeVisible();
     mock.permissions = ['overview.read','payments.read'];
     app.rerender(<MemoryRouter initialEntries={['/admin']}><RouteHarness /></MemoryRouter>);
     expect(balance).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog',{name:'Wallet details'})).not.toBeInTheDocument();
     expect(screen.queryByRole('region',{name:'Group snapshot'})).not.toBeInTheDocument();
     const reads = called('burimunsi/home');
     await waitFor(() => expect(reads[1][1].signal.aborted).toBe(true));
@@ -536,7 +566,12 @@ describe('BuriMunsi phone Payments', () => {
     expect(called('burimunsi/home')).toHaveLength(2);
     expect(called('momo/observations')).toHaveLength(0);
 
-    fireEvent.click(await screen.findByRole('link',{name:/Latest MoMo SMS balance/}));
+    fireEvent.click(await screen.findByRole('button',{name:/Latest MoMo SMS balance/}));
+    const details = within(screen.getByRole('dialog',{name:'Wallet details'}));
+    const openInbox = details.getByRole('link',{name:'Open SMS inbox'});
+    expect(openInbox).toHaveAttribute('href','/admin/payments?view=sms');
+    expect(called('momo/observations')).toHaveLength(0);
+    fireEvent.click(openInbox);
     expect(location()).toHaveTextContent('/admin/payments?view=sms');
     const inbox=within(await screen.findByRole('region',{name:'Inbox completeness'}));
     expect(inbox.getByRole('status')).toHaveTextContent('SMS sync pending');
@@ -1011,9 +1046,9 @@ describe('BuriMunsi phone Payments', () => {
     visit('/admin/payments?payment='+momoId,['payments.read'],'staff');
     const row = await screen.findByRole('row',{name:/MOMO-FIXTURE-01/});
     fireEvent.click(within(row).getByRole('link',{name:'Unallocated – allocate payment '+momoRef}));
-    const member = await screen.findByRole('combobox',{name:'Member'});
+    fireEvent.click(await screen.findByRole('button',{name:'Choose member'}));
+    fireEvent.click(await screen.findByRole('button',{name:'Group member'}));
     const dialog = within(screen.getByRole('dialog',{name:'Allocate payment'}));
-    fireEvent.change(member,{target:{value:accountId}});
     fireEvent.click(dialog.getByRole('button',{name:'Review allocation'}));
     expect(attempts).toBe(0);
     fireEvent.click(dialog.getByRole('button',{name:'Confirm allocation'}));
@@ -1044,7 +1079,8 @@ describe('BuriMunsi phone Payments', () => {
     });
     const path = '/admin/payments?payment='+momoId+'&allocate='+momoId;
     const initial = visit(path,['payments.read'],'staff');
-    fireEvent.change(await screen.findByRole('combobox',{name:'Member'}),{target:{value:accountId}});
+    fireEvent.click(await screen.findByRole('button',{name:'Choose member'}));
+    fireEvent.click(await screen.findByRole('button',{name:'Group member'}));
     fireEvent.click(screen.getByRole('button',{name:'Review allocation'}));
     fireEvent.click(screen.getByRole('button',{name:'Confirm allocation'}));
     expect(await screen.findByText(/Allocation was not confirmed/)).toBeVisible();

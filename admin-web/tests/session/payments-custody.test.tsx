@@ -143,7 +143,8 @@ describe('Payments authority changes with a slow privileged response',()=>{
     const close=openPayments(paymentRoute,fetchImpl);
     try {
       fireEvent.click(await screen.findByRole('link',{name:'Unallocated – allocate payment '+oldPayment.ftId}));
-      fireEvent.change(await screen.findByRole('combobox',{name:'Member'}),{target:{value:memberId}});
+      fireEvent.click(await screen.findByRole('button',{name:'Choose member'}));
+      fireEvent.click(await screen.findByRole('button',{name:'Synthetic member'}));
       fireEvent.click(screen.getByRole('button',{name:'Review allocation'}));
       fireEvent.click(screen.getByRole('button',{name:'Confirm allocation'}));
       await screen.findByText(/Allocation was not confirmed/);

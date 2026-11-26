@@ -9,7 +9,7 @@ export interface DialogProps {
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
-  placement?: 'center' | 'side';
+  placement?: 'center' | 'side' | 'picker';
 }
 
 /** Dialogs retain keyboard focus and restore it to the triggering control. */

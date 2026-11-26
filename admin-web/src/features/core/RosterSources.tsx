@@ -1,7 +1,7 @@
 import {flushSync} from 'react-dom';
 import {useCallback, useEffect, useRef, useState, type FormEvent, type RefObject} from 'react';
 import {AdminRequestError, type AdminRequest} from '../../api/contracts';
-import {CompactText, Button, ErrorState, Icon, LoadingState} from '../../ui';
+import {CompactText, Button, Dialog, ErrorState, Icon, LoadingState} from '../../ui';
 import {useOperationRead} from '../operations/useOperationRead';
 import {disclosureVersion, IMPORT_PATH, readRosterPreview, readSuggestions, SUGGESTIONS_PATH,
   type PreviewRow, type RosterCandidate, type SourceKind} from './memberRoster';
@@ -14,18 +14,32 @@ const icons = {suggestions:'users', manual:'edit', camera:'smartphone', photo:'l
 export type EnrollmentMode = keyof typeof methodLabels;
 export function EnrollmentMethods({choose, fileInput, recovering = false}: {choose: (mode: EnrollmentMode) => void;
   fileInput: RefObject<HTMLInputElement | null>; recovering?: boolean}) {
-  function open(mode: EnrollmentMode) {
+  const [open, setOpen] = useState(!recovering);
+  const trigger = useRef<HTMLButtonElement>(null), restoreFocus = useRef(false);
+  useEffect(() => {
+    if (!open && restoreFocus.current) {
+      restoreFocus.current = false;
+      trigger.current?.focus();
+    }
+  }, [open]);
+  function select(mode: EnrollmentMode) {
     if (mode === 'manual' || mode === 'suggestions') {choose(mode); return;}
     // The system file or camera picker must open during the operator's original gesture.
     flushSync(()=>choose(mode));
     fileInput.current?.click();
   }
-  return <div className="members-enrollment-options">
-    {(Object.keys(methodLabels) as EnrollmentMode[]).filter(mode=>!recovering || mode !== 'manual').map(mode=>
-      <button className="members-enrollment-option" key={mode} onClick={()=>open(mode)}>
-        <span className="members-enrollment-icon"><Icon name={icons[mode]} /></span>
-        <span>{methodLabels[mode]}</span><Icon name="chevron" /></button>)}
-  </div>;
+  return <>
+    <button ref={trigger} type="button" className="admin-btn admin-btn--soft" aria-haspopup="dialog" aria-expanded={open}
+      onClick={() => setOpen(true)}>Choose a method</button>
+    <Dialog open={open} title="Add member" placement="picker" onClose={() => {restoreFocus.current = true; setOpen(false);}}>
+      <ul className="members-enrollment-options" aria-label="Enrollment methods">
+        {(Object.keys(methodLabels) as EnrollmentMode[]).filter(mode => !recovering || mode !== 'manual').map(mode =>
+          <li key={mode}><button type="button" className="members-enrollment-option" onClick={() => select(mode)}>
+            <span className="members-enrollment-icon"><Icon name={icons[mode]} /></span>
+            <CompactText>{methodLabels[mode]}</CompactText><Icon name="chevron" /></button></li>)}
+      </ul>
+    </Dialog>
+  </>;
 }
 
 export function RosterSuggestions({request, group, onSelect, onBack}: {

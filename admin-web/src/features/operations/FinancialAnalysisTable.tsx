@@ -40,16 +40,17 @@ function FilterEditor<T>({column, rows, active, close, apply, remote}: {
     apply(draft.presence === 'blank' ? {...emptyFilter,presence:'blank'} : {...draft,text:draft.text.trim()});
   };
   const range = column.kind === 'date' || column.kind === 'number';
-  return <Dialog open title={'Filter ' + column.label} onClose={close} footer={<>
+  return <Dialog open placement="picker" title={'Filter ' + column.label} onClose={close} footer={<>
     <Button onClick={() => apply(emptyFilter)}>Clear filter</Button>
     <Button onClick={close}>Cancel</Button>
     <Button variant="primary" type="submit" form={formId}>Apply filter</Button>
   </>}>
     <form id={formId} className="financial-filter-form" onSubmit={submit}>
-      <label>Values<select className="admin-input" value={draft.presence}
-        onChange={event => update({presence:event.target.value as ColumnFilter['presence']})}>
-        <option value="any">All values</option><option value="blank">Blank only</option><option value="present">Non-blank only</option>
-      </select></label>
+      <fieldset className="financial-filter-choices"><legend>Values</legend>
+        {([['any','All values'],['blank','Blank only'],['present','Non-blank only']] as const).map(([value,label]) =>
+          <label key={value}><input type="radio" name={formId+'-presence'} value={value}
+            checked={draft.presence === value} onChange={() => update({presence:value})} />{label}</label>)}
+      </fieldset>
       {draft.presence !== 'blank' && <>
         {column.kind === 'text' && <label>Contains<input className="admin-input" type="search" autoComplete="off" maxLength={remote ? 200 : undefined}
           value={draft.text} onChange={event => update({text:event.target.value})} /></label>}
@@ -80,6 +81,7 @@ export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, i
   const [localFilters,setFilters] = useState(() => initialColumnFilters(columns,initialFilters));
   const filters=remote?.filters ?? localFilters;
   const [editing,setEditing] = useState<string | null>(null);
+  const filterOpener = useRef<HTMLButtonElement | null>(null), filterHeaders = useRef(new Map<string,HTMLButtonElement>());
   const [navigation,setNavigation] = useState<{position:number; given?:number; revealed?:string}>({position:page ?? 1,given:page});
   const [maximized,setMaximized] = useState(false);
   const panel = useRef<HTMLDivElement>(null), expandControl = useRef<HTMLButtonElement>(null);
@@ -119,6 +121,10 @@ export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, i
     if (remote) remote.onCriteria(next,remote.sort);
     else {setFilters(next); changePage(1);}
     setEditing(null);
+    // Clearing a filter removes its chip. The column still provides a keyboard return destination.
+    if (filterOpener.current?.closest('.financial-analysis-filters') && !next.has(column)) {
+      queueMicrotask(() => filterHeaders.current.get(column)?.focus({preventScroll:true}));
+    }
   };
   const clearAll = () => {
     if (remote) remote.onCriteria(new Map(),remote.sort);
@@ -147,7 +153,7 @@ export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, i
         const criteria = describeColumnFilter(column,filters.get(column.key)!);
         const descriptionId = instance + '-criteria-' + index;
         return <button key={column.key} type="button" aria-label={'Edit ' + column.label + ' filter'} aria-describedby={descriptionId}
-          title={column.label + ' · ' + criteria} aria-haspopup="dialog" onClick={() => setEditing(column.key)}>
+          title={column.label + ' · ' + criteria} aria-haspopup="dialog" onClick={event => {filterOpener.current=event.currentTarget;setEditing(column.key);}}>
           <span className="financial-analysis-chip">{column.label}{/^[=≥≤]/u.test(criteria) ? ' ' : ' · '}<span id={descriptionId}>{criteria}</span></span>
           <Icon name="filter" /></button>;
       })}
@@ -170,7 +176,8 @@ export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, i
               </button>
               <button type="button" className="financial-analysis-filter" data-filtered={filtered || undefined}
                 aria-label={'Filter ' + column.label} aria-haspopup="dialog" aria-expanded={editing === column.key}
-                aria-describedby={filtered ? filteredId : undefined} onClick={() => setEditing(column.key)}><Icon name="filter" /></button>
+                ref={element => {if (element) filterHeaders.current.set(column.key,element); else filterHeaders.current.delete(column.key);}}
+                aria-describedby={filtered ? filteredId : undefined} onClick={event=>{filterOpener.current=event.currentTarget;setEditing(column.key);}}><Icon name="filter" /></button>
               {filtered && <span className="financial-analysis-sr" id={filteredId}>Filter applied</span>}
             </div>
           </th>;

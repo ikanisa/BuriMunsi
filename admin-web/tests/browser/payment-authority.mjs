@@ -68,6 +68,14 @@ export async function qualifyPaymentAuthority({origin, open, staffPin, installed
     await signIn('0780 000 001','0123');
     await heading('Home').waitFor();
     await page.getByRole('link',{name:'Payments',exact:true}).click();
+    const filterTrigger=button('Filter Amount');
+    await filterTrigger.click();
+    const amountFilter=page.getByRole('dialog',{name:'Filter Amount',exact:true});
+    assert.equal(await amountFilter.getByRole('combobox').count(),0);
+    await amountFilter.getByRole('radio',{name:'All values',exact:true}).press('ArrowRight');
+    assert(await amountFilter.getByRole('radio',{name:'Blank only',exact:true}).isChecked());
+    await amountFilter.getByRole('radio',{name:'Blank only',exact:true}).press('Escape');
+    assert(await filterTrigger.evaluate(control=>document.activeElement===control));
     await oldRecord.click();
     await page.getByRole('link',{name:'Unallocated – allocate payment ' + fixturePayment.ftId,exact:true}).click();
     const dialog = page.getByRole('dialog',{name:'Allocate payment',exact:true});
@@ -75,7 +83,25 @@ export async function qualifyPaymentAuthority({origin, open, staffPin, installed
     assert.equal(new URLSearchParams(new URL(paymentLink).hash.split('?')[1]).get('payment'),fixturePayment.id);
     assert.equal(new URLSearchParams(new URL(paymentLink).hash.split('?')[1]).get('allocate'),fixturePayment.id);
     await dialog.getByRole('button',{name:'Select suggested member ' + fixtureMember.display_name,exact:true}).click();
-    assert.equal(await dialog.getByRole('combobox',{name:'Member',exact:true}).inputValue(),fixtureMember.id);
+    const memberChoice=dialog.getByRole('button',{name:'Choose member',exact:true});
+    assert.equal(await memberChoice.innerText(),fixtureMember.display_name);
+    await memberChoice.click();
+    const picker=page.getByRole('dialog',{name:'Select member',exact:true});
+    const selectedMember=picker.getByRole('button',{name:fixtureMember.display_name,exact:true});
+    assert.equal(await selectedMember.getAttribute('aria-pressed'),'true');
+    assert(await picker.evaluate(element=>{
+      const box=element.getBoundingClientRect();
+      return Math.abs(box.left + box.width/2 - innerWidth/2) < 2 && Math.abs(box.top + box.height/2 - innerHeight/2) < 2;
+    }));
+    await page.setViewportSize({width:390,height:740});
+    assert(await picker.evaluate(element=>{
+      const box=element.getBoundingClientRect();
+      return Math.abs(box.left)<2 && Math.abs(box.right-innerWidth)<2 && Math.abs(box.bottom-innerHeight)<2 &&
+        document.documentElement.scrollWidth<=innerWidth;
+    }));
+    await picker.getByRole('searchbox',{name:'Search group members'}).press('Escape');
+    assert(await memberChoice.evaluate(button=>document.activeElement===button));
+    await page.setViewportSize({width:1280,height:800});
     await dialog.getByRole('button',{name:'Review allocation',exact:true}).click();
     await dialog.getByRole('button',{name:'Confirm allocation',exact:true}).click();
     await heading('Original allocation request').waitFor();

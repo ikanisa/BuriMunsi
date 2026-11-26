@@ -16,3 +16,33 @@
   margin-top: .2rem;
   color: var(--admin-muted);
 }
+.member-statement-reference {
+  display: inline-flex;
+  align-items: center;
+  max-inline-size: 100%;
+  min-block-size: 2.75rem;
+  margin-block: -.5rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--admin-accent-ink);
+  font: inherit;
+  font-weight: 650;
+  text-align: start;
+  cursor: pointer;
+}
+.member-statement-heading, .member-statement-download { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
+.member-statement-heading { justify-content: space-between; }
+.member-statement-download [role="alert"] { font-size: .875rem; }
+.member-statement-reference:is(:hover, :focus-visible) { text-decoration: underline; }
+.member-transaction-facts { display: grid; gap: 1rem; margin: 0; }
+.member-transaction-facts > div { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
+.member-transaction-facts dt { color: var(--admin-muted); }
+.member-transaction-facts dd { margin: 0; text-align: end; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.member-transaction-facts .member-transaction-amount {
+  display: grid;
+  gap: .15rem;
+  padding-block-end: 1rem;
+  border-block-end: 1px solid var(--admin-line);
+}
+.member-transaction-amount dd { font-size: 1.6rem; font-weight: 650; text-align: start; }

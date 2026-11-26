@@ -1,10 +1,13 @@
-import {fireEvent, render, screen, within} from '@testing-library/react';
+import {act, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import {MemoryRouter} from 'react-router';
 import {describe, expect, it, vi} from 'vitest';
 import {AdminRequestError} from '../../src/api/client';
 import {CoreRecordPage} from '../../src/features/core/CoreRecordPage';
 import {MemberStatementPage} from '../../src/features/core/MemberStatementPage';
 import {readMemberStatement, readMemberStatementPage} from '../../src/features/core/memberStatement';
+import {memberStatementCsv} from '../../src/features/core/memberStatementDownload';
+import type {AdminRequest} from '../../src/features/core/types';
 import fixture from './canonical-core-fixtures.json';
 
 const person = {...fixture.members.rows[0], membership_status: 'active', momo_pay_code: '003314'};
@@ -45,6 +48,129 @@ const props = {id: person.id, expectedGroup: group, permissions: grants, actorId
   role: 'staff' as const, authorityKey: 'signed-in-staff', financialModel: 'canonical_evidence_ledger' as const, navigate: vi.fn()};
 
 describe('scoped member statement', () => {
+  it('opens an inline credit by keyboard, preserves the balance link and returns focus without another request', async () => {
+    const user = userEvent.setup(), request = source([payment(1, true, 1250), payment(2, false, 100)]);
+    render(<MemoryRouter><CoreRecordPage {...props} area="members" scopedMember request={request} /></MemoryRouter>);
+    const reference = await screen.findByRole('button', {name:'View transaction FT-0001'});
+    expect(reference).toHaveAttribute('aria-haspopup', 'dialog');
+    reference.focus();
+    await user.keyboard('{Enter}');
+    const dialog = within(screen.getByRole('dialog', {name:'Transaction details'}));
+    expect(dialog.getByText('Credit').nextElementSibling).toHaveTextContent('RWF 1,250');
+    expect(dialog.getByText('Running balance').nextElementSibling).toHaveTextContent('RWF 1,250');
+    expect(dialog.getByText('Reference').nextElementSibling).toHaveTextContent('FT-0001');
+    expect(dialog.getByText('Date (Kigali)').nextElementSibling).toHaveTextContent('24 Nov 2026, 14:00:00');
+    expect(dialog.getByRole('button', {name:'Close dialog'})).toHaveFocus();
+    await user.tab();
+    expect(dialog.getByRole('button', {name:'Close dialog'})).toHaveFocus();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(reference).toHaveFocus();
+    expect(screen.getByRole('link', {name:'Open member statement, total balance RWF 1,150'})).toBeVisible();
+    expect(request.mock.calls.map(([path]) => path)).toEqual([profilePath + '?include=statement']);
+  });
+
+  it('selects an unreferenced debit on the standalone view without leaking record IDs or keeping it open after access changes', async () => {
+    const raw = statement([payment(1, false, 10)]);
+    const request = vi.fn(async () => ({...detail, member_statement:{...raw, items:[{...raw.items[0], ftId:null, atRaw:'provider time unknown'}]}}));
+    const view = render(<MemoryRouter><MemberStatementPage {...props} request={request} /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', {name:'View transaction, Debit, RWF 10, provider time unknown'}));
+    const dialog = within(screen.getByRole('dialog', {name:'Transaction details'}));
+    expect(dialog.getByText('Debit').nextElementSibling).toHaveTextContent('RWF 10');
+    expect(dialog.getByText('Running balance').nextElementSibling).toHaveTextContent('RWF -10');
+    expect(dialog.getByText('Reference').nextElementSibling).toHaveTextContent('Not recorded');
+    expect(dialog.queryByText('p-1')).not.toBeInTheDocument();
+    expect(dialog.queryByText(internal)).not.toBeInTheDocument();
+    view.rerender(<MemoryRouter><MemberStatementPage {...props} permissions={['users.read']} request={request} /></MemoryRouter>);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', {name:'Download statement'})).not.toBeInTheDocument();
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it('downloads the whole pinned statement from a later page with literal text, exact debits, credits and balances', async () => {
+    const rows = Array.from({length: 51}, (_, index) => payment(index, index !== 50, 4));
+    rows[0].ftId = '=first,"quoted"';
+    rows[1].ftId = 'FT-line1\nline2';
+    const request = source(rows);
+    const signal = new AbortController().signal;
+    const first = await readMemberStatement(request, signal, person.id, actor, group, {offset:0});
+    const middle = await readMemberStatementPage(request, signal, person.id, first.membership, {offset:25, revision});
+    request.mockClear();
+    const csv = await memberStatementCsv(middle, first.membership, request, signal);
+    expect(csv).toContain('Opening balance,,,,,0\r\nTransaction,"24 Nov 2026, 14:00:00","\'=first,""quoted""",,4,4');
+    expect(csv).toContain('"FT-line1\nline2",,4,8');
+    expect(csv).toContain('Transaction,"24 Nov 2026, 14:00:00","FT-0050",4,,196\r\nClosing balance,,,,,196\r\n');
+    expect(csv.match(/^Transaction,/gm)).toHaveLength(51);
+    for (const hidden of [internal, person.id, 'p-25', person.phone_e164, person.momo_number]) if (hidden) expect(csv).not.toContain(hidden);
+    expect(request.mock.calls.map(([path])=>path)).toEqual([0,50].map(offset =>
+      'burimunsi/payments?statement=1&memberId=' + person.id + '&offset=' + offset + '&revision=' + revision));
+  });
+
+  it('offers no partial file if another page repeats a payment or the revision changes, and can refresh the statement', async () => {
+    const rows = Array.from({length: 26}, (_, index) => payment(index));
+    const data = source(rows);
+    const request = vi.fn(async (path: string) => {
+      if (!path.includes('offset=25')) return data(path);
+      const page = statement(rows, 25);
+      return {...page, items:[{...page.items[0], id:rows[0].id}]};
+    });
+    render(<MemoryRouter><CoreRecordPage {...props} area="members" scopedMember request={request} /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', {name:'Download statement'}));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not prepare the complete statement');
+    expect(screen.queryByRole('link',{name:'Download statement'})).not.toBeInTheDocument();
+    expect(screen.getByRole('table',{name:'Member transactions'})).toBeVisible();
+    fireEvent.click(screen.getByRole('button',{name:'Refresh statement'}));
+    expect(await screen.findByRole('button',{name:'Download statement'})).toBeVisible();
+    expect(request.mock.calls.at(-1)?.[0]).toMatch(/offset=0$/);
+    const signal = new AbortController().signal;
+    const first = await readMemberStatement(data, signal, person.id, actor, group, {offset:0});
+    const stale = vi.fn(async () => {throw new AdminRequestError('Changed', {code:'member_statement_changed',statusCode:409});});
+    await expect(memberStatementCsv(first, first.membership, stale, signal)).rejects.toThrow('The statement changed');
+  });
+
+  it('starts a real CSV download for a verified empty statement and revokes the link when the view closes', async () => {
+    const create = vi.fn<typeof URL.createObjectURL>(() => 'blob:https://example.test/statement'), revoke = vi.fn<typeof URL.revokeObjectURL>();
+    vi.stubGlobal('URL', class extends URL {static createObjectURL = create; static revokeObjectURL = revoke;});
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const request = source([]);
+    const view = render(<MemoryRouter><MemberStatementPage {...props} request={request} /></MemoryRouter>);
+    try {
+      fireEvent.click(await screen.findByRole('button', {name:'Download statement'}));
+      const link = await screen.findByRole('link', {name:'Download statement'});
+      expect(link).toHaveAttribute('download','burimunsi-member-statement.csv');
+      expect(link).toHaveAttribute('href','blob:https://example.test/statement');
+      expect(click.mock.instances).toEqual([link]);
+      const file = create.mock.calls[0][0] as Blob;
+      expect(file.type).toBe('text/csv;charset=utf-8');
+      const csv = await new Response(await file.arrayBuffer()).text();
+      expect(csv).toContain('Opening balance,,,,,0\r\nClosing balance,,,,,0');
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally {
+      view.unmount();
+      expect(revoke).toHaveBeenCalledWith('blob:https://example.test/statement');
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('aborts a running export on authority loss and discards any late page', async () => {
+    const rows = Array.from({length:26}, (_, i) => payment(i));
+    const regular = source(rows);
+    let signal: AbortSignal | undefined, release: (() => void) | undefined;
+    const request: AdminRequest = async (path, options) => {
+      if (!path.includes('offset=25')) return regular(path);
+      signal = options?.signal;
+      await new Promise<void>(resolve => {release = resolve;});
+      return statement(rows, 25);
+    };
+    const view = render(<MemoryRouter><MemberStatementPage {...props} request={request} /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', {name:'Download statement'}));
+    await waitFor(() => expect(signal).toBeDefined());
+    view.rerender(<MemoryRouter><MemberStatementPage {...props} authorityKey="new-session" permissions={['users.read']} request={request} /></MemoryRouter>);
+    expect(signal?.aborted).toBe(true);
+    await act(async () => {release?.();});
+    expect(screen.queryByRole('link',{name:'Download statement'})).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('cannot open this member statement');
+  });
   it('opens the inline transaction history from one scoped profile read, then pages on the original revision', async () => {
     const rows = Array.from({length: 26}, (_, index) => payment(index, index !== 25, 4));
     const request = source(rows);

@@ -101,7 +101,7 @@ describe('financial analysis grid',()=>{
     fireEvent.change(dialog.getByLabelText('Maximum'),{target:{value:'0'}});
     await user.click(dialog.getByRole('button',{name:'Apply filter'})); expect(ids()).toEqual(['Five']);
     const {dialog:empty}=await filter('Amount');
-    await user.selectOptions(empty.getByLabelText('Values'),'blank'); await user.click(empty.getByRole('button',{name:'Apply filter'}));
+    await user.click(empty.getByRole('radio',{name:'Blank only'})); await user.click(empty.getByRole('button',{name:'Apply filter'}));
     expect(ids()).toEqual(['Four']);
     const {dialog:payer}=await filter('Payer');
     await user.type(payer.getByLabelText('Contains'),'Nobody'); await user.click(payer.getByRole('button',{name:'Apply filter'}));
@@ -123,7 +123,7 @@ describe('financial analysis grid',()=>{
     const {dialog:clear}=await filter('Status');
     await user.click(clear.getByRole('button',{name:'Clear filter'})); expect(ids()).toHaveLength(6);
     const {dialog:present}=await filter('Payer');
-    await user.selectOptions(present.getByLabelText('Values'),'present'); await user.click(present.getByRole('button',{name:'Apply filter'}));
+    await user.click(present.getByRole('radio',{name:'Non-blank only'})); await user.click(present.getByRole('button',{name:'Apply filter'}));
     expect(ids()).toEqual(['One','Two','Three','Six']);
   });
 
@@ -176,8 +176,24 @@ describe('financial analysis grid',()=>{
     await user.click(button('Refresh')); expect(refreshed).toHaveBeenCalledOnce();
     await user.click(button('Edit Amount filter'));
     const reopened=within(screen.getByRole('dialog',{name:'Filter Amount'}));
-    await user.selectOptions(reopened.getByLabelText('Values'),'blank');
+    await user.click(reopened.getByRole('radio',{name:'Blank only'}));
     await user.click(reopened.getByRole('button',{name:'Apply filter'}));
     expect(button('Edit Amount filter')).toHaveTextContent('Amount · Blank');
+  });
+
+  it('uses radio choices in the popup and restores focus to the column after clearing a filter chip',async()=>{
+    render(sample({pageSize:10}));
+    const {dialog,user}=await filter('Payer');
+    expect(dialog.queryByRole('combobox')).not.toBeInTheDocument();
+    const values=within(dialog.getByRole('group',{name:'Values'}));
+    const all=values.getByRole('radio',{name:'All values'});
+    expect(all).toBeChecked();
+    all.focus();await user.keyboard('{ArrowRight}');
+    expect(values.getByRole('radio',{name:'Blank only'})).toBeChecked();
+    await user.click(dialog.getByRole('button',{name:'Apply filter'}));
+    await user.click(button('Edit Payer filter'));
+    await user.click(screen.getByRole('button',{name:'Clear filter'}));
+    expect(button('Filter Payer')).toHaveFocus();
+    expect(ids()).toHaveLength(6);
   });
 });

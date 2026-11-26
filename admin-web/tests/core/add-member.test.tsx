@@ -1,5 +1,6 @@
 import {webcrypto} from 'node:crypto';
-import {fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {fireEvent, render, screen, waitFor, within} from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import {MemoryRouter, Route, Routes} from 'react-router';
 import {beforeEach, describe, expect, it, vi} from 'vitest';
 import {AdminRequestError, type AdminRequest, type JsonObject} from '../../src/api/contracts';
@@ -195,6 +196,27 @@ const candidate = {id:'candidate-one',candidateId:'candidate-one',groupId:collec
 const candidates = {items:[candidate],nextCursor:null,revision:'r1',totalCount:1,asOf:'2026-11-26T05:00:00Z'};
 
 describe('Android member entry paths on the web', () => {
+  it('opens the scoped method picker, restores focus on dismissal and reopens without fetching suggestions or files', async () => {
+    const request = vi.fn<AdminRequest>().mockResolvedValue(scope), user = userEvent.setup();
+    open(request);
+    const methods = within(await screen.findByRole('dialog',{name:'Add member'}));
+    expect(methods.getByRole('list',{name:'Enrollment methods'})).toBeVisible();
+    expect(methods.getAllByRole('listitem')).toHaveLength(5);
+    expect(methods.getByRole('button',{name:'Close dialog'})).toHaveFocus();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    const opener = screen.getByRole('button',{name:'Choose a method'});
+    expect(opener).toHaveFocus();
+    expect(opener).toHaveAttribute('aria-haspopup','dialog');
+    expect(opener).toHaveAttribute('aria-expanded','false');
+    await user.keyboard('{Enter}');
+    const reopened = within(await screen.findByRole('dialog',{name:'Add member'}));
+    await user.click(reopened.getByRole('button',{name:'Add manually'}));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('form',{name:'Member details'})).toBeVisible();
+    expect(request.mock.calls.map(([path])=>path)).toEqual([ENROLLMENT_PATH]);
+  });
+
   it('offers five native methods, and camera and photo pickers never upload on selection', async () => {
     const request = vi.fn<AdminRequest>().mockResolvedValue(scope); open(request);
     for (const method of ['Suggested from MoMo','Add manually','Take a photo of the list','Choose a photo','Import member list']) {
@@ -349,7 +371,13 @@ describe('roster import outcomes', () => {
     const first = open(request); await previewCsv(); await approveRow(1);
     fireEvent.click(screen.getByRole('button',{name:'Register verified members (1)'})); await screen.findByText(/The import could not be confirmed/);
     first.unmount(); open(request);
+    expect(screen.queryByRole('dialog',{name:'Add member'})).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button',{name:'Check import request'})); await screen.findByText(/No completed import was found/);
+    expect(screen.queryByRole('dialog',{name:'Add member'})).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button',{name:'Choose a method'}));
+    const methods = within(screen.getByRole('dialog',{name:'Add member'}));
+    expect(methods.getAllByRole('listitem')).toHaveLength(4);
+    expect(methods.queryByRole('button',{name:'Add manually'})).not.toBeInTheDocument();
     returnedRows = [previewRow(1, 'Unrelated name')]; await previewCsv(); await approveRow(1);
     fireEvent.click(screen.getByRole('button',{name:'Retry original import'})); await screen.findByText(/Use the same rows/);
     expect(writes).toHaveLength(1);

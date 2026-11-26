@@ -3,7 +3,7 @@ import {z} from 'zod';
 import {AdminRequestError} from '../../api/client';
 import {useSession, type AdminUser, type SessionContextValue} from '../../session/SessionProvider';
 import {usesPhoneCanonicalRecords} from '../../session/sessionContext';
-import {Button, Dialog, ErrorState, Field, LoadingState} from '../../ui';
+import {Button, CompactText, Dialog, ErrorState, Field, Icon, LoadingState} from '../../ui';
 import {clearOriginalAttempt} from '../core/canonicalMutation';
 import {readPending, retainPending, sha256Text, type PendingAttempt} from '../core/pendingAttempt';
 import {usePendingIdentity} from '../core/usePendingIdentity';
@@ -70,7 +70,7 @@ function AllocationFlow({id,group,payment,onClose,onAllocated,onStale,session,us
   WizardProps & {group:string; payment:BuriMunsiPayment; session:SessionContextValue; user:AdminUser}) {
   const identity = usePendingIdentity(user), {epoch,request,isCurrentAuthority} = session;
   const mounted = useRef(false), sending = useRef(false), notified = useRef(false), reviewHeading = useRef<HTMLHeadingElement>(null);
-  const memberSearch = useRef<HTMLInputElement>(null), returning = useRef(false);
+  const memberSearch = useRef<HTMLInputElement>(null), memberButton = useRef<HTMLButtonElement>(null), returning = useRef(false);
   useLayoutEffect(() => {mounted.current = true; return () => {mounted.current = false;};}, []);
   const current = useCallback(() => mounted.current && isCurrentAuthority(epoch,identity.id,identity.sessionId), [epoch,identity,isCurrentAuthority]);
   const loadOriginal = useCallback(async () => {
@@ -86,7 +86,8 @@ function AllocationFlow({id,group,payment,onClose,onAllocated,onStale,session,us
     {invalidResponse:'The original allocation reference could not be checked. No allocation was sent.'});
   const [pending,setPending] = useState<PendingAttempt | null | undefined>(undefined);
   const original = pending === undefined && recovery.result?.status === 'success' ? recovery.result.value.attempt : pending;
-  const [query,setQuery] = useState(''), [selected,setSelected] = useState(''), [review,setReview] = useState<Member | null>(null);
+  const [query,setQuery] = useState(''), [chosen,setChosen] = useState<Member | null>(null), [review,setReview] = useState<Member | null>(null);
+  const [picking,setPicking] = useState(false);
   const [busy,setBusy] = useState(false), [canRetry,setCanRetry] = useState(false), [done,setDone] = useState(false);
   const [message,setMessage] = useState(''), [terminal,setTerminal] = useState('');
   const stale = terminal || (recovery.result?.status === 'success' && original === null && !done
@@ -119,17 +120,26 @@ function AllocationFlow({id,group,payment,onClose,onAllocated,onStale,session,us
   const suggestion = matches.size === 1 && (!targeted || namePage && namePage.length < 25)
     ? matches.values().next().value : undefined;
   const choices = [...new Map([...candidates,...matches.values()].map(member => [member.id,member])).values()];
-  const chosen = choices.find(member => member.id === selected);
+  const memberLabel = (member:Member) => choices.some(other => other.id !== member.id && nameKey(other.name) === nameKey(member.name))
+    ? member.name + ' · ' + member.id : member.name;
   const reviewedId = original ? String(original.intent.memberId) : review?.id;
   const inputId = useId();
   useEffect(() => {
     if (stale && !notified.current && current()) {notified.current = true; onStale();}
   }, [current,onStale,stale]);
   useEffect(() => {
-    if (reviewedId) reviewHeading.current?.focus();
-    else if (returning.current) {returning.current = false; memberSearch.current?.focus();}
-  }, [reviewedId]);
+    if (picking) memberSearch.current?.focus();
+    else if (reviewedId) reviewHeading.current?.focus();
+    else if (returning.current) {returning.current = false; memberButton.current?.focus();}
+  }, [reviewedId,picking]);
   function close() {if (!sending.current) onClose();}
+  function closePicker(member?:Member) {
+    if (!current()) return;
+    if (member) setChosen(member);
+    returning.current = true;
+    setPicking(false);
+    setQuery('');
+  }
 
   async function checkRequest() {
     if (!original || sending.current || !current()) return;
@@ -191,6 +201,21 @@ function AllocationFlow({id,group,payment,onClose,onAllocated,onStale,session,us
   }
 
   const finished = !!stale || done;
+  if (picking && canChoose && !review) return <Dialog open placement="picker" title="Select member"
+    onClose={() => closePicker()} footer={<Button onClick={() => closePicker()}>Cancel</Button>}>
+    <form className="payment-member-search" onSubmit={event => {
+      event.preventDefault();
+      setQuery(String(new FormData(event.currentTarget).get('member') ?? '').trim().slice(0,80));
+    }}><Field htmlFor={inputId+'-search'} label="Search group members"><input ref={memberSearch} id={inputId+'-search'}
+      name="member" type="search" autoComplete="off" className="admin-input" maxLength={80} defaultValue={query} /></Field>
+      <Button type="submit">Search</Button></form>
+    {!members.result ? <LoadingState label="Loading group members" /> : members.result.status === 'error' ?
+      <ErrorState title="Members unavailable" message={members.result.message} onRetry={members.retry} /> : choices.length ?
+      <ul className="payment-member-choices" aria-label="Group members">{choices.map(member =>
+        <li key={member.id}><button type="button" className="payment-member-choice" aria-pressed={member.id === chosen?.id}
+          onClick={() => closePicker(member)}><CompactText>{memberLabel(member)}</CompactText>
+          {member.id === chosen?.id && <Icon name="check" />}</button></li>)}</ul> : <p>No group members found.</p>}
+  </Dialog>;
   return <Dialog open title="Allocate payment" onClose={close} footer={<>
     <Button onClick={close} disabled={busy}>{finished ? 'Close' : 'Cancel'}</Button>
     {!finished && review && !original && <Button onClick={() => {returning.current = true; setReview(null);setMessage('');}} disabled={busy}>Back</Button>}
@@ -211,20 +236,12 @@ function AllocationFlow({id,group,payment,onClose,onAllocated,onStale,session,us
           {original && <p>Request <code>{original.request_key}</code></p>}</> : <>
           {suggestion && <div className="operations-search"><span>{party} name match</span>
             <Button variant="soft" aria-label={'Select suggested member ' + suggestion.name}
-              onClick={() => {if (current()) setSelected(suggestion.id);}}>{suggestion.name}</Button></div>}
+              onClick={() => {if (current()) setChosen(suggestion);}}>{suggestion.name}</Button></div>}
           {matches.size > 1 && <p>Several group members match the SMS name. Choose the intended member.</p>}
-          <form className="operations-search" onSubmit={event => {
-            event.preventDefault(); setSelected(''); setQuery(String(new FormData(event.currentTarget).get('member') ?? '').trim().slice(0,80));
-          }}><Field htmlFor={inputId+'-search'} label="Search group members"><input ref={memberSearch} id={inputId+'-search'} name="member" className="admin-input" maxLength={80} /></Field>
-            <Button type="submit">Search</Button></form>
-          {!members.result ? <LoadingState label="Loading group members" /> : members.result.status === 'error' ?
-            <ErrorState title="Members unavailable" message={members.result.message} onRetry={members.retry} /> : choices.length ?
-            <Field htmlFor={inputId+'-member'} label="Member"><select id={inputId+'-member'} className="admin-input" value={selected} onChange={event => setSelected(event.target.value)}>
-              <option value="">Choose a member</option>
-              {choices.map(member => <option key={member.id} value={member.id}>
-                {choices.some(other => other.id !== member.id && nameKey(other.name) === nameKey(member.name)) ? member.name + ' · ' + member.id : member.name}
-              </option>)}
-            </select></Field> : <p>No group members found.</p>}
+          <button ref={memberButton} type="button" className="payment-member-choice payment-member-trigger" aria-label="Choose member"
+            aria-haspopup="dialog" aria-describedby={chosen ? inputId+'-chosen' : undefined} onClick={() => {if (current()) setPicking(true);}}>
+            <span id={inputId+'-chosen'}><CompactText>{chosen ? memberLabel(chosen) : 'Choose member'}</CompactText></span><Icon name="chevron" />
+          </button>
         </>}
       </>}
     {message && !finished && <p role="status">{message}</p>}
