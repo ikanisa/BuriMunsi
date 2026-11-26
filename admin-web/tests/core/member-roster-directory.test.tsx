@@ -61,6 +61,32 @@ describe('complete scoped member roster', () => {
     }
   });
 
+  it.each([false,true])('keeps newer typing when its own earlier search commits (second search already submitted: %s), then restores external bookmarks', async bothSubmitted => {
+    const request = vi.fn(async () => page(roster(2),2)), navigate = vi.fn();
+    const directory = (locationSearch:string) => <CoreListPage area="members" scopedMember permissions={['users.read']}
+      actorId="fixture-member-staff" principalId={null} role="staff" authorityKey="directory-fixture"
+      financialModel="canonical_evidence_ledger" request={request} navigate={navigate} locationSearch={locationSearch} />;
+    const view = render(directory(''));
+    const input = await screen.findByRole('textbox',{name:'Search Members'});
+    const enter = () => fireEvent.submit(screen.getByRole('search',{name:'Members'}));
+    fireEvent.change(input,{target:{value:'000001'}});
+    enter();
+    fireEvent.change(input,{target:{value:'000002'}});
+    if (bothSubmitted) enter();
+    view.rerender(directory('?search=000001'));
+    expect(input).toHaveValue('000002');
+    expect(screen.getByRole('button',{name:'View 000002'})).toBeVisible();
+    if (!bothSubmitted) enter();
+    expect(navigate.mock.calls.map(([url]) => url)).toEqual(['/admin/members?search=000001','/admin/members?search=000002']);
+    fireEvent.change(input,{target:{value:'unsent draft'}});
+    view.rerender(directory('?search=000002'));
+    expect(input).toHaveValue('unsent draft');
+    view.rerender(directory('?search=000001'));
+    expect(input).toHaveValue('000001');
+    expect(screen.getByRole('button',{name:'View 000001'})).toBeVisible();
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it('combines independent popup filters, sorts every matching record and preserves the criteria for a profile return', async () => {
     const records = [member(1,{display_name:'Éliane Kabera',phone_e164:'+250788001251'}),
       member(2,{display_name:'Eliane Kabera',momo_number:'0788001252'}),member(3,{display_name:'Eliane Rwema'}),

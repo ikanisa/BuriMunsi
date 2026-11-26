@@ -123,6 +123,10 @@ createServer(async (request, response) => {
     const payments = phoneAccounts.hasPermission(session, 'payments.read'), sms = phoneAccounts.hasPermission(session, 'sms.read');
     const visiblePayment = item => visiblePaymentFor(item,sms);
     if (url.pathname === '/api/admin/burimunsi/home') return json(response, 200, homeFor(session));
+    if (url.pathname === '/api/admin/burimunsi/members/enrollment') {
+      const canEnroll = ['users.manage','collections.manage'].every(permission => phoneAccounts.hasPermission(session,permission));
+      return json(response, 200, {collectionId:'fixture-group', label:'Synthetic group', canEnroll});
+    }
     if (paymentAnalysis) {
       if (!payments) return json(response,403,{error:{code:'forbidden'}});
       let query;

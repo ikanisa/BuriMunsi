@@ -337,6 +337,7 @@ try {
   const searchMember = async value => {
     await memberSearch.fill(value);
     await memberSearch.press('Enter');
+    await page.waitForURL(url => (new URLSearchParams(url.hash.split('?')[1]).get('search') ?? '') === value);
   };
   await searchMember('eric   SYNTHETIC');
   await activeRow.waitFor({state:'hidden'});

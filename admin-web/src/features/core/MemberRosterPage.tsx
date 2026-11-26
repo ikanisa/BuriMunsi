@@ -34,12 +34,24 @@ export function MemberRosterPage({request, permissions, authorityKey, actorId, p
   const {result,refreshing,retry} = useOperationRead(JSON.stringify(['member-roster',authorityKey,actorId,principalId,role,financialModel]),allowed,load,
     {retainDuringRefresh:true,reuseSettledOnResume:true,invalidResponse:rosterUnavailable});
   const criteria = useMemo(() => readRosterCriteria(locationSearch),[locationSearch]);
-  const [draft,setDraft] = useState({base:criteria.search,value:criteria.search});
-  if (draft.base !== criteria.search) setDraft({base:criteria.search,value:criteria.search});
-  const search = (draft.base === criteria.search ? draft.value : criteria.search).trim();
+  const location = rosterLocation(criteria);
+  const [draft,setDraft] = useState<{location:string; value:string; pending:string[]}>({location,value:criteria.search,pending:[]});
+  let value = draft.value;
+  if (draft.location !== location) {
+    // A router acknowledgement may arrive after the next keystroke. External navigation restores its own query.
+    const committed = draft.pending.indexOf(location);
+    if (committed < 0) value = criteria.search;
+    setDraft({location,value,pending:committed < 0 ? [] : draft.pending.slice(committed + 1)});
+  }
+  const search = value.trim();
   const liveCriteria = {...criteria,search,page:search === criteria.search ? criteria.page : 1};
   const returnTo = rosterLocation(liveCriteria);
-  const update = (changes: Partial<RosterCriteria>) => navigate(rosterLocation({...liveCriteria,...changes}));
+  const update = (changes: Partial<RosterCriteria>) => {
+    const destination = rosterLocation({...liveCriteria,...changes});
+    setDraft(current => (current.pending.at(-1) ?? current.location) === destination ? current :
+      {...current,pending:[...current.pending,destination]});
+    navigate(destination);
+  };
   const rows = result?.status === 'success' ? result.value : emptyRows;
   const matching = useMemo(() => {
     const found = search ? rows.filter(rosterSearch(search)) : rows;
@@ -64,16 +76,19 @@ export function MemberRosterPage({request, permissions, authorityKey, actorId, p
           criteria={{filters:criteria.filters,sort:criteria.sort,onCriteria:(filters,sort) => update({filters,sort,page:1})}}
           loadingLabel="Loading members" refreshing={refreshing}
           search={<form className="member-roster-search" role="search" aria-label="Members" onSubmit={event => {
-            event.preventDefault(); update({page:1});
+            event.preventDefault();
+            const submitted = new FormData(event.currentTarget).get('search');
+            if (typeof submitted === 'string' && submitted.length <= 200 && !containsControl(submitted)) update({search:submitted.trim(),page:1});
           }}>
             <label className="core-visually-hidden" htmlFor="member-roster-search">Search Members</label>
-            <input className="admin-input" id="member-roster-search" placeholder="Name, Collect ID or mobile number"
-              autoComplete="off" maxLength={200} value={draft.value} onChange={event => {
-                if (!containsControl(event.target.value)) setDraft({base:criteria.search,value:event.target.value});
+            <input className="admin-input" id="member-roster-search" name="search" placeholder="Name, Collect ID or mobile number"
+              autoComplete="off" maxLength={200} value={value} onChange={event => {
+                const typed = event.target.value;
+                if (!containsControl(typed)) setDraft(current => ({...current,value:typed}));
               }} />
             <Button type="submit" icon="search" aria-label="Search" title="Search" />
-            {draft.value && <Button icon="close" aria-label="Clear search" title="Clear search" onClick={() => {
-              setDraft({base:criteria.search,value:''}); update({search:'',page:1});
+            {value && <Button icon="close" aria-label="Clear search" title="Clear search" onClick={() => {
+              setDraft(current => ({...current,value:''})); update({search:'',page:1});
             }} />}
           </form>} />}
       </Card>}
