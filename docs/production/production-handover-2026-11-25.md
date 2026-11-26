@@ -126,10 +126,16 @@ The offline coverage gate (`scripts/qa/l04_alert_coverage.py`) does not treat
 successful reads of function invocation logs as proof that client-facing API
 responses were counted. It builds the aggregate input only when separately
 attested client-facing ingress and invocation aggregates for the exact route
-and same closed five-minute window are complete, their counts agree, no malformed
-rows were counted, and the independent jobs/queue/receipt counters are available.
-Otherwise it emits telemetry unavailable, preserving independent integrity and
-privacy signals. A source attestation workflow and a real private delivery
+and same closed five-minute window are complete, their counts agree, and no malformed
+rows were counted. Each ingress and invocation bucket must specify its own
+`route`, `window_start` and `window_end`. The independent jobs/queue/receipt
+counters are supplied under `health.counters` with a separate window and explicit
+`health.complete`. Capture these from the original source evidence rather than
+copying the requested window onto retrieved counts. A missing, incomplete or
+out-of-window source does not establish coverage; rebuild older unbound inputs
+instead of accepting them. The downstream version 1 intake envelope and the
+existing checkpoint format are unchanged. The gate preserves independent
+integrity and privacy signals even when telemetry is unavailable. A source attestation workflow and a real private delivery
 destination are still required; the helper neither connects nor sends anything.
 
 In the bounded hosted comparison on 25 November 2026 at 21:45–22:00 Kigali,
