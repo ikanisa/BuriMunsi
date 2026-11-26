@@ -1,5 +1,5 @@
 .admin-compact-text { display: block; min-inline-size: 0; max-inline-size: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.admin-cell-text { inline-size: fit-content; max-inline-size: min(100%, clamp(9rem, 20vw, 22rem)); }
+.admin-cell-text { inline-size: fit-content; max-inline-size: clamp(9rem, 20vw, 22rem); }
 .admin-inline-name { display: inline-block; vertical-align: bottom; }
 .admin-page-heading > div, .admin-btn, .admin-badge { min-inline-size: 0; max-inline-size: 100%; }
 .admin-btn > .admin-icon, .admin-btn > .admin-spinner, .admin-badge-dot { flex: none; }

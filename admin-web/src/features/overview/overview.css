@@ -61,7 +61,14 @@ a.overview-evidence-card:hover {
 }
 
 .overview-metric--primary dd { font-size: clamp(1.45rem, 3.6vw, 2.3rem); }
-.overview-metric-card[data-payment-metric] dd { font-size: clamp(1.2rem, 2.65vw, 1.85rem); }
+.overview-metric-card[data-payment-metric] { container-type: inline-size; }
+.overview-metric-card[data-payment-metric] dl { inline-size: 100%; }
+.overview-metric-card[data-payment-metric] dd {
+  font-size: clamp(1.2rem, 2.65vw, 1.85rem);
+  white-space: nowrap;
+  overflow-x: auto;
+}
+.overview-metric-card dd[data-long-amount] { font-size: clamp(.875rem, 8cqi, 1.85rem); }
 .overview-refresh { min-width: 44px; min-height: 44px; padding-inline: 0; justify-content: center; }
 .overview-refresh .admin-icon, .overview-sms-row > .admin-icon { width: 22px; height: 22px; }
 

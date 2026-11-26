@@ -128,7 +128,7 @@ try {
     const response = await route.fetch();
     const json = await response.json();
     await route.fulfill({response,json:{...json,recentPayments:json.recentPayments.map((payment,index) =>
-      index === 0 ? {...payment,memberName:longMember} : payment)}});
+      index === 0 ? {...payment,[payment.memberId ? 'memberName' : 'payerNameRaw']:longMember} : payment)}});
   }, {times:1});
   const firstOverview = page.waitForResponse(response => new URL(response.url()).pathname === '/api/admin/burimunsi/home' && response.ok());
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();

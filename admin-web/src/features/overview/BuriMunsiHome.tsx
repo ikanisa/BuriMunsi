@@ -27,8 +27,9 @@ function Figure({label, icon, value, to, paymentMetric}:
   {label: string; icon: string; value: number | bigint | null; to?: string;
     paymentMetric?: 'incoming' | 'outgoing' | 'sms-balance'}) {
   const className = 'overview-metric overview-metric-card';
+  const formatted = value === null ? 'Unavailable' : (paymentMetric ? 'RWF ' : '') + amountFormat.format(value);
   const content = <dl><dt title={label}><Icon name={icon} /><span className="admin-sr-only">{label}</span></dt>
-    <dd>{value === null ? 'Unavailable' : (paymentMetric ? 'RWF ' : '') + amountFormat.format(value)}</dd></dl>;
+    <dd data-long-amount={paymentMetric && formatted.length > 15 ? true : undefined}>{formatted}</dd></dl>;
   return to ? <Link className={className + ' overview-metric-card--link'} data-payment-metric={paymentMetric} to={to}>{content}</Link> :
     <div className={className} data-payment-metric={paymentMetric}>{content}</div>;
 }
