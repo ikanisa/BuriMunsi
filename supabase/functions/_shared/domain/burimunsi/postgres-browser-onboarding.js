@@ -4,7 +4,7 @@ import {ScopedCursor} from './cursor.js';
 import {requireThat} from './errors.js';
 import {authorize} from './policy.js';
 import {canonicalJson,requireRequestId,sha256} from './values.js';
-import {findOnboardingCandidate,listOnboardingSuggestions,SMART_SUGGESTIONS_CTE} from './smart-onboarding-suggestions.js';
+import {findOnboardingCandidate,listOnboardingSuggestions,paymentSuggestionsRevision} from './smart-onboarding-suggestions.js';
 import {previewSmartOnboardingImport} from './smart-onboarding-import.js';
 import {createSmartOnboardingPolicy} from './smart-onboarding-policy.js';
 import {createGuardedSmartOnboardingImport} from './smart-onboarding-dispatch.js';
@@ -57,15 +57,11 @@ export class PostgresBrowserOnboarding extends PostgresBrowserEnrollment {
       authorize(dbActor,this.groupId,'members.enroll',{now});
       // Bind a continuation to all eligible hints, including changes to source
       // admission, number suffixes or existing memberships between pages.
-      const [snapshot]=await sql.unsafe(`${SMART_SUGGESTIONS_CTE}
-        SELECT encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(filtered) ORDER BY candidate_id)::text,'[]'),'UTF8')),'hex')
-          AS revision FROM filtered`,[this.groupId,q.trim()]);
-      const revision=snapshot?.revision;
-      requireThat(typeof revision==='string'&&SHA.test(revision),'invalid_suggestion',503);
+      const revision=await paymentSuggestionsRevision(sql,{groupId:this.groupId,q});
       const scope={groupId:this.groupId,actorId:this.actorId,snapshot:revision,sort:'onboarding_suggestions',
         filterHash:await sha256(canonicalJson({q,limit,sessionId:this.sessionId}))};
       const after=cursor?await cursorFor(this.env).read(cursor,scope,now):null;
-      const page=await listOnboardingSuggestions(sql,{groupId:this.groupId,q,limit,after});
+      const page=await listOnboardingSuggestions(sql,{groupId:this.groupId,q,limit,after},{paymentsOnly:true});
       const nextCursor=page.after?await cursorFor(this.env).create({...scope,after:page.after,
         expiresAt:Math.min(dbActor.expiresAt,now+15*60*1000)}):null;
       return {items:page.items.map(item=>({...item,id:item.candidateId,groupId:this.groupId})),
@@ -118,7 +114,7 @@ export class PostgresBrowserOnboarding extends PostgresBrowserEnrollment {
         },
         onboardingCandidate:command=>{
           check(command.groupId,command.actorId,command.sessionId);
-          return findOnboardingCandidate(sql,command);
+          return findOnboardingCandidate(sql,command,{paymentsOnly:true});
         },
         createDirectMember:command=>{
           check(command.groupId,command.actorId,command.sessionId);

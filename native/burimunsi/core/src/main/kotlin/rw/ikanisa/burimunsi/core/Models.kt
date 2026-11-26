@@ -1,5 +1,7 @@
 package rw.ikanisa.burimunsi.core
 
+import java.math.BigInteger
+
 enum class Role { ADMIN, STAFF }
 enum class Route { LOGIN, HOME, PAYMENTS, PAYMENT, MEMBERS, MEMBER, SMS, SETTINGS }
 enum class Capability(val key: String) {
@@ -21,7 +23,15 @@ data class RawSms(val id: String, val sender: String, val at: String, val body: 
 data class StaffAccount(val id: String, val name: String, val phone: String, val active: Boolean, val version: Long, val capabilities: Set<String>)
 data class AuditRow(val id: String, val action: String, val at: String)
 data class Page<T>(val items: List<T>, val nextCursor: String?, val totalCount: Int, val revision: String, val asOf: String)
-data class Home(val paymentCount: Int?, val memberCount: Int, val unallocatedCount: Int, val recent: List<Payment>, val asOf: String, val savings: HomeSavings? = null)
+data class Home(val paymentCount: Int?, val memberCount: Int, val unallocatedCount: Int, val recent: List<Payment>, val asOf: String,
+    val savings: HomeSavings? = null, val paymentTotals: HomeWalletTotals? = null)
+data class HomeWalletTotals(
+    val incomingRwf: BigInteger,
+    val outgoingRwf: BigInteger,
+    val latestSmsBalanceRwf: Long?,
+    val walletGapRwf: BigInteger?,
+    val smsBalanceVisible: Boolean,
+)
 data class HomeSavings(
     val lifetimeContributionsRwf: Long?,
     val outgoingPaymentsRwf: Long?,

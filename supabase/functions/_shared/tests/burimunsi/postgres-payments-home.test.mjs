@@ -50,7 +50,7 @@ test('Admin Home reports exact directional totals and limits SMS balance to the 
   const totals = {...counts, incoming:'9007199254740993', outgoing:'0', latest_sms_balance:'0'};
   const granted = recordedSql([totals]);
   assert.deepEqual(await readPaymentsHome(granted.sql, group, asOf, {canAnalyzeSms:true}, {adminTotals:true}), {
-    ...home, paymentTotals:{incomingRwf:'9007199254740993',outgoingRwf:'0',latestSmsBalanceRwf:0},
+    ...home, paymentTotals:{incomingRwf:'9007199254740993',outgoingRwf:'0',latestSmsBalanceRwf:0,walletGapRwf:'9007199254740993'},
   });
   assert.match(granted.queries[0], /sum\(amount_rwf\) FILTER \(WHERE direction='incoming'\)/);
   assert.match(granted.queries[0], /private\.burimunsi_admin_home_sms_balance\(\$1\)/);
@@ -59,6 +59,42 @@ test('Admin Home reports exact directional totals and limits SMS balance to the 
     ...home, paymentTotals:{incomingRwf:'9007199254740993',outgoingRwf:'0'},
   });
   assert.doesNotMatch(restricted.queries[0], /private\.burimunsi_admin_home_sms_balance/);
+});
+
+test('native and browser wallet projections use their own scoped SMS reader and exact signed differences', async () => {
+  for (const options of [{includeWallet:true},{adminTotals:true}]) {
+    for (const [incoming,outgoing,balance,latestSmsBalanceRwf,walletGapRwf] of [
+      ['38050','12100','2990.00',2990,'22960'],
+      ['0','0','0',0,'0'],
+      ['10','8','2',2,'0'],
+      ['2','10','1',1,'-9'],
+      ['0','0',null,null,null],
+      ['0','0','9007199254740992',null,null],
+      ['0','9'.repeat(38),'9007199254740991',Number.MAX_SAFE_INTEGER,'-100000000000000000000009007199254740990'],
+    ]) {
+      const {sql,queries}=recordedSql([{...counts,incoming,outgoing,latest_sms_balance:balance}]);
+      const result=await readPaymentsHome(sql,group,asOf,{canAnalyzeSms:true},options);
+      assert.deepEqual(result,{...home,paymentTotals:{incomingRwf:incoming,outgoingRwf:outgoing,latestSmsBalanceRwf,walletGapRwf}});
+      assert.match(queries[0],/FROM burimunsi\.payments WHERE collection_id=\$1/);
+      assert.match(queries[0],/coalesce\(sum\(amount_rwf\) FILTER \(WHERE direction='outgoing'\),0\)::text/);
+      const native=/FROM private\.burimunsi_home_savings\(\$1\)/,browser=/private\.burimunsi_admin_home_sms_balance\(\$1\)/;
+      assert.match(queries[0],options.includeWallet?native:browser);
+      assert.doesNotMatch(queries[0],options.includeWallet?browser:native);
+    }
+    // Access to payment source links alone does not grant the balance or difference.
+    const {sql,queries}=recordedSql([{...counts,incoming:'0',outgoing:'0',latest_sms_balance:'750'}]);
+    const result=await readPaymentsHome(sql,group,asOf,{showSms:true},options);
+    assert.deepEqual(result.paymentTotals,{incomingRwf:'0',outgoingRwf:'0'});
+    assert.doesNotMatch(queries[0],/private\./);
+  }
+});
+
+test('wallet projection rejects malformed movement totals and malformed balance evidence',async()=>{
+  for (const row of [{incoming:'00'}, {incoming:'1.0'}, {incoming:2}, {outgoing:'1'.repeat(39)},
+    {outgoing:null}, {outgoing:'-1'}, {latest_sms_balance:undefined}, {latest_sms_balance:'73.001'}]) {
+    const {sql}=recordedSql([{...counts,incoming:'1',outgoing:'0',latest_sms_balance:'1',...row}]);
+    await assert.rejects(readPaymentsHome(sql,group,asOf,{canAnalyzeSms:true},{includeWallet:true}),/invalid_snapshot/);
+  }
 });
 
 test('malformed numeric evidence and absent or duplicate summary rows fail closed', async () => {

@@ -182,6 +182,55 @@ test('separate standalone Home savings selector preserves legacy schemas and rec
  assert.equal((await run(get('/session?include=home_savings'))).status,401);
  assert.equal(reads,before[1]);
 });
+test('standalone Home wallet uses the current scoped PIN role for both SMS-derived fields',async()=>{
+ const groupId='group-1',origin='https://native.example.test',installation='22222222-2222-4222-8222-222222222222',
+  requestId='11111111-1111-4111-8111-111111111111';
+ const granted={...actor,role:'admin',sessionId:requestId,installationId:installation,capabilities:['records.read','sms.read']};
+ let current=granted,observedBalance='2990.00',snapshots=0;
+ const queries=[],sql={async unsafe(query,params){
+  assert.deepEqual(params,[groupId]);queries.push(query);
+  assert.match(query,/count\(\*\) AS payments/);assert.match(query,/FROM burimunsi\.payments p /);assert.match(query,/LIMIT 3/);
+  return [{payments:'2',members:'1',unallocated:'1',summary_rows:'1',id:null,
+   incoming:'38050',outgoing:'12100',latest_sms_balance:observedBalance}];
+ }};
+ const noop=async()=>({});
+ const store=new PostgresRecordsStore({authority:{groupId,read:fn=>fn(sql),session:async(connection,{id})=>{
+  assert.equal(connection,sql);assert.equal(id,requestId);snapshots++;return current;
+ }},sourceReader:{revision:noop,page:noop,detail:noop},clock:()=>CLOCK,paymentsOnly:true});
+ const records=new RecordsService({store,groupId,clock:()=>CLOCK,cursor:new ScopedCursor(new Uint8Array(32).fill(8)),paymentsOnly:true});
+ const options={auth:{login:noop,authenticate:()=>assert.fail('PIN selector was not used'),logout:noop,changePasscode:noop,manageStaff:noop},
+  records,contributions:{allocate:noop},members:{enroll:noop,setActive:noop},gateway:{status:noop,replace:noop},
+  strictContract:true,groupId,origin,networkBucket:noop,readRecordActor:()=>({id:granted.id,sessionId:requestId,groupId})};
+ const handle=createNativeHandler({...options,paymentsOnly:true});
+ const get=(path='/home?include=wallet')=>new Request(origin+'/v1/burimunsi'+path,{headers:{
+  'x-burimunsi-installation':installation,'x-burimunsi-contract':'burimunsi.native.v1','x-burimunsi-request':requestId,
+  'x-burimunsi-generation':'1',authorization:'Bearer '+'a'.repeat(64)}});
+ const movements={incomingRwf:'38050',outgoingRwf:'12100'};
+ const plainResponse=await handle(get('/home'));assert.equal(plainResponse.status,200);
+ const plain=(await plainResponse.json()).data;assert.equal(Object.hasOwn(plain,'paymentTotals'),false);
+ assert.doesNotMatch(queries[0],/sum\(amount_rwf\)|home_savings/);
+ for(const [role,capabilities,balance,fields,readsWallet] of [
+  ['admin',['records.read','sms.read'],'2990.00',{latestSmsBalanceRwf:2990,walletGapRwf:'22960'},true],
+  ['admin',['records.read','sms.read'],null,{latestSmsBalanceRwf:null,walletGapRwf:null},true],
+  ['admin',['records.read'],'2990',{},false],
+  ['staff',['records.read','sms.read'],'2990',{},false],
+ ]){
+  current={...granted,role,capabilities};observedBalance=balance;queries.length=0;
+  const response=await handle(get());assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'no-store');
+  assert.deepEqual((await response.json()).data,{...plain,paymentTotals:{...movements,...fields}});
+  assert.equal(queries.length,1);assert.equal(queries[0].includes('private.burimunsi_home_savings($1)'),readsWallet);
+ }
+ queries.length=0;const before=snapshots;
+ for(const path of ['/home?include=wallet&include=savings','/home?include=wallet&q=other','/session?include=wallet']){
+  assert.equal((await handle(get(path))).status,400,path);
+ }
+ assert.equal((await createNativeHandler({...options,paymentsOnly:false})(get())).status,400);
+ assert.equal(snapshots,before);
+ for(const invalid of [{...granted,capabilities:['sms.read']},{...granted,groupId:'other'},{...granted,active:false},null]){
+  current=invalid;assert.equal((await handle(get())).status,invalid?.active?403:401);
+ }
+ assert.equal(queries.length,0);
+});
 test('verified PIN record selector still requires a matching actor in the records snapshot',async()=>{
  const {svc,data,tx}=records(),installation='22222222-2222-4222-8222-222222222222',requestId='11111111-1111-4111-8111-111111111111';
  data.actor={...data.actor,sessionId:requestId,installationId:installation,name:'Synthetic operator'};

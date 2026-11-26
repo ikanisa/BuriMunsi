@@ -36,6 +36,8 @@ a.overview-evidence-card:hover {
 .overview-metric dl { margin: 0; }
 .overview-metric dt { color: var(--admin-muted); font-weight: 650; }
 .overview-payment-metrics { margin-block-start: .75rem; }
+.overview-wallet-status { margin: .5rem 0 0; overflow-wrap: anywhere; }
+.overview-wallet-status .admin-badge-dot { flex: none; }
 .overview-metric-card[data-payment-metric='incoming'] {
   background: var(--admin-success-surface);
   --overview-payment-icon: var(--admin-success);

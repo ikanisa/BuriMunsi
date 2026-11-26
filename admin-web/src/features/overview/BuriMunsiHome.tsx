@@ -4,7 +4,7 @@ import {z} from 'zod';
 import {useSession} from '../../session/SessionProvider';
 import {hasScopedAdminAuthority} from '../../session/ownerIdentity';
 import {canDisplaySessionRecords, canReadSmsEvidence} from '../../session/sessionContext';
-import {Button, Card, EmptyState, ErrorState, Icon, LoadingState, PageHeader} from '../../ui';
+import {Button, Card, EmptyState, ErrorState, Icon, LoadingState, PageHeader, StatusBadge} from '../../ui';
 import {BuriMunsiPaymentRows, buriMunsiPaymentsPath, buriMunsiSmsPath} from '../operations/BuriMunsiPaymentRows';
 import {buriMunsiPayment} from '../operations/canonicalPaymentAnalysis';
 import {useOperationRead} from '../operations/useOperationRead';
@@ -12,9 +12,12 @@ import './overview.css';
 
 const count = z.number().int().nonnegative();
 const totalRwf = z.string().regex(/^(0|[1-9]\d{0,37})$/).transform(value => BigInt(value));
+const signedRwf = z.string().regex(/^(0|-?[1-9]\d{0,38})$/).transform(value => BigInt(value));
 const snapshot = z.object({
   paymentCount: count, memberCount: count, unallocatedCount: count, recentPayments: z.array(buriMunsiPayment),
-  paymentTotals: z.object({incomingRwf:totalRwf,outgoingRwf:totalRwf,latestSmsBalanceRwf:count.nullish()}).optional(),
+  paymentTotals: z.object({
+    incomingRwf:totalRwf,outgoingRwf:totalRwf,latestSmsBalanceRwf:count.nullish(),walletGapRwf:signedRwf.nullish(),
+  }).optional(),
   asOf: z.string().refine(value => Number.isFinite(Date.parse(value))),
 }).refine(value => value.unallocatedCount <= value.paymentCount && value.recentPayments.length <= value.paymentCount &&
   new Set(value.recentPayments.map(row => row.id)).size === value.recentPayments.length);
@@ -41,6 +44,7 @@ export function BuriMunsiHome() {
   const {result, retry} = useOperationRead('burimunsi-home:' + authority, visible, load);
   const canOpenSms=!!collection && session.status==='authenticated';
   const totals = result?.status === 'success' ? result.value.paymentTotals : undefined;
+  const walletGap = sms && totals?.latestSmsBalanceRwf != null ? totals.walletGapRwf : null;
   return <><PageHeader title="Home" actions={<Button icon="refresh" aria-label="Refresh Home" onClick={retry} />} />
     {!visible ? <ErrorState title="Access unavailable" message="Your account cannot view the group snapshot." /> : !result ? <LoadingState label="Loading Home" /> :
       result.status === 'error' ? <ErrorState message={result.message} onRetry={retry} /> : <>
@@ -58,6 +62,9 @@ export function BuriMunsiHome() {
             {sms && <Figure label="Latest MoMo SMS balance" icon="message" value={totals?.latestSmsBalanceRwf ?? null}
               to={canOpenSms ? buriMunsiSmsPath : undefined} paymentMetric="sms-balance" />}
           </div>}
+          {payments && walletGap != null && walletGap !== 0n && <p className="overview-wallet-status" role="status">
+            <StatusBadge tone="warning"><span>Wallet difference · RWF {amountFormat.format(walletGap)}</span></StatusBadge>
+          </p>}
         </section>
         {payments && <Card className="operations-records"><div className="operations-toolbar"><h2>Recent payments</h2>
           <Link className="operations-link" to={buriMunsiPaymentsPath}>View all payments</Link></div>

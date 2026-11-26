@@ -7,7 +7,7 @@ enum class Sheet { PROFILE, PIN, HELP, ALLOCATE, ENROLL, STAFF, STAFF_EDIT, REMO
 data class UiState(
     val operator:Operator?=null,val route:Route=Route.LOGIN,val sheet:Sheet?=null,val busy:Boolean=false,val error:String?=null,
     val home:Home?=null,val payments:Page<Payment>?=null,val members:Page<Member>?=null,
-    val homeSavingsLoading:Boolean=false,
+    val homeSavingsLoading:Boolean=false,val homeWalletUnavailable:Boolean=false,
     val payment:Payment?=null,val allocatedFromVersion:Long?=null,val member:Member?=null,val messages:Page<SmsRow>?=null,val observations:Page<ObservationListRow>?=null,
     val queuedObservations:List<QueuedObservationRow>?=null,val queuedUnavailable:Boolean=false,
     val observationProcessing:Map<SmsSourceRef.Observation,ObservationProcessing> = emptyMap(),val observationRetryNotice:String?=null,

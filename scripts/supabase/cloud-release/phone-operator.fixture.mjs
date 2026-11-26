@@ -213,7 +213,10 @@ export async function verifyPhoneOperatorAccounts({owner,database,fixtureRoot,ph
   await owner.query('SELECT private.collect_fence_begin_quiesce($1,$2,$3)',args);
   await owner.query('SELECT private.collect_fence_drain($1,$2,$3)',args);
   await owner.query(await migration('20261122190000_burimunsi_phone_operator_accounts.sql'));
-  if(phoneOnboarding)await owner.query(await migration('20261119041000_burimunsi_ocr_disclosure_binding.sql'));
+  if(phoneOnboarding){
+    await owner.query(await migration('20261119041000_burimunsi_ocr_disclosure_binding.sql'));
+    await owner.query(await migration('20261124114500_burimunsi_payments.sql'));
+  }
   if(phoneSmsHealth){
     // The topic fixture supplies its own scheduler predecessor. Install the
     // same financial projection and its production ACLs from the source migration.

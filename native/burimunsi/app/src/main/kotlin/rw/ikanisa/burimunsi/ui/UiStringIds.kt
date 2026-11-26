@@ -582,4 +582,9 @@ internal val UiStringIds:Map<String,Int> = mapOf(
     "Wallet reconciliation needs a verified opening balance and a complete record of payments and fees." to R.string.ui_home_wallet_check_unavailable,
     "Recorded outgoing payments" to R.string.ui_home_recorded_outgoing,
     "Loading savings" to R.string.ui_home_loading_savings,
+    "Cumulative incoming payments" to R.string.ui_home_wallet_incoming,
+    "Cumulative outgoing payments" to R.string.ui_home_wallet_outgoing,
+    "Latest MoMo SMS balance" to R.string.ui_home_wallet_sms_balance,
+    "Wallet difference" to R.string.ui_home_wallet_difference,
+    "Loading payment totals" to R.string.ui_home_wallet_loading,
 )

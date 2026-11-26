@@ -1243,24 +1243,33 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         receiverStatus.refreshHealth()
     }
 
-    /** A bundle that omitted savings gets one background read. A complete or
-     * partial savings object already carries the server's reported facts. */
+    /** Show the session's verified records immediately. Use existing legacy savings
+     * only when the server explicitly rejects the wallet selector. If the bundle
+     * omitted savings, that rejection permits one background savings read. */
     private fun showBundledHome(grant: NativeSessionBootstrap.Grant, base: Home, savedAt: Long?) {
-        sessionBootstrap.withCurrent(grant) { showHome(base,false,savedAt) }
+        val initial = if (base.savings != null && base.paymentTotals == null) base.copy(savings = null) else base
+        sessionBootstrap.withCurrent(grant) { showHome(initial,false,savedAt,walletUnavailable = base.paymentTotals == null) }
         fun stillShowingBase() = foreground && !state.offline && SnapshotFreshness.reusable(savedAt,clock()) &&
             state.route == Route.HOME && state.sheet == null &&
-            state.home === base && state.operator === grant.operator && hasAccess(Capability.READ) &&
+            state.home === initial && state.operator === grant.operator && hasAccess(Capability.READ) &&
             (queuedNavigation == null || queuedNavigation?.first == Route.HOME)
-        if (base.savings != null || !stillShowingBase()) return
+        if (base.paymentTotals != null || !stillShowingBase()) return
         val records = repo()
         state = state.copy(homeSavingsLoading = true)
         viewModelScope.launch {
             try {
-                val enhanced = io { records.readHomeEnhancement(grant.operator) } ?: return@launch
+                val enhanced = io { records.readHomeEnhancement(grant.operator, allowLegacySavings = base.savings == null) }
+                // Null is returned only after the server explicitly rejects the requested selectors.
+                val selected = enhanced ?: base
                 if (!stillShowingBase()) return@launch
                 sessionBootstrap.withCurrent(grant) {
                     // Do not change shared cache/repository provenance or extend base freshness.
-                    if (stillShowingBase()) state = state.copy(home = enhanced, homeSavingsLoading = false)
+                    if (stillShowingBase()) {
+                        if (pendingFreshDraw?.first == Route.HOME && pendingFreshDraw?.second === initial) {
+                            pendingFreshDraw = Route.HOME to selected
+                        }
+                        state = state.copy(home = selected, homeSavingsLoading = false, homeWalletUnavailable = false)
+                    }
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -1275,7 +1284,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                     clearViews()
                     state=UiState(error="Sign in again.",pending=state.pending)
                 } else if (error.status == 403 && error.code == "access_denied" && !error.uncertain &&
-                    state.operator === grant.operator && state.route == Route.HOME && state.home === base) {
+                    state.operator === grant.operator && state.route == Route.HOME && state.home === initial) {
                     // The profile still exists, but the later authenticated records read was denied.
                     // Hide the old Home and discard its owner's cache before ordinary profile validation.
                     pendingFreshDraw=null
@@ -1293,15 +1302,15 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             } catch (_: Exception) {
                 // An optional read must not hide the confirmed base Home or invent values.
             } finally {
-                if (state.home === base && state.operator === grant.operator && state.homeSavingsLoading) {
+                if (state.home === initial && state.operator === grant.operator && state.homeSavingsLoading) {
                     state = state.copy(homeSavingsLoading = false)
                 }
             }
         }
     }
 
-    private fun showHome(home:Home,cached:Boolean,savedAt:Long?) {
-        state=state.copy(home=home,homeSavingsLoading=false,gateway=null,offline=cached,savedAt=savedAt,readbackRequired=state.readbackRequired&&cached)
+    private fun showHome(home:Home,cached:Boolean,savedAt:Long?,walletUnavailable:Boolean=false) {
+        state=state.copy(home=home,homeSavingsLoading=false,homeWalletUnavailable=walletUnavailable,gateway=null,offline=cached,savedAt=savedAt,readbackRequired=state.readbackRequired&&cached)
         if(!cached&&savedAt!=null)pendingFreshDraw=Route.HOME to home
         if(state.sheet==null)refreshHomeGatewayStatus()
     }
