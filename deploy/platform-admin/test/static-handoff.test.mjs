@@ -210,3 +210,48 @@ test('React content-addressed entry passes only when selected Worker holds its r
   }
   assert.equal(upstream, 0);
 });
+
+test('a successful status with the wrong MIME cannot become an immutable React asset', async () => {
+  const fixtures = [
+    ['assets/admin-entry.js', 'text/plain', 'text/javascript; charset=UTF-8'],
+    ['assets/lazy.mjs', 'application/json', 'application/javascript'],
+    ['assets/admin.css', 'text/plain', 'text/css'],
+    ['assets/module.wasm', 'application/octet-stream', 'application/wasm'],
+  ];
+  const entry = createAdminWorker({fetchImpl: async () => {throw Error('No provider call');}});
+  for (const [file, wrong, right] of fixtures) {
+    const path = current.replace('main.dart.js', file);
+    for (const method of ['GET', 'HEAD']) {
+      const response = await entry.fetch(request(path, {method}), environment({fetch: async () =>
+        new Response(method === 'HEAD' ? null : 'fixture wrong representation', {headers: {
+          'Content-Type': wrong, 'Cache-Control': 'public, max-age=31536000, immutable'}})}));
+      assert.equal(response.status, 404, path);
+      assert.match(response.headers.get('Cache-Control'), /no-store/);
+      assert.doesNotMatch(response.headers.get('Cache-Control'), /immutable/);
+      assert.equal(response.headers.get('X-Collect-Static-Recovery'), '1');
+      if (method === 'HEAD') assert.equal(await response.text(), '');
+      else assert.doesNotMatch(await response.text(), /fixture wrong representation/);
+    }
+    const genuine = new Response('fixture correct bytes', {status: 206, headers: {
+      'Content-Type': right, 'Content-Range': 'bytes 0-20/42', ETag: '"asset"', 'Cache-Control': 'public, immutable'}});
+    const passthrough = await entry.fetch(request(path, {headers: {Range: 'bytes=0-20'}}),
+      environment({fetch: async () => genuine}));
+    assert.equal(passthrough, genuine);
+    assert.equal(await passthrough.text(), 'fixture correct bytes');
+  }
+});
+
+test('conditional React asset revalidation rejects a successful mismatched representation', async () => {
+  const path = current.replace('main.dart.js', 'assets/admin-entry.js');
+  let calls = 0;
+  const response = await versionedStatic(request(path, {headers: {'If-None-Match': '"wrong"'}}), {
+    fetch: async (received) => {
+      if (++calls === 1) return new Response(null, {status: 304});
+      assert.equal(received.headers.get('If-None-Match'), null);
+      return new Response('fixture wrong representation', {headers: {'Content-Type': 'application/json'}});
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(response.status, 404);
+  assert.match(response.headers.get('Cache-Control'), /no-store/);
+});

@@ -5,6 +5,16 @@ import {cancelObserved} from './transport-body.js';
 const PREFIX = '/_build/';
 const MAIN = /^\/_build\/[a-f0-9]{64}\/main\.dart\.js$/;
 const JAVASCRIPT = new Set(['text/javascript', 'application/javascript']);
+
+function matchesStaticMime(path, mime) {
+  if (!mime || mime === 'text/html' || mime === 'application/xhtml+xml') return false;
+  // 200/206 at an immutable URL is not enough: an error or fallback response
+  // must not be cached in place of a script, stylesheet or WASM module.
+  if (/\.m?js$/i.test(path)) return JAVASCRIPT.has(mime);
+  if (/\.css$/i.test(path)) return mime === 'text/css';
+  if (/\.wasm$/i.test(path)) return mime === 'application/wasm';
+  return true;
+}
 const NO_STORE = {
   'Cache-Control': 'no-store, no-cache, max-age=0, must-revalidate, no-transform',
   'CDN-Cache-Control': 'no-store',
@@ -83,8 +93,8 @@ export async function versionedStatic(request, assets) {
     return unavailable(request, main, 503);
   }
   const mime = response.headers.get('Content-Type')?.split(';', 1)[0].trim().toLowerCase();
-  if ((response.status === 200 || response.status === 206) && mime && mime !== 'text/html' &&
-      (!main || JAVASCRIPT.has(mime)) && !response.headers.has('Set-Cookie')) return response;
+  if ((response.status === 200 || response.status === 206) && matchesStaticMime(path, mime) &&
+      !response.headers.has('Set-Cookie')) return response;
   cancelObserved(response.body);
   return unavailable(request, main, response.status >= 500 ? 503 : 404);
 }

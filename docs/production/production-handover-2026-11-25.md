@@ -126,10 +126,16 @@ The offline coverage gate (`scripts/qa/l04_alert_coverage.py`) does not treat
 successful reads of function invocation logs as proof that client-facing API
 responses were counted. It builds the aggregate input only when separately
 attested client-facing ingress and invocation aggregates for the exact route
-and same closed five-minute window are complete, their counts agree, no malformed
-rows were counted, and the independent jobs/queue/receipt counters are available.
-Otherwise it emits telemetry unavailable, preserving independent integrity and
-privacy signals. A source attestation workflow and a real private delivery
+and same closed five-minute window are complete, their counts agree, and no malformed
+rows were counted. Each ingress and invocation bucket must specify its own
+`route`, `window_start` and `window_end`. The independent jobs/queue/receipt
+counters are supplied under `health.counters` with a separate window and explicit
+`health.complete`. Capture these from the original source evidence rather than
+copying the requested window onto retrieved counts. A missing, incomplete or
+out-of-window source does not establish coverage; rebuild older unbound inputs
+instead of accepting them. The downstream version 1 intake envelope and the
+existing checkpoint format are unchanged. The gate preserves independent
+integrity and privacy signals even when telemetry is unavailable. A source attestation workflow and a real private delivery
 destination are still required; the helper neither connects nor sends anything.
 
 In the bounded hosted comparison on 25 November 2026 at 21:45–22:00 Kigali,
@@ -161,3 +167,22 @@ Provide the independently retained SHA-256 of each adjacent build receipt (not j
 In the isolated authenticated browser rehearsal, leave the two tabs open across the respective transitions, force lazy asset loads and verify response MIME/status, sign-out, and original-ID outcome readback for a synthetic interrupted write. Returning Worker traffic does not restore database state. Do not blindly retry or downgrade schema on a missing acknowledgement. Unit checks: `node --test scripts/qa/r06_compare_admin_assets.test.mjs`.
 
 For a local adverse-case exercise, run `node admin-web/tests/browser/react-asset-handoff.mjs BASELINE_FIXTURE BASELINE_RECEIPT_SHA256 CANDIDATE_FIXTURE CANDIDATE_RECEIPT_SHA256`. Both must be unconfigured React fixtures built for the same loopback origin (default port 4175), with distinct asset sets and the fixture sign-in contract. The child switches only the static roots via private process IPC, retaining its in-memory synthetic session. The check verifies both signed-in tabs, the Payments JavaScript bytes when present, plain noncacheable 404s after the respective switch, and sign-out on reload in both tabs. Its browser deliberately disables installed service workers to cover requests that reach the server. This is neither installed-PWA nor interrupted-write qualification and is not permission to change hosted traffic.
+
+### R06: Offline paired build rehearsal
+
+For two distinct unmodified React Admin packages with independently pinned
+adjacent build receipts, prepare a fresh local rehearsal directory:
+
+```sh
+node scripts/qa/r06_prepare_admin_pair.mjs OLD_DIR OLD_RECEIPT_SHA256 NEW_DIR NEW_RECEIPT_SHA256 NEW_REHEARSAL_DIR
+```
+
+The `baseline/` directory keeps its own shell, manifest, profile and service
+worker and adds the candidate's versioned static assets. The `candidate/`
+directory does the reverse. The tool checks full input inventories, verifies
+copied bytes, and writes a separate `pair.json` marked non-deployable. Do not
+replace `build/admin-web` with these outputs or put them in a deployment bundle.
+The ordinary package validator intentionally rejects these extended inventories.
+Test the two directions with `node --test scripts/qa/r06_*test.mjs`.
+The rehearsal does not qualify previously deployed Flutter assets, a real
+browser session, a Worker traffic change, or compatible database/API rollback.

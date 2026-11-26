@@ -58,3 +58,16 @@ test('actual kept-name Admin bundle serves manual predecessor recovery instead o
   dom.panel().children[2].listeners.click();
   assert.equal(dom.reloads, 1); assert.equal(dom.forbiddenEffects, 0);
 });
+
+test('compiled Admin Worker rejects a wrongly typed immutable React entry', async () => {
+  const url = origin + '/_build/' + 'c'.repeat(64) + '/assets/admin-entry.js';
+  const env = {...profile, ASSETS: {fetch() {
+    return new Response('fixture non-JavaScript', {headers: {
+      'Content-Type': 'application/json', 'Cache-Control': 'public, immutable',
+    }});
+  }}};
+  const rejected = await worker.fetch(new Request(url), env);
+  assert.equal(rejected.status, 404);
+  assert.match(rejected.headers.get('Cache-Control'), /no-store/);
+  assert.doesNotMatch(await rejected.text(), /fixture non-JavaScript/);
+});
