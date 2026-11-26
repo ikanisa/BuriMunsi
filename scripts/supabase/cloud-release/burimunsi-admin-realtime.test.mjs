@@ -12,6 +12,9 @@ import {compileSql} from '../../../supabase/functions/_shared/postgres-compatibi
 const release=await readFile(new URL('../../../supabase/migrations/20261122191400_burimunsi_admin_realtime.sql',import.meta.url),'utf8');
 const predecessor=await readFile(new URL('../../../supabase/migrations/20261022200028_collect_private_member_realtime.sql',import.meta.url),'utf8');
 const phoneAccounts=await readFile(new URL('../../../supabase/migrations/20261122190000_burimunsi_phone_operator_accounts.sql',import.meta.url),'utf8');
+const ownerIdentity=await readFile(new URL('../../../supabase/migrations/20261111121400_collect_protected_owner_identity.sql',import.meta.url),'utf8');
+const fence=await readFile(new URL('../../../supabase/migrations/20261022195747_collect_application_mutation_fence.sql',import.meta.url),'utf8');
+const ownerJoinFix=await readFile(new URL('../../../supabase/migrations/20261126165723_burimunsi_admin_live_owner_join.sql',import.meta.url),'utf8');
 function privateFunction(name,source){
  const start=source.indexOf('CREATE FUNCTION private.'+name+'(');
  assert.ok(start>=0);const tail=source.slice(start),end=tail.match(/\$(?:fn|meta)\$;/);
@@ -55,10 +58,6 @@ test('private Realtime authorizes just the current group and session and never d
  SET ROLE postgres;
  GRANT USAGE ON SCHEMA private,app TO collect_runtime;
  CREATE TABLE private.collect_fence_control(singleton boolean,mode text,source_sha256 text);INSERT INTO private.collect_fence_control VALUES(true,'fenced',repeat('a',64));
- CREATE FUNCTION private._collect_fence_require_operator() RETURNS void LANGUAGE plpgsql AS $$BEGIN IF current_user<>'postgres' THEN RAISE insufficient_privilege;END IF;END$$;
- CREATE FUNCTION private._collect_fence_require_runtime() RETURNS void LANGUAGE plpgsql AS $$BEGIN
-  IF current_setting('role',true) IS DISTINCT FROM 'collect_runtime' OR current_setting('collect.edge_verified',true) IS DISTINCT FROM 'true'
-   OR current_setting('fixture.work_kind',true) IS DISTINCT FROM 'http_admin' THEN RAISE insufficient_privilege;END IF;END$$;
  CREATE FUNCTION private._collect_fence_statement() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN
   IF current_setting('role',true)='postgres' AND current_setting('fixture.work_kind',true)='maintenance' THEN RETURN NULL;END IF;
   IF current_setting('role',true) IS DISTINCT FROM 'collect_runtime' OR current_setting('collect.edge_verified',true) IS DISTINCT FROM 'true' THEN RAISE insufficient_privilege;END IF;RETURN NULL;END$$;
@@ -90,8 +89,6 @@ test('private Realtime authorizes just the current group and session and never d
  ALTER TABLE app.admin_users ADD COLUMN burimunsi_phone_only boolean NOT NULL DEFAULT false;
  ALTER TABLE private.burimunsi_operator_approvals ADD COLUMN identity_source text NOT NULL DEFAULT 'phone';
  ALTER TABLE private.burimunsi_accounts ADD COLUMN name text, ADD COLUMN pin_hash jsonb;
- CREATE FUNCTION private.collect_owner_is(web_id text,principal text,email text) RETURNS boolean LANGUAGE sql AS $$
-  SELECT EXISTS(SELECT 1 FROM private.collect_owner_identity WHERE singleton AND admin_user_id=web_id AND principal_user_id=principal AND owner_email=email)$$;
  CREATE FUNCTION private.burimunsi_browser_pin_is_fresh(bigint) RETURNS boolean LANGUAGE sql AS $$SELECT false$$;
  CREATE FUNCTION private.burimunsi_browser_pin_session(p_group text,p_cookie text,p_origin text) RETURNS jsonb LANGUAGE sql SECURITY DEFINER AS $$
   SELECT f.value||jsonb_build_object('permissions',ARRAY(SELECT permission FROM app.admin_grants WHERE user_id=b.principal_id),
@@ -124,7 +121,9 @@ test('private Realtime authorizes just the current group and session and never d
  CREATE TABLE private.burimunsi_auto_sms_jobs(collection_id text,state text);
  CREATE TABLE app.payments(id text PRIMARY KEY,collection_id text);CREATE TABLE app.contribution_posting_snapshots(payment_id text);
  CREATE TABLE private.burimunsi_payment_sms_deliveries(collection_id text,state text,provider_state text);
- CREATE TABLE private.burimunsi_inbox_checks(collection_id text,state text);CREATE TABLE collect_ops.jobs_dispatches(id uuid PRIMARY KEY);
+ CREATE TABLE private.burimunsi_inbox_checks(collection_id text,state text);
+ CREATE TABLE collect_ops.jobs_config(singleton boolean,enabled boolean);
+ CREATE TABLE collect_ops.jobs_dispatches(id uuid PRIMARY KEY,state text);
  CREATE FUNCTION private._retention_manifest_catalog_v2() RETURNS jsonb LANGUAGE sql AS $$SELECT '{"private_classes":[]}'::jsonb;$$;
  CREATE FUNCTION private.retention_capture_inventory_v2(uuid,text,bigint,text,integer) RETURNS jsonb LANGUAGE sql AS $$SELECT jsonb_build_array('managed:storage_iceberg')$$;
  CREATE TABLE realtime.messages(topic text,extension text,event text,payload jsonb,private boolean,id uuid DEFAULT gen_random_uuid());
@@ -146,9 +145,18 @@ test('private Realtime authorizes just the current group and session and never d
    app.admin_grants,app.admin_account_role_capabilities,app.admin_account_guards TO collect_runtime;
  GRANT INSERT,DELETE ON app.admin_account_guards TO collect_runtime;
  `);
+ for(const name of ['_collect_fence_operator','_collect_fence_require_operator','_collect_fence_require_runtime'])
+  await q(privateFunction(name,fence));
+ for(const name of ['collect_owner_binding','collect_owner_is'])await q(privateFunction(name,ownerIdentity));
+ await q(`ALTER TABLE private.collect_owner_identity ENABLE ROW LEVEL SECURITY;
+  REVOKE ALL ON TABLE private.collect_owner_identity FROM PUBLIC,anon,authenticated,service_role,collect_runtime,collect_importer;
+  REVOKE ALL ON FUNCTION private.collect_owner_binding(),private.collect_owner_is(text,text,text)
+    FROM PUBLIC,anon,authenticated,service_role,collect_runtime,collect_importer;`);
  for(const name of ['_collect_member_realtime_metadata','_collect_member_realtime_metadata_sha','collect_member_realtime_join',
   'collect_member_realtime_configure','collect_member_realtime_publish'])await q(privateFunction(name,predecessor));
  await q(privateFunction('burimunsi_browser_operator',phoneAccounts));
+ await q(`REVOKE ALL ON FUNCTION private.burimunsi_browser_operator(text,text,uuid,boolean)
+   FROM PUBLIC,anon,authenticated,service_role,collect_runtime,collect_importer`);
  await q("CREATE POLICY fixture_member ON realtime.messages FOR SELECT TO authenticated USING (topic=(SELECT realtime.topic()) AND extension='broadcast' AND private.collect_member_realtime_join((SELECT realtime.topic())))");
  const memberPin=await one('SELECT private._collect_member_realtime_metadata_sha() value');
  await q("INSERT INTO private.member_realtime_control VALUES(true,true,$1,repeat('a',64),0)",[memberPin]);
@@ -207,6 +215,30 @@ test('private Realtime authorizes just the current group and session and never d
  await topic('buri:ops:'+'0'.repeat(64));assert.equal((await select()).rowCount,0);
  await runtime('jobs');await q('BEGIN');await insert();await q('INSERT INTO app.contribution_posting_snapshots VALUES($1)',['payment']);await q('COMMIT');
  assert.equal(await count(),1);await publicAnon();await topic(cap.topic);
+ await t.test('the browser PIN owner receives its exact topic under the subscriber role without owner DTO privilege',async()=>{
+  // Supabase's private Broadcast join selects an exact topic/extension probe
+  // under the subscriber role. Before the fix the owner DTO guard caused
+  // even this current, scoped owner to be rejected under anon.
+  assert.equal((await select()).rowCount,0);
+  await operator();await q("UPDATE private.collect_fence_control SET mode='fenced'");
+  await q(ownerJoinFix);await q("UPDATE private.collect_fence_control SET mode='open'");
+  assert.equal(await one(`SELECT has_function_privilege('anon','private.collect_owner_binding()','EXECUTE')
+    OR has_function_privilege('anon','private.burimunsi_browser_operator(text,text,uuid,boolean)','EXECUTE')
+    OR has_table_privilege('anon','private.collect_owner_identity','SELECT') AS value`),false);
+  await publicAnon();await topic(cap.topic);
+  assert.equal((await select()).rowCount,1);
+  for(const field of ['admin_user_id','principal_user_id','owner_email']){
+   // The temporary fixture can vary its synthetic immutable row to prove
+   // each component of the binding must match. The production table cannot.
+   await operator();await q('BEGIN');
+   try{
+    await q(`UPDATE private.collect_owner_identity SET ${field}='unbound'`);
+    await q('SET LOCAL ROLE anon');await topic(cap.topic);
+    assert.equal((await select()).rowCount,0,field);
+   }finally{await q('ROLLBACK');}
+  }
+  await publicAnon();await topic(cap.topic);
+ });
  const [broadcast]=(await select()).rows;assert.match(broadcast.payload.id,/^[0-9a-f-]{36}$/);
  assert.deepEqual(broadcast,{topic:cap.topic,event:'operations_changed',payload:{changed:true,id:broadcast.payload.id},private:true});
  await t.test('an authorized phone Admin can subscribe and a demotion closes cached read access',async()=>{
