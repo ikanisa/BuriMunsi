@@ -165,3 +165,22 @@ node scripts/qa/r06_compare_admin_assets.mjs BASELINE_DIR BASELINE_RECEIPT_SHA25
 Provide the independently retained SHA-256 of each adjacent build receipt (not just the asset version). The check rehashes the files, rejects a wrong receipt or malformed path, and separately counts missing or byte-different URLs for old tabs on promotion and new tabs on rollback. Exit 0 means a static inventory match only, 2 means invalid/unverified inputs, and 3 means a compatibility gap. The report never marks hosted acceptance. Reverify which version serves the baseline before changing traffic; provider history alone does not establish a safe rollback.
 
 In the isolated authenticated browser rehearsal, leave the two tabs open across the respective transitions, force lazy asset loads and verify response MIME/status, sign-out, and original-ID outcome readback for a synthetic interrupted write. Returning Worker traffic does not restore database state. Do not blindly retry or downgrade schema on a missing acknowledgement. Unit checks: `node --test scripts/qa/r06_compare_admin_assets.test.mjs`.
+
+### R06: Offline paired build rehearsal
+
+For two distinct unmodified React Admin packages with independently pinned
+adjacent build receipts, prepare a fresh local rehearsal directory:
+
+```sh
+node scripts/qa/r06_prepare_admin_pair.mjs OLD_DIR OLD_RECEIPT_SHA256 NEW_DIR NEW_RECEIPT_SHA256 NEW_REHEARSAL_DIR
+```
+
+The `baseline/` directory keeps its own shell, manifest, profile and service
+worker and adds the candidate's versioned static assets. The `candidate/`
+directory does the reverse. The tool checks full input inventories, verifies
+copied bytes, and writes a separate `pair.json` marked non-deployable. Do not
+replace `build/admin-web` with these outputs or put them in a deployment bundle.
+The ordinary package validator intentionally rejects these extended inventories.
+Test the two directions with `node --test scripts/qa/r06_*test.mjs`.
+The rehearsal does not qualify previously deployed Flutter assets, a real
+browser session, a Worker traffic change, or compatible database/API rollback.
