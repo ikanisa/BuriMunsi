@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {createCollectTransport} from "../../../../deploy/platform-admin/src/supabase-transport.js";
+import {BURIMUNSI_ADMIN_COOKIE} from "../../../../deploy/platform-admin/src/admin-session-realm.js";
 import {handleAdmin} from '../domain/admin_bridge.js';
 import {standaloneAdminRoute} from '../burimunsi-standalone.js';
 import {accountReadDatabase} from '../domain/admin_accounts.js';
@@ -436,4 +438,102 @@ test('exact linked SMS route uses only current payment and SMS read scope and ne
   assert.equal((await read(original)).status,503);
   projectedPayment='different-only';
   assert.deepEqual(await (await read(original)).json(),{paymentId:'synthetic-payment',groupId:group,evidence:null});
+});
+
+test('BuriMunsi Worker and Admin handler recover the original allocation after the Worker rejects its acknowledgement',async()=>{
+  const {env,setGrants}=await fixture({role:'staff'});
+  const paymentId='synthetic-payment',memberId='synthetic-member',requestId=crypto.randomUUID();
+  const path='/api/admin/burimunsi/payments/'+paymentId;
+  let retained=null,posted=0,reads=0,writes=0,upstreamPosts=0;
+  const scoped=(sql,args)=>{
+    if(sql.startsWith('SELECT set_config')){assert.deepEqual(args,[group]);return [];}
+    if(sql.includes('burimunsi_browser_pin_session')){
+      assert.equal(args[0],group);assert.equal(args[2],origin);return [{role:'staff',can_allocate:true}];
+    }
+    assert.fail('Unexpected fixture SQL');
+  };
+  Object.assign(env.DB,{context:async()=>{},readContext:async()=>{},applicationWork:{assert:async()=>{}},
+    transaction:async run=>{
+      writes++;
+      let pending=null;
+      const reply=await run({unsafe:async(sql,args)=>{
+        if(sql.includes('pg_advisory_xact_lock'))return [];
+        if(sql.includes('FROM private.burimunsi_command_receipts'))return [];
+        if(sql.includes('FROM app.memberships')){assert.deepEqual(args,[group,memberId]);return [{user_id:memberId}];}
+        if(sql.startsWith('UPDATE burimunsi.payments')){
+          assert.deepEqual(args,[group,paymentId,memberId,3]);
+          return [{id:paymentId,member_id:memberId,allocation_state:'allocated',version:'4'}];
+        }
+        if(sql.includes('INSERT INTO private.burimunsi_command_receipts')){
+          assert.deepEqual([args[0],args[2],args[4]],[group,requestId,'burimunsi.allocate']);
+          pending={actor:args[1],session:args[3],response:args[6]};return [];
+        }
+        return scoped(sql,args);
+      }});
+      assert.deepEqual(pending?.response,reply);
+      retained=pending;posted++;
+      return reply;
+    },
+    withLockedReadSnapshot:run=>run({unsafe:async(sql,args)=>{
+      if(!sql.includes('FROM private.burimunsi_command_receipts'))return scoped(sql,args);
+      reads++;
+      const row=retained;
+      if(!row||args[1]!==row.actor||args[2]!==requestId||args[3]!==row.session||args[5]!==paymentId)return [];
+      return [{response:row.response,member_id:memberId,payment_version:'4'}];
+    }})});
+
+  // Translate the gateway prefix only. The real Worker admits and qualifies
+  // responses; the real Admin route does sign-in, CSRF, allocation and readback.
+  // SQL is a fixture here; the native PostgreSQL suite tests persistence.
+  const handle=createCollectTransport({frontendOrigin:origin,allowedFrontendOrigins:[origin],burimunsi:true,maxResponseBytes:4096,
+    fetchImpl:async req=>{
+      const url=new URL(req.url),prefix='/functions/v1/admin-api';
+      assert.ok(url.pathname.startsWith(prefix+'/api/admin/'));
+      const route=url.pathname.slice(prefix.length),allocation=req.method==='POST'&&route===path+'/allocate';
+      if(route.startsWith(path)){
+        assert.equal(req.headers.get('Origin'),origin);
+        assert.match(req.headers.get('Cookie'),/^__Host-collect_admin=[a-f0-9]{64}$/);
+        assert.equal(req.headers.has('Authorization'),false);
+      }
+      if(allocation){upstreamPosts++;assert.equal(req.headers.get('Idempotency-Key'),requestId);}
+      const reply=await handleAdmin(new Request(origin+route+url.search,req),env);
+      if(allocation&&reply.status===200){
+        assert.deepEqual(await reply.json(),{paymentId,memberId,state:'allocated',version:4});
+        assert.equal(posted,1);
+        return new Response(JSON.stringify({discarded:'x'.repeat(4096)}),{headers:{'Content-Type':'application/json'}});
+      }
+      return reply;
+    }});
+  const login=async()=>{
+    const reply=await handle(request('phone-passcode',{body:{phone:staffPhone,pin}}));
+    assert.equal(reply.status,200);
+    const cookie=reply.headers.get('Set-Cookie').split(';')[0];
+    assert.ok(cookie.startsWith(BURIMUNSI_ADMIN_COOKIE+'='));
+    return {cookie,csrf:(await reply.json()).csrfToken};
+  };
+  const original=await login();
+  setGrants(['payments.read']);
+  const lookup=(session=original,key=requestId,where=path)=>handle(new Request(origin+where+'/allocation-receipt',
+    {headers:{Cookie:session.cookie,'Sec-Fetch-Site':'same-origin','Idempotency-Key':key}}));
+  assert.deepEqual(await (await lookup()).json(),{state:'unconfirmed',requestId});
+
+  const allocate=routeRequest('burimunsi/payments/'+paymentId+'/allocate',
+    {...original,body:{memberId,expectedVersion:3}});
+  allocate.headers.set('Idempotency-Key',requestId);
+  const uncertain=await handle(allocate);
+  assert.equal(uncertain.status,502);
+  assert.equal((await uncertain.json()).code,'proxy_outcome_unknown');
+  assert.deepEqual([upstreamPosts,writes,posted],[1,1,1]);
+
+  const reply=await lookup();
+  assert.equal(reply.status,200);
+  assert.match(reply.headers.get('Cache-Control'),/no-store/);
+  assert.match(reply.headers.get('CDN-Cache-Control'),/no-store/);
+  assert.deepEqual(await reply.json(),{state:'committed',requestId,receipt:{paymentId,memberId,version:4}});
+  const fresh=await login();
+  setGrants(['payments.read']);
+  assert.deepEqual(await (await lookup(fresh)).json(),{state:'unconfirmed',requestId});
+  const other=crypto.randomUUID();
+  assert.deepEqual(await (await lookup(original,other)).json(),{state:'unconfirmed',requestId:other});
+  assert.deepEqual([upstreamPosts,writes,posted,reads],[1,1,1,4]);
 });
