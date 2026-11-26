@@ -1,5 +1,6 @@
 import {useCallback, useState} from 'react';
 import {useSession} from '../../session/SessionProvider';
+import {hasScopedAdminAuthority} from '../../session/ownerIdentity';
 import {canDisplaySessionRecords, canReadSmsEvidence} from '../../session/sessionContext';
 import {Button, Card, ErrorState, LoadingState} from '../../ui';
 import {receiptLabels, reasonLabels} from '../overview/smsOversightContract';
@@ -11,21 +12,24 @@ import {useOperationRead} from './useOperationRead';
 import {inboxReadClock,useInboxFreshness} from './inboxFreshness';
 
 export function ReceiverSmsPanel({simplePayments = false}: {simplePayments?: boolean} = {}) {
-  const session = useSession(), request = session.request;
-  const enabled = canDisplaySessionRecords(session) && canReadSmsEvidence(session.user);
+  const session = useSession(), {request, user} = session;
+  const enabled = canDisplaySessionRecords(session) && canReadSmsEvidence(user);
+  const scopedCollection = simplePayments && user && hasScopedAdminAuthority(user) ? user.adminIdentity?.collectionId : undefined;
+  const authority = JSON.stringify([session.epoch,session.status,user?.id,user?.sessionId,user?.role,scopedCollection,
+    [...(user?.permissions ?? [])].sort()]);
   const load = useCallback(async (signal: AbortSignal) => receiverCollections(await request('momo/observations/collections', {signal})), [request]);
-  const {result, retry} = useOperationRead(String(session.epoch), enabled, load, {...momoReadOptions, live:false});
-  const authority=JSON.stringify([session.epoch,session.status,session.user?.id,session.user?.sessionId,session.user?.role,
-    [...(session.user?.permissions ?? [])].sort()]);
+  // This phone Admin was issued one collection. The metadata API still rechecks its live scope on every read.
+  const {result, retry} = useOperationRead(authority, enabled && !scopedCollection, load, {...momoReadOptions, live:false});
   const [selection, setSelection] = useState('');
   if (!enabled) return null;
-  if (!result) return <LoadingState label="Loading receiver collections" />;
-  if (result.status === 'error') return <ErrorState message={result.message} onRetry={retry} />;
-  const groups = result.value, group = groups.find(item => item.collectionId === selection) ?? groups[0];
-  if (!group) return <Card><p>No receiver collections are available for this account.</p></Card>;
-  return <Card className="operations-records">{groups.length > 1 && <label>Collection <select className="admin-input" value={group.collectionId} onChange={event => setSelection(event.target.value)}>
+  if (!scopedCollection && !result) return <LoadingState label="Loading receiver collections" />;
+  if (result?.status === 'error') return <ErrorState message={result.message} onRetry={retry} />;
+  const groups = result?.value ?? [];
+  const collection = scopedCollection ?? (groups.find(item => item.collectionId === selection) ?? groups[0])?.collectionId;
+  if (!collection) return <Card><p>No receiver collections are available for this account.</p></Card>;
+  return <Card className="operations-records">{groups.length > 1 && <label>Collection <select className="admin-input" value={collection} onChange={event => setSelection(event.target.value)}>
     {groups.map(item => <option key={item.collectionId} value={item.collectionId}>{item.label}</option>)}</select></label>}
-    <CollectionReceipts key={JSON.stringify([authority, group.collectionId])} group={group.collectionId} simplePayments={simplePayments} />
+    <CollectionReceipts key={JSON.stringify([authority, collection])} group={collection} simplePayments={simplePayments} />
   </Card>;
 }
 

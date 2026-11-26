@@ -1,5 +1,6 @@
 package rw.ikanisa.burimunsi.crosslayertests
 import android.app.Application
+import androidx.lifecycle.onFixtureMain
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.*
 import org.json.*
@@ -101,6 +102,7 @@ private class Scenario(private val role: String = "admin") {
  suspend fun submit(){model.allocate();idle()}
  suspend fun close(){releaseStatus?.countDown();model.viewModelScope.coroutineContext[Job]!!.cancelAndJoin()}
  fun posts()=Transport.calls.count{it.method!="GET"&&!it.path.contains("/session/")}
+ fun memberReads()=Transport.calls.count{it.method=="GET"&&it.path.endsWith("/members/member-1")}
  fun journal()=SecureStore.records["pending-command"]
 }
 fun main()=runBlocking {
@@ -108,8 +110,9 @@ fun main()=runBlocking {
  fun ck(label:String,ok:Boolean){checks++;println((if(ok)"PASS " else "FAIL ")+label);if(!ok)failures.add(label)}
  suspend fun scenario(role:String="admin",block:suspend (Scenario)->Unit){val s=Scenario(role);try{s.start();block(s)}finally{s.close()}}
  for(role in listOf("staff","admin"))scenario(role){s->
+  val beforeDetail=s.memberReads()
   s.model.navigate(Route.MEMBER,"member-1");s.idle()
-  ck("$role original member route shows the member details",s.model.state.member?.id=="member-1"&&s.model.state.member?.phone=="+250780000816")
+  ck("$role direct navigation reads the exact member once",s.model.state.member?.id=="member-1"&&s.memberReads()==beforeDetail+1)
   val cached=SecureStore.records["records"]
   val payments=Transport.calls.count{it.path.contains("memberId=member-1")}
   s.detailMemberId="different-member";s.model.refresh();s.idle()
@@ -120,6 +123,60 @@ fun main()=runBlocking {
   ck("$role matching readback restores the original member without a command",
       s.model.state.member?.id=="member-1"&&s.model.state.member?.phone=="+250780000816"&&
           !s.model.state.readbackRequired&&s.posts()==0&&s.journal()==null)
+  val sheetRead=s.memberReads()
+  if(role=="admin")s.memberVersion++
+  s.model.onFixtureMain{openSheet(Sheet.MEMBER_DETAILS)};s.idle()
+  ck("$role panel opening keeps the required member freshness",
+      s.model.state.sheet==Sheet.MEMBER_DETAILS&&s.model.state.member?.version==s.memberVersion.toLong()&&
+          s.memberReads()==sheetRead+if(role=="admin")1 else 0)
+  s.model.onFixtureMain{onForeground()};s.idle()
+  val beforeResume=s.memberReads()
+  s.model.onFixtureMain{onBackground();onForeground()};s.idle()
+  ck("$role resume with Member Details performs exactly one member read",
+      s.memberReads()==beforeResume+1&&s.model.state.sheet==Sheet.MEMBER_DETAILS&&s.model.presentation.showRecords)
+  s.detailMemberId="different-member";s.model.onFixtureMain{refresh()};s.idle()
+  ck("$role mismatched panel read stays covered",s.model.state.readbackRequired&&!s.model.presentation.showRecords)
+  s.detailMemberId="member-1";val beforeReadback=s.memberReads()
+  s.model.onFixtureMain{refresh()};s.idle()
+  ck("$role explicit panel readback performs exactly one member read",
+      s.memberReads()==beforeReadback+1&&s.model.state.sheet==Sheet.MEMBER_DETAILS&&
+          !s.model.state.readbackRequired&&s.model.presentation.showRecords&&s.posts()==0)
+ }
+ for(role in listOf("staff","admin"))scenario(role){s->
+  s.model.onFixtureMain{navigate(Route.MEMBERS)};s.idle()
+  val row=checkNotNull(s.model.state.members).items.single()
+  val before=s.memberReads()
+  s.model.onFixtureMain{openMember(row)};s.idle()
+  ck("$role opens a selected directory row with the expected member HTTP count",
+      s.model.state.member==row&&s.model.presentation.showRecords&&
+          s.memberReads()==before+if(role=="staff")0 else 1)
+ }
+ scenario("staff"){s->
+  s.model.onFixtureMain{navigate(Route.MEMBERS)};s.idle()
+  val earlier=checkNotNull(s.model.state.members).items.single()
+  s.memberVersion++;s.model.onFixtureMain{refresh()};s.idle()
+  val before=s.memberReads()
+  s.model.onFixtureMain{openMember(earlier)};s.idle()
+  ck("Staff stale list selection requires one canonical detail read",
+      s.memberReads()==before+1&&s.model.state.member?.version==s.memberVersion.toLong())
+  s.model.onFixtureMain{navigate(Route.MEMBERS);onForeground()};s.idle()
+  val oldActorRow=checkNotNull(s.model.state.members).items.single()
+  s.model.onFixtureMain{onBackground()};s.owner="operator-2"
+  s.model.onFixtureMain{onForeground()};s.idle()
+  val afterSwitch=s.memberReads()
+  s.model.onFixtureMain{openMember(oldActorRow)};s.idle()
+  ck("Staff selection from the prior actor cannot load or expose the member",
+      s.memberReads()==afterSwitch&&s.model.state.operator==null&&s.model.state.member==null&&!s.model.presentation.showRecords)
+ }
+ scenario("staff"){s->
+  s.model.onFixtureMain{navigate(Route.MEMBERS)};s.idle()
+  val row=checkNotNull(s.model.state.members).items.single()
+  s.recordFailure=true;s.model.onFixtureMain{refresh()};s.idle()
+  check(s.model.state.offline)
+  val before=s.memberReads()
+  s.model.onFixtureMain{openMember(row)};s.idle()
+  ck("Offline directory rows keep the ordinary scoped detail read and fallback",
+      s.memberReads()==before+1&&s.model.state.offline&&s.model.state.member==null)
  }
  scenario{s->
   s.allocation();s.postReadPaymentId="other-payment";s.submit()

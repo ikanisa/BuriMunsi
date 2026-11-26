@@ -39,6 +39,7 @@ interface BuriController {
     fun login(phone:String,pin:String)
     fun logout()
     fun navigate(route:Route,id:String?=null)
+    fun openMember(member:Member)=navigate(Route.MEMBER,member.id)
     fun listPosition(route:Route,id:String?,index:Int,offset:Int) {}
     fun memberListPosition(revision: Long, index: Int, offset: Int, visibleKey: String?) {
         listPosition(Route.MEMBERS, null, index, offset)
