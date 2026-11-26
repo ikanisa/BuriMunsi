@@ -30,7 +30,7 @@ function FilterEditor<T>({column, rows, active, close, apply, remote}: {
   const [draft,setDraft] = useState<ColumnFilter>(active);
   const [error,setError] = useState('');
   const formId = useId();
-  const options = useMemo(() => column.kind === 'category' ? categoryChoices(column,rows,active.choices) : [],[column,rows,active.choices]);
+  const options = useMemo(() => column.kind === 'category' ? categoryChoices(column,rows,active.choices,remote) : [],[column,rows,active.choices,remote]);
   const update = (changes: Partial<ColumnFilter>) => {setDraft(current => ({...current,...changes})); setError('');};
   const submit = (event: FormEvent) => {
     event.preventDefault();

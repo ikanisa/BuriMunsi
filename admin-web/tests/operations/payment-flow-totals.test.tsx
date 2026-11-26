@@ -3,7 +3,7 @@ import {describe, expect, it} from 'vitest';
 import {PaymentFlowTotals} from '../../src/features/operations/PaymentFlowTotals';
 
 const total = (name: string) => within(screen.getByRole('region', {name: 'Totals for matching payments'}))
-  .getByText(name, {selector: 'dt'}).nextElementSibling?.textContent;
+  .getByText(name).closest('dt')?.nextElementSibling?.textContent;
 
 describe('filtered payment flow totals', () => {
   it('keeps exact whole RWF beyond the safe integer range and distinguishes outgoing from net', () => {

@@ -1,7 +1,8 @@
 .payments-workspace { min-inline-size: 0; }
-.payment-allocation-link { display: inline-flex; border-radius: 7px; text-decoration: none; }
-.payment-allocation-link .admin-badge { text-decoration: underline; text-underline-offset: .18em; }
-.payment-allocation-link:hover .admin-badge { text-decoration-thickness: 2px; }
+.payment-allocation-link { display: inline-flex; align-items: center; justify-content: center; min-inline-size: 44px; min-block-size: 44px; border-radius: 7px; text-decoration: none; }
+.payment-allocation-link:hover .admin-badge { outline: 1px solid currentColor; }
+.payment-term-icon { display: inline-flex; align-items: center; vertical-align: middle; }
+.payment-term-icon .admin-icon, .overview-metric-card dt .admin-icon { width: 1.5rem; height: 1.5rem; }
 .payment-allocation-link:focus-visible { outline: 2px solid var(--admin-focus); outline-offset: 2px; }
 .payments-nav { display: flex; flex-wrap: wrap; gap: .5rem; margin-block: .5rem 1rem; }
 .payments-nav a { display: inline-flex; align-items: center; justify-content: center; min-block-size: 44px; padding: .25rem .875rem; border-radius: 999px; text-decoration: none; font-weight: 600; }

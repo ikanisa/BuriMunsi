@@ -32,6 +32,15 @@ async function filter(label: string) {
   return {user,dialog:within(screen.getByRole('dialog',{name:'Filter ' + label}))};
 }
 describe('financial analysis grid',()=>{
+  it('keeps every declared category selectable when the server returns only the selected value',async()=>{
+    const onCriteria=vi.fn();
+    const remote={filters:new Map(),sort:{key:'state',direction:'asc' as const},total:rows.length,matching:1,onCriteria};
+    render(sample({rows:[rows[0]],remote}));
+    const {user,dialog}=await filter('Status');
+    await user.click(dialog.getByRole('checkbox',{name:'Queued'}));
+    await user.click(dialog.getByRole('button',{name:'Apply filter'}));
+    expect(onCriteria.mock.calls[0][0].get('state').choices).toEqual(['queued']);
+  });
   it('exposes separate keyboard buttons at each header; sorts amounts numerically in both directions, with stable ties and blanks last',async()=>{
     const user=userEvent.setup();
     render(sample({pageSize:10}));

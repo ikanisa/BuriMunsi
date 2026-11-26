@@ -4,7 +4,7 @@ import {z} from 'zod';
 import {useSession} from '../../session/SessionProvider';
 import {hasScopedAdminAuthority} from '../../session/ownerIdentity';
 import {canDisplaySessionRecords, canReadSmsEvidence} from '../../session/sessionContext';
-import {Button, Card, EmptyState, ErrorState, LoadingState, PageHeader} from '../../ui';
+import {Button, Card, EmptyState, ErrorState, Icon, LoadingState, PageHeader} from '../../ui';
 import {BuriMunsiPaymentRows, buriMunsiPayment, buriMunsiPaymentsPath, buriMunsiSmsPath} from '../operations/BuriMunsiPayments';
 import {paymentTime} from '../operations/canonicalPaymentAnalysis';
 import {inboxReadClock,useInboxFreshness} from '../operations/inboxFreshness';
@@ -23,8 +23,8 @@ const smsHealthLabels = {
   incomplete: 'Sync pending', verified: 'Last inbox check matched',
 } as const;
 
-function Figure({label, value, to}: {label: string; value: number; to?: string}) {
-  const content = <dl><dt>{label}</dt><dd>{value.toLocaleString('en-RW')}</dd></dl>;
+function Figure({label, icon, value, to}: {label: string; icon: string; value: number; to?: string}) {
+  const content = <dl><dt title={label}><Icon name={icon} /><span className="admin-sr-only">{label}</span></dt><dd>{value.toLocaleString('en-RW')}</dd></dl>;
   return to ? <Link className="overview-metric overview-metric-card overview-metric-card--link" to={to}>{content}</Link> :
     <div className="overview-metric overview-metric-card">{content}</div>;
 }
@@ -45,9 +45,9 @@ export function BuriMunsiHome() {
       result.status === 'error' ? <ErrorState message={result.message} onRetry={retry} /> : <>
         <section className="overview-summary" aria-label="Group snapshot">
           <div className="overview-metrics">
-            {payments && <Figure label="Payments" value={result.value.paymentCount} to={buriMunsiPaymentsPath} />}
-            <Figure label="Members" value={result.value.memberCount} to={user?.permissions.includes('users.read') ? '/admin/members' : undefined} />
-            {payments && <Figure label="Unallocated" value={result.value.unallocatedCount} to={buriMunsiPaymentsPath + '?status=unallocated'} />}
+            {payments && <Figure label="Payments" icon="swap" value={result.value.paymentCount} to={buriMunsiPaymentsPath} />}
+            <Figure label="Members" icon="users" value={result.value.memberCount} to={user?.permissions.includes('users.read') ? '/admin/members' : undefined} />
+            {payments && <Figure label="Unallocated" icon="unlinked" value={result.value.unallocatedCount} to={buriMunsiPaymentsPath + '?status=unallocated'} />}
           </div>
         </section>
         {payments && <Card className="operations-records"><div className="operations-toolbar"><h2>Recent payments</h2>

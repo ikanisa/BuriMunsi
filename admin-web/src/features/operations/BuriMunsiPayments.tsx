@@ -11,6 +11,7 @@ import {CanonicalPaymentEvidence} from './CanonicalPaymentEvidence';
 import {PaymentAllocationWizard} from './PaymentAllocationWizard';
 import {FinancialAnalysisTable, type FinancialColumn} from './FinancialAnalysisTable';
 import {PaymentTotalsSummary} from './PaymentFlowTotals';
+import {PaymentTermIcon} from './PaymentTermIcon';
 import {initialColumnFilters, type ColumnFilter, type FinancialSort} from './financialAnalysisModel';
 import {type PaymentAnalysisQuery} from '../../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
 import {buriMunsiPayment, paymentAllocation, paymentDirection, paymentId, paymentInstant, paymentTime, readCanonicalPaymentAnalysis, type BuriMunsiPayment} from './canonicalPaymentAnalysis';
@@ -31,7 +32,7 @@ export const buriMunsiSmsPath = buriMunsiPaymentsPath + '?view=sms';
 export const buriMunsiPaymentPath = (id: string) => buriMunsiPaymentsPath + '?' + new URLSearchParams({payment: id});
 
 function AllocationStatus({row, search}: {row: BuriMunsiPayment; search?: URLSearchParams}) {
-  const badge = <StatusBadge tone={row.state === 'allocated' ? 'success' : 'warning'}>{allocationLabel(row.state)}</StatusBadge>;
+  const badge = <StatusBadge tone={row.state === 'allocated' ? 'success' : 'warning'}><PaymentTermIcon term={row.state} /></StatusBadge>;
   if (row.state !== 'unallocated' || row.canAllocate === false) return badge;
   const next = new URLSearchParams(search);
   next.set('allocate', row.id); next.delete('view'); next.delete('source');
@@ -45,7 +46,7 @@ export function BuriMunsiPaymentRows({rows, onSelect}: {rows: BuriMunsiPayment[]
     {rows.map(row => <tr key={row.id}><MomoCell label="Reference">{onSelect
       ? <button type="button" className="operations-link" onClick={() => onSelect(row.id)}>{row.ftId ?? 'View payment'}</button>
       : <Link className="operations-link" to={buriMunsiPaymentPath(row.id)}>{row.ftId ?? 'View payment'}</Link>}</MomoCell>
-      <MomoCell label="Direction">{directionLabel(row.direction)}</MomoCell><MomoCell label="Amount">{amount(row.amountRwf)}</MomoCell>
+      <MomoCell label="Direction"><PaymentTermIcon term={row.direction} /></MomoCell><MomoCell label="Amount">{amount(row.amountRwf)}</MomoCell>
       <MomoCell label="Member">{row.memberName ?? '—'}</MomoCell><MomoCell label="Status"><AllocationStatus row={row} /></MomoCell>
       <MomoCell label="Payment time">{paymentTime(row.atRaw)}</MomoCell></tr>)}
   </MomoTable>;
@@ -145,7 +146,7 @@ function ScopedPaymentRecords() {
     {key:'reference',label:'FT reference',kind:'text',value:r=>recordedText(r.ftId),render:r=>rowButton(r, recordedText(r.ftId) ?? 'View payment')},
     {key:'time',label:'Time (Kigali)',kind:'date',value:r=>paymentInstant(r.atRaw),render:r=>paymentTime(r.atRaw)},
     {key:'amount',label:'Amount (RWF)',kind:'number',align:'end',value:r=>r.amountRwf,render:r=>r.amountRwf === null ? '—' : amountFormat.format(r.amountRwf)},
-    {key:'direction',label:'Direction',kind:'category',value:r=>r.direction,render:r=>directionLabel(r.direction),
+    {key:'direction',label:'Direction',kind:'category',value:r=>r.direction,render:r=><PaymentTermIcon term={r.direction} />,
       options:[{value:'incoming',label:'Incoming'},{value:'outgoing',label:'Outgoing'}]},
     {key:'allocation',label:'Allocation',kind:'category',value:r=>r.state,render:r=><AllocationStatus row={r} search={params} />,
       options:[{value:'allocated',label:'Allocated'},{value:'unallocated',label:'Unallocated'}]},

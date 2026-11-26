@@ -1,4 +1,5 @@
 import {useMemo} from 'react';
+import {PaymentTermIcon} from './PaymentTermIcon';
 import './paymentFlowTotals.css';
 
 type Payment = {direction: 'incoming' | 'outgoing'; amountRwf: number | null};
@@ -13,9 +14,9 @@ export function PaymentTotalsSummary({incoming,outgoing,missing}: {incoming: big
   const net = incoming !== null && outgoing !== null ? incoming - outgoing : null;
   return <section className="payment-flow-totals" aria-label="Totals for matching payments">
     <dl>
-      <div><dt>Incoming</dt><dd>{rwf(incoming)}</dd></div>
-      <div><dt>Outgoing</dt><dd>{rwf(outgoing)}</dd></div>
-      <div><dt>Net flow</dt><dd>{rwf(net)}</dd></div>
+      <div><dt><PaymentTermIcon term="incoming" /></dt><dd>{rwf(incoming)}</dd></div>
+      <div><dt><PaymentTermIcon term="outgoing" /></dt><dd>{rwf(outgoing)}</dd></div>
+      <div><dt><PaymentTermIcon term="net" /></dt><dd>{rwf(net)}</dd></div>
     </dl>
     {missing > 0 && <p>{number.format(missing)} matching {missing === 1 ? 'payment has' : 'payments have'} no amount.</p>}
   </section>;

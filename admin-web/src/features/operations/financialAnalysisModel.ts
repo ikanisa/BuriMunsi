@@ -69,9 +69,12 @@ export function rangeError(filter: ColumnFilter, kind: Kind): string | undefined
   }
 }
 
-export function categoryChoices<T>(column: FinancialColumn<T>, rows: readonly T[], selected: readonly string[]) {
+export function categoryChoices<T>(column: FinancialColumn<T>, rows: readonly T[], selected: readonly string[], remote = false) {
   const options = new Map((column.options ?? []).map(item => [item.value,item.label]));
   const values = new Set(selected);
+  // A server-filtered page contains only matching rows. Its declared choices
+  // remain selectable even if none of the current rows has that value.
+  if (remote) for (const value of options.keys()) values.add(value);
   for (const row of rows) {
     const value = comparable(column.value(row),'category');
     if (value !== null) values.add(String(value));
