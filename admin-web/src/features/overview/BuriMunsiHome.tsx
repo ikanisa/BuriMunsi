@@ -27,13 +27,14 @@ const smsHealthLabels = {
 
 const amountFormat = new Intl.NumberFormat('en-RW');
 
-function Figure({label, icon, value, to, currency = false}:
-  {label: string; icon: string; value: number | bigint | null; to?: string; currency?: boolean}) {
-  const className = 'overview-metric overview-metric-card' + (currency ? ' overview-metric-card--currency' : '');
-  const content = <dl><dt title={label}><Icon name={icon} /><span className={currency ? undefined : 'admin-sr-only'}>{label}</span></dt>
-    <dd>{value === null ? 'Unavailable' : (currency ? 'RWF ' : '') + amountFormat.format(value)}</dd></dl>;
-  return to ? <Link className={className + ' overview-metric-card--link'} to={to}>{content}</Link> :
-    <div className={className}>{content}</div>;
+function Figure({label, icon, value, to, paymentMetric}:
+  {label: string; icon: string; value: number | bigint | null; to?: string;
+    paymentMetric?: 'incoming' | 'outgoing' | 'sms-balance'}) {
+  const className = 'overview-metric overview-metric-card';
+  const content = <dl><dt title={label}><Icon name={icon} /><span className="admin-sr-only">{label}</span></dt>
+    <dd>{value === null ? 'Unavailable' : (paymentMetric ? 'RWF ' : '') + amountFormat.format(value)}</dd></dl>;
+  return to ? <Link className={className + ' overview-metric-card--link'} data-payment-metric={paymentMetric} to={to}>{content}</Link> :
+    <div className={className} data-payment-metric={paymentMetric}>{content}</div>;
 }
 
 export function BuriMunsiHome() {
@@ -60,11 +61,11 @@ export function BuriMunsiHome() {
           </div>
           {payments && <div className="overview-metrics overview-payment-metrics">
             <Figure label="Cumulative incoming payments" icon="incoming" value={totals?.incomingRwf ?? null}
-              to={buriMunsiPaymentsPath + '?direction=incoming'} currency />
+              to={buriMunsiPaymentsPath + '?direction=incoming'} paymentMetric="incoming" />
             <Figure label="Cumulative outgoing payments" icon="outgoing" value={totals?.outgoingRwf ?? null}
-              to={buriMunsiPaymentsPath + '?direction=outgoing'} currency />
+              to={buriMunsiPaymentsPath + '?direction=outgoing'} paymentMetric="outgoing" />
             {sms && <Figure label="Latest MoMo SMS balance" icon="message" value={totals?.latestSmsBalanceRwf ?? null}
-              to={showInbox ? buriMunsiSmsPath : undefined} currency />}
+              to={showInbox ? buriMunsiSmsPath : undefined} paymentMetric="sms-balance" />}
           </div>}
         </section>
         {payments && <Card className="operations-records"><div className="operations-toolbar"><h2>Recent payments</h2>

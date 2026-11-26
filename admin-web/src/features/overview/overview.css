@@ -36,14 +36,19 @@ a.overview-evidence-card:hover {
 .overview-metric dl { margin: 0; }
 .overview-metric dt { color: var(--admin-muted); font-weight: 650; }
 .overview-payment-metrics { margin-block-start: .75rem; }
-.overview-metric-card--currency dt {
-  display: flex;
-  align-items: center;
-  gap: .45rem;
-  font-size: .875rem;
-  line-height: 1.3;
+.overview-metric-card[data-payment-metric='incoming'] {
+  background: var(--admin-success-surface);
+  --overview-payment-icon: var(--admin-success);
 }
-.overview-metric-card--currency dt .admin-icon { flex: none; }
+.overview-metric-card[data-payment-metric='outgoing'] {
+  background: var(--admin-accent-surface);
+  --overview-payment-icon: var(--admin-accent-ink);
+}
+.overview-metric-card[data-payment-metric='sms-balance'] {
+  background: light-dark(#f1ebff, #34284b);
+  --overview-payment-icon: light-dark(#634296, #d9c7fa);
+}
+.overview-metric-card[data-payment-metric] dt { color: var(--overview-payment-icon); }
 .overview-metric dd {
   margin: .2rem 0 0;
   font-size: clamp(1.35rem, 3vw, 2rem);
@@ -54,7 +59,7 @@ a.overview-evidence-card:hover {
 }
 
 .overview-metric--primary dd { font-size: clamp(1.45rem, 3.6vw, 2.3rem); }
-.overview-metric-card--currency dd { font-size: clamp(1.2rem, 2.65vw, 1.85rem); }
+.overview-metric-card[data-payment-metric] dd { font-size: clamp(1.2rem, 2.65vw, 1.85rem); }
 .overview-refresh { min-width: 44px; min-height: 44px; padding-inline: 0; justify-content: center; }
 .overview-refresh .admin-icon, .overview-sms-row > .admin-icon { width: 22px; height: 22px; }
 
