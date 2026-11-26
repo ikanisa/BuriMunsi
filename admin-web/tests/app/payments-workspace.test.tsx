@@ -309,7 +309,7 @@ describe('BuriMunsi phone Payments', () => {
     fireEvent.click(screen.getByRole('link',{name:'View all payments'}));
     expect(await screen.findByRole('button',{name:'MOMO-OUT-FIXTURE'})).toBeVisible();
     expect(screen.getByRole('columnheader',{name:'Member'})).toBeVisible();
-    expect(screen.getByRole('columnheader',{name:'Member phone',exact:true})).toBeVisible();
+    expect(screen.getByRole('columnheader',{name:/^Member phone$/})).toBeVisible();
     expect(screen.getAllByRole('columnheader')).toHaveLength(7);
     expect(screen.queryByRole('columnheader',{name:/Counterparty|Member number/})).not.toBeInTheDocument();
     expect(within(screen.getByRole('row',{name:/MOMO-FIXTURE-01/})).getByText('Fixture payer')).toBeVisible();
@@ -337,7 +337,8 @@ describe('BuriMunsi phone Payments', () => {
     fireEvent.click(screen.getByRole('button',{name:'Sort Amount ascending'}));
     fireEvent.click(await screen.findByRole('button',{name:'FT-104'}));
     const detail = within(await screen.findByRole('region',{name:'Payment details'}));
-    expect(await detail.findByText('pay-104')).toBeVisible();
+    expect(await detail.findByRole('heading',{name:'FT-104'})).toBeVisible();
+    expect(detail.queryByText('pay-104')).not.toBeInTheDocument();
     expect(called('burimunsi/payments/analysis').map(([,options]) => [options.method,options.body.offset,options.body.sort])).toEqual([
       ['POST',25,{key:'time',direction:'desc'}], ['POST',0,{key:'amount',direction:'asc'}],
     ]);

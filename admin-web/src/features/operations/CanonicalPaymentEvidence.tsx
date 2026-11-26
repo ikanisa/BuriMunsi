@@ -1,4 +1,4 @@
-import {useCallback} from 'react';
+import {useCallback, useState} from 'react';
 import {z} from 'zod';
 import {useSession} from '../../session/SessionProvider';
 import {canReadSmsEvidence} from '../../session/sessionContext';
@@ -41,15 +41,19 @@ function ScopedCanonicalPaymentEvidence({paymentId,group,sourceId,authority}: Ev
     return evidence;
   }, [actor,epoch,group,isCurrentAuthority,paymentId,request,sessionId,sourceId]);
   const {result,retry} = useOperationRead(authority,true,load,{invalidResponse:'The linked SMS could not be verified.'});
+  const [showOriginal,setShowOriginal] = useState(false);
   const evidence = result?.status === 'success' ? result.value : null;
-  return <section aria-label="Linked SMS"><h3>Linked SMS</h3>
+  return <section className="payment-detail-evidence" aria-label="Linked SMS"><h3>Linked SMS</h3>
     {!result ? <LoadingState label="Loading linked SMS" /> : result.status === 'error' ? <ErrorState message={result.message} onRetry={retry} /> :
-      evidence ? <><Facts items={[['Received (Kigali)', paymentTime(evidence.admittedAt)], ['Processing', processingLabels[evidence.processing]],
+      evidence ? <><Facts items={[['Received', paymentTime(evidence.admittedAt)], ['Processing', processingLabels[evidence.processing]],
         ['Payer SMS', <>{evidence.payerStatus ? receiptLabels[evidence.payerStatus] : 'No receipt recorded'}
           {evidence.payerReason && <div>{reasonLabels[evidence.payerReason]}</div>}</>],
         ['Source', evidence.retentionState === 'retained' ? 'Retained' : 'Unresolved']]} />
         {user?.permissions.includes('sms.reveal') && evidence.retentionState === 'retained' && evidence.bodySha256 &&
-          <MomoSourceRevealPanel source={{raw_sms_id: evidence.sourceId, body_sha256: evidence.bodySha256}} observationGroup={group} enabled />}
+          <details className="payment-detail-disclosure" onToggle={event=>setShowOriginal(event.currentTarget.open)}>
+            <summary>Original SMS</summary>
+            {showOriginal && <MomoSourceRevealPanel source={{raw_sms_id: evidence.sourceId, body_sha256: evidence.bodySha256}} observationGroup={group} enabled />}
+          </details>}
       </> : <p>This linked SMS is unavailable in the current collection.</p>}
   </section>;
 }

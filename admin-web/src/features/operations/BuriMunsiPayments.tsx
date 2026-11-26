@@ -24,7 +24,6 @@ export type {BuriMunsiPayment};
 const maxSearchLength = 80;
 const amountFormat = new Intl.NumberFormat('en-RW');
 const amount = (value: number | null) => value === null ? '—' : 'RWF ' + amountFormat.format(value);
-const directionLabel = (value: BuriMunsiPayment['direction']) => value === 'incoming' ? 'Incoming' : 'Outgoing';
 const recordedText = (value: string | null | undefined) => value?.trim() ? value : null;
 export const buriMunsiPaymentsPath = '/admin/payments';
 export const buriMunsiSmsPath = buriMunsiPaymentsPath + '?view=sms';
@@ -36,8 +35,12 @@ function PaymentDirection({direction}: {direction: BuriMunsiPayment['direction']
   </span>;
 }
 
-function AllocationStatus({row, search}: {row: BuriMunsiPayment; search?: URLSearchParams}) {
-  const badge = <StatusBadge tone={row.state === 'allocated' ? 'success' : 'warning'}><PaymentTermIcon term={row.state} /></StatusBadge>;
+function AllocationStatus({row, search, text = false}: {row: BuriMunsiPayment; search?: URLSearchParams; text?: boolean}) {
+  const allocated = row.state === 'allocated';
+  const label = allocated ? 'Allocated' : 'Unallocated';
+  const badge = <StatusBadge tone={allocated ? 'success' : 'warning'}>
+    {text ? label : <PaymentTermIcon term={row.state} />}
+  </StatusBadge>;
   if (row.state !== 'unallocated' || row.canAllocate !== true) return badge;
   const next = new URLSearchParams(search);
   next.set('allocate', row.id); next.delete('view'); next.delete('source');
@@ -47,7 +50,7 @@ function AllocationStatus({row, search}: {row: BuriMunsiPayment; search?: URLSea
 }
 
 export function BuriMunsiPaymentRows({rows, onSelect}: {rows: BuriMunsiPayment[]; onSelect?: (paymentId: string) => void}) {
-  return <MomoTable name="Payments" headings={['Reference', 'Direction', 'Amount', 'Member', 'Status', 'Payment time']} compact>
+  return <MomoTable name="Payments" headings={['Reference', 'IN/OUT', 'Amount', 'Member', 'Status', 'Payment time']} compact>
     {rows.map(row => <tr key={row.id}><MomoCell label="Reference">{onSelect
       ? <button type="button" className="operations-link" onClick={() => onSelect(row.id)}>{row.ftId ?? 'View payment'}</button>
       : <Link className="operations-link" to={buriMunsiPaymentPath(row.id)}>{row.ftId ?? 'View payment'}</Link>}</MomoCell>
@@ -197,13 +200,24 @@ function PaymentDetail({id: paymentKey, group, search, onClose}: {id: string; gr
   const payment = result?.status === 'success' ? result.value : null;
   const evidenceGroup = payment?.groupId ?? group;
   const recordedParty = payment ? paymentCounterpartyEvidence(payment) : null;
-  return <section aria-label="Payment details"><div className="operations-toolbar"><h2>Payment details</h2><Button onClick={onClose}>Close</Button></div>
+  const member = payment && paymentMemberName(payment);
+  const memberPhone = payment && paymentMemberNumber(payment);
+  return <section className="payment-detail" aria-label="Payment details">
+    <header className="payment-detail-heading">
+      <h2>{recordedText(payment?.ftId) ?? 'Payment details'}</h2>
+      <div>{payment && <AllocationStatus row={payment} search={search} text />}<Button onClick={onClose}>Close</Button></div>
+    </header>
     {!result ? <LoadingState label="Loading payment" /> : result.status === 'error' ? <ErrorState message={result.message} onRetry={retry} /> :
-      payment && <><Facts items={[[ 'FT reference', payment.ftId ], ['Direction', directionLabel(payment.direction)], ['Amount', amount(payment.amountRwf)],
-        ['Time (Kigali)', paymentTime(payment.atRaw)], ['Member', paymentMemberName(payment)], ['Member phone', paymentMemberNumber(payment)],
-        ...(recordedParty?.name ? [['Recorded counterparty', recordedParty.name] as [string, string]] : []),
-        ...(recordedParty?.number ? [['Recorded number / code', recordedParty.number] as [string, string]] : []),
-        ['Allocation', <AllocationStatus row={payment} search={search} />], ['Record ID', payment.id]]} />
+      payment && <><Facts items={[['Amount', amount(payment.amountRwf)], ['IN/OUT', <PaymentDirection direction={payment.direction} />],
+        ['Time', paymentTime(payment.atRaw)],
+        ...(member ? [['Member', member] as [string,string]] : []),
+        ...(memberPhone ? [['Member phone', memberPhone] as [string,string]] : [])]} />
+        {(recordedParty?.name || recordedParty?.number) && <details className="payment-detail-disclosure">
+          <summary>Recorded counterparty details</summary><Facts items={[
+            ...(recordedParty.name ? [['Name', recordedParty.name] as [string,string]] : []),
+            ...(recordedParty.number ? [['Number or code', recordedParty.number] as [string,string]] : []),
+          ]} />
+        </details>}
         {payment.sourceId && canReadSmsEvidence(user) && (evidenceGroup
           ? <CanonicalPaymentEvidence key={payment.sourceId} paymentId={payment.id} group={evidenceGroup} sourceId={payment.sourceId} />
           : <Link className="operations-link" to={buriMunsiSmsPath}>Open M-Money SMS</Link>)}
