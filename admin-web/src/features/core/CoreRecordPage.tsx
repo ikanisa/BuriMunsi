@@ -7,8 +7,8 @@ import { OperatorNotes } from '../notes/OperatorNotes';
 import { containsControl, formatField, isId, isObject, memberMobileNumber, parseCoreRow, paymentReference, validateMemberStatus } from './contracts';
 import { coreRecordActions } from './coreRecordActions';
 import { CoreRelatedSection, MembershipRecoveries } from './CoreRelatedRecords';
-import {MemberMemberships} from './MemberMemberships';
-import {canReadMemberStatement, readMemberDetails} from './memberStatement';
+import {MemberStatementPage, type StatementProfile} from './MemberStatementPage';
+import {canReadMemberStatement, profileMembership, readProfileWithStatement} from './memberStatement';
 import type { PendingIdentity } from './pendingAttempt';
 import { relatedPage, validateRelated } from './relatedRecordContract';
 import type { CoreArea, FeatureAccess } from './types';
@@ -44,20 +44,22 @@ function safeReturn(area: CoreArea, financialModel: FeatureAccess['financialMode
 export function CoreRecordPage({ area, id, request, permissions, actorId, principalId, role, authorityKey, financialModel, navigate,
   returnTo, allowMutations = false, identity, isCurrent, simplePayments = false, scopedMember = false, expectedGroup }: RecordProps) {
   const allowed = permissions.includes(CORE_PERMISSIONS[area]);
-  const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
+  const [record, setRecord] = useState<StatementProfile | null>(null);
+  const detail = record?.data ?? null;
   const [detailScope, setDetailScope] = useState('');
-  const currentScope = JSON.stringify([authorityKey, area, financialModel, id, scopedMember, expectedGroup]);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [retry, setRetry] = useState(0);
   const scopedProfile = scopedMember && financialModel === 'canonical_evidence_ledger' && (area === 'members' || area === 'users');
-  const includeBalance = scopedProfile && canReadMemberStatement(permissions);
+  const includeStatement = scopedProfile && canReadMemberStatement(permissions);
+  const showMembership = scopedProfile && permissions.includes('collections.read');
+  const currentScope = JSON.stringify([authorityKey, actorId, area, financialModel, id, scopedMember, expectedGroup, includeStatement, showMembership]);
   const resource = scopedProfile ? 'members' : area === 'members' ? 'users' : area === 'ledgers' && financialModel === 'transaction_journals' ? 'journals' : area;
   useEffect(() => {
     if (!allowed || !isId(id)) return;
     const controller = new AbortController(); let active = true;
-    const read = includeBalance ? readMemberDetails(request, controller.signal, id, 'balance') :
-      request(`operations/${resource}/${id}`, { signal: controller.signal });
-    read.then(data => {
+    const read = includeStatement ? readProfileWithStatement(request, controller.signal, id) :
+      request(`operations/${resource}/${id}`, {signal: controller.signal}).then(data => ({data,statementUnavailable:false}));
+    read.then(({data, statementUnavailable}) => {
       if (data.resource_type !== resource || data.current_actor_id !== actorId || typeof data.can_manage !== 'boolean' || !isObject(data.resource) || !isObject(data.related)) throw new Error('Invalid detail');
       if (financialModel === 'canonical_evidence_ledger') {
         if (data.contract_version !== 2 || data.model !== financialModel) throw new Error('Invalid model');
@@ -66,10 +68,11 @@ export function CoreRecordPage({ area, id, request, permissions, actorId, princi
       } else if (data.contract_version !== undefined || data.model !== undefined || (data.resource.id !== id && !(resource === 'users' && data.resource.operator_admin_id === id))) throw new Error('Invalid detail');
       if (data.resource.id !== id && !(resource === 'users' && data.resource.operator_admin_id === id)) throw new Error('Invalid identity');
       validateRelated(data, resource);
-      if (active) { setDetail(data); setDetailScope(currentScope); setState('ready'); }
+      const membership = scopedProfile && Object.hasOwn(data.related, 'memberships') ? profileMembership(data, id, expectedGroup) : null;
+      if (active) { setRecord({data, membership, statementUnavailable}); setDetailScope(currentScope); setState('ready'); }
     }).catch(() => { if (active) { setDetailScope(currentScope); setState('error'); } });
     return () => { active = false; controller.abort(); };
-  }, [allowed, id, resource, request, actorId, authorityKey, financialModel, area, currentScope, retry, includeBalance]);
+  }, [allowed, id, resource, request, actorId, authorityKey, financialModel, area, currentScope, retry, includeStatement, scopedProfile, expectedGroup]);
   const paymentsReturn = area === 'transactions' ? safePaymentListReturn(returnTo, 'recorded') : null;
   const back = paymentsReturn ?? safeReturn(area, financialModel, scopedMember, returnTo);
   const {actions, membershipRecovery, membershipWrite, journalRecovery, journalWrite} = coreRecordActions({
@@ -82,17 +85,21 @@ export function CoreRecordPage({ area, id, request, permissions, actorId, princi
   const resourceRow = detail?.resource as Record<string, unknown> | undefined;
   const displayRow = memberProfile && resourceRow ? {...resourceRow, mobile_number:memberMobileNumber(resourceRow)} : resourceRow;
   const detailFields = memberProfile ? fields.members : fields[area];
+  const recordNumber = record?.membership?.groupId && record.membership.id ? record.membership.recordNumber : null;
   return <>
     <PageHeader title={area === 'users' ? 'Person' : AREA_TITLES[area]} subtitle={simplePayments && memberProfile ? undefined :
       'Review this record and its related information.'} actions={<>
       <Button type="button" onClick={() => navigate(back)}>Back to {paymentsReturn ? 'payments' : scopedMember && area === 'users' ? 'members' : AREA_TITLES[area].toLowerCase()}</Button>
-      {actions.map(action => <Button key={action.path} type="button" variant={action.variant} onClick={() => navigate(action.path)}>{action.label}</Button>)}
+      {actions.filter(action => !scopedProfile || action.variant !== 'secondary' || action.path !== '/admin/users/' + id + '/edit')
+        .map(action => <Button key={action.path} type="button" variant={action.variant} onClick={() => navigate(action.path)}>{action.label}</Button>)}
     </>} />
     {!allowed ? <ErrorState title="Access unavailable" message="Your account does not have permission to view this record." /> :
       !isId(id) ? <ErrorState message="Select a valid record." /> :
       state === 'loading' || detailScope !== currentScope ? <LoadingState label="Loading record" layout="details" /> :
       state === 'error' || !detail ? <ErrorState message="The record could not be verified or the service is unavailable." onRetry={reload} /> : <>
-        <Card className="admin-content-enter"><div className="core-detail"><h2>Record details</h2><dl>{detailFields.filter(([key]) => (!scopedProfile || key !== 'momo_pay_code') && (!simplePayments || key !== 'total_contributed_rwf') &&
+        <Card className="admin-content-enter"><div className="core-detail"><h2>Record details</h2><dl>
+          {showMembership && <div><dt>Record ID</dt><dd>{recordNumber ?? 'Unavailable'}</dd></div>}
+          {detailFields.filter(([key]) => (!scopedProfile || key !== 'momo_pay_code' && key !== 'momo_provider') && (!simplePayments || key !== 'total_contributed_rwf') &&
           displayRow?.[key] !== undefined).map(([key, title]) => <div key={key}><dt>{title}</dt><dd>{area === 'transactions' && financialModel === 'canonical_evidence_ledger' && key === 'title' ? paymentReference(detail.resource as Record<string, unknown>) : formatField(key, displayRow?.[resource === 'members' && key === 'status' ? 'membership_status' : key])}</dd></div>)}</dl></div></Card>
         {area === 'transactions' && <p className="core-note">Recorded evidence does not establish provider settlement.</p>}
         {area === 'transactions' && financialModel === 'transaction_journals' && identity && identity.id === actorId && identity.role === role && isCurrent &&
@@ -103,11 +110,11 @@ export function CoreRecordPage({ area, id, request, permissions, actorId, princi
         {financialModel === 'canonical_evidence_ledger' && identity && identity.role === role && (resource === 'groups' || resource === 'users') &&
           <OperatorNotes key={`${currentScope}:notes`} request={request} permissions={permissions} authorityKey={authorityKey} area={resource}
             id={id} identity={identity} actorId={actorId} principalId={principalId} allowMutations={allowMutations} />}
-        {Object.entries(detail.related as Record<string, unknown>).filter(([name]) => !simplePayments || name === 'memberships')
-          .map(([name, values]) => scopedProfile && name === 'memberships'
-            ? permissions.includes('collections.read') && <MemberMemberships key={currentScope} detail={detail} memberId={id} expectedGroup={expectedGroup}
-                request={request} authorityKey={authorityKey} permissions={permissions} returnTo={back} onRetryBalance={reload} />
-            : <CoreRelatedSection key={`${currentScope}:${name}`} name={name} initial={values as Record<string, unknown>[]} page={relatedPage(detail, name, values as unknown[])} resource={resource} id={id} actorId={actorId} financialModel={financialModel} request={request} version={(detail.resource as Record<string, unknown>).version} membershipRecovery={membershipRecovery} membershipWrite={membershipWrite} accountRead={!simplePayments && permissions.includes('ledger.read')} journalRecovery={journalRecovery} journalWrite={journalWrite} navigate={navigate} />)}
+        {includeStatement && record && <MemberStatementPage key={currentScope} id={id} expectedGroup={expectedGroup} profile={record} onRetryProfile={reload}
+          request={request} actorId={actorId} principalId={principalId} role={role} authorityKey={authorityKey} permissions={permissions}
+          financialModel={financialModel} navigate={navigate} returnTo={back} />}
+        {Object.entries(detail.related as Record<string, unknown>).filter(([name]) => !scopedProfile && (!simplePayments || name === 'memberships'))
+          .map(([name, values]) => <CoreRelatedSection key={`${currentScope}:${name}`} name={name} initial={values as Record<string, unknown>[]} page={relatedPage(detail, name, values as unknown[])} resource={resource} id={id} actorId={actorId} financialModel={financialModel} request={request} version={(detail.resource as Record<string, unknown>).version} membershipRecovery={membershipRecovery} membershipWrite={membershipWrite} accountRead={!simplePayments && permissions.includes('ledger.read')} journalRecovery={journalRecovery} journalWrite={journalWrite} navigate={navigate} />)}
       </>}
   </>;
 }

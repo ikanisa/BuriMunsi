@@ -328,7 +328,16 @@ try {
   await memberRecords.getByRole('columnheader', {name: 'Mobile number', exact: true}).waitFor();
   const memberHeadings = await memberRecords.getByRole('columnheader').allTextContents();
   assert.deepEqual(memberHeadings.filter(name => /number|phone|WhatsApp/i.test(name)), ['Mobile number']);
-  const scopedDetail = member => page.waitForResponse(response => response.url() === origin + '/api/admin/operations/members/' + member.id + '?include=balance' && response.ok());
+  const refreshedRoster = page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return url.origin === origin && url.pathname === '/api/admin/core/members' &&
+      url.searchParams.get('directory') === 'roster' && url.searchParams.get('status') === 'inactive' && response.ok();
+  });
+  await page.getByRole('button', {name: 'Refresh Members', exact: true}).click();
+  await refreshedRoster;
+  await inactiveRow.getByRole('cell', {name: 'Inactive', exact:true}).waitFor();
+  assert.equal(await memberStatus.inputValue(), 'inactive');
+  const scopedDetail = member => page.waitForResponse(response => response.url() === origin + '/api/admin/operations/members/' + member.id + '?include=statement' && response.ok());
   await Promise.all([scopedDetail(fixtureInactiveMember), inactiveRow.getByRole('button', {name:'View ' + fixtureInactiveMember.public_id}).click()]);
   await page.getByRole('heading', {name: 'Record details',exact:true}).waitFor();
   await page.getByText('Mobile number', {exact: true}).locator('+ dd').waitFor();
@@ -356,8 +365,9 @@ try {
   await Promise.all([scopedDetail(fixtureMember), memberRow.getByRole('button', {name: `View ${fixtureMember.public_id}`, exact: true}).click()]);
   await page.getByRole('heading', {name: 'Record details', exact: true}).waitFor();
   await page.getByText(fixtureMember.display_name, {exact: true}).waitFor();
-  await page.getByRole('row').filter({hasText: 'Synthetic group'}).waitFor();
-  await page.getByRole('link', {name:'Open member statement, total balance RWF 4,000',exact:true}).click();
+  assert.equal(await page.getByText('MoMo provider', {exact:true}).count(),0);
+  assert.equal(await page.getByRole('button',{name:'Check person change request',exact:true}).count(),0);
+  assert.equal(await page.getByRole('heading',{name:'Memberships',exact:true}).count(),0);
   const statement = page.getByRole('table',{name:'Member transactions',exact:true});
   await statement.getByRole('row').filter({hasText:'STATEMENT-01'}).waitFor();
   assert.equal(await page.getByText('Closing balance',{exact:true}).locator('+ dd').textContent(),'RWF 4,000');
@@ -372,11 +382,14 @@ try {
   const lastMovement = statement.getByRole('row').filter({hasText:'STATEMENT-26'});
   await lastMovement.waitFor();
   page.off('request',recordMemberRead);
-  assert.deepEqual(memberReads, ['/api/admin/operations/members/' + fixtureMember.id + '?include=balance',
-    '/api/admin/operations/members/' + fixtureMember.id + '?include=statement', nextStatementUrl.pathname + nextStatementUrl.search]);
+  assert.deepEqual(memberReads, ['/api/admin/operations/members/' + fixtureMember.id + '?include=statement',
+    nextStatementUrl.pathname + nextStatementUrl.search]);
   assert.deepEqual((await lastMovement.getByRole('cell').allTextContents()).slice(2),['1,000','—','4,000']);
   await page.setViewportSize({width:320,height:720});
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await page.getByRole('link', {name:/Open member statement/}).click();
+  await page.getByRole('heading',{name:'Member statement',exact:true}).waitFor();
+  await statement.getByRole('row').filter({hasText:'STATEMENT-01'}).waitFor();
   await page.getByRole('button',{name:'Back to member',exact:true}).click();
   await page.getByRole('heading',{name:'Record details',exact:true}).waitFor();
   await page.setViewportSize({width:1440,height:900});
@@ -623,7 +636,7 @@ try {
   assert.deepEqual(denied, []);
   assert.deepEqual(unexpectedAuth, []);
   assert.deepEqual(incorrectIdentityHeaders, []);
-  const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'home_has_no_sms_status_and_retired_admin_pages_return_home', 'long_home_member_names_truncate_with_full_text', 'home_loading_follows_the_request_and_respects_motion_preference', 'retired_passcode_bookmark_returns_to_overview', 'three_daily_links_and_no_redundant_sidebar_search', 'canonical_payment_direction_filter_and_clear', 'inline_inbox_preserves_financial_table_and_390px_scroll', 'protected_sms_deep_link', 'filtered_member_detail_and_return', 'single_mobile_number_in_member_roster_and_detail', 'member_statement_pinned_revision_full_balance_and_320px_reflow', 'payment_details_link_to_authorized_sms_evidence', 'payment_without_source_and_320px_reflow', 'sms_read_failure_retry',
+  const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'home_has_no_sms_status_and_retired_admin_pages_return_home', 'long_home_member_names_truncate_with_full_text', 'home_loading_follows_the_request_and_respects_motion_preference', 'retired_passcode_bookmark_returns_to_overview', 'three_daily_links_and_no_redundant_sidebar_search', 'canonical_payment_direction_filter_and_clear', 'inline_inbox_preserves_financial_table_and_390px_scroll', 'protected_sms_deep_link', 'filtered_member_detail_and_return', 'single_mobile_number_in_member_roster_and_detail', 'member_refresh_preserves_filter_and_rows', 'inline_member_statement_pinned_revision_full_balance_and_320px_reflow', 'payment_expansion_shows_authorized_original_sms', 'payment_without_source_and_320px_reflow', 'sms_read_failure_retry',
       'payer_sms_empty_and_reported_delivered', 'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
       'retired_authenticator_bookmark_preserves_safe_destination', 'missing_scoped_admin_identity_removes_controls', 'session_failure_and_recovery_require_server_authority', 'expired_request_and_history_return_require_sign_in',
       'mobile_drawer_traps_and_restores_focus_and_reflows', 'tablet_core_routes_fit_viewport_and_collect_reconciliation_stays_closed', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, ...authorityChecks, 'no_unexpected_auth_request', 'identity_version_only_on_session_exchanges'];

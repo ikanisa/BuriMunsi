@@ -2,9 +2,9 @@ import {fireEvent, render, screen, within} from '@testing-library/react';
 import {MemoryRouter} from 'react-router';
 import {describe, expect, it, vi} from 'vitest';
 import {AdminRequestError} from '../../src/api/client';
-import {MemberMemberships} from '../../src/features/core/MemberMemberships';
+import {CoreRecordPage} from '../../src/features/core/CoreRecordPage';
 import {MemberStatementPage} from '../../src/features/core/MemberStatementPage';
-import {profileMembership, readMemberStatement, readMemberStatementPage} from '../../src/features/core/memberStatement';
+import {readMemberStatement, readMemberStatementPage} from '../../src/features/core/memberStatement';
 import fixture from './canonical-core-fixtures.json';
 
 const person = {...fixture.members.rows[0], membership_status: 'active', momo_pay_code: '003314'};
@@ -45,6 +45,72 @@ const props = {id: person.id, expectedGroup: group, permissions: grants, actorId
   role: 'staff' as const, authorityKey: 'signed-in-staff', financialModel: 'canonical_evidence_ledger' as const, navigate: vi.fn()};
 
 describe('scoped member statement', () => {
+  it('opens the inline transaction history from one scoped profile read, then pages on the original revision', async () => {
+    const rows = Array.from({length: 26}, (_, index) => payment(index, index !== 25, 4));
+    const request = source(rows);
+    render(<MemoryRouter><CoreRecordPage {...props} role="admin" permissions={[...grants,'users.manage']} area="members"
+      scopedMember simplePayments request={request} returnTo="/admin/members?status=inactive" /></MemoryRouter>);
+    const table = within(await screen.findByRole('table', {name:'Member transactions'}));
+    expect(table.getByRole('row', {name:/FT-0000/})).toBeVisible();
+    expect(table.queryByText(time)).not.toBeInTheDocument();
+    expect(screen.getByText('Record ID').nextElementSibling).toHaveTextContent(number);
+    expect(screen.getByText('Closing balance').nextElementSibling).toHaveTextContent('RWF 96');
+    expect(screen.getByRole('link', {name:'Open member statement, total balance RWF 96'})).toHaveAttribute('href',
+      '/admin/members/' + person.id + '/statement?returnTo=' + encodeURIComponent('/admin/members?status=inactive'));
+    expect(screen.queryByText('MoMo provider')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', {name:'Check person change request'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', {name:'Memberships'})).not.toBeInTheDocument();
+    expect(request.mock.calls.map(([path]) => path)).toEqual([profilePath + '?include=statement']);
+    fireEvent.click(screen.getByRole('button', {name:'Next'}));
+    expect(await screen.findByRole('row', {name:/FT-0025/})).toBeVisible();
+    expect(screen.getByText('Record ID').nextElementSibling).toHaveTextContent(number);
+    expect(request.mock.calls.map(([path]) => path)).toEqual([profilePath + '?include=statement',
+      'burimunsi/payments?statement=1&memberId=' + person.id + '&offset=25&revision=' + revision]);
+  });
+
+  it('keeps the record number visible with membership access but never reads money without all statement permissions', async () => {
+    const request = source([]);
+    render(<MemoryRouter><CoreRecordPage {...props} area="members" scopedMember permissions={['users.read','collections.read']}
+      request={request} /></MemoryRouter>);
+    expect((await screen.findByText('Record ID')).nextElementSibling).toHaveTextContent(number);
+    expect(screen.queryByText('Closing balance')).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', {name:'Member statement'})).not.toBeInTheDocument();
+    expect(request.mock.calls.map(([path]) => path)).toEqual([profilePath]);
+  });
+
+  it('keeps the profile available after a statement failure and independently retries the first scoped payment page', async () => {
+    const regular = source([payment(1, false, 5)]);
+    const request = vi.fn(async (path: string) => {
+      if (path.endsWith('?include=statement')) throw new AdminRequestError('Unavailable', {statusCode:503,code:'operation_unavailable'});
+      return regular(path);
+    });
+    render(<MemoryRouter><CoreRecordPage {...props} area="members" scopedMember request={request} /></MemoryRouter>);
+    expect(await screen.findByRole('heading', {name:'Member statement unavailable'})).toBeVisible();
+    expect(screen.getByText('Record ID').nextElementSibling).toHaveTextContent(number);
+    expect(screen.queryByText('Closing balance')).not.toBeInTheDocument();
+    expect(request.mock.calls.map(([path]) => path)).toEqual([profilePath + '?include=statement',profilePath]);
+    fireEvent.click(screen.getByRole('button',{name:'Try again'}));
+    expect(await screen.findByRole('table',{name:'Member transactions'})).toBeVisible();
+    expect(screen.getByText('Closing balance').nextElementSibling).toHaveTextContent('RWF -5');
+    expect(request.mock.calls.map(([path]) => path)).toEqual([profilePath + '?include=statement',profilePath,
+      'burimunsi/payments?statement=1&memberId=' + person.id + '&offset=0']);
+  });
+
+  it('withholds a mismatched inline statement and never shows or reads a foreign membership', async () => {
+    const request = vi.fn(async () => ({...detail, member_statement:{...statement([payment(1)]),groupId:'foreign'}}));
+    const ui = render(<MemoryRouter><CoreRecordPage {...props} area="members" scopedMember request={request} /></MemoryRouter>);
+    expect(await screen.findByRole('heading', {name:'Member statement unavailable'})).toBeVisible();
+    expect(screen.getByText('Record ID').nextElementSibling).toHaveTextContent(number);
+    expect(screen.queryByText('FT-0001')).not.toBeInTheDocument();
+    expect(request).toHaveBeenCalledTimes(1);
+    ui.unmount();
+    const foreign = source([], {...detail,related:{memberships:[{...membership,group_id:'foreign'}]}});
+    render(<MemoryRouter><CoreRecordPage {...props} area="members" scopedMember request={foreign} /></MemoryRouter>);
+    expect(await screen.findByRole('alert')).toHaveTextContent('The record could not be verified');
+    expect(screen.queryByText(number)).not.toBeInTheDocument();
+    expect(foreign).toHaveBeenCalledTimes(1);
+  });
+
   it('reads one scoped page with exact balances even when the statement totals exceed JavaScript integer precision', async () => {
     const rows = Array.from({length: 105}, (_, i) => payment(i, i % 2 === 0, 100));
     const api = source(rows);
@@ -102,33 +168,12 @@ describe('scoped member statement', () => {
       signal, person.id, actor, group, {offset: 0})).rejects.toThrow('The statement scope changed.');
   });
 
-  it.each([internal, 'foreign-membership'])('shows a joined balance only for the verified membership %s', async membershipId => {
-    const request = vi.fn();
-    render(<MemoryRouter><MemberMemberships detail={{...detail, member_balance: {
-      groupId:group, memberId:person.id, membershipId, closingRwf:'25',
-    }}} memberId={person.id} expectedGroup={group} authorityKey="staff" permissions={grants}
-      request={request} returnTo="/admin/members" /></MemoryRouter>);
-    expect(screen.getByRole('link', {name:'Open member statement, total balance ' + (membershipId===internal?'RWF 25':'Unavailable')})).toBeVisible();
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it('shows the issued record number and makes a fully scoped balance available to a permitted Staff reader', async () => {
-    const request = source([payment(1, true, 25), payment(2, false, 5)]);
-    const view = render(<MemoryRouter><MemberMemberships detail={detail} memberId={person.id} expectedGroup={group}
-      authorityKey="staff" permissions={grants} request={request} returnTo="/admin/members" /></MemoryRouter>);
-    const records = within(screen.getByRole('region', {name: 'Memberships records'}));
-    const balance = await records.findByRole('link', {name: /Open member statement.*RWF 20/});
-    expect(balance).toHaveAttribute('href', '/admin/members/' + person.id + '/statement');
-    expect(records.getByRole('cell', {name: number})).toBeVisible();
-    expect(records.queryByText(internal)).not.toBeInTheDocument();
-    expect(profileMembership({...detail, related: {memberships: [{...membership, membership_record_number: undefined}]}},
-      person.id, group)?.recordNumber).toBeNull();
-    view.unmount();
-    request.mockClear();
-    render(<MemoryRouter><MemberMemberships detail={detail} memberId={person.id} expectedGroup={group}
-      authorityKey="read-only" permissions={['users.read', 'collections.read']} request={request} returnTo="/admin/members" /></MemoryRouter>);
-    expect(screen.queryByRole('columnheader', {name: 'Total balance'})).not.toBeInTheDocument();
-    expect(request).not.toHaveBeenCalled();
+  it('shows an unavailable record number without disclosing an internal identifier for older membership records', async () => {
+    const request = source([], {...detail,related:{memberships:[{...membership,membership_record_number:undefined}]}});
+    render(<MemoryRouter><CoreRecordPage {...props} area="members" scopedMember request={request} /></MemoryRouter>);
+    expect((await screen.findByText('Record ID')).nextElementSibling).toHaveTextContent('Unavailable');
+    expect(screen.queryByText(internal)).not.toBeInTheDocument();
+    expect(await screen.findByRole('heading',{name:'No member transactions'})).toBeVisible();
   });
 
   it('shows original times and references, debit and credit, and whole-statement running balances on later display pages', async () => {
