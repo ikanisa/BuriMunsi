@@ -85,7 +85,9 @@ describe('authenticated initial Home projection', () => {
       homeBootstrap:{...boot,home:{...boot.home,paymentTotals:{...boot.home.paymentTotals,latestSmsBalanceRwf:null,walletGapRwf:null}}}}));
     render(<AdminApp config={{...config,fetchImpl}} />);
     expect(await screen.findByRole('link',{name:'BOOT-HOME'})).toBeVisible();
-    expect(screen.getByRole('link',{name:/Latest MoMo SMS balance.*Unavailable/})).toBeVisible();
+    fireEvent.click(screen.getByRole('button',{name:/Latest MoMo SMS balance.*Unavailable/}));
+    expect(screen.getByRole('dialog',{name:'Wallet details'})).toBeVisible();
+    expect(screen.getByText('Latest verified SMS balance',{exact:true}).nextElementSibling).toHaveTextContent('Unavailable');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
