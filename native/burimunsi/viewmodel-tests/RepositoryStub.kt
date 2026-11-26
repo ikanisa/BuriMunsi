@@ -117,14 +117,16 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDis
  fun restore():Operator?{Fixture.restoreReads++;Fixture.restoreEntered?.countDown();
   check(Fixture.restoreBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false)
   Fixture.restoreFailure?.let{throw it};return operator}
- internal class Restoration(val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null)
+ internal class Restoration(val operator:Operator,val home:Home?=null,val homeSavedAt:Long?=null,val homeSavingsRequested:Boolean=false)
  internal fun restoreForHome(wantsHome:(String?,String)->Boolean):Restoration?=restore()?.let{
   val include=wantsHome(it.id,collectionId)
   Restoration(it,Fixture.restoredHome.takeIf{include},Fixture.restoredHomeSavedAt.takeIf{include})
  }
  internal fun refreshHome()=Restoration(refreshSession())
  internal fun loginForHome(phone:String,pin:String)=Restoration(login(phone,pin))
- fun current()=operator?.takeUnless{Fixture.processSessionInvalidated}?.let{it.copy(id=Fixture.currentOwnerOverride?:it.id)}
+ fun current()=operator?.takeUnless{Fixture.processSessionInvalidated}?.let{profile->
+  Fixture.currentOwnerOverride?.let{profile.copy(id=it)}?:profile
+ }
  internal fun <T> withCurrentProfile(profile:Operator,publish:(String,Long)->T):T {
   checkContract(operator===profile&&current()==profile,"session_changed")
   return publish(Fixture.receiverGroupOverride?:collectionId,sessionRevision?:throw ContractFailure("session_changed"))
@@ -200,6 +202,8 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDis
     Page(result.items.map{Fixture.member.copy(id=it)},result.nextCursor,result.totalCount,result.revision,result.asOf)
    }else members(listing.q,cursor)
   }
+ internal fun memberPage(listing:ListingQuery,cursor:String?=null,anchorId:String?=null):RecordSnapshot<Page<Member>> =
+  RecordSnapshot(members(listing,cursor,anchorId=anchorId),lastReadFromCache,lastReadSavedAt)
  fun sms(listing:ListingQuery,cursor:String?=null,scope:RecordReadScope?=null,limit:Int=100):Page<SmsRow> =
   typedListing(ListingTarget.SMS,listing,cursor,null,scope,limit){sms(listing.q,cursor,listing.filter,limit)}
  fun observationPage(listing:ListingQuery,cursor:String?=null,scope:RecordReadScope?=null,limit:Int=100):Page<ObservationListRow> =
@@ -215,6 +219,7 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDis
   memberProvenance();Fixture.paged?.let{handler->val p=handler("MEMBERS",cursor,q,"all");memberProvenance();return Page(p.items.map{Fixture.member.copy(id=it)},p.nextCursor,p.totalCount,p.revision,p.asOf)};return Fixture.page(listOf(Fixture.member.copy(id=if(cursor==null)"member-1" else "member-2")),if(cursor==null)"more" else null)
  }
  fun payment(id:String):Payment{Fixture.paymentReads++;if(Fixture.paymentFailure)throw ApiFailure("connection_unavailable",0);provenance();return allocatedPayments[id]?:Fixture.payment(id)}
+ internal fun paymentRecord(id:String)=RecordSnapshot(payment(id),lastReadFromCache,lastReadSavedAt)
  fun member(id:String):Member{Fixture.memberReadFailure?.let{throw it};provenance(Fixture.memberCached||Fixture.cached);return Fixture.member.copy(id=id)}
  internal fun memberRecord(id:String):RecordSnapshot<Member>{
   val value=member(id)

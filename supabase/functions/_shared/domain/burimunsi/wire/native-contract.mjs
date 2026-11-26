@@ -28,7 +28,7 @@ export function validateNativeRequest(operation,value){
  return value;
 }
 export function nativeExpected(binding,route,body,originDigest,handoffFingerprint){
- return {...binding,recordId:route.recordId,includeHome:route.includeHome,memberId:body?.memberId,phone:body?.phone,
+ return {...binding,recordId:route.recordId,includeHome:route.includeHome,includeHomeSavings:route.includeHomeSavings,memberId:body?.memberId,phone:body?.phone,
   staffId:body?.id,commandRequestId:body?.requestId,staffOperation:body?.operation,
   consentEnabled:body?.enabled,consentGeneration:body?.generation,displayHintsVersion:body?.displayHintsVersion,
   importRows:body?.rows?.map(row=>row.row),sourceIds:body?.sourceIds,sourceKey:body?.sourceKey,observationBodySha256:route.observationBodySha256,

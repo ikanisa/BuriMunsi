@@ -10,6 +10,7 @@ import {browserCors, edgeHttpResponse, logicalRequest, mergeCollectOrigins} from
 import {gatewayUploadHeld, isGatewayIngest, nativeGatewayUploadsEnabled} from './gateway-upload-hold.js';
 import {createCollectNativeRuntime} from './domain/burimunsi/collect-runtime.js';
 import {isCollectNativeRoute, unavailableHeldObservation} from './domain/burimunsi/collect-route.js';
+import {isPhonePinRecordRead} from './domain/burimunsi/wire/native-http.mjs';
 import {json} from './domain/core.js';
 import worker from './domain/index.js';
 import {recordPlatformHealth} from './domain/observability.js';
@@ -102,8 +103,7 @@ export function createHandler(functionName, envReader = () => Deno.env.toObject(
       env.AUTH_MEMBER_REGISTRATION_ENABLED ??= 'false';
       const nativeSnapshotRead = standalone && collect && logical.method === 'GET' &&
         logical.headers.get('X-BuriMunsi-Auth') === 'phone_pin' &&
-        (path === '/v1/burimunsi/payments' ||
-         (path === '/v1/burimunsi/session' && new URL(logical.url).search === '?include=home'));
+        isPhonePinRecordRead(path,new URL(logical.url).search);
       await runtime.initializeDatabase(env, collectionId, standalone && openWork === openApplicationWork);
       const work = await runtime.admit(env, openWork, admin ? 'http_admin' : 'http_collect', request.signal,
         standalone && logical.method === 'GET', nativeSnapshotRead && openWork === openApplicationWork);

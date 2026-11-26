@@ -158,7 +158,10 @@ fun main()=runBlocking {
     suspend fun returnFromPaymentPicker() {
         m.prepareDownload(ExportFormat.XLSX)
         idle()
-        val request = checkNotNull(m.takeDownloadRequest())
+        val request = checkNotNull(m.takeDownloadRequest()){
+            "Payment export was not ready: gate=${m.screenGate}, phase=${m.exportFeedback?.phase}, " +
+                "eligible=${m.canExportListing}, offline=${m.state.offline}, pending=${m.state.pending}, busy=${m.state.busy}"
+        }
         m.onBackground()
         check(m.downloadDestination(request.id, request.format, write = { file, verify ->
             verify()

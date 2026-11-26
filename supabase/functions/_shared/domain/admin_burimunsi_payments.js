@@ -7,7 +7,7 @@ import {lockCollectMutation} from '../postgres-mutation-lock.js';
 import {BuriError,requireThat} from './burimunsi/errors.js';
 import {PostgresNativeAuthority} from './burimunsi/postgres-authority.js';
 import {assignPayment,readPayment,readPaymentAnalysisRows,readPayments,readPaymentsHome,setPaymentsScope,
-  readMemberPaymentStatement,MEMBER_STATEMENT_PAGE_SIZE,MEMBER_STATEMENT_MAX_ROWS} from './burimunsi/postgres-payments.js';
+  readMemberPaymentStatement,readOptionalMemberPaymentBalance,MEMBER_STATEMENT_PAGE_SIZE,MEMBER_STATEMENT_MAX_ROWS} from './burimunsi/postgres-payments.js';
 import {analyzeCanonicalPaymentRows,parsePaymentAnalysisQuery} from './burimunsi/payment-analysis-shared.mjs';
 import {canonicalJson,exactKeys,requireId,requireRequestId,sha256} from './burimunsi/values.js';
 
@@ -45,12 +45,8 @@ function query(url,allowed,{maxOffset=100000}={}) {
   return values;
 }
 
-export async function adminBuriMunsiPayments(request,env) {
-  const url=new URL(request.url),path=url.pathname;
-  if(path!==base+'home'&&path!==base+'payments'&&!path.startsWith(base+'payments/'))return null;
-  if(env.BURIMUNSI_PRODUCT_MODE!=='standalone')throw new ApiError(404,'not_found','This workspace is unavailable.');
-  validateAdminOrigin(request,env);
-  const account=await adminAccountSession(request,env),proof=activePhoneOperator(account);
+function paymentsContext(env,account) {
+  const proof=activePhoneOperator(account);
   const groupId=env.BURIMUNSI_COLLECTION_ID;
   if(!proof||proof.collectionId!==groupId||!account.permissions.includes('payments.read'))
     throw new ApiError(403,'permission_required','Payments are unavailable for this account.');
@@ -67,6 +63,45 @@ export async function adminBuriMunsiPayments(request,env) {
       canReadStatement:actor.can_read_statement===true,
       canAllocate:actor.can_allocate===true};
   };
+  return {db,groupId,proof,authority,scoped};
+}
+
+export async function readScopedAdminMemberPaymentDetail(env,account,{memberId,include,readProfile}) {
+  const {db,groupId,authority,scoped}=paymentsContext(env,account);
+  try {
+    requireThat(account.permissions.includes('users.read')&&account.permissions.includes('collections.read'),'access_denied',403);
+    return await db.withLockedReadSnapshot(async sql=>{
+      await sql.unsafe("SET LOCAL statement_timeout='1250ms'");
+      requireThat((await scoped(sql)).canReadStatement,'access_denied',403);
+      // Lock and recheck both personal grants for the profile as well as the
+      // existing Payments guard. Profile/financial data use this same snapshot.
+      const [result]=await sql.unsafe(`SELECT (private.assert_actor('users.read',NULL,NULL,1::bigint,NULL::bigint)=$1
+        AND private.assert_actor('collections.read',NULL,NULL,1::bigint,NULL::bigint)=$1) AS allowed`,[account.principal_id]);
+      requireThat(result?.allowed===true,'access_denied',403);
+      const profile=await readProfile(sql,account,memberId,groupId);
+      const membership=profile.related.memberships[0];
+      requireThat(profile.resource.id===memberId&&membership?.user_id===memberId&&membership.group_id===groupId,'member_statement_unavailable',404);
+      const projection=include==='balance'
+        ? {member_balance:await readOptionalMemberPaymentBalance(sql,groupId,memberId,membership.id)}
+        : {member_statement:await readMemberPaymentStatement(sql,groupId,memberId,{offset:0})};
+      if(projection.member_statement)requireThat(projection.member_statement.membershipId===membership.id,'member_statement_unavailable',404);
+      await authority.assertOwned();
+      return {...profile,...projection};
+    });
+  } catch(error) {
+    if(error instanceof BuriError)throw new ApiError(error.status,error.code,'The requested member record is unavailable.');
+    if(error?.code==='42501')throw new ApiError(403,'permission_required','The requested member record is unavailable.');
+    throw error;
+  }
+}
+
+export async function adminBuriMunsiPayments(request,env) {
+  const url=new URL(request.url),path=url.pathname;
+  if(path!==base+'home'&&path!==base+'payments'&&!path.startsWith(base+'payments/'))return null;
+  if(env.BURIMUNSI_PRODUCT_MODE!=='standalone')throw new ApiError(404,'not_found','This workspace is unavailable.');
+  validateAdminOrigin(request,env);
+  const account=await adminAccountSession(request,env);
+  const {db,groupId,proof,authority,scoped}=paymentsContext(env,account);
   const evidenceMatch=/^payments\/([A-Za-z0-9_-]+)\/sms-evidence$/.exec(path.slice(base.length));
   const relative=path.slice(base.length),match=/^payments\/([A-Za-z0-9_-]+)(\/allocate)?$/.exec(relative);
   const statusMatch=/^payments\/([A-Za-z0-9_-]+)\/allocation-receipt$/.exec(relative);

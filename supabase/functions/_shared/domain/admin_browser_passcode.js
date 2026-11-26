@@ -44,6 +44,14 @@ async function sqlResult(env, query, ...values) {
   return row.result;
 }
 
+export async function firstBrowserPasscodeRead(env,query,...values) {
+  const db=env.DB;
+  if(typeof db.withAdminSessionRead!=='function')return first(env,query,...values);
+  const result=await db.withAdminSessionRead(tx=>db.statement(tx,db.prepare(query).bind(...values)));
+  if(result.results.length>1)throw unavailable();
+  return result.results[0]??null;
+}
+
 export async function browserPasscodeSession(request, env, required = true) {
   const origin = originFor(request, env);
   const token = adminCookieToken(request);
@@ -53,8 +61,13 @@ export async function browserPasscodeSession(request, env, required = true) {
   }
   const hash = await cookieHash(token);
   const group = collectionFor(env);
-  const result = await sqlResult(env,
-    'SELECT private.burimunsi_browser_pin_session(?,?,?) AS result', group, hash, origin);
+  // The resolver still takes its existing identity/session locks. GET avoids
+  // reserving the write circuit before the locked read has checked the cookie.
+  const statement='SELECT private.burimunsi_browser_pin_session(?,?,?) AS result';
+  const reader=request.method==='GET'?firstBrowserPasscodeRead:first;
+  const row=await reader(env,statement,group,hash,origin);
+  if(!row||!Object.hasOwn(row,'result'))throw unavailable();
+  const result=row.result;
   if (result === null) {
     if (required) throw signedOut();
     return null;

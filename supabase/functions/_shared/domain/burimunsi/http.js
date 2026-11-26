@@ -76,16 +76,19 @@ export function createNativeHandler({auth,records,contributions,members,gateway,
       // The server-owned PIN selector only names the actor to the records
       // service, which reloads and checks the full actor inside its snapshot.
       const usesRecordSnapshot=recordSnapshotReads.has(wireRoute?.operation)||
-        (wireRoute?.operation==='session'&&wireQuery?.include==='home');
+        (wireRoute?.operation==='session'&&wireQuery?.include!==undefined);
       const selector=method==='GET'&&token&&usesRecordSnapshot?readRecordActor?.(req):null;
       const actor=selector??await auth.authenticate(token,installationId);
       requireActiveNativeRequest(req);
       if(strictContract){requireThat(actor.groupId===groupId,'access_denied',403);wireBinding.actorId=actor.id;}
       if(route==='/session'&&method==='GET'){
-        if(wireQuery?.include!=='home')return json(sessionProfile(actor));
+        if(wireQuery?.include===undefined)return json(sessionProfile(actor));
+        const optionalSavings=wireQuery.include==='home_savings';
+        requireThat(!optionalSavings||paymentsOnly,'invalid_query',400);
         requirePort(records,['sessionHome']);
         wireRoute.includeHome=true;
-        const {current,home}=await records.sessionHome(actor);
+        wireRoute.includeHomeSavings=optionalSavings;
+        const {current,home}=await (optionalSavings?records.sessionHome(actor,{optionalSavings}):records.sessionHome(actor));
         return json({...sessionProfile(current),home});
       }
       if(route==='/session/logout'&&method==='POST'){await body(req,[]);return json(await auth.logout(actor));}

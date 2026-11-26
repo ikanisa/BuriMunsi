@@ -6,6 +6,13 @@ snapshot included in native login or session keep their existing response shapes
 Hosted Admin's `GET /api/admin/burimunsi/home` continues to return its Home counts
 and recent payments.
 
+`GET /v1/burimunsi/session?include=home_savings` opts in to a session response
+that includes the standalone Home and, when available within the database
+budget, its `savings` object. This operation uses the same session and collection
+checks as `?include=home`. An optional projection timeout returns the verified
+core Home without `savings`. Existing GET selectors and POST sign-in responses
+retain their existing shape.
+
 The savings selector is available in standalone Payments mode. `RecordsService`
 revalidates the caller's `records.read` access in the scoped read snapshot and
 `readPaymentsHome` reads `private.burimunsi_home_savings` and the outgoing sum in
@@ -34,7 +41,7 @@ only the amounts and reconciliation status, with no raw SMS or source identities
 
 The API converts PostgreSQL whole-RWF values exactly within the existing safe
 integer range. A supported zero is returned as `0`. Missing, unqualified or
-out-of-range evidence produces `null` for that amount. A malformed summary or
-inconsistent reconciliation result fails the read. Deploy the database helper
-before the `collect-api` source that reads it. This change uses the existing v64
-wire shape.
+out-of-range evidence produces `null` for that amount. Direct savings reads fail
+when the summary is malformed or reconciliation is inconsistent. Optional
+session reads can still return the core Home in those cases. Deploy the database
+helper before the `collect-api` source that reads it.

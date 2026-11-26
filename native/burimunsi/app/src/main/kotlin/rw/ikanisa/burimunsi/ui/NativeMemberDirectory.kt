@@ -22,27 +22,26 @@ internal class NativeMemberDirectory(
 
     private var viewportRevision = 0L
 
-    fun first(query: ListingQuery, anchor: String?, allowRecentCache: Boolean = false): Read {
+    fun first(query: ListingQuery, anchor: String?, allowRecentCache: Boolean, journalClear: () -> Boolean): Read {
         val source = repository()
         if(allowRecentCache&&anchor==null)source.recentMembers(query)?.let{(page,savedAt)->
-            if(SnapshotFreshness.recent(savedAt,now()))return Read(page,false,savedAt)
+            if(SnapshotFreshness.recent(savedAt,now())&&journalClear())return Read(page,false,savedAt)
         }
-        val page = if (anchor == null) source.members(query) else try {
-            source.members(query, anchorId = anchor)
+        val read = if (anchor == null) source.memberPage(query) else try {
+            source.memberPage(query, anchorId = anchor)
         } catch (failure: ApiFailure) {
             // An older API may reject the optional anchor; an offline phone may retain only page one.
             val fallback = failure.status in setOf(400, 422) ||
                 (failure.status == 0 && failure.code == "connection_unavailable")
             if (!fallback) throw failure
-            source.members(query)
+            source.memberPage(query)
         }
-        return Read(page, source.lastReadFromCache, source.lastReadSavedAt)
+        return Read(read.value, read.offline, read.savedAt)
     }
 
     fun next(query: ListingQuery, cursor: String): Read {
-        val source = repository()
-        val page = source.members(query, cursor)
-        return Read(page, source.lastReadFromCache, source.lastReadSavedAt)
+        val read = repository().memberPage(query, cursor)
+        return Read(read.value, read.offline, read.savedAt)
     }
 
     fun showFirst(state: UiState, query: ListingQuery, savedAnchor: String?, read: Read): UiState {

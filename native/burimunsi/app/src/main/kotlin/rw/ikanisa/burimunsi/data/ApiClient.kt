@@ -132,6 +132,7 @@ class ApiClient private constructor(origin: String, val installationId: String,
             if(group!=null)Values.id(group)
             val route=contract.route(method,path.removePrefix("/v1/burimunsi"))
             val query=contract.query(route.first, path.substringAfter('?', ""))
+            val includeHomeSavings = query["include"] == SESSION_HOME_SAVINGS_INCLUDE
             // Bind validation and response expectations to the exact JSON sent on the wire.
             val requestJson=body?.let { checkNotNull(it.toString()) }
             val requestData=StrictJson.parse(requestJson ?: "null",requestLimit)
@@ -139,7 +140,8 @@ class ApiClient private constructor(origin: String, val installationId: String,
             val b=requestData as? Map<*, *>
             val expected=(if(bootstrap)contractContext-"groupId" else contractContext) + mapOf("installationId" to installationId,"generation" to generation,
                 "requestId" to correlation,"recordId" to route.second,"now" to System.currentTimeMillis(),
-                "includeHome" to (query["include"]=="home"),
+                "includeHome" to (query["include"]=="home" || includeHomeSavings),
+                "includeHomeSavings" to includeHomeSavings,
                 "verifiedScope" to if(query["scope"]=="installation") "verified_installation" else "verified_collection") +
                 (b?.get("phone")?.let{mapOf("phone" to it)} ?: emptyMap()) +
                 (b?.get("memberId")?.let{mapOf("memberId" to it)} ?: emptyMap()) +

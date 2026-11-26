@@ -115,12 +115,17 @@ export function semantics(product,operation,r,expected={}) {
   if(data.recentPayments)rows(data.recentPayments);
   const home=['home','homeSavings'].includes(operation)?data:data.home;
   if(home&&(!Object.hasOwn(home,'paymentCount')&&(!Object.hasOwn(home,'groupBalanceRwf')||!Object.hasOwn(home,'todayRwf'))))fail('CONTRACT_STATE');
-  if(operation==='homeSavings'&&(data.recentPayments.length>data.paymentCount||data.unallocatedCount>data.paymentCount||
-    (data.savings.reconciliationStatus!=='unavailable'&&['lifetimeContributionsRwf','outgoingPaymentsRwf','latestWalletBalanceRwf']
-      .some(field=>data.savings[field]===null))))fail('CONTRACT_STATE');
+  if(home?.savings&&(home.recentPayments.length>home.paymentCount||home.unallocatedCount>home.paymentCount||
+    (home.savings.reconciliationStatus!=='unavailable'&&['lifetimeContributionsRwf','outgoingPaymentsRwf','latestWalletBalanceRwf']
+      .some(field=>home.savings[field]===null))))fail('CONTRACT_STATE');
   if(operation==='session'||operation==='login'){
    if(Object.hasOwn(data,'home')!==(expected.includeHome===true))fail('CONTRACT_CONTEXT');
-   if(data.home)rows(data.home.recentPayments);
+   if(data.home){
+    rows(data.home.recentPayments);
+    if(operation==='session'&&expected.includeHomeSavings===true){
+     if(!Object.hasOwn(home,'paymentCount'))fail('CONTRACT_STATE');
+    }else if(Object.hasOwn(home,'savings'))fail('CONTRACT_CONTEXT');
+   }
   }
   if(data.groupId!==undefined&&data.groupId!==r.binding.groupId)fail('CONTRACT_IDENTITY');
   if(['payment','paymentDetailV1','member','rawSms'].includes(operation)&&data.id!==expected.recordId)fail('CONTRACT_IDENTITY');

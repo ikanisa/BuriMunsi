@@ -118,10 +118,10 @@ test('separate standalone Home savings selector preserves legacy schemas and rec
   reconciliationStatus:'reconciled'};
  let savings={...reconciled,sourceBody:'never-return'};
  tx.loadBinding=()=>assert.fail('ordinary Savings attempted an SMS binding lookup');
- tx.canonicalHome=async(groupId,{includeSavings})=>{
+ tx.canonicalHome=async(groupId,{includeSavings,optionalSavings})=>{
   assert.equal(groupId,'group-1');reads++;
   return {paymentCount:1,memberCount:1,unallocatedCount:1,asOf:'2026-11-06T10:00:00Z',recentPayments:[],
-   ...(includeSavings?{savings}:{}),unrelated:'never-return'};
+   ...(includeSavings||optionalSavings?{savings}:{}),unrelated:'never-return'};
  };
  const svc=new RecordsService({store:{withReadSnapshot:fn=>fn(tx)},groupId:'group-1',
   cursor:new ScopedCursor(new Uint8Array(32).fill(8)),clock:()=>CLOCK,paymentsOnly:true});
@@ -160,6 +160,17 @@ test('separate standalone Home savings selector preserves legacy schemas and rec
  }
  const session=await run(get('/session?include=home'));assert.equal(session.status,200);
  assert.deepEqual((await session.json()).data.home,plain);
+ const bare=await run(get('/session'));assert.equal(bare.status,200);
+ assert.equal(Object.hasOwn((await bare.json()).data,'home'),false);
+ savings={...reconciled,sourceBody:'never-return'};
+ const bundled=await run(get('/session?include=home_savings'));assert.equal(bundled.status,200);
+ assert.deepEqual((await bundled.json()).data.home,{...plain,savings:reconciled});
+ savings=undefined;
+ const unavailable=await run(get('/session?include=home_savings'));assert.equal(unavailable.status,200);
+ assert.deepEqual((await unavailable.json()).data.home,plain);
+ savings={...reconciled,reconciliationStatus:'unverified'};
+ const malformed=await run(get('/session?include=home_savings'));assert.equal(malformed.status,200);
+ assert.deepEqual((await malformed.json()).data.home,plain);
  const before=[authenticated,reads];
  for(const path of ['/home?include=savings&include=savings','/home?include=foo','/home?include=savings&q=foo','/session?include=savings']){
   const denied=await run(get(path));assert.equal(denied.status,400,path);
@@ -168,6 +179,7 @@ test('separate standalone Home savings selector preserves legacy schemas and rec
  assert.deepEqual([authenticated,reads],before);
  tx.reloadActor=async()=>null;
  assert.equal((await run(get('/home?include=savings'))).status,401);
+ assert.equal((await run(get('/session?include=home_savings'))).status,401);
  assert.equal(reads,before[1]);
 });
 test('verified PIN record selector still requires a matching actor in the records snapshot',async()=>{

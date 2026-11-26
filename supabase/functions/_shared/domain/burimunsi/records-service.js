@@ -68,27 +68,27 @@ export class RecordsService {
     requireThat(!includeSavings||this.paymentsOnly,'invalid_query',400);
     return this.within(actor,'records.read',tx=>this.#home(tx,includeSavings));
   }
-  sessionHome(actor) {
-    return this.within(actor,'records.read',async(tx,current)=>({current,home:await this.#home(tx)}));
+  sessionHome(actor,{optionalSavings=false}={}) {
+    requireThat(!optionalSavings||this.paymentsOnly,'invalid_query',400);
+    return this.within(actor,'records.read',async(tx,current)=>({current,home:await this.#home(tx,false,optionalSavings)}));
   }
-  async #home(tx,includeSavings=false) {
+  async #home(tx,includeSavings=false,optionalSavings=false) {
     requirePort(tx,['canonicalHome']);
-    const value=await tx.canonicalHome(this.groupId,{includeSavings});
+    const value=await tx.canonicalHome(this.groupId,optionalSavings?{optionalSavings}:{includeSavings});
     if(this.paymentsOnly){
       requireThat(value&&[value.paymentCount,value.memberCount,value.unallocatedCount].every(n=>Number.isSafeInteger(n)&&n>=0)&&
         typeof value.asOf==='string','invalid_snapshot',503);
       const home={paymentCount:value.paymentCount,memberCount:value.memberCount,unallocatedCount:value.unallocatedCount,
         asOf:value.asOf,recentPayments:this.projectRows(value.recentPayments,'payments')};
-      if(!includeSavings)return home;
+      if(!includeSavings&&(!optionalSavings||value.savings===undefined))return home;
       const {lifetimeContributionsRwf,outgoingPaymentsRwf,latestWalletBalanceRwf,reconciliationStatus}=value.savings??{};
       const amounts=[lifetimeContributionsRwf,outgoingPaymentsRwf,latestWalletBalanceRwf];
-      requireThat(amounts.every(amount=>amount===null||Number.isSafeInteger(amount)&&amount>=0)&&
-        ['reconciled','mismatch','unavailable'].includes(reconciliationStatus),'invalid_snapshot',503);
-      if(reconciliationStatus!=='unavailable'){
-        const complete=amounts.every(amount=>amount!==null);
-        requireThat(complete&&(lifetimeContributionsRwf-outgoingPaymentsRwf===latestWalletBalanceRwf)===
-          (reconciliationStatus==='reconciled'),'invalid_snapshot',503);
-      }
+      const valid=amounts.every(amount=>amount===null||Number.isSafeInteger(amount)&&amount>=0)&&
+        ['reconciled','mismatch','unavailable'].includes(reconciliationStatus)&&
+        (reconciliationStatus==='unavailable'||(amounts.every(amount=>amount!==null)&&
+          (lifetimeContributionsRwf-outgoingPaymentsRwf===latestWalletBalanceRwf)===(reconciliationStatus==='reconciled')));
+      if(optionalSavings&&!valid)return home;
+      requireThat(valid,'invalid_snapshot',503);
       return {...home,savings:{lifetimeContributionsRwf,outgoingPaymentsRwf,latestWalletBalanceRwf,reconciliationStatus}};
     }
     requireThat(value && Number.isSafeInteger(value.groupBalanceRwf)&&Number.isSafeInteger(value.todayRwf)&&Number.isSafeInteger(value.memberCount)&&Number.isSafeInteger(value.unallocatedCount)&&typeof value.asOf==='string','invalid_snapshot',503);

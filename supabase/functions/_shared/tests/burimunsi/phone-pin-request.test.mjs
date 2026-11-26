@@ -62,7 +62,7 @@ function fixture(){
    const [proof]=row(await sha256(args[0]),args[1],args[2],args[3]);
    if(!proof)throw Object.assign(Error('session_changed'),{code:'42501'});
    state.current=proof;
-   const actor=state.readActor?.(text,args)?.[0]??null;
+   const actor=args[4]===proof.collection_id?state.readActor?.(text,args)?.[0]??null:null;
    return [{result:proof,actor,checked_at:state.dbCheckedAt??state.time}];
   }
   if(text===PIN_SET_CONTEXT_SQL){const rows=row(await sha256(args[0]),args[1],args[2],args[3]);state.current=rows[0];return rows.map(r=>({result:r}));}
@@ -88,7 +88,7 @@ function fixture(){
  const login=async options=>{const response=await invoke(request(options));return (await response.json()).data;};
  return {state,db,sql,request,invoke,login};
 }
-function freshRead(f,{scope='actual-group',enabled=true,actorScope=scope,pinCurrent=true,operatorCurrent=true,combined=true}={}){
+function freshRead(f,{scope='actual-group',enabled=true,actorScope=scope,pinCurrent=true,operatorCurrent=true,combined=true,paymentsOnly=false}={}){
  const actorReloads=[],noop=async()=>null;
  const inputs={db:f.db,groupId:scope};
  const sessionBinding=new PostgresPhonePinSessions(inputs);
@@ -117,13 +117,13 @@ function freshRead(f,{scope='actual-group',enabled=true,actorScope=scope,pinCurr
    phone:f.state.account.phone,name:f.state.account.name,role:row.role,capabilities:row.capabilities,
    expires_at:row.expires_at,pin_current:pinCurrent,operator_current:operatorCurrent}]:[];
  };
- const store=new PostgresRecordsStore({authority,sourceReader:{revision:noop,page:noop,detail:noop},clock:()=>f.state.time});
- const records=new RecordsService({store,groupId:scope,cursor:new ScopedCursor(new Uint8Array(32).fill(8)),clock:()=>f.state.time});
+ const store=new PostgresRecordsStore({authority,sourceReader:{revision:noop,page:noop,detail:noop},clock:()=>f.state.time,paymentsOnly});
+ const records=new RecordsService({store,groupId:scope,cursor:new ScopedCursor(new Uint8Array(32).fill(8)),clock:()=>f.state.time,paymentsOnly});
  const auth=new NativeAuthService({store:authority,hasher,groupId:scope,clock:()=>f.state.time});
  if(combined)auth.authenticate=()=>assert.fail('unnecessary bearer transaction');
  const handler=createNativeHandler({auth,records,contributions:{allocate:noop},
   members:{enroll:noop,setActive:noop},gateway:{status:noop,replace:noop},origin,groupId:scope,strictContract:true,
-  networkBucket:noop,readRecordActor:request=>phonePinReadSelector(f.db,request)});
+  networkBucket:noop,readRecordActor:request=>phonePinReadSelector(f.db,request),paymentsOnly});
  return {handler,actorReloads};
 }
 
@@ -585,4 +585,66 @@ test('bound Home actor stays on the owned snapshot and rechecks a database deadl
  assert.equal(f.state.calls.filter(call=>call.text===PIN_READ_ACTOR_SQL).length,2);
  f.state.actorQueryError=Object.assign(Error('directory_permission_denied'),{code:'42501'});
  await assert.rejects(read(),{code:'session_unavailable'});assert.equal(f.state.calls.some(call=>call.text===PIN_RENEW_SQL),false);
+});
+
+test('Home, Members and Payment detail reuse the actor from their exact production-style read snapshot',async t=>{
+ const f=fixture(),login=await f.login(),{handler}=freshRead(f);
+ let active=false,projected=0;
+ f.db.withNativeReadSnapshot=fn=>f.db.transaction(async sql=>{
+  active=true;try{return await fn(sql);}finally{active=false;}
+ });
+ f.db.ownsNativeRead=sql=>active&&sql===f.sql;
+ f.state.readQuery=(text,args)=>{
+  projected++;assert.equal(args[0],'actual-group');
+  if(text.startsWith('WITH credited'))return [{balance:1000,today:1000,members:1,unallocated:0,unallocated_amount:0,id:null}];
+  if(text.includes('FROM private.member_history_versions'))return [{revision:4}];
+  if(text.includes('SELECT count(*) AS total'))return [{total:1}];
+  if(text.includes('app.memberships m JOIN app.users u'))return [{id:'member-one',collection_id:'actual-group',full_name:'Test Member',
+   momo_number:'0780000001',active:1,revision:2,balance:1000}];
+  assert.match(text,/FROM private\.burimunsi_transaction_scopes/);
+  return [{id:'payment-one',collection_id:'actual-group',amount_minor:1000,provider_transaction_id:'REF-1',
+   provider_datetime_raw:'',version:2,payment_status:null,allocation_state:'unallocated',has_conflict:0,source_conflict:false}];
+ };
+ const run=async(path,standalone,options={})=>{
+  const before=f.state.transactions;f.state.calls=[];
+  const req=f.request({login:false,token:login.token,path,...options});
+  const res=await f.invoke(req,()=>handler(req),standalone?{BURIMUNSI_PRODUCT_MODE:'standalone'}:{});
+  return {status:res.status,body:await res.json(),sql:f.state.calls.map(x=>x.text),transactions:f.state.transactions-before};
+ };
+ for(const path of ['/home','/members','/members/member-one','/payments/payment-one']){
+  const previous=await run(path,false),current=await run(path,true);
+  assert.equal(previous.status,200,path);assert.equal(current.status,200,path);
+  assert.deepEqual(current.body,previous.body);
+  assert.equal(previous.transactions,1);assert.equal(current.transactions,1);
+  assert.equal(previous.sql.length,current.sql.length+1);
+  assert.equal(current.sql.filter(sql=>sql===PIN_READ_ACTOR_SQL).length,1);
+  assert.ok(!current.sql.includes(PIN_SET_CONTEXT_SQL)&&!current.sql.includes(PIN_RENEW_SQL));
+  t.diagnostic(`${path} database calls ${previous.sql.length} -> ${current.sql.length}`);
+ }
+ const before=projected;
+ await assert.rejects(run('/members/member-one',true,{headers:{'X-BuriMunsi-Device':'f'.repeat(64)}}),{code:'session_unavailable'});
+ await assert.rejects(run('/payments/payment-one',true,{group:'foreign-group'}),{code:'native_scope_changed'});
+ assert.equal(projected,before);
+});
+
+test('only the standalone GET session can negotiate savings through the actual PIN request boundary',async()=>{
+ const f=fixture(),login=await f.login(),{handler}=freshRead(f,{paymentsOnly:true});
+ let active=false;
+ f.db.withNativeReadSnapshot=fn=>f.db.transaction(async sql=>{
+  active=true;try{return await fn(sql);}finally{active=false;}
+ });
+ f.db.ownsNativeRead=sql=>active&&sql===f.sql;
+ f.state.readQuery=text=>{
+  if(!text.startsWith('WITH home_totals'))return [];
+  return [{summary_rows:1,payments:0,members:0,unallocated:0,id:null,
+   lifetime_contributions:'10',outgoing:'3',latest_wallet_balance:'7',reconciliation_status:'reconciled'}];
+ };
+ const bundled=f.request({login:false,token:login.token,path:'/session',query:'?include=home_savings'});
+ const response=await f.invoke(bundled,()=>handler(bundled),{BURIMUNSI_PRODUCT_MODE:'standalone'});
+ assert.equal(response.status,200,await response.clone().text());
+ assert.deepEqual((await response.json()).data.home.savings,{lifetimeContributionsRwf:10,outgoingPaymentsRwf:3,
+  latestWalletBalanceRwf:7,reconciliationStatus:'reconciled'});
+ const outside=f.request({login:false,token:login.token,path:'/session',query:'?include=home_savings'});
+ await assert.rejects(f.invoke(outside,()=>assert.fail('shared mode savings selected')),{code:'invalid_query'});
+ await assert.rejects(f.invoke(f.request({query:'?include=home_savings'}),undefined,{BURIMUNSI_PRODUCT_MODE:'standalone'}),{code:'invalid_query'});
 });

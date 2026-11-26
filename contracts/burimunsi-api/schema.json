@@ -831,6 +831,69 @@
       ],
       "additionalProperties": false
     },
+    "session.home": {
+      "type": "object",
+      "properties": {
+        "groupBalanceRwf": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991,
+          "x-code": "CONTRACT_AMOUNT"
+        },
+        "todayRwf": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991,
+          "x-code": "CONTRACT_AMOUNT"
+        },
+        "memberCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "unallocatedCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "asOf": {
+          "type": "string",
+          "minLength": 20,
+          "maxLength": 40,
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})(?![\\s\\S])",
+          "format": "date-time"
+        },
+        "recentPayments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/payment"
+          },
+          "minItems": 0,
+          "maxItems": 100
+        },
+        "unallocatedAmountRwf": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991,
+          "x-code": "CONTRACT_AMOUNT"
+        },
+        "paymentCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "savings": {
+          "$ref": "#/$defs/home.savings"
+        }
+      },
+      "required": [
+        "memberCount",
+        "unallocatedCount",
+        "asOf",
+        "recentPayments"
+      ],
+      "additionalProperties": false
+    },
     "session.data": {
       "type": "object",
       "properties": {
@@ -843,7 +906,7 @@
           "$ref": "#/$defs/profile"
         },
         "home": {
-          "$ref": "#/$defs/home.data"
+          "$ref": "#/$defs/session.home"
         },
         "groupId": {
           "type": "string",
@@ -2972,7 +3035,10 @@
       "properties": {
         "include": {
           "type": "string",
-          "const": "home"
+          "enum": [
+            "home",
+            "home_savings"
+          ]
         }
       },
       "required": [],

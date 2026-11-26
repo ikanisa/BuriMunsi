@@ -1,4 +1,4 @@
-import {browserPasscodeSession} from './admin_browser_passcode.js';
+import {browserPasscodeSession,firstBrowserPasscodeRead} from './admin_browser_passcode.js';
 import {adminPasscodeProof} from './admin_email_policy.js';
 import {ApiError, first, json, readJson, uuid} from './core.js';
 import {nativePinHasher} from './burimunsi/native-secrets.js';
@@ -23,7 +23,7 @@ export async function handlePasscodeTeam(request, env, path) {
 
   try {
     if (read) {
-      const row = await first(env,'SELECT private.burimunsi_browser_team(?) AS result',proof.collectionId);
+      const row = await firstBrowserPasscodeRead(env,'SELECT private.burimunsi_browser_team(?) AS result',proof.collectionId);
       if (row?.result?.contractVersion !== 1 || row.result.currentAccountId !== proof.accountId) throw unavailable();
       return json(row.result);
     }

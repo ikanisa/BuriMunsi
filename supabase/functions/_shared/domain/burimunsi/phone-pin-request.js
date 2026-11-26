@@ -6,7 +6,7 @@ import {lockCollectMutation} from '../../postgres-mutation-lock.js';
 import {BURIMUNSI_PRODUCT_MODE} from '../../burimunsi-standalone.js';
 import {requireActiveNativeRequest} from './wire/request-boundary.mjs';
 import {validateNativeRequest,requestBinding,bindNativeResponse,CONTRACT_VERSION} from './wire/native-contract.mjs';
-import {nativeRequestUrl,readNativeJson,requireNativeHttpsOrigin} from './wire/native-http.mjs';
+import {isPhonePinRecordRead,nativeRequestUrl,readNativeJson,requireNativeHttpsOrigin} from './wire/native-http.mjs';
 import {PIN_READ_ACTOR_SQL,PIN_CLOCK_SKEW_MS} from './postgres-session-row.js';
 import {pgInteger} from './postgres-values.js';
 
@@ -108,12 +108,12 @@ function current(row,installation,profile,now){
 }
 function headers(){return {'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','Pragma':'no-cache',
   'X-Content-Type-Options':'nosniff','X-BuriMunsi-Contract':CONTRACT_VERSION};}
-function requirePinTransition(request,url,{readSession=false}={}){
+function requirePinTransition(request,url,{includeHome=false}={}){
   requireRequestId(request.headers.get('X-BuriMunsi-Request'));
   const generation=request.headers.get('X-BuriMunsi-Generation');
   requireThat(/^(0|[1-9][0-9]{0,15})$/.test(generation??'')&&Number.isSafeInteger(Number(generation)),'invalid_generation',400);
   requireThat(request.headers.get('X-BuriMunsi-Contract')===CONTRACT_VERSION,'contract_version',400);
-  requireThat(url.search===''||(readSession&&url.search==='?include=home'),'invalid_query',400);
+  requireThat(url.search===''||includeHome,'invalid_query',400);
 }
 
 /** Bounded native phone/PIN authentication. No Auth identity, browser session
@@ -138,7 +138,9 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
     const login=method==='POST'&&path==='/v1/burimunsi/session/login';
     const logout=method==='POST'&&path==='/v1/burimunsi/session/logout';
     const retirement=method==='GET'&&/^\/v1\/burimunsi\/gateway\/replacements\/([a-f0-9-]{36})\/outcome$/.exec(path);
-    const readSession=method==='GET'&&path==='/v1/burimunsi/session',includeHome=url.search==='?include=home';
+    const readSession=method==='GET'&&path==='/v1/burimunsi/session';
+    const includeHome=(readSession||login)&&url.search==='?include=home'||
+      readSession&&env.BURIMUNSI_PRODUCT_MODE===BURIMUNSI_PRODUCT_MODE&&url.search==='?include=home_savings';
     const renewing=readSession||(method==='POST'&&path==='/v1/burimunsi/session/passcode');
     const db=env?.DB,work=db?.applicationWork;requirePort(db,['transaction','context','readContext','setClaims']);requirePort(work,['assert']);
     const supportsReadSnapshot=typeof db.withNativeReadSnapshot==='function';
@@ -150,7 +152,7 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
       profile=request.headers.get('X-BuriMunsi-Profile'),device=request.headers.get('X-BuriMunsi-Device');
     requireThat(['staff','internal_receiver'].includes(profile)&&/^[a-f0-9]{64}$/.test(device??''),'invalid_credentials',401);
     if(login)requireThat(!request.headers.has('X-BuriMunsi-Group')&&!request.headers.has('authorization'),'invalid_credentials',401);
-    if(login||logout||retirement||renewing)requirePinTransition(request,url,{readSession:readSession||login});
+    if(login||logout||retirement||renewing)requirePinTransition(request,url,{includeHome});
     const owned=async(durable=false)=>{requireActiveNativeRequest(request);requireThat(db.applicationWork===work,'request_not_admitted',503);
       if(durable)await work.assert();else await assertWorkOwner(work);
       requireThat(db.applicationWork===work,'request_not_admitted',503);requireActiveNativeRequest(request);};
@@ -306,7 +308,7 @@ export function createPhonePinRequestGate({origin,secrets,networkBucket,clock=()
         const readSnapshot=allowRenewal=>readOnly(async sql=>{
           let row,actorEvidence;
           const readActor=env.BURIMUNSI_PRODUCT_MODE===BURIMUNSI_PRODUCT_MODE&&db.ownsNativeRead?.(sql)===true&&
-            (path==='/v1/burimunsi/payments'||readSession&&includeHome);
+            isPhonePinRecordRead(path,url.search);
           try{
             if(readActor) {
               const startedAt=performance.now();

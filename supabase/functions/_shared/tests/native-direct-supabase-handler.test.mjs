@@ -74,7 +74,9 @@ test('dedicated fresh PIN read verifies the database at admission and returns bo
   COLLECT_DEPLOYMENT_PROFILE_SHA256:createHash('sha256').update(profile).digest('hex'),APP_ENVIRONMENT:'production',
   BURIMUNSI_PRODUCT_MODE:'standalone',BURIMUNSI_COLLECTION_ID:'fixture-group'});
  const handler=createHandler('collect-api',production,{standalone:true,admitDirectSupabaseNativeIngress,reportHealth:()=>{}});
- for(const [path,timed] of [['/session?include=home',true],['/payments?filter=all&sort=newest&limit=100',true],['/session',false]]){
+ for(const [path,timed] of [['/session?include=home',true],['/session?include=home_savings',true],['/home?include=savings',true],
+  ['/payments?filter=all&sort=newest&limit=100',true],['/payments/payment-one',true],['/members',true],['/members/member-one',true],
+  ['/session',false],['/sms/observations',false],['/payments/payment-one/history',false]]){
   reset();
   const response=await handler(new Request(project+'/functions/v1/collect-api/v1/burimunsi'+path,
    {headers:{'X-BuriMunsi-Auth':'phone_pin'}}));

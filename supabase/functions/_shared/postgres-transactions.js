@@ -5,17 +5,25 @@ import {ApiError} from './domain/core.js';
 const beginWrite = 'BEGIN ISOLATION LEVEL READ COMMITTED';
 const beginNativeRead = 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY';
 const beginLockedRead = 'BEGIN ISOLATION LEVEL REPEATABLE READ READ WRITE';
+const beginAdminSessionRead = 'BEGIN ISOLATION LEVEL READ COMMITTED READ WRITE';
 const runtimeSetup = "SET LOCAL ROLE collect_runtime; SET LOCAL statement_timeout='15s'; SET LOCAL lock_timeout='5s'";
 
-const nativeScopeSql = `SELECT
+const readSessionSettings = `
   pg_catalog.set_config('role','collect_runtime',true) AS runtime_role,
   pg_catalog.set_config('statement_timeout','15s',true),
   pg_catalog.set_config('lock_timeout','5s',true),
   pg_catalog.set_config('search_path','app,public,pg_catalog',true),
   pg_catalog.set_config('request.jwt.claims',$1,true),
-  pg_catalog.set_config('collect.edge_verified','true',true)
+  pg_catalog.set_config('collect.edge_verified','true',true)`;
+const nativeScopeSql = `SELECT ${readSessionSettings}
   WHERE pg_catalog.current_setting('transaction_read_only') = 'on'
     AND pg_catalog.current_setting('transaction_isolation') = 'repeatable read'`;
+const adminReadScopeSql = `SELECT ${readSessionSettings},
+  pg_catalog.set_config('collect.fence_admission_id',$2,true),
+  pg_catalog.set_config('collect.fence_epoch',$3,true),
+  pg_catalog.set_config('collect.fence_source_sha256',$4,true)
+  WHERE pg_catalog.current_setting('transaction_read_only') = $5
+    AND pg_catalog.current_setting('transaction_isolation') = $6`;
 // Phone/PIN sets empty claims before entering the snapshot. A fixed statement
 // needs one protocol exchange while nonempty claims stay parameterized.
 const nativeEmptyScopeSql = nativeScopeSql.replace('$1', "'{}'");
@@ -78,23 +86,21 @@ export class PostgresTransactions {
     if (!work) throw fenceFailure(null);
     await work.assert();
     const claims = JSON.stringify(this.claims);
-    if (native && work.kind === 'http_collect') {
+    if (work.kind === 'http_admin') {
+      const [id,epoch,source]=applicationWorkTuple(work);
+      const [setup]=await tx.unsafe(adminReadScopeSql,[claims,id,String(epoch),source,readOnly,isolation]);
+      if(setup?.runtime_role!=='collect_runtime')throw fenceFailure(null);
+    } else if (native && work.kind === 'http_collect') {
       // A mode mismatch produces no row, so none of the transaction-local
       // settings are applied. The consumer runs only after the role is confirmed.
       const [setup] = claims === '{}'
         ? await tx.unsafe(nativeEmptyScopeSql)
         : await tx.unsafe(nativeScopeSql, [claims]);
       if (setup?.runtime_role !== 'collect_runtime') throw fenceFailure(null);
-      await this.#applyBrowserPasscode(tx);
-      return;
-    }
-    const [mode] = await tx.unsafe("SELECT pg_catalog.current_setting('transaction_read_only') AS transaction_read_only,pg_catalog.current_setting('transaction_isolation') AS transaction_isolation");
-    if (mode?.transaction_read_only !== readOnly || mode?.transaction_isolation !== isolation) throw fenceFailure(null);
-    await tx.unsafe(runtimeSetup);
-    if (work.kind === 'http_admin') {
-      const [id, epoch, source] = applicationWorkTuple(work);
-      await tx`select pg_catalog.set_config('search_path','app,public,pg_catalog',true),pg_catalog.set_config('request.jwt.claims',${claims},true),pg_catalog.set_config('collect.edge_verified','true',true),pg_catalog.set_config('collect.fence_admission_id',${id},true),pg_catalog.set_config('collect.fence_epoch',${String(epoch)},true),pg_catalog.set_config('collect.fence_source_sha256',${source},true)`;
     } else {
+      const [mode] = await tx.unsafe("SELECT pg_catalog.current_setting('transaction_read_only') AS transaction_read_only,pg_catalog.current_setting('transaction_isolation') AS transaction_isolation");
+      if (mode?.transaction_read_only !== readOnly || mode?.transaction_isolation !== isolation) throw fenceFailure(null);
+      await tx.unsafe(runtimeSetup);
       await tx`select pg_catalog.set_config('search_path','app,public,pg_catalog',true),pg_catalog.set_config('request.jwt.claims',${claims},true),pg_catalog.set_config('collect.edge_verified','true',true)`;
     }
     await this.#applyBrowserPasscode(tx);
@@ -146,7 +152,7 @@ export class PostgresTransactions {
   }
 
   #transaction(fn, begin = beginWrite) {
-    const lockReadSnapshot = begin === beginLockedRead;
+    const lockReadSnapshot = begin === beginLockedRead || begin === beginAdminSessionRead;
     const work = this.applicationWork;
     if (!work) throw fenceFailure(null);
     return work.waitUntil((async () => {
@@ -182,13 +188,22 @@ export class PostgresTransactions {
   // Use a guarded repeatable-read snapshot without mutation admission and
   // always roll back after materializing the projections.
   withLockedReadSnapshot(read) {
+    return this.#lockedRead(read,beginLockedRead,'repeatable read');
+  }
+
+  withAdminSessionRead(read) {
+    if(this.applicationWork?.kind!=='http_admin')throw fenceFailure(null);
+    return this.#lockedRead(read,beginAdminSessionRead,'read committed');
+  }
+
+  #lockedRead(read,begin,isolation) {
     const work = this.applicationWork;
     return this.#transaction(async tx => {
-      await this.#readContext(tx, 'repeatable read', 'off');
+      await this.#readContext(tx,isolation,'off');
       const result = await read(tx);
       await work.assert();
       if (this.applicationWork !== work) throw fenceFailure(null);
       return result;
-    }, beginLockedRead);
+    },begin);
   }
 }
