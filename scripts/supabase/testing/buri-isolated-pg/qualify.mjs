@@ -54,6 +54,9 @@ const suites=[
  {label:'native-payment-projection',files:[
   'supabase/functions/_shared/tests/burimunsi/native-payment-batch-postgres.test.mjs'],expected:[
   'batched native payment projections preserve collection, actor and receipt disclosure']},
+ {label:'admin-allocation-recovery',files:[
+  'supabase/functions/_shared/tests/burimunsi/admin-allocation-recovery-postgres.test.mjs'],expected:[
+  'native allocation recovery preserves one committed payment and original-session receipt']},
  {label:'observation-dedup',files:[
   'supabase/functions/_shared/tests/burimunsi/observation-source-keys-postgres.test.mjs'],expected:[
   'real PostgreSQL source reservation preserves exact replay, distinct rows and authorization']},
