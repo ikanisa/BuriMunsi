@@ -41,10 +41,10 @@ def _storage(path):
     return path
 
 
-def _connect(path):
+def _connect(path, *, readonly=False):
     p = _storage(path)
     _private(p, stat.S_ISREG)
-    return sqlite3.connect(p.as_uri() + '?mode=rw', uri=True, timeout=3)
+    return sqlite3.connect(p.as_uri() + ('?mode=ro' if readonly else '?mode=rw'), uri=True, timeout=3)
 
 
 def initialize(path):
@@ -130,6 +130,18 @@ def status(path):
         return {'last_window_end': last, 'pending_count': count}
 
 
+def incidents(path):
+    """Report open incidents and delivery backlog from one read snapshot."""
+    with closing(_connect(path, readonly=True)) as db, db:
+        db.execute('BEGIN')
+        _verify(db)
+        last = db.execute('SELECT window_end FROM checkpoint WHERE id=1').fetchone()[0]
+        active = dict(db.execute('SELECT category,severity FROM episode'))
+        backlog = dict(db.execute('SELECT category,count(*) FROM pending GROUP BY category'))
+        return {'last_window_end': last, 'open_incidents': active,
+                'pending_by_category': backlog}
+
+
 def acknowledge(path, event_id):
     if (type(event_id) is not str or len(event_id) != 32
             or any(c not in '0123456789abcdef' for c in event_id)):
@@ -157,6 +169,7 @@ def main():
     action.add_parser('init')
     action.add_parser('pending')
     action.add_parser('status')
+    action.add_parser('incidents')
     action.add_parser('ingest').add_argument('window_end_utc', type=int)
     action.add_parser('ack').add_argument('event_id')
     args = arg.parse_args()
@@ -168,6 +181,8 @@ def main():
             result = {'pending': pending(args.checkpoint)}
         elif args.action == 'status':
             result = status(args.checkpoint)
+        elif args.action == 'incidents':
+            result = incidents(args.checkpoint)
         elif args.action == 'ack':
             result = {'acknowledged': acknowledge(args.checkpoint, args.event_id)}
         else:

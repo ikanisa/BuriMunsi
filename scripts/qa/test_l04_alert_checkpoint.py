@@ -1,6 +1,7 @@
 from dataclasses import asdict, replace
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+import json
 import sqlite3
 import subprocess
 import sys
@@ -8,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from l04_alert_checkpoint import acknowledge, ingest, initialize, pending, status
+from l04_alert_checkpoint import acknowledge, incidents, ingest, initialize, pending, status
 from test_l04_alert_rules import BASE
 
 T = 1_800_000_000
@@ -122,6 +123,44 @@ class Checkpoint(unittest.TestCase):
         self.assertEqual(status(self.path), {'last_window_end': None, 'pending_count': 0})
         self.sample(T, FAIL)
         self.assertEqual(status(self.path), {'last_window_end': T, 'pending_count': 1})
+
+    def test_incidents_distinguishes_delivery_ack_from_recovery(self):
+        self.assertEqual(incidents(self.path), {'last_window_end': None,
+                         'open_incidents': {}, 'pending_by_category': {}})
+        self.sample(T, FAIL)
+        f = pending(self.path)[0]
+        seen = incidents(self.path)
+        self.assertEqual(seen, {'last_window_end': T,
+                         'open_incidents': {'api-unavailable': 'page'},
+                         'pending_by_category': {'api-unavailable': 1}})
+        self.assertTrue(acknowledge(self.path, f['id']))
+        self.assertEqual(incidents(self.path), {**seen, 'pending_by_category': {}})
+
+    def test_incidents_reports_resolved_but_undelivered_notifications(self):
+        self.sample(T, FAIL)
+        self.sample(T + 300)
+        self.sample(T + 600, FAIL)
+        self.sample(T + 900)
+        self.assertEqual(incidents(self.path), {'last_window_end': T + 900,
+                         'open_incidents': {},
+                         'pending_by_category': {'api-unavailable': 2}})
+
+    def test_incidents_restart_cli_keeps_blind_api_and_privacy_visible(self):
+        self.sample(T, FAIL)
+        self.sample(T + 300, telemetry_available=False, privacy_event=True)
+        for row in pending(self.path):
+            self.assertTrue(acknowledge(self.path, row['id']))
+        cmd = [sys.executable, str(Path(__file__).with_name('l04_alert_checkpoint.py')),
+               str(self.path), 'incidents']
+        # A mode-0400 checkpoint must be readable without write permission.
+        self.path.chmod(0o400)
+        before = self.path.read_bytes()
+        out = json.loads(subprocess.check_output(cmd, text=True))
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(out, {'last_window_end': T + 300, 'pending_by_category': {},
+                         'open_incidents': {'api-unavailable': 'page',
+                                            'telemetry-blind': 'page',
+                                            'privacy': 'halt'}})
 
     def test_bad_cli_input_is_not_echoed(self):
         command = [sys.executable, str(Path(__file__).with_name('l04_alert_checkpoint.py')),
