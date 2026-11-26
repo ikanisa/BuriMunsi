@@ -8,6 +8,7 @@ import {ProtectedShell} from '../../src/app/SessionRoutes';
 import {AdminSessionController, SessionProvider} from '../../src/session/SessionProvider';
 import {Button, Dialog} from '../../src/ui';
 import {hasActiveFocusScope} from '../../src/ui/useFocusScope';
+import core from '../core/canonical-core-fixtures.json';
 
 const config = {backend: 'supabase', phonePasscodeOnly: true, publishableKey: 'sb_publishable_' + 'a'.repeat(32),
   captchaEnabled: false, googleEnabled: false} as const;
@@ -187,37 +188,37 @@ describe('scheduled Admin session checks', () => {
     expect(fetchImpl.mock.calls.slice(3).map(([path]) => path)).toEqual(reason === 'sign-out' ? ['/api/admin/auth/logout', sessionPath] : []);
   });
 
-  it('keeps the open Groups page and its draft search through a temporary background failure', async () => {
+  it('keeps the open Members page and its draft search through a temporary background failure', async () => {
     vi.useFakeTimers({shouldAdvanceTime: true});
-    const group = {id: '10000000-0000-4000-8000-000000000001', title: 'Review savings', subtitle: 'Private group', amount: '2 members',
-      active_members: 2, slug: 'review-savings', collection_type: 'ikimina', visibility: 'private', status: 'active',
-      country_code: 'RW', currency_code: 'RWF', created_at: '2026-01-01T00:00:00.000Z'};
-    const model = {contract_version: 2, model: 'canonical_evidence_ledger'};
+    const member = {...core.members.rows[0], membership_status: 'active'};
+    const rowName = new RegExp(member.display_name);
+    const openRecord = {name: 'View ' + member.public_id};
+    const {contract_version, model} = core.members;
     let checks = 0, detailReads = 0;
     const searches: string[] = [];
     const fetchImpl: typeof fetch = async input => {
       const url = new URL(String(input), window.location.origin);
-      if (url.pathname === sessionPath) {checks++; return checks >= 2 && checks <= 4 ? maintenance() : verified();}
-      if (url.pathname === '/api/admin/core/groups') {
+      if (url.pathname === sessionPath) {checks++; return checks >= 2 && checks <= 4 ? maintenance() : verified(['overview.read', 'users.read']);}
+      if (url.pathname === '/api/admin/core/members' && url.searchParams.get('directory') === 'roster') {
         const query = url.searchParams.get('search') ?? '';
         searches.push(query);
-        const rows = group.title.toLowerCase().includes(query.toLowerCase()) ? [group] : [];
-        return Response.json({...model, rows, total: rows.length});
+        const rows = member.display_name.toLowerCase().includes(query.toLowerCase()) ? [member] : [];
+        return Response.json({contract_version, model, rows, total: rows.length});
       }
-      if (url.pathname === '/api/admin/operations/groups/' + group.id) {
+      if (url.pathname === '/api/admin/operations/members/' + member.id) {
         detailReads++;
-        return Response.json({...model, resource_type: 'groups', current_actor_id: user.id, can_manage: false,
-          resource: group, related: {memberships: []}, related_truncated: false});
+        return Response.json({contract_version, model, resource_type: 'members', current_actor_id: user.id, can_manage: false,
+          resource: member, related: {}, related_truncated: false});
       }
       throw new Error('Unexpected request');
     };
-    window.history.replaceState(null, '', '/#/admin/groups');
+    window.history.replaceState(null, '', '/#/admin/members');
     const router = makeAdminRouter();
     const view = render(<SessionProvider config={{...config, fetchImpl}}><RouterProvider router={router} /></SessionProvider>);
     try {
-      const originalRow = await screen.findByRole('row', {name: /Review savings/});
-      const search = screen.getByRole('textbox', {name: 'Search Groups'});
-      fireEvent.change(search, {target: {value: 'savings'}});
+      const originalRow = await screen.findByRole('row', {name: rowName});
+      const search = screen.getByRole('textbox', {name: 'Search Members'});
+      fireEvent.change(search, {target: {value: 'recorded'}});
       await act(async () => {await vi.advanceTimersByTimeAsync(scheduledCheckMs);});
       expect(screen.getByText('Rechecking account access…')).toBeInTheDocument();
       expect(search.closest('[inert]')).toBeInTheDocument();
@@ -228,17 +229,17 @@ describe('scheduled Admin session checks', () => {
       await act(async () => {await vi.advanceTimersByTimeAsync(3_000);});
       expect(screen.queryByText('Rechecking account access…')).toBeNull();
       expect(search.closest('[inert]')).toBeNull();
-      expect(screen.getByRole('textbox', {name: 'Search Groups'})).toBe(search);
-      expect(search).toHaveValue('savings');
-      expect(screen.getByRole('row', {name: /Review savings/})).toBe(originalRow);
-      expect(router.state.location.pathname).toBe('/admin/groups');
-      expect({checks, searches}).toEqual({checks: 5, searches: ['']});
+      expect(screen.getByRole('textbox', {name: 'Search Members'})).toBe(search);
+      expect(search).toHaveValue('recorded');
+      expect(screen.getByRole('row', {name: rowName})).toBe(originalRow);
+      expect(router.state.location.pathname).toBe('/admin/members');
+      expect({checks, searches, detailReads}).toEqual({checks: 5, searches: [''], detailReads: 0});
       fireEvent.click(screen.getByRole('button', {name: 'Search'}));
-      await screen.findByRole('button', {name: 'View Review savings'});
-      expect(searches).toEqual(['', 'savings']);
-      fireEvent.click(screen.getByRole('button', {name: 'View Review savings'}));
+      await screen.findByRole('button', openRecord);
+      expect(searches).toEqual(['', 'recorded']);
+      fireEvent.click(screen.getByRole('button', openRecord));
       await screen.findByRole('heading', {name: 'Record details'});
-      expect(screen.getByText(group.title)).toBeVisible();
+      expect(screen.getByText(member.display_name)).toBeVisible();
       expect(detailReads).toBe(1);
     } finally {
       view.unmount();
@@ -269,9 +270,9 @@ it.each(['dialog', 'compact navigation'] as const)('suspends an open %s and lets
     return Response.json({ok: true});
   };
   const router = createMemoryRouter([{path: '/admin', element: <ProtectedShell navigation={[
-    {label: 'Groups', path: '/admin/groups'},
-  ]} />, children: [{path: 'groups', element: <DialogFixture />} ]}, {path: '/admin/login', element: <h1>Signed out</h1>}],
-  {initialEntries: ['/admin/groups']});
+    {label: 'Home', path: '/admin'},
+  ]} />, children: [{index: true, element: <DialogFixture />} ]}, {path: '/admin/login', element: <h1>Signed out</h1>}],
+  {initialEntries: ['/admin']});
   const view = render(<SessionProvider config={{...config, fetchImpl}}><RouterProvider router={router} /></SessionProvider>);
   try {
     const trigger = await screen.findByRole('button', {name: kind === 'dialog' ? 'Open record dialog' : 'Open navigation'});
