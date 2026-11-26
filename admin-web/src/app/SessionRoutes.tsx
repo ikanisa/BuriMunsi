@@ -4,6 +4,8 @@ import {LoginPage} from '../session/LoginPage';
 import {publicSessionPaths, safeAdminReturnLocation} from '../session/returnLocation';
 import {useSession, type SessionContextValue} from '../session/SessionProvider';
 import {AdminShell, type AdminNavItem} from '../layout/AdminShell';
+import {androidHelpDestinations} from '../layout/AdminAccountMenu';
+import {usesPhoneCanonicalRecords} from '../session/sessionContext';
 import {Button, ErrorState, LoadingState} from '../ui';
 import {InteractionSuspendedContext} from '../ui/useFocusScope';
 import {canOpenAdminPath} from './route-access';
@@ -36,6 +38,9 @@ export function ProtectedShell({navigation, accountNavigation = []}: {navigation
   }
   const user = session.user;
   const permitted = navigation.filter(item => canOpenAdminPath(item.path, user));
+  const androidHelpPaths = usesPhoneCanonicalRecords(session)
+    ? androidHelpDestinations.map(item => item.path).filter(path => canOpenAdminPath(path, user))
+    : undefined;
   const permittedAccount = accountNavigation.filter(item => canOpenAdminPath(item.path, user) &&
     (!item.contextualPath || !canOpenAdminPath(item.contextualPath, user)));
   const rechecking = session.status === 'rechecking';
@@ -46,7 +51,7 @@ export function ProtectedShell({navigation, accountNavigation = []}: {navigation
     </div>}
     <InteractionSuspendedContext.Provider value={rechecking}><div inert={rechecking}>
       <AdminShell navigation={permitted} accountNavigation={permittedAccount} currentPath={`${location.pathname}${location.search}`}
-        identity={{name: session.verificationMode === 'passcode' ? user.displayName ?? user.phone ?? 'BuriMunsi account' : user.email,
+        identity={{androidHelpPaths, name: session.verificationMode === 'passcode' ? user.displayName ?? user.phone ?? 'BuriMunsi account' : user.email,
           role: user.role === 'staff' ? 'Staff' : user.role === 'admin' || session.verificationMode === 'passcode' ? 'Admin' : 'Owner'}} onSignOut={signOut}>
         {canOpenAdminPath(location.pathname, user) ? <ScreenBoundary key={location.pathname}><Suspense fallback={<LoadingState label="Opening workspace" />}><Outlet /></Suspense></ScreenBoundary> : <ErrorState title="Access unavailable"
           message="Your account cannot open this page." />}

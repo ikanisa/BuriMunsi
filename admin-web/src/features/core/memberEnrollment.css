@@ -1,26 +1,72 @@
 .members-enrollment {
-  max-inline-size: 38rem;
+  max-inline-size: 40rem;
   overflow-wrap: anywhere;
 }
-.members-enrollment .admin-auth-form { display: grid; gap: 1rem; }
-.members-enrollment .core-note { margin: 0; color: var(--admin-muted); }
-.members-enrollment-confirmations { margin: 0; padding: 0; min-inline-size: 0; border: 0; }
-.members-enrollment-confirmations legend { padding: 0; font-weight: 650; }
-.members-enrollment-confirmations label {
+.members-enrollment .admin-auth-form, .members-journey, .members-review {
+  display: grid;
+  gap: 1rem;
+  min-inline-size: 0;
+}
+.members-journey > h2, .members-journey p, .members-review > h2, .members-review > p,
+.members-review dl, .members-review dd { margin: 0; }
+.members-enrollment-options, .members-roster-list {
+  display: grid;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.members-enrollment-option {
   display: flex;
   align-items: center;
   gap: .75rem;
-  min-block-size: 44px;
-  padding-block: .375rem;
+  min-block-size: 3.3rem;
+  inline-size: 100%;
+  padding: .6rem .4rem;
+  border: 0;
+  border-block-end: 1px solid var(--admin-line);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: start;
+  cursor: pointer;
 }
-.members-enrollment-confirmations input {
+.members-enrollment-option:hover { background: var(--admin-surface-soft); }
+.members-enrollment-option > .admin-icon:last-child { margin-inline-start: auto; inline-size: 1rem; }
+.members-enrollment-icon {
+  display: grid;
+  place-items: center;
   flex: none;
-  inline-size: 1.125rem;
-  block-size: 1.125rem;
-  margin: 0;
-  accent-color: var(--admin-accent);
+  inline-size: 2rem;
+  block-size: 2rem;
+  border-radius: 50%;
+  background: var(--admin-surface-soft);
 }
-.members-enrollment .admin-auth-form > button { justify-self: start; }
+.members-enrollment-icon .admin-icon { inline-size: 1.15rem; }
+.members-enrollment .admin-field p, .members-roster-list small, .members-review dt { color: var(--admin-muted); }
+.members-enrollment .admin-field .admin-field-error { color: var(--admin-danger); }
+.members-enrollment-actions, .members-roster-row-actions, .members-suggestion-filter {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: .5rem;
+}
+.members-suggestion-filter > .admin-field { flex: 1 1 14rem; min-inline-size: 0; }
+.members-review dl > div, .members-roster-list > li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  padding-block: .65rem;
+  border-block-end: 1px solid var(--admin-line);
+}
+.members-review dd { text-align: end; }
+.members-roster-list > li > div:first-child { display: grid; gap: .15rem; }
+.members-roster-list > li > .members-enrollment-option { border: 0; }
+.members-roster-file { max-inline-size: 100%; }
+.members-journey > button { justify-self: start; }
 @media (max-width: 480px) {
-  .members-enrollment .admin-auth-form > button { justify-self: stretch; }
+  .members-enrollment-actions > button { flex: 1 1 8rem; }
+  .members-roster-row-actions { justify-content: end; }
+  .members-roster-list > li { flex-wrap: wrap; }
 }

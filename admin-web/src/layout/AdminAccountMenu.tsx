@@ -6,7 +6,16 @@ import {hasActiveFocusScope} from '../ui/useFocusScope';
 export interface AdminShellIdentity {
   name: string;
   role?: string;
+  androidHelpPaths?: readonly string[];
 }
+
+export const androidHelpDestinations = [
+  {path:'/admin/members/new', label:'Add or import members'},
+  {path:'/admin/members', label:'Find a member'},
+  {path:'/admin/payments', label:'Review payments'},
+  {path:'/admin/sms-receipts', label:'Open the M-Money SMS inbox'},
+  {path:'/admin/admin-users', label:'Manage staff access'},
+] as const;
 
 export interface AdminAccountDestination {
   label: string;
@@ -60,7 +69,14 @@ export function AdminAccountMenu({identity, destinations = [], pathname, onSignO
       <strong>{identity.name}</strong>
       {identity.role && <span>{identity.role}</span>}
       {links(undefined)}
-      <details className="admin-profile-more"><summary>Help</summary><SupportLink />{links('help')}</details>
+      <details className="admin-profile-more"><summary>Help</summary>
+        {identity.androidHelpPaths && <div role="group" aria-label="BuriMunsi on web and Android">
+          {androidHelpDestinations.filter(item => identity.androidHelpPaths?.includes(item.path)).map(item =>
+            <a key={item.path} className="admin-profile-destination" href={'#' + item.path} onClick={() => setOpen(false)}>{item.label}</a>)}
+          <p>On the registered Android receiver, open Settings to manage SMS permissions, notifications and battery optimization.</p>
+        </div>}
+        <SupportLink />{links('help')}
+      </details>
       {advanced.length > 0 && <details className="admin-profile-more"><summary>Advanced</summary>{advanced}</details>}
       {onSignOut && <button type="button" onClick={() => {setOpen(false); onSignOut();}}>
         <Icon name="logout" />Sign out

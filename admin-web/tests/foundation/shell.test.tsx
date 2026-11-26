@@ -58,6 +58,7 @@ describe('Admin shell', () => {
     expect(screen.queryByRole('link', {name: 'Privacy requests'})).not.toBeInTheDocument();
     await user.click(screen.getByText('Help', {selector: 'summary'}));
     const help = screen.getByRole('link', {name: 'WhatsApp support · +250 788 767 816'});
+    expect(screen.queryByRole('group', {name: 'BuriMunsi on web and Android'})).not.toBeInTheDocument();
     expect(help).toHaveAttribute('href', 'https://wa.me/250788767816');
     expect(help).toHaveAttribute('rel', 'noopener noreferrer');
     await user.click(screen.getByText('Advanced', {selector: 'summary'}));
@@ -67,6 +68,23 @@ describe('Admin shell', () => {
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
     expect(trigger).toHaveFocus();
     expect(signOut).not.toHaveBeenCalled();
+  });
+
+  it('puts permitted BuriMunsi workflows and receiver guidance in account Help', async () => {
+    const user = userEvent.setup();
+    render(<AdminShell navigation={navigation} currentPath="/admin"
+      identity={{name:'Member reader', role:'Staff', androidHelpPaths:['/admin/members', '/admin/payments']}}>
+      <p>Overview</p></AdminShell>);
+    await user.click(screen.getByRole('button', {name:'Account: Member reader'}));
+    await user.click(screen.getByText('Help', {selector:'summary'}));
+    const help = within(screen.getByRole('group', {name:'BuriMunsi on web and Android'}));
+    expect(help.getAllByRole('link').map(link => link.getAttribute('href'))).toEqual(['#/admin/members', '#/admin/payments']);
+    expect(help.getByText(/registered Android receiver/)).toBeVisible();
+    expect(help.queryByRole('link', {name:'Add or import members'})).not.toBeInTheDocument();
+    expect(help.queryByRole('link', {name:'Open the M-Money SMS inbox'})).not.toBeInTheDocument();
+    expect(help.queryByRole('link', {name:'Manage staff access'})).not.toBeInTheDocument();
+    await user.click(help.getByRole('link', {name:'Review payments'}));
+    expect(screen.getByRole('button', {name:'Account: Member reader'})).toHaveAttribute('aria-expanded','false');
   });
 
 });

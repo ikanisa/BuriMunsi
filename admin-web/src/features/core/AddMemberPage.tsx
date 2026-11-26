@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useRef, useState, type FormEvent} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import {Link} from 'react-router';
 import {type AdminRequest} from '../../api/contracts';
 import {useCurrentAuthority} from '../../app/workspace/access';
@@ -6,20 +6,17 @@ import {useSession, type AdminUser} from '../../session/SessionProvider';
 import {Button, Card, ErrorState, LoadingState, PageHeader, StatusBadge} from '../../ui';
 import {useOperationRead} from '../operations/useOperationRead';
 import {canAddMember} from './addMemberAccess';
+import {EnrollmentReview} from './EnrollmentReview';
+import {MemberRosterImport} from './MemberRosterImport';
+import {EnrollmentMethods, type EnrollmentMode} from './RosterSources';
+import {ROSTER_FAMILY, validImportAttempt, type ReviewedMember} from './memberRoster';
 import {clearOriginalAttempt} from './canonicalMutation';
 import {ENROLLMENT_FAMILY, ENROLLMENT_PATH, ENROLLMENT_PERMISSION, enrollmentIntent, readEnrollmentOutcome,
-  readEnrollmentScope, rejectedEnrollment, validateMember, validEnrollmentAttempt,
+  readEnrollmentScope, rejectedEnrollment, validEnrollmentAttempt,
   type EnrolledMember, type EnrollmentScope, type MemberDraft} from './memberEnrollment';
 import {readPending, retainPending, type PendingAttempt, type PendingIdentity} from './pendingAttempt';
 import {usePendingIdentity} from './usePendingIdentity';
 import './memberEnrollment.css';
-
-const attestations = [
-  ['verifiedOwnership', 'I checked the full mobile number and confirmed who owns it.'],
-  ['acceptedTerms', 'The member accepted the savings terms.'],
-  ['consentRecorded', 'I recorded the member’s consent to the privacy notice.'],
-] as const;
-const emptyConfirmations = {verifiedOwnership: false, acceptedTerms: false, consentRecorded: false};
 
 export function AddMemberPage() {
   const {user, request, epoch} = useSession();
@@ -35,27 +32,43 @@ function MemberAccess({request, user}: {request: AdminRequest; user: AdminUser})
   const expectedGroup = user.adminIdentity?.collectionId;
   const load = useCallback(async (signal: AbortSignal) => {
     const scope = readEnrollmentScope(await request(ENROLLMENT_PATH, {signal}), expectedGroup);
-    const attempt = scope.canEnroll ? await readPending(identity, ENROLLMENT_FAMILY, scope.collectionId) : null;
-    if (attempt && !validEnrollmentAttempt(attempt, scope.collectionId)) throw new Error('Invalid original member request.');
-    return {scope, attempt};
+    const [attempt, roster] = scope.canEnroll ? await Promise.all([
+      readPending(identity, ENROLLMENT_FAMILY, scope.collectionId), readPending(identity, ROSTER_FAMILY, scope.collectionId),
+    ]) : [null, null];
+    if ((attempt && !validEnrollmentAttempt(attempt, scope.collectionId)) || (roster && !validImportAttempt(roster, scope.collectionId))) {
+      throw new Error('Invalid original member request.');
+    }
+    return {scope, attempt, roster};
   }, [request, expectedGroup, identity]);
   const {result, retry} = useOperationRead(JSON.stringify([user.id, user.sessionId, expectedGroup, identity.permissions]),
     true, load, {invalidResponse: 'The group or the original member request could not be confirmed.'});
   if (!result) return <LoadingState label="Loading member form" />;
   if (result.status === 'error') return <ErrorState title="Member form unavailable" message={result.message} onRetry={retry} />;
-  const {scope, attempt} = result.value;
+  const {scope, attempt, roster} = result.value;
   if (!scope.canEnroll) return <ErrorState title="Access unavailable" message="Your account cannot add members to this group." />;
-  return <MemberForm key={scope.collectionId} {...{scope, identity, request, isCurrent}} original={attempt} />;
+  return <MemberJourneys key={scope.collectionId} {...{scope, identity, request, isCurrent, roster}} original={attempt} />;
 }
 
 interface FormProps {
   scope: EnrollmentScope; identity: PendingIdentity; request: AdminRequest;
   isCurrent: () => boolean; original: PendingAttempt | null;
 }
-function MemberForm({scope, identity, request, isCurrent, original}: FormProps) {
-  const [draft, setDraft] = useState<MemberDraft>({name: '', phone: ''});
-  const [confirmed, setConfirmed] = useState(emptyConfirmations);
-  const [errors, setErrors] = useState<{name?: string; phone?: string; consent?: string}>({});
+function MemberJourneys({scope, identity, request, isCurrent, original, roster}: FormProps & {roster: PendingAttempt | null}) {
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [mode, setMode] = useState<EnrollmentMode | null>(original ? 'manual' : null);
+  const [recoveringRoster, setRecoveringRoster] = useState(!!roster && !original);
+  const back = () => {setMode(null); setRecoveringRoster(false);};
+  if (mode === 'manual') return <MemberForm {...{scope,identity,request,isCurrent,original}} onBack={back} />;
+  return <Card className="admin-security-card members-enrollment">
+    {mode || recoveringRoster
+      ? <MemberRosterImport initialMode={mode} fileInput={fileInput} group={scope.collectionId} {...{identity,request,isCurrent}} original={roster} onBack={back} />
+      : <><h2>{scope.label}</h2><EnrollmentMethods choose={setMode} fileInput={fileInput} /></>}
+  </Card>;
+}
+
+function MemberForm({scope, identity, request, isCurrent, original, onBack}: FormProps & {onBack: () => void}) {
+  const [initial,setInitial] = useState<MemberDraft>({name:'', phone:''});
+  const [revision,setRevision] = useState(0);
   const [pending, setPending] = useState(original), [canRetry, setCanRetry] = useState(false);
   const [member, setMember] = useState<EnrolledMember | null>(null), [message, setMessage] = useState('');
   const [working, setWorking] = useState<'saving' | 'checking' | null>(null);
@@ -84,14 +97,10 @@ function MemberForm({scope, identity, request, isCurrent, original}: FormProps) 
     finally {busy.current = false; if (current()) setWorking(null);}
   };
 
-  const save = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const save = async (details: ReviewedMember) => {
     if (busy.current || !current() || (pending && !canRetry)) return;
-    const {name, phone, errors: fieldErrors} = validateMember(draft);
-    const missing = attestations.find(([key]) => !confirmed[key]);
-    setErrors({...fieldErrors, consent: missing ? 'Confirm each statement before saving the member.' : undefined});
-    const first = fieldErrors.name ? 'name' : fieldErrors.phone ? 'phone' : missing?.[0];
-    if (first) {event.currentTarget.querySelector<HTMLElement>(`[name="${first}"]`)?.focus(); return;}
+    const {name, phone} = details;
+    setInitial({name,phone});
     busy.current = true; setWorking('saving'); setMessage('');
     let original = pending;
     let submitted = false;
@@ -100,13 +109,13 @@ function MemberForm({scope, identity, request, isCurrent, original}: FormProps) 
       const intent = await enrollmentIntent(requestId, {name, phone});
       if (!current()) return;
       if (original && (original.intent.memberHash !== intent.memberHash || original.intent.phoneHash !== intent.phoneHash)) {
-        setMessage('Use the same registered name and mobile number as the original request.'); return;
+        setMessage('Use the same registered name and mobile number as the original request.'); setRevision(value=>value+1); return;
       }
-      original = await retainPending(identity, ENROLLMENT_FAMILY, scope.collectionId, requestId, ENROLLMENT_PERMISSION, intent);
+      original = await retainPending(identity, ENROLLMENT_FAMILY, scope.collectionId, requestId, ENROLLMENT_PERMISSION, intent, undefined, undefined, current);
       if (!current()) return;
       setPending(original); setCanRetry(false); submitted = true;
       const response = await request(ENROLLMENT_PATH, {method: 'POST', idempotencyKey: requestId,
-        body: {requestId, name, phone, ...confirmed}});
+        body: {requestId, ...details}});
       const member = await readEnrollmentOutcome(response, original);
       if (member) await finish(original, member);
     } catch (error) {
@@ -115,7 +124,7 @@ function MemberForm({scope, identity, request, isCurrent, original}: FormProps) 
       if (rejection && original && !pending) {
         try {
           await clearOriginalAttempt(identity, original, current);
-          if (current()) {setPending(null); setCanRetry(false); setMessage(rejection);}
+          if (current()) {setPending(null); setCanRetry(false); setMessage(rejection); setRevision(value=>value+1);}
         } catch {if (current()) setMessage('Check the original request before continuing.');}
       } else if (submitted) {
         setMessage('The save could not be confirmed. Check the original request before trying again.');
@@ -124,11 +133,6 @@ function MemberForm({scope, identity, request, isCurrent, original}: FormProps) 
       }
     } finally {busy.current = false; if (current()) setWorking(null);}
   };
-  const update = (field: keyof MemberDraft, value: string) => {
-    setDraft(previous => ({...previous, [field]: value}));
-    setConfirmed(emptyConfirmations); setErrors({}); setMessage('');
-  };
-
   if (member) return <Card className="admin-security-card members-enrollment" role="status">
     <h2>Member confirmed</h2><p>{member.name} · {member.phone}</p>
     <p>{scope.label} · <StatusBadge tone={member.active ? 'success' : 'neutral'}>{member.active ? 'Active' : 'Inactive'}</StatusBadge></p>
@@ -138,28 +142,9 @@ function MemberForm({scope, identity, request, isCurrent, original}: FormProps) 
     {pending && <div><p>Request <code>{pending.request_key}</code></p>
       <Button onClick={() => void check()} disabled={!!working} loading={working === 'checking'}>Check request</Button></div>}
     {message && <p role="alert">{message}</p>}
-    {(!pending || canRetry) && <form className="admin-auth-form" aria-label="Member details" onSubmit={save} noValidate>
-      <div className="admin-field"><label htmlFor="member-name">Registered MoMo name</label>
-        <input className="admin-input" id="member-name" name="name" autoComplete="off" required minLength={2} maxLength={100}
-          value={draft.name} onChange={event => update('name', event.target.value)} disabled={!!working}
-          aria-invalid={!!errors.name} aria-describedby={errors.name ? 'member-name-error' : undefined} />
-        {errors.name && <p className="admin-field-error" id="member-name-error">{errors.name}</p>}
-      </div>
-      <div className="admin-field"><label htmlFor="member-phone">Mobile number</label>
-        <input className="admin-input" id="member-phone" name="phone" type="tel" autoComplete="off" required maxLength={40}
-          value={draft.phone} onChange={event => update('phone', event.target.value)} disabled={!!working}
-          aria-invalid={!!errors.phone} aria-describedby={errors.phone ? 'member-phone-error' : undefined} />
-        {errors.phone && <p className="admin-field-error" id="member-phone-error">{errors.phone}</p>}
-      </div>
-      <fieldset className="members-enrollment-confirmations" disabled={!!working} aria-describedby={errors.consent ? 'member-consent-error' : undefined}>
-        <legend>Member consent</legend>
-        {attestations.map(([key, text]) => <label key={key}><input type="checkbox" name={key} required checked={confirmed[key]}
-          onChange={event => {setConfirmed({...confirmed, [key]: event.target.checked}); setErrors({...errors, consent: undefined});}} /> {text}</label>)}
-        {errors.consent && <p className="admin-field-error" id="member-consent-error">{errors.consent}</p>}
-      </fieldset>
-      <p className="core-note">New memberships start active. Eligible earlier MoMo payments may be matched and credited to this member.</p>
-      <Button variant="primary" type="submit" disabled={!!working} loading={working === 'saving'}>{pending ? 'Retry original request' : 'Save member'}</Button>
-    </form>}
+    {(!pending || canRetry) && <EnrollmentReview key={revision} initial={initial} busy={!!working}
+      confirmLabel={pending ? 'Retry original request' : 'Confirm and save'} onConfirm={details=>void save(details)}
+      onBack={pending ? ()=>{setCanRetry(false); setMessage('Check the original request before continuing.');} : onBack} />}
     {working === 'saving' && <LoadingState label="Saving member" />}
   </Card>;
 }
