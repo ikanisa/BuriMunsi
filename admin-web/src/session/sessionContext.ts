@@ -2,6 +2,7 @@ import type {AdminRequest} from '../api/client';
 import type {VerificationMode} from './returnLocation';
 import type {SensitiveEmailRecovery} from './sensitiveEmailVerification';
 import type {AdminUser, OtpReceipt} from './sessionResponses';
+import type {SessionHomeBootstrap} from './sessionReadback';
 
 export interface SessionSnapshot {
   status: 'loading' | 'anonymous' | 'authenticated' | 'rechecking' | 'error';
@@ -30,6 +31,7 @@ export type PasswordChangeOutcome = 'session-retained' | 'signed-out';
 
 export interface SessionContextValue extends SessionSnapshot {
   request: AdminRequest;
+  takeStartupHome?: () => SessionHomeBootstrap | null;
   refresh: () => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
   signInWithPhonePasscode?: (phone: string, pin: string) => Promise<void>;

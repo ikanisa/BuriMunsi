@@ -1,9 +1,11 @@
-import {useMemo} from 'react';
+import {useCallback, useMemo} from 'react';
 import {createHashRouter, Navigate, RouterProvider} from 'react-router';
 import {ProtectedShell, publicSessionRoutes} from './SessionRoutes';
 import {UnavailablePage} from './UnavailablePage';
 import {workspaceRoutes} from './WorkspaceRoutes';
 import {adminAccountNavigation, primaryAdminNavigation} from './navigation';
+import type {AdminClientConfig} from '../api/client';
+import {SessionProvider} from '../session/SessionProvider';
 import './transaction-view.css';
 
 export function makeAdminRouter() {
@@ -15,7 +17,11 @@ export function makeAdminRouter() {
   ]);
 }
 
-export function AdminApp() {
+export function AdminApp({config}: {config: AdminClientConfig}) {
   const router = useMemo(() => makeAdminRouter(), []);
-  return <RouterProvider router={router} />;
+  const resolveHomeStart = useCallback(() => {
+    const initial = router.state.location;
+    return initial.pathname === '/admin' && !initial.search && !initial.hash ? () => router.state.location === initial : undefined;
+  }, [router]);
+  return <SessionProvider config={config} resolveHomeStart={resolveHomeStart}><RouterProvider router={router} /></SessionProvider>;
 }

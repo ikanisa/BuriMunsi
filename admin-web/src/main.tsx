@@ -4,7 +4,7 @@ import {readAdminConfig} from './config';
 import {hasPredecessorCustody} from './custodyRealm';
 import {registerAdminWorker} from './pwa-registration';
 import {SupportLink} from './ui/SupportLink';
-import {captureSetupLocation, SessionProvider} from './session/SessionProvider';
+import {captureSetupLocation} from './session/SessionProvider';
 import './styles/admin.css';
 
 // Erase any obsolete setup credential before routing the old link to sign-in.
@@ -26,7 +26,7 @@ try {
   renderer.render(<>{hasPredecessorCustody() && <aside role="note" className="admin-previous-service">
     If you have unfinished work from the previous Admin service, keep its original tab open.
     Ask your administrator to check the original request before submitting it again.
-  </aside>}<SessionProvider config={config}><AdminApp /></SessionProvider></>);
+  </aside>}<AdminApp config={config} /></>);
   if (import.meta.env.PROD) void registerAdminWorker();
 } catch {
   renderer.render(<main className="admin-state" role="alert"><h1>Workspace unavailable</h1>

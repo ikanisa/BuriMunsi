@@ -43,6 +43,8 @@ export function admitRequest(config: AdminClientConfig, path: string, options: A
   const mutation = method !== 'GET';
   const authenticated = options.authenticated ?? true;
   const mfaRecovery = options.mfaRecovery === true;
+  if (options.sessionHome && (config.backend !== 'supabase' || !config.phonePasscodeOnly ||
+      path !== 'auth/session' || method !== 'GET' || authenticated)) throw new TypeError('Invalid Home session request.');
   if (mfaRecovery && (config.backend !== 'supabase' || method !== 'POST' || !['auth/mfa/recover', 'auth/logout'].includes(path) ||
       !validMfaRecovery(options.body) || options.idempotencyKey !== undefined || options.reviewReason !== undefined)) throw new TypeError('Invalid MFA recovery request.');
   if (path === 'auth/mfa/recover' && !mfaRecovery) throw new TypeError('MFA recovery requires the original intent.');
@@ -93,6 +95,7 @@ export function requestHeaders(config: AdminClientConfig, path: string, options:
   const passcodeExchange = config.phonePasscodeOnly && method === 'POST' &&
     (path === 'auth/phone-passcode' || path === 'auth/passcode/verify');
   if (config.backend === 'supabase' && (sessionRead || passcodeExchange)) headers['X-Collect-Owner-Identity-Version'] = '1';
+  if (options.sessionHome) headers['X-BuriMunsi-Session-Home'] = '1';
   if (config.backend === 'supabase') headers.apikey = config.publishableKey!;
   if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey;
   if (options.reviewReason) headers['X-Collect-Review-Reason'] = options.reviewReason.trim();

@@ -276,5 +276,11 @@
       "index.js": "b55bacf1651c62aec59fbe93604440adada0893da088307d99c0a23f1d57eccb"
     },
     "change": "Provide a credential-free static workspace entry for installations that still serve a previous shell."
+  },
+  "burimunsi_admin_home_bootstrap_successor": {
+    "source_sha256s": {
+      "transport-request.js": "d3cf581a1d9c6a710ad3347620e432e6323a5594d56bc9439494814a40c2e2ff"
+    },
+    "change": "Forward the Home projection opt-in for the exact same-origin BuriMunsi browser session GET with its managed cookie."
   }
 }

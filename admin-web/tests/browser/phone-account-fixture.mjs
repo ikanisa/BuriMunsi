@@ -13,7 +13,7 @@ const cookie = value => ({'Set-Cookie': `${cookieKey}=${value}; Path=/; HttpOnly
 const anonymous = {user: null, expiresAt: null, csrfToken: null, ownerEmail: null};
 const error = code => ({error: {code}});
 
-export function createPhoneAccountFixture({cookieSignIn, legacySessionResponses, lifetime, json, readBody}) {
+export function createPhoneAccountFixture({cookieSignIn, legacySessionResponses, lifetime, json, readBody, startupHome}) {
   const admin = {id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', displayName: 'Fixture administrator',
     phone: '+250780000001', role: 'admin', active: true, version: 1};
   const members = new Map([[admin.id, admin]]);
@@ -46,7 +46,18 @@ export function createPhoneAccountFixture({cookieSignIn, legacySessionResponses,
   }
   async function handle(request, response, path, session) {
     const send = (status, body, headers) => json(response, status, body, headers);
-    if (path === 'auth/session' && request.method === 'GET') return send(200, sessionBody(session));
+    if (path === 'auth/session' && request.method === 'GET') {
+      const profile = sessionBody(session);
+      if (session && request.headers['x-burimunsi-session-home'] === '1' && hasPermission(session,'overview.read') && hasPermission(session,'payments.read')) {
+        const home = startupHome?.(session);
+        if (home) {
+          const collectionId = 'fixture-group';
+          return send(200,{...profile,homeCollectionId:collectionId,homeBootstrap:{version:1,actorId:profile.user.id,
+            sessionId:profile.user.sessionId,collectionId,home}});
+        }
+      }
+      return send(200, profile);
+    }
     if (request.method === 'POST' && !cookieSignIn) return send(405, error('fixture_read_only'));
     if (path === 'auth/phone-passcode' && request.method === 'POST') {
       const data = await readBody(request);

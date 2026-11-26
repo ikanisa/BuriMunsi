@@ -15,13 +15,13 @@ export type {AdminUser, OtpReceipt} from './sessionResponses';
 
 const SessionContext = createContext<SessionContextValue | null>(null);
 
-export function SessionProvider({config, children}: {config: AdminClientConfig; children: ReactNode}) {
+export function SessionProvider({config, resolveHomeStart, children}: {config: AdminClientConfig; resolveHomeStart?: () => (() => boolean) | undefined; children: ReactNode}) {
   const [controller] = useState(() => new AdminSessionController(config));
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   useEffect(() => {
-    void controller.refresh().catch(() => undefined);
+    void controller.start(resolveHomeStart?.()).catch(() => undefined);
     return () => controller.stop();
-  }, [controller]);
+  }, [controller, resolveHomeStart]);
   const user = snapshot.user;
   const liveAuthority = snapshot.status === 'authenticated' && user && canReadSmsEvidence(user)
     ? JSON.stringify([snapshot.epoch, user.id, user.sessionId]) : null;
@@ -31,6 +31,7 @@ export function SessionProvider({config, children}: {config: AdminClientConfig; 
   const value: SessionContextValue = {
     ...snapshot,
     request: controller.request,
+    takeStartupHome: controller.takeStartupHome,
     refresh: controller.refresh,
     signIn: controller.signIn,
     signInWithPhonePasscode: controller.signInWithPhonePasscode,

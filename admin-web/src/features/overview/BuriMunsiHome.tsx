@@ -35,11 +35,21 @@ function Figure({label, icon, value, to, paymentMetric}:
 }
 
 export function BuriMunsiHome() {
-  const session = useSession(), {request, epoch, user} = session;
+  const session = useSession(), {request, takeStartupHome, epoch, user} = session;
   const visible = canDisplaySessionRecords(session) && !!user?.permissions.includes('overview.read');
   const payments = !!user?.permissions.includes('payments.read');
-  const load = useCallback(async (signal: AbortSignal) => snapshot.parse(await request('burimunsi/home', {signal})), [request]);
   const sms = canReadSmsEvidence(user);
+  const load = useCallback(async (signal: AbortSignal) => {
+    signal.throwIfAborted();
+    const startup = takeStartupHome?.();
+    if (startup) {
+      const parsed = snapshot.safeParse(startup.home);
+      const totals = parsed.success ? parsed.data.paymentTotals : undefined;
+      if (parsed.success && totals && parsed.data.recentPayments.every(row => row.groupId === startup.collectionId && (sms || !row.sourceId)) &&
+          (sms ? Object.hasOwn(totals,'latestSmsBalanceRwf') : totals.latestSmsBalanceRwf == null && totals.walletGapRwf == null)) return parsed.data;
+    }
+    return snapshot.parse(await request('burimunsi/home', {signal}));
+  }, [request, takeStartupHome, sms]);
   const collection = visible && user && sms && hasScopedAdminAuthority(user) ? user.adminIdentity?.collectionId : undefined;
   const authority=JSON.stringify([epoch,user?.id,user?.sessionId,user?.role,user?.adminIdentity?.collectionId,[...(user?.permissions ?? [])].sort()]);
   const {result, retry, refreshing} = useOperationRead('burimunsi-home:' + authority, visible, load, {retainDuringRefresh: true});

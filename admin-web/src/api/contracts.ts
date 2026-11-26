@@ -38,6 +38,7 @@ export interface AdminRequestOptions {
   reviewReason?: string;
   expectedStatus?: number;
   signal?: AbortSignal;
+  sessionHome?: true;
   /** Use only the exact per-tab Supabase MFA intent to recover or sign out. */
   mfaRecovery?: boolean;
 }

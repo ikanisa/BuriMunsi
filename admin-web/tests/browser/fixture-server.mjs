@@ -76,7 +76,7 @@ async function readFixtureBody(request) {
 const phoneAccounts = createPhoneAccountFixture({cookieSignIn: process.env.COLLECT_FIXTURE_SIGN_IN === '1',
   legacySessionResponses: process.env.COLLECT_FIXTURE_LEGACY_SESSIONS === '1',
   lifetime: process.env.COLLECT_FIXTURE_LONG_EXPIRY === '1' ? 40 * 24 * 60 * 60 * 1000 : 2 * 60 * 60 * 1000,
-  json, readBody: readFixtureBody});
+  json, readBody: readFixtureBody, startupHome: process.env.COLLECT_FIXTURE_SESSION_HOME === '1' ? homeFor : undefined});
 
 // Only the pinned two-version browser rehearsal can enable this scoped
 // in-memory side effect. The generic fixture API remains read-only.
@@ -87,6 +87,17 @@ if (process.argv[4] && (!commitRehearsal || !process.argv[3] || !process.send ||
 const commitFixture = commitRehearsal ? createPaymentCommitFixture({
   payment:fixturePayment, member:fixtureMembers.rows[0], json, readBody:readFixtureBody
 }) : null;
+
+function homeFor(session) {
+  const payments = phoneAccounts.hasPermission(session,'payments.read'), sms = phoneAccounts.hasPermission(session,'sms.read');
+  return {paymentCount:payments ? 2 : 0, memberCount:1, unallocatedCount:payments ? 2 : 0,
+    recentPayments:payments ? [fixturePayment,fixtureOutgoingPayment].map(item=>visiblePaymentFor(item,sms)) : [], asOf:fixturePayment.atRaw,
+    ...(payments && {paymentTotals:{incomingRwf:'5000',outgoingRwf:'5000',...(sms && {latestSmsBalanceRwf:0})}})};
+}
+
+function visiblePaymentFor(item,sms) {
+  return {...(commitFixture && item.id === fixturePayment.id ? commitFixture.readPayment() : item),sourceId:sms ? item.sourceId : null};
+}
 if (commitFixture) process.on('message', command => {
   if (command === 'allocation-evidence') process.send(commitFixture.evidence());
 });
@@ -110,13 +121,8 @@ createServer(async (request, response) => {
     if (!paymentAnalysis && request.method !== 'GET') return json(response, 405, {error: {code: 'fixture_read_only'}});
     if (!session) return json(response, 401, {error: {code: 'fixture_unauthorized'}});
     const payments = phoneAccounts.hasPermission(session, 'payments.read'), sms = phoneAccounts.hasPermission(session, 'sms.read');
-    const visiblePayment = item => ({...(commitFixture && item.id === fixturePayment.id ? commitFixture.readPayment() : item),
-      sourceId: sms ? item.sourceId : null});
-    if (url.pathname === '/api/admin/burimunsi/home') return json(response, 200, {
-      paymentCount:payments ? 2 : 0, memberCount:1, unallocatedCount:payments ? 2 : 0,
-      recentPayments:payments ? [fixturePayment, fixtureOutgoingPayment].map(visiblePayment) : [], asOf:fixturePayment.atRaw,
-      ...(payments && {paymentTotals:{incomingRwf:'5000',outgoingRwf:'5000',...(sms && {latestSmsBalanceRwf:0})}}),
-    });
+    const visiblePayment = item => visiblePaymentFor(item,sms);
+    if (url.pathname === '/api/admin/burimunsi/home') return json(response, 200, homeFor(session));
     if (paymentAnalysis) {
       if (!payments) return json(response,403,{error:{code:'forbidden'}});
       let query;

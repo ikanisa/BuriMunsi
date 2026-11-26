@@ -120,6 +120,10 @@ export function upstreamRequest(request, admission, bytes, signal, frontendOrigi
       request.headers.get('x-collect-owner-identity-version') === '1') {
     headers.set('X-Collect-Owner-Identity-Version', '1');
   }
+  if (browserAdminCookie === BURIMUNSI_ADMIN_COOKIE && sessionRead && route.path === route.logicalPath && !route.query &&
+      headers.has('Cookie') && !headers.has('Authorization') && request.headers.get('x-burimunsi-session-home') === '1') {
+    headers.set('X-BuriMunsi-Session-Home', '1');
+  }
   if (route.functionName === 'admin-api' && route.logicalPath === '/api/admin/burimunsi/access' && request.method === 'POST') {
     const device = request.headers.get('x-burimunsi-device');
     if (device !== null) {
