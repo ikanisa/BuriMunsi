@@ -3,6 +3,8 @@ package rw.ikanisa.burimunsi.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -74,15 +76,8 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
             }
         }
         val sortControl:@Composable (Modifier)->Unit={modifier->
-            Box(modifier){
-                OutlinedButton({sortOpen=true},Modifier.fillMaxWidth().heightIn(min=48.dp).testTag("listing-sort-menu"),enabled=enabled,shape=RoundedCornerShape(24.dp),colors=ButtonDefaults.outlinedButtonColors(contentColor=BuriTheme.Text)){
-                    Icon(painterResource(R.drawable.ic_arrow),null,Modifier.size(19.dp).rotate(90f));Spacer(Modifier.width(8.dp));CompactLabel(t("Sort"),fontSize=15.sp,lineHeight=22.sp)
-                }
-                DropdownMenu(sortOpen,{sortOpen=false},containerColor=BuriTheme.Raised){
-                    ListingQuery.allowedSorts(target).forEach{sort->DropdownMenuItem(
-                        text={CompactLabel(t(listingSortLabel(sort)))},trailingIcon={if(sort==query.sort)Icon(painterResource(R.drawable.ic_check),null,Modifier.size(20.dp))},
-                        onClick={sortOpen=false;model.applyListingQuery(query.copy(sort=sort))})}
-                }
+            OutlinedButton({sortOpen=true},modifier.heightIn(min=48.dp).testTag("listing-sort-menu"),enabled=enabled,shape=RoundedCornerShape(24.dp),colors=ButtonDefaults.outlinedButtonColors(contentColor=BuriTheme.Text)){
+                Icon(painterResource(R.drawable.ic_arrow),null,Modifier.size(19.dp).rotate(90f));Spacer(Modifier.width(8.dp));CompactLabel(t("Sort"),fontSize=15.sp,lineHeight=22.sp)
             }
         }
         val exportControl:@Composable ()->Unit={
@@ -109,20 +104,63 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
             }
         }
     }
+    if(sortOpen) ListingChoiceDialog("Sort by", query.sort, ListingQuery.allowedSorts(target).map { it to listingSortLabel(it) },
+        enabled, onDismiss = {sortOpen=false}) {sort ->
+        sortOpen=false
+        model.applyListingQuery(query.copy(sort=sort))
+    }
 }
 
-@Composable private fun QueryChoice(label:String,value:String,choices:List<Pair<String,String>>,enabled:Boolean,tag:String,onChange:(String)->Unit){
-    val t=LocalUiText.current;var expanded by remember{mutableStateOf(false)}
+@Composable
+internal fun ListingChoice(label:String,value:String,choices:List<Pair<String,String>>,enabled:Boolean,tag:String,onChange:(String)->Unit){
+    val t=LocalUiText.current
+    var open by remember(label) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth()){
         CompactLabel(t(label),fontSize=15.sp,color=BuriTheme.Muted);Spacer(Modifier.height(8.dp))
-        Box{
-            OutlinedButton({expanded=true},Modifier.fillMaxWidth().heightIn(min=56.dp).testTag(tag).semantics{contentDescription=t(label)},enabled=enabled,shape=RoundedCornerShape(17.dp),colors=ButtonDefaults.outlinedButtonColors(contentColor=BuriTheme.Text)){
-                CompactLabel(t(choices.firstOrNull{it.first==value}?.second?:"All"),Modifier.weight(1f),fontSize=17.sp,lineHeight=25.sp)
-                Icon(painterResource(R.drawable.ic_arrow),null,Modifier.size(18.dp).rotate(90f))
-            }
-            DropdownMenu(expanded,{expanded=false},containerColor=BuriTheme.Raised){choices.forEach{(key,text)->DropdownMenuItem(text={CompactLabel(t(text))},onClick={expanded=false;onChange(key)})}}
+        val selectedLabel = t(choices.firstOrNull { it.first == value }?.second ?: "All")
+        OutlinedButton({open=true},Modifier.fillMaxWidth().heightIn(min=56.dp).testTag(tag)
+            .semantics { contentDescription = t(label); stateDescription = selectedLabel },
+            enabled=enabled,shape=RoundedCornerShape(17.dp),colors=ButtonDefaults.outlinedButtonColors(contentColor=BuriTheme.Text)){
+            CompactLabel(selectedLabel,Modifier.weight(1f),fontSize=17.sp,lineHeight=25.sp)
+            Icon(painterResource(R.drawable.ic_arrow),null,Modifier.size(18.dp))
         }
     }
+    if(open) ListingChoiceDialog(label,value,choices,enabled,onDismiss={open=false}) {choice ->
+        open=false
+        onChange(choice)
+    }
+}
+
+@Composable
+private fun <T> ListingChoiceDialog(label:String,selected:T,choices:List<Pair<T,String>>,enabled:Boolean,onDismiss:()->Unit,onChoose:(T)->Unit){
+    val t=LocalUiText.current
+    AlertDialog(
+        onDismissRequest=onDismiss,
+        modifier=Modifier.testTag("listing-choice-dialog"),
+        title={CompactLabel(t(label),Modifier.semantics { heading() })},
+        text={
+            Column(Modifier.fillMaxWidth().heightIn(max=LocalConfiguration.current.screenHeightDp.dp*.55f)
+                .verticalScroll(rememberScrollState()).selectableGroup()){
+                for((key,text) in choices){
+                    Row(
+                        Modifier.fillMaxWidth().heightIn(min=48.dp)
+                            .selectable(selected=key==selected,enabled=enabled,role=Role.RadioButton,onClick={onChoose(key)}),
+                        verticalAlignment=Alignment.CenterVertically
+                    ){
+                        RadioButton(selected=key==selected,onClick=null,enabled=enabled,
+                            colors=RadioButtonDefaults.colors(selectedColor=BuriTheme.Blue))
+                        Spacer(Modifier.width(12.dp))
+                        CompactLabel(t(text),Modifier.weight(1f),fontSize=16.sp)
+                    }
+                }
+            }
+        },
+        confirmButton={TextButton(onDismiss){CompactLabel(t("Cancel"))}},
+        shape=RoundedCornerShape(24.dp),
+        containerColor=BuriTheme.Raised,
+        titleContentColor=BuriTheme.Text,
+        textContentColor=BuriTheme.Text
+    )
 }
 
 @Composable private fun QueryNumber(label:String,value:String,enabled:Boolean,onChange:(String)->Unit){
@@ -171,10 +209,10 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
         }
     }){
         if(target !in setOf(ListingTarget.SMS,ListingTarget.OBSERVATIONS))item{Entry(t("Search"),draft.q,{draft=draft.copy(q=it.take(80))},enabled=enabled)}
-        if(ListingQuery.filters(target).size>1)item{QueryChoice("Status",draft.filter,ListingQuery.filters(target).map{it to listingValueLabel(it)},enabled,if(target==ListingTarget.PAYMENTS)"payment-filter-select"else "listing-filter-select"){draft=draft.copy(filter=it)}}
-        item{QueryChoice("Sort by",draft.sort.wire,ListingQuery.allowedSorts(target).map{it.wire to listingSortLabel(it)},enabled,"listing-sort-select"){wire->draft=draft.copy(sort=ListingSort.entries.first{it.wire==wire})}}
-        if(ListingQuery.supportsActive(target))item{QueryChoice(if(target==ListingTarget.STAFF)"Access status"else "Membership status",draft.active,listOf("all","active","inactive").map{it to listingValueLabel(it)},enabled,"listing-active-select"){draft=draft.copy(active=it)}}
-        if(ListingQuery.supportsDirection(target))item{QueryChoice("Direction",draft.direction,listOf("all","incoming","outgoing").map{it to listingValueLabel(it)},enabled,"listing-direction-select"){draft=draft.copy(direction=it)}}
+        if(ListingQuery.filters(target).size>1)item{ListingChoice("Status",draft.filter,ListingQuery.filters(target).map{it to listingValueLabel(it)},enabled,if(target==ListingTarget.PAYMENTS)"payment-filter-select"else "listing-filter-select"){draft=draft.copy(filter=it)}}
+        item{ListingChoice("Sort by",draft.sort.wire,ListingQuery.allowedSorts(target).map{it.wire to listingSortLabel(it)},enabled,"listing-sort-select"){wire->draft=draft.copy(sort=ListingSort.entries.first{it.wire==wire})}}
+        if(ListingQuery.supportsActive(target))item{ListingChoice(if(target==ListingTarget.STAFF)"Access status"else "Membership status",draft.active,listOf("all","active","inactive").map{it to listingValueLabel(it)},enabled,"listing-active-select"){draft=draft.copy(active=it)}}
+        if(ListingQuery.supportsDirection(target))item{ListingChoice("Direction",draft.direction,listOf("all","incoming","outgoing").map{it to listingValueLabel(it)},enabled,"listing-direction-select"){draft=draft.copy(direction=it)}}
         if(ListingQuery.supportsDates(target)){
             item{CompactLabel(t("Date range"),fontSize=20.sp,fontWeight=FontWeight.Medium);Text(t("Dates use Kigali time. End date is included."),fontSize=14.sp,lineHeight=22.sp,color=BuriTheme.Muted)}
             item{ScrollingChips{chip ->

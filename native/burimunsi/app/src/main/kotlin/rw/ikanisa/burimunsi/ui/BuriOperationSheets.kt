@@ -5,7 +5,6 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.ui.semantics.Role as SemanticRole
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -14,7 +13,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.*
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.cool.mobile.R
@@ -121,15 +119,10 @@ import rw.ikanisa.burimunsi.core.*
     }
 }
 @Composable internal fun FiltersPanel(s:UiState,m:BuriController){
-    val t=LocalUiText.current;var selected by remember(s.filter){mutableStateOf(s.filter)};var expanded by remember{mutableStateOf(false)}
+    val t=LocalUiText.current;var selected by remember(s.filter){mutableStateOf(s.filter)}
     val options=listOf("all" to "All","allocated" to "Allocated","unallocated" to "Unallocated")
     Panel(footer={Primary(t("Apply"),{m.setFilter(selected)},!s.busy)}){
-        item{CompactLabel(t("Status"),fontSize=15.sp,color=BuriTheme.Muted);Spacer(Modifier.height(9.dp));Box{
-            OutlinedButton({expanded=true},Modifier.testTag("payment-filter-select").fillMaxWidth().heightIn(min=60.dp),enabled=!s.busy,shape=RoundedCornerShape(17.dp)){
-                CompactLabel(t(options.firstOrNull{it.first==selected}?.second?:"All"),Modifier.weight(1f),textAlign=TextAlign.Start,fontSize=19.sp);Glyph(R.drawable.ic_arrow,null,BuriTheme.Muted,18)
-            }
-            DropdownMenu(expanded,{expanded=false}){for((value,label)in options)DropdownMenuItem(text={CompactLabel(t(label))},onClick={selected=value;expanded=false})}
-        }}
+        item{ListingChoice("Status",selected,options,!s.busy,"payment-filter-select"){selected=it}}
         s.payments?.asOf?.let{asOf->item{CompactLabel(historyTime(asOf,t.locale),fontSize=15.sp,color=BuriTheme.Muted)}}
     }
 }

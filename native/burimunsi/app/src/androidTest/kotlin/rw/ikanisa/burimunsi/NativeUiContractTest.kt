@@ -285,6 +285,11 @@ class NativeUiContractTest {
     @Test fun paymentFiltersUseOnlyTheAllocationStates(){
         val c=FakeController(Route.PAYMENTS);show(c);ui.onNodeWithContentDescription("Payment filters").performClick()
         ui.onNodeWithText("Filters").assertExists();ui.onNodeWithText("Status").assertExists();ui.onNodeWithTag("payment-filter-select").performClick()
+        ui.onNodeWithTag("listing-choice-dialog").assertIsDisplayed()
+        ui.onNode(hasText("All") and isSelectable() and isSelected()).assertExists()
+        button("Cancel").performClick()
+        ui.onNodeWithTag("listing-choice-dialog").assertDoesNotExist()
+        ui.onNodeWithTag("payment-filter-select").assert(hasText("All")).performClick()
         ui.onNodeWithText("Processing").assertDoesNotExist();ui.onNodeWithText("Unallocated").performClick();ui.runOnIdle{check(c.filterCalls==0)}
         val applyBounds=button("Apply").fetchSemanticsNode().boundsInRoot
         val resetBounds=button("Reset all").fetchSemanticsNode().boundsInRoot
