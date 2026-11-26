@@ -33,7 +33,7 @@ async function countedPage(sql,count,page,order,values){
   return {total:pgInteger(rows[0].page_total),rows:rows[0].id===null?[]:rows};
 }
 
-/** Reuses canonical app tables, never a client or SMS-derived balance.
+/** Reuses canonical app tables and scoped, validated wallet evidence.
  * sourceReader must reuse Collect's admitted decrypt/read command and validate
  * each source's group/transaction lineage inside this same snapshot. It is not
  * replaced with an independent raw-body table or a broad storage credential.

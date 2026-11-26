@@ -1,11 +1,16 @@
 # Standalone Home savings summary
 
-`GET /v1/burimunsi/home?include=savings` opts in to the `homeSavings` response
-schema; `GET /home`, login, and session requests keep their existing wire shape.
-This is only available in standalone Payments mode. The read uses the same
-current, scoped `records.read` authorization and snapshot as Home; it does not
-request SMS permission or expose raw sources. Responses are not cacheable over
-HTTP. Missing or unqualified amounts are null, not zero.
+`GET /v1/burimunsi/home?include=savings` opts in to the existing `homeSavings`
+response schema through `collect-api`. `GET /v1/burimunsi/home` and the Home
+snapshot included in native login or session keep their existing response shapes.
+Hosted Admin's `GET /api/admin/burimunsi/home` continues to return its Home counts
+and recent payments.
+
+The savings selector is available in standalone Payments mode. `RecordsService`
+revalidates the caller's `records.read` access in the scoped read snapshot and
+`readPaymentsHome` reads `private.burimunsi_home_savings` and the outgoing sum in
+one SQL statement. Responses use `Cache-Control: no-store`. The projection returns
+only the amounts and reconciliation status, with no raw SMS or source identities.
 
 - `outgoingPaymentsRwf` is the exact principal of **recorded outgoing
   payments** in the current collection's canonical Payments table. It is not
@@ -13,19 +18,23 @@ HTTP. Missing or unqualified amounts are null, not zero.
   It is unavailable if no outgoing payment is recorded or if the sum is
   outside the safe whole-RWF wire range. Incoming rows, raw/SMS records,
   and predecessor ledger views are not summed.
-- `lifetimeContributionsRwf` remains unavailable: standalone incoming
-  payment recording and member attribution do not establish an effective
-  posted contribution or a complete predecessor contribution bridge.
-- `latestWalletBalanceRwf` remains unavailable: the canonical payment row
-  does not hold validated, retained original wallet-balance evidence. A
-  parser's raw output or a calculation from partial inflows/outflows is not
-  proof.
-- `reconciliationStatus` is `unavailable` until independently verified
-  opening balances, movements, fees/reversals and wallet evidence establish
-  scope. This candidate does not assert reconciliation or a mismatch.
+- `lifetimeContributionsRwf` uses effective posted member contributions in the
+  authorized collection. Each included amount requires matching payment,
+  membership and ledger evidence and an effective, unreversed posting.
+- `latestWalletBalanceRwf` uses the latest eligible, retained wallet-balance
+  amount for the configured receiving account. The amount must come from
+  validated provider SMS evidence with trusted source timing and wallet lineage.
+  It describes the balance reported by that SMS.
+- `reconciliationStatus` can be `reconciled` or `mismatch` when an independently
+  verified provider statement covers the same wallet and exact movements,
+  all three amounts are available, and the opening balance, fees and other
+  adjustments leave the existing lifetime contributions minus recorded outgoing
+  comparison applicable. Three available amounts can still have status
+  `unavailable` when coverage is unproved.
 
-A future authoritative wallet projection should persist only a validated
-wallet scalar and verified original-source time and identity at the existing
-fenced parse completion, using a new reviewed additive change. It should not
-copy the predecessor Home migration, rewrite old events, or read historical raw
-SMS to populate this summary without a separately approved plan.
+The API converts PostgreSQL whole-RWF values exactly within the existing safe
+integer range. A supported zero is returned as `0`. Missing, unqualified or
+out-of-range evidence produces `null` for that amount. A malformed summary or
+inconsistent reconciliation result fails the read. Deploy the database helper
+before the `collect-api` source that reads it. This change uses the existing v64
+wire shape.

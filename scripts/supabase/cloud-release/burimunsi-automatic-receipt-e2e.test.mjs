@@ -672,14 +672,27 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
  await f.client.query("BEGIN; SET LOCAL ROLE collect_runtime; SET LOCAL burimunsi.collection_id='another-group'");
  assert.equal((await f.client.query('SELECT count(*)::int n FROM burimunsi.raw_sms')).rows[0].n,0);
  await f.client.query('ROLLBACK');
- await t.test('Home opt-in reads exact recorded outgoing principal only and never claims wallet balance',async()=>{
+ await t.test('Home opt-in keeps exact outgoing and uses the scoped savings projection in the same snapshot',async()=>{
+  // The effective ledger and wallet-evidence rules are covered by the SQL
+  // savings contract. This fixture exercises the caller transaction and RLS.
+  await f.client.query(`CREATE FUNCTION private.burimunsi_home_savings(p_collection text)
+   RETURNS TABLE(lifetime_contributions_rwf numeric,latest_wallet_balance_rwf numeric,reconciliation_status text)
+   LANGUAGE plpgsql STABLE AS $fixture$
+   BEGIN
+    IF p_collection IS DISTINCT FROM current_setting('burimunsi.collection_id',true) THEN RAISE insufficient_privilege; END IF;
+    RETURN QUERY SELECT 325::numeric,75::numeric,'unavailable'::text;
+   END;
+   $fixture$;
+   REVOKE ALL ON FUNCTION private.burimunsi_home_savings(text) FROM PUBLIC;
+   GRANT EXECUTE ON FUNCTION private.burimunsi_home_savings(text) TO collect_runtime;`);
   const run=runtime.run('http_collect',{readOnly:true}),asOf=new Date().toISOString();
   const lookup=(tx,id=group)=>readPaymentsHome(tx,id,asOf,{showSms:false},{includeSavings:true});
   const warm=await run(tx=>lookup(tx)); // Own outgoing plus its duplicate source count once.
-  assert.equal(warm.recordedOutgoingRwf,250);
+  assert.deepEqual(warm.savings,{lifetimeContributionsRwf:325,outgoingPaymentsRwf:250,
+   latestWalletBalanceRwf:75,reconciliationStatus:'unavailable'});
   assert.ok(warm.recentPayments.every(row=>row.sourceId===null));
   const plain=await run(tx=>readPaymentsHome(tx,group,asOf,{showSms:false}));
-  const {recordedOutgoingRwf,...same}=warm;
+  const {savings,...same}=warm;
   assert.deepEqual(same,plain);
   const before=(await f.client.query('SELECT count(*) AS n FROM app.ledger_entries')).rows[0];
   const insert=(db,id,groupId,amount)=>db.query(
@@ -692,7 +705,7 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
    const other='home-savings-foreign';
    await peer.query("INSERT INTO private.burimunsi_scopes VALUES($1,'wallet',NULL)",[other]);
    await insert(peer,'home-savings-foreign-payment',other,'75');
-   const outside=await run(tx=>lookup(tx,other));assert.equal(outside.paymentCount,0);assert.equal(outside.recordedOutgoingRwf,null);
+   await assert.rejects(run(tx=>lookup(tx,other)),{code:'42501'});
    await run(async tx=>{
     const old=await lookup(tx);
     await insert(peer,'home-savings-overflow',group,'9007199254740991');
@@ -700,7 +713,7 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
    });
    const overflow=await run(tx=>lookup(tx));
    assert.equal(overflow.paymentCount,warm.paymentCount+1);
-   assert.equal(overflow.recordedOutgoingRwf,null);
+   assert.deepEqual(overflow.savings,{...savings,outgoingPaymentsRwf:null});
    await peer.query("DELETE FROM burimunsi.payments WHERE id IN ('home-savings-overflow','home-savings-foreign-payment')");
    await peer.query('DELETE FROM private.burimunsi_scopes WHERE collection_id=$1',[other]);
   } finally {await peer.end();}
@@ -873,6 +886,80 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
   } finally {await f.client.query('ROLLBACK');}
   const publicAccess=(await f.client.query("SELECT has_function_privilege('collect_runtime','private._burimunsi_reconcile_held_payment_page(uuid,jsonb,jsonb)','EXECUTE') AS allowed")).rows[0];
   assert.equal(publicAccess.allowed,false);
+ });
+
+ await t.test('standalone Admin SMS payment metadata uses the signed-in collection without a shared membership',async()=>{
+  const scopedMigration=await load('20261126150200_burimunsi_admin_sms_payment_scope.sql');
+  await f.client.query('BEGIN');
+  try {
+   // Keep the existing live-grant seam. Model the deployed scope's current
+   // Admin check and the separate browser assertion's shared membership rule.
+   await f.client.query(`
+    ALTER TABLE app.memberships ADD COLUMN role text;
+    INSERT INTO app.admin_grants VALUES ('principal','sms.read');
+    CREATE FUNCTION private.burimunsi_browser_pin_context() RETURNS jsonb LANGUAGE sql
+       AS $$SELECT nullif(current_setting('fixture.browser_actor',true),'')::jsonb$$;
+    CREATE OR REPLACE FUNCTION private.burimunsi_browser_pin_assert_actor(text,text,text,bigint,bigint)
+    RETURNS text LANGUAGE plpgsql AS $$DECLARE actor jsonb:=private.burimunsi_browser_pin_context(); BEGIN
+     IF actor->>'principalId' IS NULL THEN RAISE EXCEPTION 'session_changed' USING ERRCODE='42501';END IF;
+     IF $2 IS NOT NULL AND ($2 IS DISTINCT FROM actor->>'collectionId' OR NOT EXISTS(
+       SELECT FROM app.memberships WHERE collection_id=$2 AND user_id=actor->>'principalId' AND active=1
+        AND ($3 IS NULL OR role=$3 OR ($3='admin' AND role='owner')))) THEN
+        RAISE EXCEPTION 'group_access_denied' USING ERRCODE='42501';END IF;
+     RETURN private.assert_actor($1,NULL,NULL,$4,$5);
+    END$$;
+    CREATE OR REPLACE FUNCTION private.burimunsi_observation_admin_scope(p_collection text,p_sensitive boolean)
+    RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER AS $fn$
+    DECLARE actor jsonb:=private.burimunsi_browser_pin_context();
+    BEGIN
+     IF actor->>'collectionId' IS DISTINCT FROM p_collection OR actor->>'operatorRole' IS DISTINCT FROM 'admin'
+       OR NOT EXISTS(SELECT FROM private.burimunsi_operator_approvals
+          WHERE collection_id=p_collection AND principal_user_id=actor->>'principalId' AND active) THEN
+        RAISE insufficient_privilege;
+     END IF;
+     PERFORM private.burimunsi_browser_pin_assert_actor('sms.read',NULL,NULL,1,NULL);
+     RETURN actor;
+    END;$fn$;`);
+   const actor={collectionId:group,operatorRole:'admin',principalId:'principal'};
+   const browser=async(scope,read)=>{
+    await f.client.query('SAVEPOINT browser_sms_check');
+    try {
+     await f.client.query("SET LOCAL ROLE collect_runtime; SET LOCAL collect.edge_verified='true'; SET LOCAL test.work_kind='http_admin'; SET LOCAL burimunsi.browser_pin_cookie='fixture'");
+     await f.client.query("SELECT set_config('fixture.browser_actor',$1,true),set_config('burimunsi.collection_id',$2,true)",[JSON.stringify(scope),group]);
+     return await read();
+    } finally {
+     await f.client.query('ROLLBACK TO SAVEPOINT browser_sms_check');
+     await f.client.query('RELEASE SAVEPOINT browser_sms_check');
+    }
+   };
+   const outcomes=(payer=true)=>f.client.query(
+    'SELECT private.burimunsi_admin_payment_observation_outcomes($1,$2::text[],$3) AS result',[group,[source.sourceId],payer])
+    .then(r=>r.rows[0].result);
+   const paymentEvidence=(payment=source.sourceId)=>f.client.query(
+    'SELECT count(*)::int AS n FROM private.burimunsi_payment_sms_evidence_rows($1,$2,$3)',[group,payment,source.sourceId])
+    .then(r=>r.rows[0].n);
+   assert.equal((await browser(actor,()=>outcomes(false)))[0].payerStatus,null);
+   const previousError={code:'42501',message:'group_access_denied'};
+   await assert.rejects(browser(actor,outcomes),previousError);
+   await assert.rejects(browser(actor,paymentEvidence),previousError);
+
+   await f.client.query(stripFraming(scopedMigration));
+   assert.equal((await browser(actor,outcomes))[0].payerStatus,'delivered');
+   assert.equal(await browser(actor,paymentEvidence),1);
+   assert.equal(await browser(actor,()=>paymentEvidence('unlinked-payment')),0);
+   for(const denied of [{...actor,collectionId:'other-group'},{...actor,operatorRole:'staff'},null]){
+    await assert.rejects(browser(denied,outcomes),{code:'42501'});
+    await assert.rejects(browser(denied,paymentEvidence),{code:'42501'});
+   }
+   await f.client.query("DELETE FROM app.admin_grants WHERE user_id='principal' AND permission='payments.read'");
+   await assert.rejects(browser(actor,outcomes),{code:'42501'});
+   await assert.rejects(browser(actor,paymentEvidence),{code:'42501'});
+   const {rows:[access]}=await f.client.query(`SELECT has_function_privilege(
+    'collect_runtime','private._burimunsi_assert_browser_sms_payments_read(text)','EXECUTE') AS allowed`);
+   assert.equal(access.allowed,false);
+  } finally {
+   await f.client.query('ROLLBACK');
+  }
  });
 
  await t.test('payer opt-out before claim or after claim but before prepare never submits or replays', async () => {

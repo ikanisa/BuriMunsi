@@ -9,6 +9,18 @@ const display = `SELECT p.*,member.full_name AS member_name,member.momo_number A
 const newest = ' ORDER BY coalesce(p.occurred_at,p.created_at) DESC,p.id DESC';
 const escaped = value => '%'+value.replaceAll('\\','\\\\').replaceAll('%','\\%').replaceAll('_','\\_')+'%';
 const iso = value => value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+const maxWireRwf = BigInt(Number.MAX_SAFE_INTEGER);
+
+function wholeRwf(value) {
+  if(value===null)return null;
+  // Read PostgreSQL numeric text directly, including an optional zero scale.
+  // Converting to Number first could turn a fractional or oversized amount into
+  // an apparently valid whole-RWF value.
+  const match=typeof value==='string'&&/^([0-9]{1,38})(?:\.0{1,38})?$/.exec(value);
+  requireThat(match,'invalid_snapshot',503);
+  const exact=BigInt(match[1]);
+  return exact>maxWireRwf?null:Number(exact);
+}
 
 export async function setPaymentsScope(sql,groupId) {
   await sql.unsafe("SELECT set_config('burimunsi.collection_id',$1,true)",[groupId]);
@@ -27,21 +39,24 @@ export function paymentRecord(row,{showSms=false}={}) {
 }
 
 export async function readPaymentsHome(sql,groupId,asOf,projection,{includeSavings=false}={}) {
-  const [totals]=await sql.unsafe(`SELECT count(*) AS payments,
+  const counts=`SELECT count(*) AS payments,
     count(*) FILTER (WHERE allocation_state='unallocated') AS unallocated,
     (SELECT count(*) FROM app.memberships WHERE collection_id=$1 AND active=1) AS members
     ${includeSavings?", (sum(amount_rwf) FILTER (WHERE direction='outgoing'))::text AS outgoing":""}
-    FROM burimunsi.payments WHERE collection_id=$1`,[groupId]);
+    FROM burimunsi.payments WHERE collection_id=$1`;
+  const totalsRows=await sql.unsafe(includeSavings?`WITH counts AS (${counts})
+    SELECT counts.*,s.lifetime_contributions_rwf::text AS lifetime_contributions,
+      s.latest_wallet_balance_rwf::text AS latest_wallet_balance,s.reconciliation_status
+    FROM counts CROSS JOIN private.burimunsi_home_savings($1) s`:counts,[groupId]);
+  requireThat(totalsRows.length===1,'invalid_snapshot',503);
+  const [totals]=totalsRows;
   const rows=await sql.unsafe(display+newest+' LIMIT 3',[groupId]);
   const home={paymentCount:pgInteger(totals.payments),memberCount:pgInteger(totals.members),
     unallocatedCount:pgInteger(totals.unallocated),recentPayments:rows.map(row=>paymentRecord(row,projection)),asOf};
   if(!includeSavings)return home;
-  // PostgreSQL sums bigint principal to numeric. Do not round in JS, invent a
-  // zero when no outgoing is recorded, or imply all wallet activity is covered.
-  const outgoing=totals.outgoing;
-  requireThat(outgoing===null||typeof outgoing==='string'&&/^[0-9]{1,38}$/.test(outgoing),'invalid_snapshot',503);
-  const exact=outgoing===null?null:BigInt(outgoing);
-  return {...home,recordedOutgoingRwf:exact===null||exact>BigInt(Number.MAX_SAFE_INTEGER)?null:Number(exact)};
+  return {...home,savings:{lifetimeContributionsRwf:wholeRwf(totals.lifetime_contributions),
+    outgoingPaymentsRwf:wholeRwf(totals.outgoing),latestWalletBalanceRwf:wholeRwf(totals.latest_wallet_balance),
+    reconciliationStatus:totals.reconciliation_status}};
 }
 
 export async function readPayment(sql,groupId,id,projection) {

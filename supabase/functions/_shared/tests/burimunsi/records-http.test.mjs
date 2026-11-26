@@ -114,11 +114,14 @@ test('separate standalone Home savings selector preserves legacy schemas and rec
   requestId='11111111-1111-4111-8111-111111111111',origin='https://native.example.test';
  data.actor={...data.actor,role:'staff',sessionId:requestId,installationId:installation,name:'Synthetic operator'};
  let authenticated=0,reads=0;
+ const reconciled={lifetimeContributionsRwf:1000,outgoingPaymentsRwf:250,latestWalletBalanceRwf:750,
+  reconciliationStatus:'reconciled'};
+ let savings={...reconciled,sourceBody:'never-return'};
  tx.loadBinding=()=>assert.fail('ordinary Savings attempted an SMS binding lookup');
  tx.canonicalHome=async(groupId,{includeSavings})=>{
   assert.equal(groupId,'group-1');reads++;
   return {paymentCount:1,memberCount:1,unallocatedCount:1,asOf:'2026-11-06T10:00:00Z',recentPayments:[],
-   ...(includeSavings?{recordedOutgoingRwf:250}:{}),unrelated:'never-return'};
+   ...(includeSavings?{savings}:{}),unrelated:'never-return'};
  };
  const svc=new RecordsService({store:{withReadSnapshot:fn=>fn(tx)},groupId:'group-1',
   cursor:new ScopedCursor(new Uint8Array(32).fill(8)),clock:()=>CLOCK,paymentsOnly:true});
@@ -134,8 +137,27 @@ test('separate standalone Home savings selector preserves legacy schemas and rec
  assert.equal(Object.hasOwn(plain,'savings'),false);
  const added=await run(get('/home?include=savings'));assert.equal(added.status,200);
  assert.equal(added.headers.get('cache-control'),'no-store');
- assert.deepEqual((await added.json()).data,{...plain,savings:{lifetimeContributionsRwf:null,
-  outgoingPaymentsRwf:250,latestWalletBalanceRwf:null,reconciliationStatus:'unavailable'}});
+ assert.deepEqual((await added.json()).data,{...plain,savings:reconciled});
+ for(const expected of [
+  {...reconciled,latestWalletBalanceRwf:null,reconciliationStatus:'unavailable'},
+  {...reconciled,reconciliationStatus:'unavailable'},
+  {...reconciled,latestWalletBalanceRwf:650,reconciliationStatus:'mismatch'},
+ ]){
+  savings=expected;
+  const response=await run(get('/home?include=savings'));assert.equal(response.status,200);
+  assert.deepEqual((await response.json()).data,{...plain,savings:expected});
+ }
+ for(const invalid of [
+  {...reconciled,latestWalletBalanceRwf:650},
+  {...reconciled,latestWalletBalanceRwf:null},
+  {...reconciled,reconciliationStatus:'mismatch'},
+  {...reconciled,reconciliationStatus:'unverified'},
+  {...reconciled,outgoingPaymentsRwf:1.5},
+ ]){
+  savings=invalid;
+  const response=await run(get('/home?include=savings'));assert.equal(response.status,503);
+  assert.equal((await response.json()).error.code,'invalid_snapshot');
+ }
  const session=await run(get('/session?include=home'));assert.equal(session.status,200);
  assert.deepEqual((await session.json()).data.home,plain);
  const before=[authenticated,reads];
