@@ -52,7 +52,7 @@ export async function verifyBrowserHomeBootstrap({admitted,pool,fixtureSql,busin
         [group,account.id,account.version,cookieHash,randomUUID(),randomUUID(),origin]);
       assert.equal(result.ok,true);
     }),'http_admin');
-    viewers.set(account.role,{cookie,cookieHash});
+    viewers.set(account.role,{cookie});
   }
   const admin=viewers.get('admin'),staff=viewers.get('staff');
 
@@ -176,29 +176,24 @@ export async function verifyBrowserHomeBootstrap({admitted,pool,fixtureSql,busin
   const stale=await call('auth/session',{cookie:admin.cookie,selector:'1'});
   assert.equal(stale.status,200,stale.body);
   assert.equal(stale.body,noCookie.body);
-  const expiredCookie=randomBytes(32).toString('hex');
-  const expiredHash=createHash('sha256').update(expiredCookie).digest('hex');
-  // Seed an already expired copy without changing a session's immutable identity.
-  const [expiredProof]=await fixtureSql(`WITH previous AS (
-    SELECT b.*,a.auth_version FROM private.burimunsi_browser_pin_sessions b
-      JOIN app.admin_sessions a ON a.token_hash=b.cookie_hash WHERE b.cookie_hash=$1
-  ), principal AS (
-    INSERT INTO app.auth_sessions(id,user_id,surface,auth_at,created_at,expires_at)
-    SELECT $3,principal_id,'admin',issued_at-3600,issued_at-3600,expires_at-3600 FROM previous RETURNING id
-  ), browser AS (
-    INSERT INTO private.burimunsi_browser_pin_sessions(session_id,cookie_hash,public_id,collection_id,origin,profile_sha256,
-      account_id,account_version,credential_version,admin_id,principal_id,authority,issued_at,expires_at,verified_at,proof_id)
-    SELECT principal.id,$2,$4::uuid,collection_id,origin,profile_sha256,account_id,account_version,credential_version,
-      admin_id,principal_id,authority,issued_at-3600,expires_at-3600,verified_at-3600,gen_random_uuid()
-    FROM previous CROSS JOIN principal RETURNING session_id,cookie_hash,public_id,admin_id,origin,issued_at,expires_at
-  ), web AS (
-    INSERT INTO app.admin_sessions(token_hash,public_id,user_id,auth_version,auth_session_id,origin,created_at,expires_at)
-    SELECT browser.cookie_hash,browser.public_id::text,browser.admin_id,previous.auth_version,browser.session_id,
-      browser.origin,browser.issued_at,browser.expires_at FROM browser CROSS JOIN previous RETURNING token_hash
-  ) SELECT (SELECT count(*) FROM principal)=1 AND (SELECT count(*) FROM web)=1 AS expired`,
-    [staff.cookieHash,expiredHash,randomUUID(),randomUUID()]);
-  assert.equal(expiredProof.expired,true);
-  const expired=await call('auth/session',{cookie:expiredCookie,selector:'1'});
-  assert.equal(expired.body,noCookie.body);
+  // Advance only the test process's clock after real PostgreSQL materializes
+  // Home. The session's immutable rows and the database clock stay intact.
+  const realNow=Date.now;
+  let reachedHome=false;
+  const expiresDuringRead=intercept(pool,async(connection,text,params)=>{
+    const rows=await connection.unsafe(text,...params);
+    if(text.includes('WITH home_totals')){
+      reachedHome=true;
+      Date.now=()=>Date.parse(empty.data.expiresAt);
+    }
+    return rows;
+  });
+  try{
+    const expired=await call('auth/session',{cookie:staff.cookie,selector:'1',businessPool:expiresDuringRead});
+    assert.equal(reachedHome,true);
+    assert.equal(expired.status,200,expired.body);
+    assert.equal(expired.data.homeBootstrap,undefined);
+    assert.equal(expired.data.homeCollectionId,undefined);
+  }finally{Date.now=realNow;}
   console.log('PASS optional timeout, partial projection, wallet scope mismatch, current grant revocation, switched scope, logout and expiry do not expose Home');
 }
