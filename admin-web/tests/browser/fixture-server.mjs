@@ -5,6 +5,7 @@ import {analyzeCanonicalPaymentRows,parsePaymentAnalysisQuery}
 import {promises as fs} from 'node:fs';
 import path from 'node:path';
 import {versionedStatic} from '../../../deploy/platform-admin/src/static-recovery.js';
+import {createPaymentCommitFixture} from './payment-commit-fixture.mjs';
 import {createPhoneAccountFixture, fixtureAdminId} from './phone-account-fixture.mjs';
 import {fixtureMembers, fixtureMomoDetail, fixtureMomoRecord, fixtureOutgoingPayment, fixturePayment, fixtureSmsEvidenceId,
   readBuriMunsiPayments, readMemberList, readMomoList} from './operator-read-fixture.mjs';
@@ -77,6 +78,19 @@ const phoneAccounts = createPhoneAccountFixture({cookieSignIn: process.env.COLLE
   lifetime: process.env.COLLECT_FIXTURE_LONG_EXPIRY === '1' ? 40 * 24 * 60 * 60 * 1000 : 2 * 60 * 60 * 1000,
   json, readBody: readFixtureBody});
 
+// Only the pinned two-version browser rehearsal can enable this scoped
+// in-memory side effect. The generic fixture API remains read-only.
+const commitRehearsal = process.argv[4] === '--allocation-recovery';
+if (process.argv[4] && (!commitRehearsal || !process.argv[3] || !process.send || process.env.COLLECT_FIXTURE_SIGN_IN !== '1')) {
+  throw new Error('Allocation recovery requires the synthetic two-version sign-in fixture.');
+}
+const commitFixture = commitRehearsal ? createPaymentCommitFixture({
+  payment:fixturePayment, member:fixtureMembers.rows[0], json, readBody:readFixtureBody
+}) : null;
+if (commitFixture) process.on('message', command => {
+  if (command === 'allocation-evidence') process.send(commitFixture.evidence());
+});
+
 createServer(async (request, response) => {
   const url = new URL(request.url ?? '/', origin);
   if (url.origin !== origin) return json(response, 403, {error: {code: 'fixture_origin_denied'}});
@@ -91,11 +105,13 @@ createServer(async (request, response) => {
     if (url.pathname.startsWith('/api/admin/auth/') || /^\/api\/admin\/team(?:\/|$)/.test(url.pathname)) {
       return phoneAccounts.handle(request, response, url.pathname.slice('/api/admin/'.length), session);
     }
+    if (commitFixture && await commitFixture.handle(request,response,url,session,phoneAccounts.hasPermission(session,'payments.read'))) return;
     const paymentAnalysis = request.method === 'POST' && url.pathname === '/api/admin/burimunsi/payments/analysis';
     if (!paymentAnalysis && request.method !== 'GET') return json(response, 405, {error: {code: 'fixture_read_only'}});
     if (!session) return json(response, 401, {error: {code: 'fixture_unauthorized'}});
     const payments = phoneAccounts.hasPermission(session, 'payments.read'), sms = phoneAccounts.hasPermission(session, 'sms.read');
-    const visiblePayment = item => ({...item, sourceId: sms ? item.sourceId : null});
+    const visiblePayment = item => ({...(commitFixture && item.id === fixturePayment.id ? commitFixture.readPayment() : item),
+      sourceId: sms ? item.sourceId : null});
     if (url.pathname === '/api/admin/burimunsi/home') return json(response, 200, {
       paymentCount:payments ? 2 : 0, memberCount:1, unallocatedCount:payments ? 2 : 0,
       recentPayments:payments ? [fixturePayment, fixtureOutgoingPayment].map(visiblePayment) : [], asOf:fixturePayment.atRaw,

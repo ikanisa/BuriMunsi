@@ -8,12 +8,14 @@ import {join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium} from 'playwright-core';
 import {loadPackage, compare} from '../../../scripts/qa/r06_compare_admin_assets.mjs';
+import {fixtureMember, fixturePayment} from './operator-read-fixture.mjs';
 import {installLocalNetworkFence} from './local-network-fence.cjs';
 
 const [baseDir, basePin, nextDir, nextPin, mode, extra] = process.argv.slice(2);
-assert(baseDir && basePin && nextDir && nextPin && (!mode || mode === '--installed') && !extra,
-  'Provide two pinned synthetic Admin artifacts and optionally --installed.');
-const installedMode = mode === '--installed';
+assert(baseDir && basePin && nextDir && nextPin && (!mode || ['--installed','--allocation-recovery'].includes(mode)) && !extra,
+  'Provide two pinned synthetic Admin artifacts and optionally --installed or --allocation-recovery.');
+const installedMode = mode === '--installed' || mode === '--allocation-recovery';
+const allocationRecovery = mode === '--allocation-recovery';
 const [a, b] = await Promise.all([loadPackage(baseDir, basePin), loadPackage(nextDir, nextPin)]);
 for (const root of [baseDir, nextDir]) {
   const metadata = JSON.parse(await readFile(join(root, 'version.json')));
@@ -32,7 +34,7 @@ const port = Number(process.env.COLLECT_FIXTURE_PORT ?? 4175);
 assert(Number.isInteger(port) && port > 1023 && port < 65536);
 const origin = 'http://127.0.0.1:' + port;
 const server = spawn(process.execPath, [fileURLToPath(new URL('./fixture-server.mjs', import.meta.url)),
-  resolve(baseDir), resolve(nextDir)], {
+  resolve(baseDir), resolve(nextDir), ...(allocationRecovery ? [mode] : [])], {
   env: {COLLECT_FIXTURE_PORT: String(port), COLLECT_FIXTURE_SIGN_IN: '1'},
   stdio: ['ignore', 'pipe', 'inherit', 'ipc'],
 });
@@ -132,13 +134,72 @@ try {
     await getChunk(tab, toChunk, true);
     await getChunk(other, fromChunk, false);
   }
+  async function allocationEvidence() {
+    const reply = once(server, 'message', {signal:AbortSignal.timeout(5000)});
+    server.send('allocation-evidence');
+    return (await reply)[0];
+  }
+  async function openAllocation(page) {
+    await page.getByRole('link', {name:'Payments',exact:true}).click();
+    await page.getByRole('button', {name:fixturePayment.ftId,exact:true}).click();
+    await page.getByRole('heading', {name:'Payment details',exact:true}).waitFor();
+  }
+  async function submitInterruptedAllocation(page) {
+    await openAllocation(page);
+    const detailUrl = page.url();
+    const body = page.getByRole('region', {name:'Original allocation request'});
+    await page.getByRole('combobox', {name:'Member',exact:true}).selectOption(fixtureMember.id);
+    await page.getByRole('button', {name:'Allocate',exact:true}).click();
+    await body.getByText('Allocation was not confirmed. Check the original request before trying again.',{exact:true}).waitFor();
+    const code = (await body.locator('code').textContent())?.trim();
+    assert.match(code,/^[0-9a-f-]{36}$/);
+    const result = await allocationEvidence();
+    assert.deepEqual({writes:result.writes,effects:result.effects,lookupMatches:result.lookupMatches},
+      {writes:1,effects:1,lookupMatches:[]});
+    await page.getByRole('link', {name:'Home',exact:true}).click();
+    await page.getByRole('heading', {name:'Home',exact:true}).waitFor();
+    return {detailUrl, code};
+  }
+  async function checkInterruptedAllocation(page,{detailUrl,code}) {
+    assert.equal(new URL(detailUrl).origin,origin);
+    await page.goto(detailUrl,{waitUntil:'domcontentloaded'});
+    const body = page.getByRole('region',{name:'Original allocation request'});
+    const original = body.getByText(code,{exact:true});
+    await original.waitFor();
+    const check = body.getByRole('button',{name:'Check request',exact:true});
+    await check.click();
+    await body.getByText('The original request could not be checked. Keep its reference and check again.',{exact:true}).waitFor();
+    assert(await original.isVisible());
+    assert.equal(await body.getByRole('button',{name:'Retry allocation',exact:true}).count(),0);
+    await check.click();
+    await body.waitFor({state:'hidden'});
+    await page.getByRole('region',{name:'Payment details'}).getByText('Allocated',{exact:true}).waitFor();
+    await page.reload({waitUntil:'domcontentloaded'});
+    await page.getByRole('heading',{name:'Payment details',exact:true}).waitFor();
+    await page.getByRole('region',{name:'Payment details'}).getByText('Allocated',{exact:true}).waitFor();
+    assert.equal(await body.count(),0);
+    assert.equal(await page.getByRole('button',{name:'Allocate',exact:true}).count(),0);
+    const result = await allocationEvidence();
+    assert.deepEqual({writes:result.writes,effects:result.effects,lookupMatches:result.lookupMatches},
+      {writes:1,effects:1,lookupMatches:[true,true]});
+    await page.getByRole('link',{name:'Home',exact:true}).click();
+    await page.getByRole('heading',{name:'Home',exact:true}).waitFor();
+  }
   if (installedMode) {
     await launchHome(tab, false);
     await installedVersion(tab, a.version);
     const other = await context.newPage();
     await launchHome(other, true);
     await installedVersion(other, a.version);
+    const initialSession = (await context.cookies(origin)).find(c=>c.name==='collect_fixture_session');
+    const pending = allocationRecovery ? await submitInterruptedAllocation(tab) : null;
     await transition('candidate', a, b, oldChunk, newChunk, tab, other);
+    if (pending) {
+      assert(initialSession?.httpOnly);
+      assert((await context.cookies(origin)).find(c=>c.name==='collect_fixture_session')?.value === initialSession.value,
+        'The original authenticated session must survive the handoff');
+      await checkInterruptedAllocation(tab,pending);
+    }
     await transition('baseline', b, a, newChunk, oldChunk, tab, other);
     const apiOnline = await tab.evaluate(async () => {
       try {
@@ -160,7 +221,13 @@ try {
     await tab.getByRole('heading', {name:'Welcome to BuriMunsi'}).waitFor();
     assert(!(await context.cookies(origin)).some(c => c.name === 'collect_fixture_session'));
     assert.deepEqual(deny, []);
-    console.log(JSON.stringify({scope:'loopback installed workers, no financial writes',
+    if (pending) {
+      const final = await allocationEvidence();
+      assert.deepEqual({writes:final.writes,effects:final.effects,lookupMatches:final.lookupMatches},
+        {writes:1,effects:1,lookupMatches:[true,true]});
+    }
+    console.log(JSON.stringify({scope:allocationRecovery ? 'loopback installed workers with one in-memory synthetic allocation' : 'loopback installed workers, no financial writes',
+      ...(allocationRecovery ? {allocation_posts:1,synthetic_effects:1,original_request_reads:2,financial_ledger_verified:false} : {}),
       tested:['promotion waits for both tabs','rollback waits for both tabs','cache replacement both ways',
         'correct and retired chunk behavior','offline auth refused','cross-tab sign-out'], hosted_acceptance:false}));
   } else {
