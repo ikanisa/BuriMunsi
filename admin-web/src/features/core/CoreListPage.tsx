@@ -1,12 +1,13 @@
 import {AdminRequestError} from '../../api/client';
 import {Link} from 'react-router';
-import { useEffect, useMemo, useState, type ComponentProps } from 'react';
+import { useCallback, useMemo, useState, type ComponentProps } from 'react';
 import { CompactText, Button, Card, EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge } from '../../ui';
+import {useOperationRead} from '../operations/useOperationRead';
 import { containsControl, formatField, formatMoney, label, memberMobileNumber, parseCorePage, parseMemberRosterPage, paymentReference } from './contracts';
 import { coreListAction } from './coreRecordActions';
 import {MemberDirectoryActions, MemberDirectoryViews} from './MemberDirectory';
 import {baseSorts, listLocation, listStatuses, readFilters, type Filters} from './coreListFilters';
-import type { CoreArea, CorePage, DataRow, FeatureAccess, FinancialModel } from './types';
+import type { CoreArea, DataRow, FeatureAccess, FinancialModel } from './types';
 import { AREA_TITLES, CORE_PERMISSIONS } from './types';
 import './core.css';
 
@@ -14,6 +15,7 @@ type ListProps = FeatureAccess & { area: CoreArea; locationSearch?: string; allo
   simplePayments?: boolean; scopedMember?: boolean; memberActions?: ComponentProps<typeof MemberDirectoryActions> };
 
 const PAGE_SIZE = 25;
+const recordsUnavailable = 'The records could not be verified or the service is unavailable.';
 const descriptions: Record<CoreArea, string> = {
   groups: 'Explore group records and membership.', users: 'Find people with or without a group membership.',
   members: '', payees: 'Review group payment receivers.',
@@ -70,30 +72,22 @@ export function CoreListPage({ area, request, permissions, actorId, role, author
   const filter = useMemo(() => readFilters(locationSearch, area, financialModel, roster), [locationSearch, area, financialModel, roster]);
   const [draftState, setDraftState] = useState({ base: filter.search, value: filter.search });
   const draft = draftState.base === filter.search ? draftState.value : filter.search;
-  const [page, setPage] = useState<CorePage | null>(null);
-  const [pageScope, setPageScope] = useState('');
-  const currentScope = JSON.stringify([authorityKey, area, financialModel, roster, filter.search, filter.status, filter.sort, filter.page]);
-  const [state, setState] = useState<'loading' | 'ready' | 'error' | 'unavailable'>('loading');
-  const [retry, setRetry] = useState(0);
-  useEffect(() => {
-    if (!allowed) return;
-    const controller = new AbortController();
-    let active = true;
-    const offset = (filter.page - 1) * PAGE_SIZE;
-    const query = new URLSearchParams({ search: filter.search, status: filter.status, limit: String(PAGE_SIZE), offset: String(offset), sort: filter.sort, country: 'RW' });
-    if (roster) query.set('directory', 'roster');
-    request(`core/${area}?${query.toString()}`, { signal: controller.signal }).then(data => {
-      const parsed = roster ? parseMemberRosterPage(data, PAGE_SIZE, offset, filter.status)
-        : parseCorePage(data, area, financialModel, PAGE_SIZE, offset, filter.status);
-      if (active) { setPage(parsed); setPageScope(currentScope); setState('ready'); }
-    }).catch(error => {
-      if (active) {
-        setPageScope(currentScope);
-        setState(roster && error instanceof AdminRequestError && error.statusCode === 503 ? 'unavailable' : 'error');
-      }
+  const offset = (filter.page - 1) * PAGE_SIZE;
+  const query = new URLSearchParams({search: filter.search, status: filter.status, limit: String(PAGE_SIZE),
+    offset: String(offset), sort: filter.sort, country: 'RW'});
+  if (roster) query.set('directory', 'roster');
+  const path = `core/${area}?${query}`;
+  const load = useCallback(async (signal: AbortSignal) => {
+    const data = await request(path, {signal}).catch((error: unknown) => {
+      const temporarilyUnavailable = roster && error instanceof AdminRequestError && error.statusCode === 503;
+      throw new AdminRequestError(temporarilyUnavailable ? 'Members are temporarily unavailable. Try again.' : recordsUnavailable);
     });
-    return () => { active = false; controller.abort(); };
-  }, [allowed, area, request, actorId, authorityKey, financialModel, roster, filter.search, filter.status, filter.sort, filter.page, currentScope, retry]);
+    return roster ? parseMemberRosterPage(data, PAGE_SIZE, offset, filter.status)
+      : parseCorePage(data, area, financialModel, PAGE_SIZE, offset, filter.status);
+  }, [request, path, roster, area, financialModel, offset, filter.status]);
+  const {result, retry, refreshing} = useOperationRead(JSON.stringify([authorityKey, actorId, financialModel, path]), allowed, load,
+    {retainDuringRefresh: roster, invalidResponse: recordsUnavailable});
+  const page = result?.status === 'success' ? result.value : null;
 
   const update = (changes: Partial<Filters>) => navigate(listLocation(area, { ...filter, ...changes }, paymentsWorkspace));
   const tableColumns = columns(area, financialModel).filter(column => !simplePayments || column.label !== 'Contributed');
@@ -101,7 +95,9 @@ export function CoreListPage({ area, request, permissions, actorId, role, author
   const title = memberDirectory ? 'Members' : AREA_TITLES[area];
   const action = coreListAction({area, role, permissions, financialModel, allowed, allowMutations});
   return <>
-    {!paymentsWorkspace && <PageHeader title={title} subtitle={descriptions[area]} actions={roster ? memberActions && <MemberDirectoryActions {...memberActions} /> :
+    {!paymentsWorkspace && <PageHeader title={title} subtitle={descriptions[area]} actions={roster && allowed ? <>
+      <Button icon="refresh" aria-label="Refresh Members" title="Refresh Members" loading={!result || refreshing} onClick={retry} />
+      {memberActions && <MemberDirectoryActions {...memberActions} />}</> :
       action ? <Button type="button" onClick={() => navigate(action.path)}>{action.label}</Button> : undefined} />}
     {allowed && memberDirectory && !roster && <MemberDirectoryViews area={area} />}
     {!allowed ? <ErrorState title="Access unavailable" message="Your account does not have permission to view this page." /> : <Card>
@@ -122,10 +118,10 @@ export function CoreListPage({ area, request, permissions, actorId, role, author
           {baseSorts[area].flatMap(([field, name]) => [<option key={`${field}_asc`} value={`${field}_asc`}>{name} · ascending</option>, <option key={`${field}_desc`} value={`${field}_desc`}>{name} · descending</option>])}
         </select></label>
       </div>
-      {state === 'loading' || pageScope !== currentScope ? <LoadingState label={`Loading ${AREA_TITLES[area].toLowerCase()}`} layout="table" /> :
-       state === 'unavailable' || state === 'error' ? <ErrorState message={state === 'unavailable' ? 'Members are temporarily unavailable. Try again.' : 'The records could not be verified or the service is unavailable.'} onRetry={() => { setState('loading'); setRetry(value => value + 1); }} /> :
+      {!result ? <LoadingState label={`Loading ${AREA_TITLES[area].toLowerCase()}`} layout="table" /> :
+       result.status === 'error' ? <ErrorState message={result.message} onRetry={retry} /> :
        !page || page.rows.length === 0 ? <EmptyState title="No records found" description="Change your search or filters and try again." /> : <>
-        <div className="admin-table-wrap admin-content-enter" role="region" aria-label={`${AREA_TITLES[area]} records`} tabIndex={0}>
+        <div className="admin-table-wrap admin-content-enter" role="region" aria-label={`${AREA_TITLES[area]} records`} aria-busy={refreshing || undefined} tabIndex={0}>
           <table className={paymentsWorkspace ? "admin-table operations-receipt-table" : "admin-table"} role="table"><thead role="rowgroup"><tr role="row">{tableColumns.map(column => <th role="columnheader" scope="col" key={column.label}><CompactText cell>{column.label}</CompactText></th>)}<th role="columnheader" scope="col">Status</th>{!paymentsWorkspace && <th role="columnheader" scope="col">Open</th>}</tr></thead>
             <tbody role="rowgroup">{page.rows.map(row => {
               const href = recordLocation(area, row.id, listLocation(area, filter, paymentsWorkspace));

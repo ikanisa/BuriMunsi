@@ -2,7 +2,7 @@ import { webcrypto } from 'node:crypto';
 import {MemoryRouter} from 'react-router';
 import type {AdminUser} from '../../src/session/sessionResponses';
 import {MemberDirectoryActions} from '../../src/features/core/MemberDirectory';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import fixture from './canonical-core-fixtures.json';
 import relatedFixture from './group-detail-fixtures.json';
@@ -18,6 +18,103 @@ const base: Omit<FeatureAccess, 'request'> = {
   principalId: null, authorityKey: 'session-a', role: 'admin', financialModel: 'canonical_evidence_ledger',
   navigate: vi.fn(),
 };
+
+describe('Members refresh', () => {
+  const props = {...base, area:'members' as const, scopedMember:true, permissions:['users.read']};
+  function roster(name: string, total = 1) {
+    const member = {...fixture.members.rows[0], subtitle:name, display_name:name, membership_status:'active'};
+    return {...fixture.members, rows:[member], total};
+  }
+  function pending() {
+    let resolve!: (value: unknown) => void, reject!: (error: unknown) => void;
+    const promise = new Promise<unknown>((done, fail) => { resolve = done; reject = fail; });
+    return {promise, resolve, reject};
+  }
+  const refreshButton = () => screen.getByRole('button', {name:'Refresh Members'});
+
+  it('rereads the exact filtered page, retaining verified rows, controls and the URL until the fresh result arrives', async () => {
+    const fresh = pending(), navigate = vi.fn();
+    const request = vi.fn().mockResolvedValueOnce(roster('First member', 26)).mockReturnValueOnce(fresh.promise);
+    render(<CoreListPage {...props} role="staff" request={request} navigate={navigate}
+      locationSearch="?search=member&status=active&sort=public_id_asc&page=2" />);
+    await screen.findByText('First member');
+    const region = screen.getByRole('region', {name:'Members records'});
+    fireEvent.click(refreshButton());
+    expect(refreshButton()).toBeDisabled();
+    expect(refreshButton()).toHaveAttribute('aria-busy','true');
+    expect(region).toHaveAttribute('aria-busy','true');
+    expect(within(region).getByText('First member')).toBeVisible();
+    expect(screen.getByRole('textbox',{name:'Search Members'})).toHaveValue('member');
+    expect(screen.getByRole('combobox',{name:'Status'})).toHaveValue('active');
+    expect(screen.getByRole('combobox',{name:'Sort by'})).toHaveValue('public_id_asc');
+    expect(screen.getByText('Showing 26–26 of 26')).toBeVisible();
+    expect(screen.queryByText('Loading members')).not.toBeInTheDocument();
+    fireEvent.click(refreshButton());
+    expect(request.mock.calls.map(call=>call[0])).toEqual([
+      'core/members?search=member&status=active&limit=25&offset=25&sort=public_id_asc&country=RW&directory=roster',
+      'core/members?search=member&status=active&limit=25&offset=25&sort=public_id_asc&country=RW&directory=roster',
+    ]);
+    expect(navigate).not.toHaveBeenCalled();
+    await act(async () => fresh.resolve(roster('Updated member',26)));
+    expect(within(region).getByText('Updated member')).toBeVisible();
+    expect(refreshButton()).toBeEnabled();
+    expect(region).not.toHaveAttribute('aria-busy');
+  });
+
+  it('clears failed refresh data and recovers the same query through Retry', async () => {
+    const fresh = pending();
+    const request = vi.fn().mockResolvedValueOnce(roster('Original member')).mockReturnValueOnce(fresh.promise)
+      .mockResolvedValueOnce(roster('Recovered member'));
+    render(<CoreListPage {...props} request={request} locationSearch="?status=active" />);
+    await screen.findByText('Original member');
+    fireEvent.click(refreshButton());
+    await act(async () => fresh.reject(new AdminRequestError('Paused',{statusCode:503})));
+    expect(screen.getByRole('alert')).toHaveTextContent('Members are temporarily unavailable.');
+    expect(screen.queryByText('Original member')).not.toBeInTheDocument();
+    expect(refreshButton()).toBeEnabled();
+    expect(refreshButton()).not.toHaveAttribute('aria-busy');
+    fireEvent.click(screen.getByRole('button',{name:'Try again'}));
+    expect(await screen.findByText('Recovered member')).toBeVisible();
+    expect(new Set(request.mock.calls.map(call=>call[0])).size).toBe(1);
+  });
+
+  it.each([
+    ['session', {authorityKey:'session-b'}], ['actor', {actorId:'22222222-2222-4222-8222-222222222222'}],
+    ['search', {locationSearch:'?search=different'}], ['activity', {locationSearch:'?status=inactive'}],
+    ['sort', {locationSearch:'?sort=public_id_desc'}], ['page', {locationSearch:'?page=2'}],
+  ] as const)('retires the previous rows and its late refresh when the %s changes', async (_, change) => {
+    const old = pending(), next = pending();
+    const request = vi.fn().mockResolvedValueOnce(roster('Previous member')).mockReturnValueOnce(old.promise).mockReturnValueOnce(next.promise);
+    const {rerender} = render(<CoreListPage {...props} request={request} />);
+    await screen.findByText('Previous member');
+    fireEvent.click(refreshButton());
+    rerender(<CoreListPage {...props} {...change} request={request} />);
+    expect(screen.queryByText('Previous member')).not.toBeInTheDocument();
+    expect(screen.getByText('Loading members')).toBeInTheDocument();
+    await act(async () => old.resolve(roster('Superseded member')));
+    expect(screen.queryByText('Superseded member')).not.toBeInTheDocument();
+    expect(request.mock.calls[1][1].signal.aborted).toBe(true);
+    await act(async () => next.resolve({...fixture.members, rows:[], total:0}));
+    expect(screen.getByText('No records found')).toBeVisible();
+  });
+
+  it('removes the refresh control and pending rows when access is revoked', async () => {
+    const old = pending(), next = pending();
+    const request = vi.fn().mockResolvedValueOnce(roster('Restricted member')).mockReturnValueOnce(old.promise).mockReturnValueOnce(next.promise);
+    const {rerender} = render(<CoreListPage {...props} request={request} />);
+    await screen.findByText('Restricted member');
+    fireEvent.click(refreshButton());
+    rerender(<CoreListPage {...props} permissions={[]} request={request} />);
+    expect(screen.queryByRole('button',{name:'Refresh Members'})).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('permission');
+    await act(async () => old.resolve(roster('Discarded member')));
+    rerender(<CoreListPage {...props} request={request} />);
+    expect(screen.queryByText(/Restricted member|Discarded member/)).not.toBeInTheDocument();
+    expect(screen.getByText('Loading members')).toBeInTheDocument();
+    await act(async () => next.resolve(roster('Permitted member')));
+    expect(screen.getByText('Permitted member')).toBeVisible();
+  });
+});
 
 describe('core list access and authority', () => {
   it('does not request records without the required permission', () => {
