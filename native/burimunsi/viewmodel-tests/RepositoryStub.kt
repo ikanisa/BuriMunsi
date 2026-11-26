@@ -46,6 +46,7 @@ object Fixture{
  @Volatile var enrollResponseId:String?="member-1"
  @Volatile var enrollResponseGroup:String?=null
  @Volatile var memberReadFailure:ApiFailure?=null
+ var memberReads=0
  @Volatile var membersFailure:ApiFailure?=null
  @Volatile var membersCachedOverride:Boolean?=null
  @Volatile var membersSavedAtOverride:Long?=null
@@ -220,7 +221,7 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDis
  }
  fun payment(id:String):Payment{Fixture.paymentReads++;if(Fixture.paymentFailure)throw ApiFailure("connection_unavailable",0);provenance();return allocatedPayments[id]?:Fixture.payment(id)}
  internal fun paymentRecord(id:String)=RecordSnapshot(payment(id),lastReadFromCache,lastReadSavedAt)
- fun member(id:String):Member{Fixture.memberReadFailure?.let{throw it};provenance(Fixture.memberCached||Fixture.cached);return Fixture.member.copy(id=id)}
+ fun member(id:String):Member{Fixture.memberReads++;Fixture.memberReadFailure?.let{throw it};provenance(Fixture.memberCached||Fixture.cached);return Fixture.member.copy(id=id)}
  internal fun memberRecord(id:String):RecordSnapshot<Member>{
   val value=member(id)
   val cached=Fixture.memberCached||Fixture.cached

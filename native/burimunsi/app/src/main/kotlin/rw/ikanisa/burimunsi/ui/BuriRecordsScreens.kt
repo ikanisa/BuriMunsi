@@ -199,7 +199,7 @@ import rw.ikanisa.burimunsi.core.*
         item{ListingToolbar(m,onExport)}
         item{Text(s.members?.totalCount?.let{t("%1\$d members",it)}?:t("Unavailable"),color=BuriTheme.Muted)}
         val members=s.members?.items.orEmpty()
-        itemsIndexed(members,key={_,member->member.id}){index,member->MemberRow(member,index==0,index==members.lastIndex){m.navigate(Route.MEMBER,member.id)}}
+        itemsIndexed(members,key={_,member->member.id}){index,member->MemberRow(member,index==0,index==members.lastIndex){m.openMember(member)}}
         if(s.members?.items?.isEmpty()==true)item{Empty(t("No members"));Text(t("Try a name or MoMo number."),color=BuriTheme.Muted)}
         moreButton(s.members?.nextCursor,s.busy,m::more,autoEnabled=!s.offline&&s.error==null)
     }

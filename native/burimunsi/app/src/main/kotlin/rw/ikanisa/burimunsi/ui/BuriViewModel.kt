@@ -422,15 +422,16 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     private data class ViewScope(val owner:String,val collection:String,val session:Long)
     private var viewScope:ViewScope?=null
 
-    private fun <T> withRememberedViews(use: () -> T): T {
+    private fun <T> withRememberedViews(use: (sameScope:Boolean) -> T): T {
         val owner=state.operator?:throw ContractFailure("session_changed")
         return repo().withCurrentProfile(owner){collection,session->
             val scope=ViewScope(owner.id,collection,session)
-            if(viewScope!=scope){
+            val sameScope=viewScope==scope
+            if(!sameScope){
                 views.clear()
                 viewScope=scope
             }
-            use()
+            use(sameScope)
         }
     }
     private var initialDraft:Map<String,String> = emptyMap()
@@ -492,6 +493,14 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         Route.HOME,Route.PAYMENTS,Route.MEMBERS,Route.PAYMENT,Route.MEMBER->true
         else->false
     }
+    private fun recentStaffRecords(view:UiState):Boolean =
+        view.operator?.role==Role.STAFF&&Access.allows(view.operator,Capability.READ,clock())&&
+            !view.offline&&!view.pending&&!view.readbackRequired&&!view.draftDirty&&!changedRecordsPending&&
+            view.failure==DisplayFailure.NONE&&SnapshotFreshness.recent(view.savedAt,clock())
+
+    private fun reusableMemberDetail(view:UiState):Boolean =
+        view.route==Route.MEMBER&&view.routeId!=null&&view.member?.id==view.routeId&&
+            !view.offline&&!view.readbackRequired&&SnapshotFreshness.reusable(view.savedAt,clock())
 
     override fun listPosition(route: Route, id: String?, index: Int, offset: Int) {
         if (state.busy || screenGate != ScreenGate.OPEN || state.route != route || state.routeId != id ||
@@ -1005,7 +1014,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                 }else if(recent&&recentPassiveRecords())refreshRememberedReceiverStatus()
                 else refreshNow()
                 if(state.sheet!=null){
-                    if(panelAllowed(state.sheet))refreshPanelNow()
+                    if(panelAllowed(state.sheet))refreshPanelNow(mayReuseMember=true)
                     else{resetPanelInputs();state=state.copy(sheet=null,sheetId=null,raw=null,staff=null,audit=null,selectedStaff=null,selectedMember=null,draft=emptyMap(),draftDirty=false)}
                 }
                 sessionBootstrap.requireCurrent(grant)
@@ -1020,7 +1029,11 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             }finally{sessionChecking=false}
         }
     }
-    override fun navigate(route:Route,id:String?){
+    override fun navigate(route:Route,id:String?)=navigate(route,id,null)
+
+    override fun openMember(member:Member)=navigate(Route.MEMBER,member.id,member)
+
+    private fun navigate(route:Route,id:String?,selection:Member?){
         checkVisibleFreshness()
         if(screenGate!=ScreenGate.OPEN)return
         if(!Access.routeAllowed(state.operator,route,clock(),BuildConfig.IS_GATEWAY))return
@@ -1042,12 +1055,26 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         }
         clearRawDisclosure()
         if(state.draftDirty){afterDiscard={navigate(route,id)};state=state.copy(discardRequested=true);return}
+        val mayReuseStaffMember=selection!=null&&recentStaffRecords(state)
         work(kind=UiOperation.INITIAL_READ,quietRefresh=state.sheet==null&&recordsRoute(route)){
             val old=state.copy(busy=false,error=null)
-            val fresh=withRememberedViews{
+            val fresh=withRememberedViews{sameScope->
                 if(route!=state.route||id!=state.routeId)views.push(key(),smsDisclosure.redact(old).copy(gateway=null))
                 val remembered=views.remembered(key(route,id))
-                val snapshot=remembered?.takeIf{!old.pending&&views.isCurrent(it)&&reusable(it.value)}?.value
+                val prior=remembered?.takeIf{!old.pending&&views.isCurrent(it)&&reusable(it.value)}?.value
+                // Use the exact selected row of the visible directory, never a
+                // caller-supplied version or another scope's remembered detail.
+                val row=selection?.let{ selected ->
+                    old.members?.items?.singleOrNull{it.id==selected.id}?.takeIf{it==selected}
+                }
+                val snapshot=when{
+                    selection==null->prior
+                    row==null||prior?.member?.let{it!=row}==true->null
+                    sameScope&&mayReuseStaffMember&&old.route==Route.MEMBERS&&old.sheet==null&&
+                        old.memberListing==queryFor(ListingTarget.MEMBERS)&&recentStaffRecords(old)->
+                        UiState(operator=old.operator,route=Route.MEMBER,routeId=id,member=row,savedAt=old.savedAt)
+                    else->prior
+                }
                 resetPanelInputs()
                 state=(snapshot?:remembered?.value?.let{rememberedContext(it)}?:UiState(operator=state.operator,route=route,routeId=id))
                     .copy(operator=state.operator,busy=true,pending=state.pending,failure=DisplayFailure.NONE,sheet=null,sheetId=null,
@@ -1154,11 +1181,11 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         if(screenGate!=ScreenGate.OPEN){refreshSession();return}
         if(state.readbackRequired&&state.route==Route.SETTINGS){refreshSession();return}
         work(kind=UiOperation.REFRESH){
-            if(state.readbackRequired){refreshNow();if(state.sheet!=null)refreshPanelNow()}
+            if(state.readbackRequired){refreshNow();if(state.sheet!=null)refreshPanelNow(mayReuseMember=true)}
             else if(state.sheet!=null)refreshPanelNow() else refreshNow()
         }
     }
-    private suspend fun refreshPanelNow(){
+    private suspend fun refreshPanelNow(mayReuseMember:Boolean=false){
         if(!panelAllowed(state.sheet))throw ApiFailure("access_denied",403)
         when(state.sheet){
             Sheet.ALLOCATE->refreshAllocationMembers(state.allocationQuery)
@@ -1174,7 +1201,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                     if(state.sheetId!=null)state=state.copy(error="Reopen this staff account from the refreshed list before saving. Your draft has not been submitted.")
                 }
             }
-            Sheet.MEMBER_DETAILS->refreshNow()
+            Sheet.MEMBER_DETAILS->if(!mayReuseMember||!reusableMemberDetail(state))refreshNow()
             else->Unit // Read retry must never submit a form or change a passcode.
         }
     }
@@ -1191,7 +1218,9 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             pagedRestoration.withCurrent(request){}
             memberDirectory.first(listing, savedAnchor, allowRecentCache){journalKnowledge()==JournalKnowledge.CLEAR}
         }
-        pagedRestoration.withCurrent(request){state=memberDirectory.showFirst(it,listing,savedAnchor,read)}
+        pagedRestoration.withCurrent(request){current->
+            withRememberedViews{state=memberDirectory.showFirst(current,listing,savedAnchor,read)}
+        }
     }
 
     private suspend fun refreshRememberedReceiverStatus() {
@@ -1459,6 +1488,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         if(state.draftDirty&&sheet!=Sheet.REMOVE_STAFF){
             afterDiscard={openSheetWithSource(sheet,id,source)};state=state.copy(discardRequested=true);return
         }
+        val mayReuseStaffMember=sheet==Sheet.MEMBER_DETAILS&&recentStaffRecords(state)
         work(kind=UiOperation.INITIAL_READ){
             // The prototype replaces the current sheet; Close returns to the route.
             resetPanelInputs()
@@ -1476,7 +1506,10 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                 state=state.copy(selectedStaff=selected,draft=initialDraft)
             }
             if(sheet==Sheet.RAW)loadRawForCurrentPanel("Review original SMS for the selected payment or receipt")
-            else refreshPanelNow()
+            else {
+                val reuseMember=mayReuseStaffMember&&withRememberedViews{sameScope->sameScope&&recentStaffRecords(state)}
+                refreshPanelNow(mayReuseMember=reuseMember)
+            }
         }
     }
     override fun closeSheet(){
