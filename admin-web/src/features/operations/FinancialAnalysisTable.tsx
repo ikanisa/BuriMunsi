@@ -1,5 +1,5 @@
 import {Fragment, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode} from 'react';
-import {Button, Dialog, Icon} from '../../ui';
+import {CompactText, Button, Dialog, Icon} from '../../ui';
 import {validPaymentAmountBound} from '../../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
 import {useFocusScope} from '../../ui/useFocusScope';
 import {analyzeFinancialRows, categoryChoices, describeColumnFilter, emptyFilter, formatAnalysisCell, hasCriteria, initialColumnFilters, rangeError,
@@ -164,7 +164,7 @@ export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, i
             <div className="financial-analysis-heading">
               <button type="button" className="financial-analysis-sort" onClick={() => sortBy(column,next)}
                 aria-label={'Sort ' + column.label + (next === 'asc' ? ' ascending' : ' descending')}>
-                {column.label}<span className="financial-analysis-sort-mark" data-direction={selectedSort} aria-hidden="true">
+                <CompactText>{column.label}</CompactText><span className="financial-analysis-sort-mark" data-direction={selectedSort} aria-hidden="true">
                   {selectedSort === 'asc' ? '↑' : selectedSort === 'desc' ? '↓' : '↕'}</span>
               </button>
               <button type="button" className="financial-analysis-filter" data-filtered={filtered || undefined}
@@ -176,10 +176,13 @@ export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, i
         })}</tr></thead>
         <tbody>{visible.map(row => {
           const key = rowKey(row);
-          return <Fragment key={key}><tr>{columns.map(column => <td key={column.key}
+          return <Fragment key={key}><tr>{columns.map(column => {
+            const value = column.render ? column.render(row) : formatAnalysisCell(column,row);
+            const compact = typeof value === 'string' && (column.kind === 'text' || column.kind === 'category');
+            return <td key={column.key} data-kind={column.kind}
             className={column.align === 'end' || !column.align && column.kind === 'number' ? 'financial-analysis-number' : undefined}>
-            <div className="financial-analysis-value">{column.render ? column.render(row) : formatAnalysisCell(column,row)}</div>
-          </td>)}</tr>
+            <div className="financial-analysis-value">{compact ? <CompactText cell>{value}</CompactText> : value}</div>
+          </td>;})}</tr>
           {expanded?.key === key && <tr className="financial-analysis-detail-row"><td colSpan={columns.length}>
             <div className="financial-analysis-detail">{expanded.content}</div>
           </td></tr>}</Fragment>;

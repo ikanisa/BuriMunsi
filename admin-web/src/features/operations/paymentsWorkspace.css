@@ -1,4 +1,8 @@
 .payments-workspace { min-inline-size: 0; }
+.payment-exact-value { white-space: nowrap; font-variant-numeric: tabular-nums; }
+@media (max-width: 34rem) {
+  .operations-receipt-table td:has(> .payment-exact-value) { grid-column: 1 / -1; }
+}
 .payment-allocation-link { display: inline-flex; align-items: center; justify-content: center; min-inline-size: 44px; min-block-size: 44px; border-radius: 7px; text-decoration: none; }
 .payment-allocation-link:hover .admin-badge { outline: 1px solid currentColor; }
 .payment-term-icon { position: relative; display: inline-flex; align-items: center; vertical-align: middle; }

@@ -47,7 +47,7 @@ export function AdminNavigation({sidebar, navigation, pathname, selected, status
         const active = selected?.path === item.path;
         return <a key={item.path} className={active ? 'admin-nav-link admin-nav-link--active' : 'admin-nav-link'}
           href={`#${item.path}`} aria-current={active ? (pathname === item.path ? 'page' : 'location') : undefined} onClick={onClose}>
-          <Icon name={item.icon ?? 'file'} /><span>{item.label}</span>
+          <Icon name={item.icon ?? 'file'} /><span className="admin-compact-text" title={item.label}>{item.label}</span>
         </a>;
       })}
       {navigation.length === 0 && <p className="admin-nav-empty">No daily sections available.</p>}

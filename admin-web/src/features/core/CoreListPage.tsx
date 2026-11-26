@@ -1,7 +1,7 @@
 import {AdminRequestError} from '../../api/client';
 import {Link} from 'react-router';
 import { useEffect, useMemo, useState, type ComponentProps } from 'react';
-import { Button, Card, EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge } from '../../ui';
+import { CompactText, Button, Card, EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge } from '../../ui';
 import { containsControl, formatField, formatMoney, label, memberMobileNumber, parseCorePage, parseMemberRosterPage, paymentReference } from './contracts';
 import { coreListAction } from './coreRecordActions';
 import {MemberDirectoryActions, MemberDirectoryViews} from './MemberDirectory';
@@ -32,31 +32,31 @@ function tone(status: string): 'success' | 'warning' | 'danger' | 'info' | 'neut
   return 'neutral';
 }
 
-function columns(area: CoreArea, model: FinancialModel): { label: string; value: (row: DataRow) => string }[] {
+function columns(area: CoreArea, model: FinancialModel): { label: string; compact?: boolean; value: (row: DataRow) => string }[] {
   switch (area) {
     case 'groups': return [
-      { label: 'Group', value: row => row.title }, { label: 'Slug', value: row => formatField('slug', row.slug) },
+      { label: 'Group', compact: true, value: row => row.title }, { label: 'Slug', compact: true, value: row => formatField('slug', row.slug) },
       { label: 'Members', value: row => formatField('active_members', row.active_members) },
       { label: 'Type', value: row => label(String(row.collection_type)) }, { label: 'Visibility', value: row => label(String(row.visibility)) },
     ];
     case 'users': case 'members': return [
-      { label: 'Collect ID', value: row => row.title }, { label: 'Name on MoMo', value: row => row.display_name_recorded ? String(row.display_name) : 'Not recorded' },
+      { label: 'Collect ID', value: row => row.title }, { label: 'Name on MoMo', compact: true, value: row => row.display_name_recorded ? String(row.display_name) : 'Not recorded' },
       { label: 'Type', value: row => formatField('member_type', row.member_type) },
       area === 'members' ? {label: 'Mobile number', value: row => formatField('mobile_number', memberMobileNumber(row))} :
         {label: 'MoMo number / code', value: row => formatField('momo_number_or_code', row.momo_number ?? row.momo_pay_code)},
       { label: 'Contributed', value: row => formatMoney(row.total_contributed_rwf) },
     ];
     case 'payees': return [
-      { label: 'Payee', value: row => row.title }, { label: 'Group', value: row => String(row.group_name) },
+      { label: 'Payee', compact: true, value: row => row.title }, { label: 'Group', compact: true, value: row => String(row.group_name) },
       { label: 'Provider', value: row => formatField('network', row.network) }, { label: 'MoMo number / code', value: row => row.amount },
     ];
     case 'transactions': return [
-      { label: 'Reference', value: row => model === 'canonical_evidence_ledger' ? paymentReference(row) : row.title }, { label: 'Group', value: row => String(row.group_name) },
-      { label: 'Receiver', value: row => formatField('payee_label', row.payee_label) },
+      { label: 'Reference', compact: true, value: row => model === 'canonical_evidence_ledger' ? paymentReference(row) : row.title }, { label: 'Group', compact: true, value: row => String(row.group_name) },
+      { label: 'Receiver', compact: true, value: row => formatField('payee_label', row.payee_label) },
       { label: 'Amount', value: row => formatMoney(row.amount_rwf) }, { label: 'Allocated', value: row => formatMoney(row.allocated_amount_rwf) },
     ];
     case 'ledgers': return [
-      { label: 'Record', value: row => row.title }, { label: 'Group', value: row => String(row.group_name) },
+      { label: 'Record', compact: true, value: row => row.title }, { label: 'Group', compact: true, value: row => String(row.group_name) },
       { label: 'Amount', value: row => row.signed_amount_rwf !== undefined ? formatMoney(row.signed_amount_rwf, true) : formatMoney(row.debit_rwf) },
       { label: 'Recorded', value: row => formatField('created_at', row.created_at) },
     ];
@@ -126,12 +126,16 @@ export function CoreListPage({ area, request, permissions, actorId, role, author
        state === 'unavailable' || state === 'error' ? <ErrorState message={state === 'unavailable' ? 'Members are temporarily unavailable. Try again.' : 'The records could not be verified or the service is unavailable.'} onRetry={() => { setState('loading'); setRetry(value => value + 1); }} /> :
        !page || page.rows.length === 0 ? <EmptyState title="No records found" description="Change your search or filters and try again." /> : <>
         <div className="admin-table-wrap" role="region" aria-label={`${AREA_TITLES[area]} records`} tabIndex={0}>
-          <table className={paymentsWorkspace ? "admin-table operations-receipt-table" : "admin-table"} role="table"><thead role="rowgroup"><tr role="row">{tableColumns.map(column => <th role="columnheader" scope="col" key={column.label}>{column.label}</th>)}<th role="columnheader" scope="col">Status</th>{!paymentsWorkspace && <th role="columnheader" scope="col">Open</th>}</tr></thead>
+          <table className={paymentsWorkspace ? "admin-table operations-receipt-table" : "admin-table"} role="table"><thead role="rowgroup"><tr role="row">{tableColumns.map(column => <th role="columnheader" scope="col" key={column.label}><CompactText cell>{column.label}</CompactText></th>)}<th role="columnheader" scope="col">Status</th>{!paymentsWorkspace && <th role="columnheader" scope="col">Open</th>}</tr></thead>
             <tbody role="rowgroup">{page.rows.map(row => {
               const href = recordLocation(area, row.id, listLocation(area, filter, paymentsWorkspace));
               const status = roster ? String(row.membership_status) : row.status;
-              return <tr key={row.id} role="row">{tableColumns.map((column, index) => <td role="cell" key={column.label}>{paymentsWorkspace && <span className="operations-receipt-field" aria-hidden="true">{column.label}</span>}{paymentsWorkspace && index === 0 ?
-                <Link className="operations-link payments-record-link" to={href}>{column.value(row)}</Link> : column.value(row)}</td>)}
+              return <tr key={row.id} role="row">{tableColumns.map((column, index) => {
+                const value = column.value(row);
+                const text = column.compact ? <CompactText cell>{value}</CompactText> : value;
+                return <td role="cell" key={column.label}>{paymentsWorkspace && <span className="operations-receipt-field" aria-hidden="true">{column.label}</span>}{paymentsWorkspace && index === 0 ?
+                <Link className="operations-link payments-record-link" to={href}>{text}</Link> : text}</td>;
+              })}
                 <td role="cell">{paymentsWorkspace && <span className="operations-receipt-field" aria-hidden="true">Status</span>}<StatusBadge tone={tone(status)}>{label(status)}</StatusBadge></td>{!paymentsWorkspace &&
                   <td role="cell"><Button type="button" onClick={() => navigate(href)} aria-label={`View ${area === 'transactions' && financialModel === 'canonical_evidence_ledger' ? paymentReference(row) : row.title}`}>View</Button></td>}
               </tr>;

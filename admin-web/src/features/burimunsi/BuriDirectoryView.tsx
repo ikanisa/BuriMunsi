@@ -1,4 +1,4 @@
-import {Card, StatusBadge} from '../../ui';
+import {CompactText, Card, StatusBadge} from '../../ui';
 import {directoryOperatorRows, type BuriDirectory, type BuriProvisioning} from './contracts';
 import {BURI_CAPABILITIES} from './operatorPreparation';
 
@@ -21,8 +21,8 @@ export function BuriDirectoryView({directory, provisioning, provisioningError, p
           <table className="admin-table">
             <thead><tr><th scope="col">Account</th><th scope="col">{phoneAccounts ? 'Role' : 'Collect role'}</th><th scope="col">BuriMunsi access</th><th scope="col">{phoneAccounts ? 'Allowed actions' : 'Capabilities'}</th></tr></thead>
             <tbody>{operators.map(({operator, approval}) => <tr key={operator.principalId}>
-              <td>{phoneAccounts ? <>{operator.displayName || approval?.phone || operator.principalId}{operator.displayName && approval?.phone && <><br />{approval.phone}</>}</> :
-                <>{operator.displayName || operator.email}<br />{operator.email}</>}</td>
+              <td>{phoneAccounts ? <><CompactText cell>{operator.displayName || approval?.phone || operator.principalId}</CompactText>{operator.displayName && approval?.phone}</> :
+                <><CompactText cell>{operator.displayName || operator.email}</CompactText>{operator.email}</>}</td>
               <td>{phoneAccounts ? (approval ? (approval.role === 'admin' ? 'Admin' : 'Staff') : 'Unassigned') : operator.role}</td>
               <td>{approval && phoneAccounts ? <><StatusBadge tone={approval.active ? 'success' : 'warning'}>{approval.active ? 'Enabled' : 'Disabled'}</StatusBadge>
                 <br />{accountStatuses[approval.sharedStatus]}</> : approval ? <>
@@ -41,11 +41,11 @@ export function BuriDirectoryView({directory, provisioning, provisioningError, p
           <p>Recorded scope: {provisioning.scopeEnabled ? 'enabled' : 'not enabled'} · {provisioning.configured ? 'configured' : 'not configured'}.</p>}
         {provisioning.accounts.length === 0 ? <p>No approved native accounts are recorded.</p> : <>
           <h3>Accounts</h3>
-          <ul>{provisioning.accounts.map(account => <li key={account.principalId}>{account.name || account.phone} · {account.role} · {account.approved ? 'approval current' : 'approval not current'} · {account.active && !account.removed ? 'recorded active' : 'not active'}</li>)}</ul>
+          <ul>{provisioning.accounts.map(account => <li key={account.principalId}><span className="admin-compact-text admin-cell-text admin-inline-name" title={account.name || account.phone}>{account.name || account.phone}</span> · {account.role} · {account.approved ? 'approval current' : 'approval not current'} · {account.active && !account.removed ? 'recorded active' : 'not active'}</li>)}</ul>
         </>}
         {provisioning.grants.length === 0 ? <p>No installation grants are recorded.</p> : <>
           <h3>Installation grants</h3>
-          <ul>{provisioning.grants.map(grant => <li key={grant.id}>{grant.installationId} · {phoneAccounts ? (grant.profile === 'internal_receiver' ? 'Receiving phone' : 'Staff') : grant.profile} · {grant.active ? 'recorded active' : 'recorded inactive'} · version {grant.version}</li>)}</ul>
+          <ul>{provisioning.grants.map(grant => <li key={grant.id}><span className="admin-compact-text admin-cell-text admin-inline-name" title={grant.installationId}>{grant.installationId}</span> · {phoneAccounts ? (grant.profile === 'internal_receiver' ? 'Receiving phone' : 'Staff') : grant.profile} · {grant.active ? 'recorded active' : 'recorded inactive'} · version {grant.version}</li>)}</ul>
         </>}
         {!phoneAccounts && <p>A recorded grant does not confirm physical device possession, carrier delivery or payment settlement.</p>}
       </>}

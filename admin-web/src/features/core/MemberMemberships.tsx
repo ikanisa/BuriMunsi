@@ -1,6 +1,6 @@
 import {useCallback} from 'react';
 import {Link} from 'react-router';
-import {Button, Card} from '../../ui';
+import {CompactText, Button, Card} from '../../ui';
 import {useOperationRead} from '../operations/useOperationRead';
 import {label} from './contracts';
 import {canReadMemberStatement, memberStatementPath, profileMembership, readMemberBalanceProjection, readMemberStatementPage,
@@ -54,7 +54,7 @@ export function MemberMemberships(props: MembershipProps) {
         <th scope="col">Group</th>{membership.memberName && <th scope="col">Name on MoMo</th>}
         <th scope="col">Role</th><th scope="col">Status</th>{financial && <th scope="col">Total balance</th>}</tr></thead>
         <tbody><tr><td>{membership.recordNumber ?? 'Unavailable'}</td>{membership.collectId && <td>{membership.collectId}</td>}
-          <td>{membership.groupTitle ?? 'Not recorded'}</td>{membership.memberName && <td>{membership.memberName}</td>}
+          <td><CompactText cell>{membership.groupTitle ?? 'Not recorded'}</CompactText></td>{membership.memberName && <td><CompactText cell>{membership.memberName}</CompactText></td>}
           <td>{membership.role ? label(membership.role) : 'Not recorded'}</td><td>{membership.status ? label(membership.status) : 'Not recorded'}</td>
           {financial && <td><MembershipBalance {...props} membership={membership} /></td>}</tr></tbody>
       </table></div>}

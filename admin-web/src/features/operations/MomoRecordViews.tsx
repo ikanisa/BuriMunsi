@@ -1,5 +1,5 @@
 import type {ReactNode} from 'react';
-import {Button, EmptyState, ErrorState, LoadingState} from '../../ui';
+import {Button, CompactText, EmptyState, ErrorState, LoadingState} from '../../ui';
 import type {Page} from './contracts';
 import type {OperationReadState} from './useOperationRead';
 
@@ -18,7 +18,7 @@ export function MomoPager<T>({page, change}: {page: Page<T>; change: (offset: nu
 export function MomoTable({name, headings, children, compact = false}: {name: string; headings: string[]; children: ReactNode; compact?: boolean}) {
   return <div className="admin-table-wrap" role="region" aria-label={name} tabIndex={0}>
     <table className={compact ? 'admin-table operations-receipt-table' : 'admin-table'} role="table">
-      <thead role="rowgroup"><tr role="row">{headings.map((heading) => <th role="columnheader" scope="col" key={heading}>{heading}</th>)}</tr></thead>
+      <thead role="rowgroup"><tr role="row">{headings.map((heading) => <th role="columnheader" scope="col" key={heading}><CompactText cell>{heading}</CompactText></th>)}</tr></thead>
       <tbody role="rowgroup">{children}</tbody>
     </table>
   </div>;

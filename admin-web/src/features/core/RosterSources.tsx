@@ -1,7 +1,7 @@
 import {flushSync} from 'react-dom';
 import {useCallback, useEffect, useRef, useState, type FormEvent, type RefObject} from 'react';
 import {AdminRequestError, type AdminRequest} from '../../api/contracts';
-import {Button, ErrorState, Icon, LoadingState} from '../../ui';
+import {CompactText, Button, ErrorState, Icon, LoadingState} from '../../ui';
 import {useOperationRead} from '../operations/useOperationRead';
 import {disclosureVersion, IMPORT_PATH, readRosterPreview, readSuggestions, SUGGESTIONS_PATH,
   type PreviewRow, type RosterCandidate, type SourceKind} from './memberRoster';
@@ -52,7 +52,7 @@ export function RosterSuggestions({request, group, onSelect, onBack}: {
         ? ()=>setSearch({q:search.q,cursor:'',revision:''}) : retry} />
       : <>{!result.value.items.length && <p role="status">No suggested payers found.</p>}
         <ul className="members-roster-list">{result.value.items.map(item=><li key={item.candidateId}>
-          <button className="members-enrollment-option" onClick={()=>onSelect(item)}><span>{item.momoName}</span>
+          <button className="members-enrollment-option" onClick={()=>onSelect(item)}><CompactText>{item.momoName}</CompactText>
             <span>···{item.last3}</span><Icon name="chevron" /></button></li>)}</ul>
         {!!result.value.nextCursor && <Button onClick={()=>setSearch({q:search.q, cursor:result.value.nextCursor!, revision:result.value.revision})}>More suggestions</Button>}
       </>}
@@ -112,7 +112,7 @@ export function RosterUpload({mode, fileInput, request, isCurrent, onPreview, on
         accept={mode === 'file' ? '.csv,.xlsx,.pdf,text/csv,application/pdf,' + workbookMime + ',image/jpeg,image/png,image/webp' : mode === 'camera' ? 'image/*' : 'image/jpeg,image/png,image/webp'}
         onChange={e=>choose(e.target.files?.[0])} aria-describedby="roster-file-hint" />
       <p id="roster-file-hint">{mode === 'file' ? 'CSV, Excel, PDF or photo. For a spreadsheet, include Name and Phone columns.' : 'Use a clear photo showing the names and full mobile numbers.'}</p></div>
-    {selection && <div><strong>{selection.file.name}</strong>
+    {selection && <div><strong className="admin-compact-text" title={selection.file.name}>{selection.file.name}</strong>
       {needsOcr && <p id="roster-disclosure">Sending this file to OpenAI permits text extraction for this preview. You can review and edit every row before registering members.</p>}
     </div>}
     {error && <p role="alert">{error}</p>}

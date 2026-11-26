@@ -3,7 +3,7 @@ import {useCallback, useState, type FormEvent} from 'react';
 import {Link, useSearchParams} from 'react-router';
 import {useSession} from '../../session/SessionProvider';
 import {canDisplaySessionRecords, canReadSmsEvidence} from '../../session/sessionContext';
-import {Button, Card, StatusBadge} from '../../ui';
+import {CompactText, Button, Card, StatusBadge} from '../../ui';
 import {parseSmsPage, type Page, type SmsReceipt} from './contracts';
 import {formatStatus, formatTime} from './OperationsRecords';
 import {MomoCell, MomoPager, MomoResult, MomoTable, momoReadOptions} from './MomoRecordViews';
@@ -45,7 +45,7 @@ export function UploadedSms() {
     <p className="operations-note">Updates automatically while this page is visible. An upload does not confirm payment or settlement.</p>
     <MomoResult result={result} retry={retry} empty={(page: Page<SmsReceipt>) => page.rows.length === 0 && page.offset === 0}>{(page) => <>{page.rows.length > 0 && <MomoTable name="Incoming mobile-money SMS" headings={['App user', 'Member ID', 'SMS time · Kigali', 'Uploaded · Kigali', 'Status']} compact>
       {page.rows.map((row) => <tr key={row.id} role="row">
-        <MomoCell label="App user"><Link className="operations-link" to={`/admin/sms-receipts/capture/${row.id}?${new URLSearchParams({returnTo:pathname})}`}>{row.display_name ?? 'App user'}</Link></MomoCell>
+        <MomoCell label="App user"><Link className="operations-link" to={`/admin/sms-receipts/capture/${row.id}?${new URLSearchParams({returnTo:pathname})}`}><CompactText cell>{row.display_name ?? 'App user'}</CompactText></Link></MomoCell>
         <MomoCell label="Member ID">{row.public_id ?? 'Not recorded'}</MomoCell>
         <MomoCell label="SMS time · Kigali">{formatTime(row.received_at)}</MomoCell>
         <MomoCell label="Uploaded · Kigali">{formatTime(row.created_at)}</MomoCell>

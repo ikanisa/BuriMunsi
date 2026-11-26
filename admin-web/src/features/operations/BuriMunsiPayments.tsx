@@ -3,7 +3,7 @@ import {Link, useLocation, useNavigate, useSearchParams} from 'react-router';
 import {AdminRequestError} from '../../api/client';
 import {useSession} from '../../session/SessionProvider';
 import {canDisplaySessionRecords, canReadSmsEvidence} from '../../session/sessionContext';
-import {Button, Card, ErrorState, LoadingState, PageHeader} from '../../ui';
+import {CompactText, Button, Card, ErrorState, LoadingState, PageHeader} from '../../ui';
 import {Facts} from './OperationsRecords';
 import {ReceiverSmsPanel} from './ReceiverSmsPanel';
 import {CanonicalPaymentEvidence} from './CanonicalPaymentEvidence';
@@ -114,7 +114,7 @@ function ScopedPaymentRecords() {
     setParams(next);
   }
   function rowButton(row: BuriMunsiPayment, name: string) {
-    return <button type="button" className="operations-link" aria-expanded={selected === row.id} onClick={() => show(row.id)}>{name}</button>;
+    return <button type="button" className="operations-link" aria-expanded={selected === row.id} onClick={() => show(row.id)}><CompactText cell>{name}</CompactText></button>;
   }
   const columns: FinancialColumn<BuriMunsiPayment>[] = [
     {key:'reference',label:'FT reference',kind:'text',value:r=>recordedText(r.ftId),render:r=>rowButton(r, recordedText(r.ftId) ?? 'View payment')},

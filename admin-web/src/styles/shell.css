@@ -6,7 +6,6 @@
 .admin-nav-link { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 9px 12px; border-radius: 10px; color: var(--admin-muted); font-weight: 550; }
 .admin-nav-link:hover { background: var(--admin-surface-soft); color: var(--admin-ink); }
 .admin-nav-link--active { background: var(--admin-accent-surface); color: var(--admin-accent-ink); font-weight: 700; }
-.admin-nav-link span { min-width: 0; overflow-wrap: anywhere; }
 .admin-nav-empty { padding: 0 12px; color: var(--admin-muted); }
 .admin-sidebar-footer { border-top: 1px solid var(--admin-line); padding: 16px 20px; color: var(--admin-muted); font-size: .75rem; }
 .admin-sidebar-close, .admin-menu-button { display: none; }
@@ -21,7 +20,7 @@
 .admin-avatar { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; background: var(--admin-accent-surface); color: var(--admin-accent-ink); font-weight: 750; }
 .admin-operator-role { color: var(--admin-muted); font-size: .75rem; font-weight: 700; }
 .admin-profile-menu { display: flex; flex-direction: column; gap: 6px; width: min(280px, calc(100vw - 28px)); max-height: calc(100dvh - 80px); overflow-y: auto; position: absolute; right: 0; top: calc(100% + 8px); padding: 14px; overflow-wrap: anywhere; background: var(--admin-surface); border: 1px solid var(--admin-line); border-radius: 12px; box-shadow: var(--admin-shadow); }
-.admin-profile-menu span { color: var(--admin-muted); font-size: .75rem; }
+.admin-profile-menu > span { color: var(--admin-muted); font-size: .75rem; }
 .admin-profile-menu button, .admin-profile-destination, .admin-profile-more summary { display: flex; align-items: center; gap: 8px; min-height: 42px; margin-top: 4px; padding: 8px; border: 0; border-radius: 8px; color: var(--admin-ink); background: transparent; text-align: left; }
 .admin-profile-menu button:hover, .admin-profile-destination:hover, .admin-profile-more summary:hover { background: var(--admin-surface-soft); }
 .admin-content { width: 100%; max-width: 1640px; margin: 0 auto; padding: 31px 38px 72px; }

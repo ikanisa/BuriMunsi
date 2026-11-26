@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode} from 'react';
 import {AdminRequestError} from '../api/client';
 import {useOperationRead} from '../features/operations/useOperationRead';
-import {Button, Card, EmptyState, ErrorState, Field, LoadingState, PageHeader, StatusBadge} from '../ui';
+import {CompactText, Button, Card, EmptyState, ErrorState, Field, LoadingState, PageHeader, StatusBadge} from '../ui';
 import {hasScopedAdminAuthority} from './ownerIdentity';
 import {confirmTeamReceipt, parsePhoneTeam, phoneTeamRoles, prepareTeamAccount,
   type PhoneTeam, type PhoneTeamMember, type TeamChange} from './phoneTeam';
@@ -77,7 +77,7 @@ function PhoneTeamDirectory({team, canManage, reload}: {team: PhoneTeam; canMana
       {canManage && !creating && !editing && <Button onClick={() => {cancel(); setCreating(true);}}>Create account</Button>}
       {team.members.length === 0 ? <EmptyState title="No team members" /> : <div className="admin-table-wrap"><table className="admin-table">
         <thead><tr><th>Account</th><th>Mobile number</th><th>Role</th><th>Access</th>{canManage && <th>Actions</th>}</tr></thead>
-        <tbody>{team.members.map(member => <tr key={member.id}><td>{member.displayName}</td><td>{member.phone}</td>
+        <tbody>{team.members.map(member => <tr key={member.id}><td><CompactText cell>{member.displayName}</CompactText></td><td>{member.phone}</td>
           <td>{phoneTeamRoles[member.role]}</td><td><StatusBadge tone={member.active ? 'success' : 'neutral'}>{member.active ? 'Active' : 'Disabled'}</StatusBadge></td>
           {canManage && <td>{member.role === 'staff' && member.id !== team.currentAccountId && <Button aria-label={`Manage ${member.displayName}`} disabled={creating || !!editing} onClick={() => {cancel(); setEditing(member);}}>Manage access</Button>}</td>}</tr>)}</tbody>
       </table></div>}

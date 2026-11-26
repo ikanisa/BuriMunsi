@@ -1,5 +1,5 @@
 import {useCallback, useState} from 'react';
-import {Button, Card, EmptyState, ErrorState, LoadingState, PageHeader} from '../../ui';
+import {CompactText, Button, Card, EmptyState, ErrorState, LoadingState, PageHeader} from '../../ui';
 import {paymentTime} from '../operations/canonicalPaymentAnalysis';
 import {useOperationRead} from '../operations/useOperationRead';
 import {canReadMemberStatement, memberStatementPageSize, readMemberStatement, readMemberStatementPage,
@@ -52,7 +52,7 @@ export function MemberStatementPage({id, expectedGroup, returnTo, actorId, autho
               const formatted = paymentTime(payment.atRaw);
               return <tr key={payment.id}><td>{formatted}
                 {payment.atRaw?.trim() && formatted !== payment.atRaw && <small className="statement-source-time">{payment.atRaw}</small>}</td>
-                <td>{payment.ftId?.trim() ? payment.ftId : 'Not recorded'}</td>
+                <td><CompactText cell>{payment.ftId?.trim() ? payment.ftId : 'Not recorded'}</CompactText></td>
                 <td>{payment.direction === 'outgoing' ? statementAmount(payment.amountRwf) : '—'}</td>
                 <td>{payment.direction === 'incoming' ? statementAmount(payment.amountRwf) : '—'}</td>
                 <td>{statementAmount(payment.balanceRwf)}</td></tr>;

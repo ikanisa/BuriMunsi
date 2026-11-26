@@ -109,7 +109,7 @@ export function MemberRosterImport({initialMode, fileInput, group, request, iden
       <h2>Review extracted members</h2>
       {!drafts.length ? <p role="status">No member rows were found in this file.</p>
         : <ul aria-label="Roster rows" className="members-roster-list">{drafts.map(row=><li key={row.row}>
-          <div><strong>{row.name || 'Name missing'}</strong><span>{row.phone || 'Number missing'} · Row {row.row}</span>
+          <div><strong className="admin-compact-text" title={row.name || undefined}>{row.name || 'Name missing'}</strong><span>{row.phone || 'Number missing'} · Row {row.row}</span>
             <span>{row.verified ? 'Verified' : rowStatus[row.status]}</span>
             {row.issue && !row.verified && issueLabels[row.issue] && <small>{issueLabels[row.issue]}</small>}
           </div><div className="members-roster-row-actions"><Button disabled={!!working} onClick={()=>edit(row)}

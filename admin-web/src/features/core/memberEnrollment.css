@@ -61,7 +61,7 @@
   border-block-end: 1px solid var(--admin-line);
 }
 .members-review dd { text-align: end; }
-.members-roster-list > li > div:first-child { display: grid; gap: .15rem; }
+.members-roster-list > li > div:first-child { display: grid; min-inline-size: 0; max-inline-size: 100%; gap: .15rem; }
 .members-roster-list > li > .members-enrollment-option { border: 0; }
 .members-roster-file { max-inline-size: 100%; }
 .members-journey > button { justify-self: start; }

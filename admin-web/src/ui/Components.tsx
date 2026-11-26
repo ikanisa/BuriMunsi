@@ -7,10 +7,14 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   loading?: boolean;
 }
 
+export function CompactText({children, cell = false}: {children: string; cell?: boolean}) {
+  return <span className={cell ? 'admin-compact-text admin-cell-text' : 'admin-compact-text'} title={children}>{children}</span>;
+}
+
 export function Button({ variant = 'secondary', icon, loading = false, children, className = '', type = 'button', disabled, ...props }: ButtonProps) {
   return <button {...props} type={type} className={`admin-btn admin-btn--${variant} ${className}`} disabled={disabled || loading} aria-busy={loading || undefined}>
     {loading ? <span className="admin-spinner" aria-hidden="true" /> : icon ? <Icon name={icon} /> : null}
-    {children}
+    {typeof children === 'string' ? <CompactText>{children}</CompactText> : children}
   </button>;
 }
 
@@ -27,7 +31,7 @@ export interface PageHeaderProps {
 
 export function PageHeader({ title, eyebrow, subtitle, actions }: PageHeaderProps) {
   return <div className="admin-page-heading">
-    <div>{eyebrow && <p className="admin-eyebrow">{eyebrow}</p>}<h1>{title}</h1>{subtitle && <p className="admin-page-subtitle">{subtitle}</p>}</div>
+    <div>{eyebrow && <p className="admin-eyebrow">{eyebrow}</p>}<h1 className="admin-compact-text" title={title}>{title}</h1>{subtitle && <p className="admin-page-subtitle">{subtitle}</p>}</div>
     {actions && <div className="admin-heading-actions">{actions}</div>}
   </div>;
 }
@@ -38,7 +42,7 @@ export interface StatusBadgeProps {
 }
 
 export function StatusBadge({ children, tone = 'neutral' }: StatusBadgeProps) {
-  return <span className={`admin-badge admin-badge--${tone}`}><span className="admin-badge-dot" aria-hidden="true" />{children}</span>;
+  return <span className={`admin-badge admin-badge--${tone}`}><span className="admin-badge-dot" aria-hidden="true" />{typeof children === 'string' ? <CompactText>{children}</CompactText> : children}</span>;
 }
 
 export function LoadingState({ label = 'Loading' }: { label?: string }) {

@@ -47,7 +47,7 @@ export function AdminAccountMenu({identity, destinations = [], showHelp = true, 
   const links = (group: AdminAccountDestination['group']) => destinations.filter(item => item.group === group).map(item =>
     <a className="admin-profile-destination" key={item.path} href={`#${item.path}`}
       aria-current={item.path === pathname ? 'page' : undefined} onClick={() => setOpen(false)}>
-      {item.icon && <Icon name={item.icon} />}{item.label}
+      {item.icon && <Icon name={item.icon} />}<span className="admin-compact-text" title={item.label}>{item.label}</span>
     </a>);
 
   const advanced = links('advanced');
@@ -58,7 +58,7 @@ export function AdminAccountMenu({identity, destinations = [], showHelp = true, 
       <span className="admin-avatar" aria-hidden="true">{identity.name.slice(0, 1).toLocaleUpperCase()}</span>
     </button>
     {open && <div className="admin-profile-menu" id="admin-account-options">
-      <strong>{identity.name}</strong>
+      <strong className="admin-compact-text" title={identity.name}>{identity.name}</strong>
       {identity.role && <span>{identity.role}</span>}
       {links(undefined)}
       {showHelp && <details className="admin-profile-more"><summary>Help</summary>

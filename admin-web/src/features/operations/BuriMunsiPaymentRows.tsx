@@ -1,5 +1,5 @@
 import {Link} from 'react-router';
-import {StatusBadge} from '../../ui';
+import {CompactText, StatusBadge} from '../../ui';
 import {MomoCell, MomoTable} from './MomoRecordViews';
 import {PaymentTermIcon} from './PaymentTermIcon';
 import {paymentMemberName, paymentTime, type BuriMunsiPayment} from './canonicalPaymentAnalysis';
@@ -38,9 +38,9 @@ export function AllocationStatus({row, search, text = false}: {row: BuriMunsiPay
 export function BuriMunsiPaymentRows({rows}: {rows: BuriMunsiPayment[]}) {
   return <MomoTable name="Payments" headings={['Reference', 'IN/OUT', 'Amount', 'Member', 'Status', 'Payment time']} compact>
     {rows.map(row => <tr key={row.id}><MomoCell label="Reference"><Link className="operations-link" to={buriMunsiPaymentPath(row.id)}>
-      {row.ftId ?? 'View payment'}</Link></MomoCell>
-      <MomoCell label="IN/OUT"><PaymentDirection direction={row.direction} /></MomoCell><MomoCell label="Amount">{paymentAmount(row.amountRwf)}</MomoCell>
-      <MomoCell label="Member">{paymentMemberName(row) ?? '—'}</MomoCell><MomoCell label="Status"><AllocationStatus row={row} /></MomoCell>
-      <MomoCell label="Payment time">{paymentTime(row.atRaw)}</MomoCell></tr>)}
+      <CompactText cell>{row.ftId ?? 'View payment'}</CompactText></Link></MomoCell>
+      <MomoCell label="IN/OUT"><PaymentDirection direction={row.direction} /></MomoCell><MomoCell label="Amount"><span className="payment-exact-value">{paymentAmount(row.amountRwf)}</span></MomoCell>
+      <MomoCell label="Member"><CompactText cell>{paymentMemberName(row) ?? '—'}</CompactText></MomoCell><MomoCell label="Status"><AllocationStatus row={row} /></MomoCell>
+      <MomoCell label="Payment time"><span className="payment-exact-value">{paymentTime(row.atRaw)}</span></MomoCell></tr>)}
   </MomoTable>;
 }
