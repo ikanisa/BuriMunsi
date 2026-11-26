@@ -282,7 +282,7 @@ describe('BuriMunsi phone Payments', () => {
     expect(screen.getByText('Latest MoMo SMS balance',{selector:'dt span'}).closest('dl')).toHaveTextContent('RWF 0');
     admin.unmount();
     visit('/admin', ['overview.read','payments.read','sms.read'], 'staff');
-    expect(await screen.findByText('Cumulative incoming payments')).toBeVisible();
+    expect(await screen.findByRole('link',{name:/Cumulative incoming payments/})).toBeVisible();
     expect(screen.queryByText('Latest MoMo SMS balance')).not.toBeInTheDocument();
   });
 

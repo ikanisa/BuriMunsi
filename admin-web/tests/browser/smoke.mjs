@@ -128,9 +128,18 @@ try {
   const overview = page.getByRole('heading', { name: 'Home' });
   await overview.waitFor();
   await firstOverview;
-  await page.getByRole('link', {name:/Cumulative incoming payments.*RWF 5,000/}).waitFor();
-  await page.getByRole('link', {name:/Cumulative outgoing payments.*RWF 5,000/}).waitFor();
-  await page.getByRole('link', {name:/Latest MoMo SMS balance.*RWF 0/}).waitFor();
+  const paymentCardBackgrounds = new Set();
+  for (const [name, href] of [
+    [/Cumulative incoming payments.*RWF 5,000/, '#/admin/payments?direction=incoming'],
+    [/Cumulative outgoing payments.*RWF 5,000/, '#/admin/payments?direction=outgoing'],
+    [/Latest MoMo SMS balance.*RWF 0/, '#/admin/payments?view=sms'],
+  ]) {
+    const card = page.getByRole('link', {name});
+    assert.equal(await card.getAttribute('href'), href);
+    assert.equal(await card.locator('dt span').evaluate(label => getComputedStyle(label).clip), 'rect(0px, 0px, 0px, 0px)');
+    paymentCardBackgrounds.add(await card.evaluate(element => getComputedStyle(element).backgroundColor));
+  }
+  assert.equal(paymentCardBackgrounds.size, 3);
   await page.getByText('Inbox status unknown', {exact: true}).waitFor();
   assert.equal(await page.getByRole('link', {name: 'M-Money SMS', exact: true}).getAttribute('href'), '#/admin/payments?view=sms');
   page.off('request', recordLogin);
