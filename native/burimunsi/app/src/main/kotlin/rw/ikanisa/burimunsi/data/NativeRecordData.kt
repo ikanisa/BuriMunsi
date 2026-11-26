@@ -226,10 +226,10 @@ internal class NativeRecordData(
         return JSONObject(scope.read(recordReadOwner, "/home"))
     }
     fun readHomeEnhancement(owner: Operator): Home? {
-        val scope = recordReadScope(expectedOwner=owner) { witness, _ -> sessions.requestHome(witness, allowLegacy = false) }
+        val scope = recordReadScope(expectedOwner=owner) { witness, _ -> sessions.requestHome(witness, allowBaseFallback = false) }
         return try {
-            decodeHome(JSONObject(scope.read(recordReadOwner, HOME_SAVINGS_PATH))).also {
-                checkContract(it.savings != null,"invalid_api_response")
+            decodeHome(JSONObject(scope.read(recordReadOwner, HOME_WALLET_PATH))).also {
+                checkContract(it.paymentTotals != null || it.savings != null,"invalid_api_response")
             }
         } catch (error: ApiFailure) {
             if (!error.isLegacyHomeSelectorRejection()) throw error
@@ -249,8 +249,28 @@ internal class NativeRecordData(
             recent = (0 until a.length()).map { decodePayment(a.getJSONObject(it)) },
             asOf = j.getString("asOf"),
             savings = if (j.has("savings")) decodeHomeSavings(j.getJSONObject("savings")) else null,
+            paymentTotals = if (j.has("paymentTotals")) decodeHomeWallet(j.getJSONObject("paymentTotals")) else null,
         )
     }
+    private fun decodeHomeWallet(j: JSONObject): HomeWalletTotals {
+        fun amount(key: String): java.math.BigInteger {
+            val signed = key == "walletGapRwf"
+            val raw = j.get(key) as? String ?: throw ContractFailure("invalid_api_response")
+            val pattern = if (signed) "(?:0|-?[1-9][0-9]{0,38})" else "(?:0|[1-9][0-9]{0,37})"
+            checkContract(raw.matches(Regex(pattern)),"invalid_api_response")
+            return raw.toBigInteger()
+        }
+        val incoming = amount("incomingRwf")
+        val outgoing = amount("outgoingRwf")
+        val visible = j.has("latestSmsBalanceRwf")
+        checkContract(visible == j.has("walletGapRwf"),"invalid_api_response")
+        val balance = if (visible && !j.isNull("latestSmsBalanceRwf")) j.counter("latestSmsBalanceRwf",9_007_199_254_740_991L) else null
+        val difference = if (visible && !j.isNull("walletGapRwf")) amount("walletGapRwf") else null
+        checkContract((balance == null && difference == null) ||
+            (balance != null && incoming - outgoing - balance.toBigInteger() == difference),"invalid_api_response")
+        return HomeWalletTotals(incoming, outgoing, balance, difference, visible)
+    }
+
     private fun decodeHomeSavings(j: JSONObject): HomeSavings {
         val status = j.get("reconciliationStatus")
         checkContract(status is String && status in setOf("reconciled","mismatch","unavailable"),"invalid_api_response")

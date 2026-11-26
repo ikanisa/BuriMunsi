@@ -6,7 +6,7 @@ import {exactKeys,requireId,requireRequestId,sha256} from './values.js';
 import {LISTING_QUERY_KEYS} from './listing-query.js';
 import {previewOnboardingFile} from './smart-onboarding-request.js';
 
-const recordSnapshotReads = new Set(['home','homeSavings','payments','members','ledger','payment','member','history','staff','audit','onboardingSuggestions']);
+const recordSnapshotReads = new Set(['home','homeSavings','homeWallet','payments','members','ledger','payment','member','history','staff','audit','onboardingSuggestions']);
 
 function sessionProfile(actor){
   return {groupId:actor.groupId,profile:{id:actor.id,name:actor.name,phone:actor.phone,role:actor.role,capabilities:actor.capabilities},expiresAt:actor.expiresAt};
@@ -59,9 +59,9 @@ export function createNativeHandler({auth,records,contributions,members,gateway,
         const csv=method==='GET'&&/^\/members\/[A-Za-z0-9_-]+\/ledger\.csv$/.test(route);
         if(!csv){wireRoute=contractRoute(method,route);if(method==='GET')validateNativeRequest(wireRoute.operation,null);}
         wireQuery=validateNativeQuery(csv?'csv':wireRoute.operation,url.search.slice(1));
-        if(wireRoute?.operation==='home'&&wireQuery.include==='savings'){
-          requireThat(paymentsOnly,'invalid_query',400);
-          wireRoute={...wireRoute,operation:'homeSavings'};
+        if(wireRoute?.operation==='home'&&wireQuery.include){
+          requireThat(paymentsOnly&&['savings','wallet'].includes(wireQuery.include),'invalid_query',400);
+          wireRoute={...wireRoute,operation:wireQuery.include==='wallet'?'homeWallet':'homeSavings'};
         }
       }
       if(route==='/session/login'&&method==='POST'){
@@ -109,7 +109,9 @@ export function createNativeHandler({auth,records,contributions,members,gateway,
       if(outcome&&method==='GET')return json(await records.commandStatus(actor,outcome[1]));
       if(route==='/home'&&method==='GET'){
         if(!strictContract&&url.searchParams.has('include'))throw new BuriError('invalid_query',400);
-        return json(wireRoute?.operation==='homeSavings'?await records.home(actor,{includeSavings:true}):await records.home(actor));
+        if(wireRoute?.operation==='homeSavings')return json(await records.home(actor,{includeSavings:true}));
+        if(wireRoute?.operation==='homeWallet')return json(await records.home(actor,{includeWallet:true}));
+        return json(await records.home(actor));
       }
       if(route==='/members/suggestions'&&method==='GET'){
         requirePort(records,['onboardingSuggestions']);

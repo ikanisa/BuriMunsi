@@ -21,7 +21,66 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.cool.mobile.R
+import java.text.NumberFormat
 import rw.ikanisa.burimunsi.core.HomeSavings
+import rw.ikanisa.burimunsi.core.HomeWalletTotals
+
+@Composable
+internal fun HomeWalletOverview(totals: HomeWalletTotals, smsAllowed: Boolean) {
+    val t = LocalUiText.current
+    val format = NumberFormat.getIntegerInstance(t.locale)
+    val showSms = totals.smsBalanceVisible && smsAllowed
+    val incoming = format.format(totals.incomingRwf)
+    val label = t("Cumulative incoming payments")
+    val description = "$label · $incoming " + t("RWF")
+    Column(Modifier.fillMaxWidth().padding(top=12.dp,bottom=4.dp),
+        horizontalAlignment=Alignment.CenterHorizontally, verticalArrangement=Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.clearAndSetSemantics { heading(); contentDescription=description },
+            horizontalAlignment=Alignment.CenterHorizontally) {
+            Text(label, color=BuriTheme.Muted, fontSize=15.sp, textAlign=TextAlign.Center)
+            SavingsAmount(incoming,primary=true,ink=BuriTheme.Text,unitInk=BuriTheme.Muted)
+        }
+        val outgoing = format.format(totals.outgoingRwf)
+        val balance = totals.latestSmsBalanceRwf?.let { format.format(it) }
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            if (!showSms) WalletCard(outgoing, wallet=false, modifier=Modifier.fillMaxWidth())
+            else if (maxWidth < 278.dp * LocalDensity.current.fontScale || maxOf(outgoing.length, balance?.length ?: 0) > 16) {
+                Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                    WalletCard(outgoing, wallet=false, modifier=Modifier.fillMaxWidth())
+                    WalletCard(balance, wallet=true, modifier=Modifier.fillMaxWidth())
+                }
+            } else Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                WalletCard(outgoing, wallet=false, modifier=Modifier.weight(1f))
+                WalletCard(balance, wallet=true, modifier=Modifier.weight(1f))
+            }
+        }
+        val gap = totals.walletGapRwf
+        if (showSms && gap != null && gap.signum() != 0) {
+            val value = format.format(gap) + " " + t("RWF")
+            Text(t("Wallet difference") + " · " + value, color=BuriTheme.Muted, fontSize=14.sp,
+                textAlign=TextAlign.Center, lineHeight=20.sp)
+        }
+    }
+}
+
+@Composable
+private fun WalletCard(value: String?, wallet: Boolean, modifier: Modifier) {
+    val t = LocalUiText.current
+    val label = if (wallet) t("Latest MoMo SMS balance") else t("Cumulative outgoing payments")
+    val amount = value?.let { it + " " + t("RWF") } ?: t("Unavailable")
+    val ink = if (wallet) Color(0xFF292447) else Color(0xFF15274C)
+    Column(modifier.heightIn(min=64.dp)
+        .background(if (wallet) Color(0xFFEBE8FF) else Color(0xFFE2EBFF),RoundedCornerShape(18.dp))
+        .clearAndSetSemantics { contentDescription = "$label · $amount" }.padding(12.dp),
+        horizontalAlignment=Alignment.CenterHorizontally, verticalArrangement=Arrangement.spacedBy(4.dp,Alignment.CenterVertically)) {
+        Row(horizontalArrangement=Arrangement.spacedBy(5.dp),verticalAlignment=Alignment.CenterVertically) {
+            Glyph(if(wallet)R.drawable.ic_home_wallet else R.drawable.ic_home_outgoing,null,
+                if(wallet)Color(0xFF55459B)else Color(0xFF2753A3),18)
+            Text(label,color=ink,fontSize=13.sp,lineHeight=17.sp,fontWeight=FontWeight.Medium)
+        }
+        SavingsAmount(value,primary=false,ink=ink,unitInk=ink)
+    }
+}
 
 @Composable
 internal fun HomeSavingsOverview(savings:HomeSavings?) {
@@ -30,7 +89,7 @@ internal fun HomeSavingsOverview(savings:HomeSavings?) {
     val lifetimeDescription=t("Lifetime member contributions")+" · "+
         (lifetime?.let { money(it,t.locale)+" "+t("RWF") } ?: t("Unavailable"))
     Column(Modifier.fillMaxWidth().padding(top=12.dp,bottom=4.dp),horizontalAlignment=Alignment.CenterHorizontally) {
-        SavingsAmount(lifetime,primary=true,ink=BuriTheme.Text,unitInk=BuriTheme.Muted,
+        SavingsAmount(lifetime?.let { money(it,t.locale) },primary=true,ink=BuriTheme.Text,unitInk=BuriTheme.Muted,
             modifier=Modifier.clearAndSetSemantics { heading(); contentDescription=lifetimeDescription })
         Spacer(Modifier.height(18.dp))
         BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -82,17 +141,22 @@ private fun SavingsCard(savings:HomeSavings?,wallet:Boolean,modifier:Modifier) {
         verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(5.dp,Alignment.CenterHorizontally)) {
         Glyph(if(wallet)R.drawable.ic_home_wallet else R.drawable.ic_home_outgoing,null,
             if(wallet)Color(0xFF55459B)else Color(0xFF2753A3),24)
-        SavingsAmount(value,primary=false,ink=ink,unitInk=ink,modifier=Modifier.weight(1f,fill=false))
+        SavingsAmount(value?.let { money(it,t.locale) },primary=false,ink=ink,unitInk=ink,modifier=Modifier.weight(1f,fill=false))
     }
 }
 
 @Composable
-private fun SavingsAmount(value:Long?,primary:Boolean,ink:Color,unitInk:Color,modifier:Modifier) {
+private fun SavingsAmount(value:String?,primary:Boolean,ink:Color,unitInk:Color,modifier:Modifier = Modifier) {
     val t=LocalUiText.current
-    val baseSize=if(primary&&value!=null)64 else if(primary)32 else 19
+    val baseSize=when {
+        !primary -> 19
+        value == null || value.length > 24 -> 32
+        value.length > 14 -> 42
+        else -> 64
+    }
     val text=buildAnnotatedString {
         if(value==null)append(t("Unavailable")) else {
-            append(money(value,t.locale))
+            append(value)
             withStyle(SpanStyle(color=unitInk,fontSize=(if(primary)23 else 13).sp,fontWeight=FontWeight.Medium)) {
                 append(" "+t("RWF"))
             }

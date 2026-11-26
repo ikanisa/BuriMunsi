@@ -274,12 +274,24 @@ class WireContract(private val product: String, private val version: String,
                 val unallocated = (snapshot["unallocatedCount"] as Number).toLong()
                 if (recent.size > total || unallocated > total) reject("CONTRACT_STATE")
             }
-            if (operation in setOf("home", "homeSavings")) home(d)
+            if (operation in setOf("home", "homeSavings", "homeWallet")) home(d)
             if (operation == "homeSavings") {
                 val savings = objectValue(d["savings"])
                 if (savings["reconciliationStatus"] != "unavailable" &&
                     listOf("lifetimeContributionsRwf", "outgoingPaymentsRwf", "latestWalletBalanceRwf").any { savings[it] == null })
                     reject("CONTRACT_STATE")
+            }
+            if (operation == "homeWallet") {
+                val totals = objectValue(d["paymentTotals"])
+                val balance = (totals["latestSmsBalanceRwf"] as? Number)?.toLong()
+                val gap = totals["walletGapRwf"] as? String
+                if (totals.containsKey("latestSmsBalanceRwf") != totals.containsKey("walletGapRwf") ||
+                    (balance == null) != (gap == null)) reject("CONTRACT_STATE")
+                if (balance != null) {
+                    val incoming = (totals["incomingRwf"] as String).toBigInteger()
+                    val outgoing = (totals["outgoingRwf"] as String).toBigInteger()
+                    if ((incoming - outgoing - balance.toBigInteger()).toString() != gap) reject("CONTRACT_STATE")
+                }
             }
             if (operation == "session" || operation == "login") {
                 val included = d.containsKey("home")
@@ -442,8 +454,14 @@ class WireContract(private val product: String, private val version: String,
         for (entry in routes) {
             if (entry[0] != method) continue
             val match = pattern(entry[1]).matchEntire(logicalPath) ?: continue
-            val operation = if (entry[2] == "home" && method == "GET" &&
-                runCatching { query("homeSavings", path.substringAfter('?', "")) }.isSuccess) "homeSavings" else entry[2]
+            val operation = if (entry[2] == "home") {
+                val rawQuery = path.substringAfter('?', "")
+                when (runCatching { query("home", rawQuery)["include"] }.getOrNull()) {
+                    "savings" -> "homeSavings"
+                    "wallet" -> "homeWallet"
+                    else -> "home"
+                }
+            } else entry[2]
             return operation to if (match.groups.size > 1) match.groups[1]?.value else null
         }
         reject("CONTRACT_OPERATION")

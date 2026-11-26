@@ -4,6 +4,7 @@ import rw.ikanisa.burimunsi.core.ContractFailure
 import rw.ikanisa.wire.*
 
 internal const val PAYMENT_REFERENCE_VERSION_HEADER = "X-BuriMunsi-Payment-Reference-Version"
+internal const val HOME_WALLET_PATH = "/home?include=wallet"
 internal const val HOME_SAVINGS_PATH = "/home?include=savings"
 internal fun ApiFailure.isLegacyHomeSelectorRejection(): Boolean =
     status == 400 && code == "contract_query" && !uncertain
@@ -16,7 +17,12 @@ internal fun validateCachedPayload(installationId:String,path:String,payload:Str
         val contract=BuriMunsiSchemas.contract
         val data=objectValue(StrictJson.parse(payload))
         // Home has one encrypted cache entry; validate its exact negotiated wire shape.
-        val wirePath=if(path=="/home"&&data.containsKey("savings")) HOME_SAVINGS_PATH else path
+        val wirePath=when {
+            path != "/home" -> path
+            data.containsKey("paymentTotals") -> HOME_WALLET_PATH
+            data.containsKey("savings") -> HOME_SAVINGS_PATH
+            else -> path
+        }
         val route=contract.route("GET",wirePath)
         val operation=if(route.first=="payment"&&data.containsKey("payment")) PAYMENT_DETAIL_V1 else route.first
         contract.validate(operation+".data",data)

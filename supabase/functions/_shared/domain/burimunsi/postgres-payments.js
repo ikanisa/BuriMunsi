@@ -38,9 +38,24 @@ export function paymentRecord(row,{showSms=false}={}) {
   };
 }
 
-export async function readPaymentsHome(sql,groupId,asOf,projection,{includeSavings=false,adminTotals=false}={}) {
-  const showSmsBalance = adminTotals && projection.canAnalyzeSms;
-  const movementTotals = adminTotals ? `,
+export function projectHomePaymentTotals(totals,showSmsBalance) {
+  const {incomingRwf,outgoingRwf}=totals??{};
+  for(const value of [incomingRwf,outgoingRwf]){
+    requireThat(typeof value==='string'&&/^(0|[1-9]\d{0,37})$/.test(value),'invalid_snapshot',503);
+  }
+  if(!showSmsBalance)return {incomingRwf,outgoingRwf};
+  const {latestSmsBalanceRwf}=totals;
+  requireThat(latestSmsBalanceRwf===null||Number.isSafeInteger(latestSmsBalanceRwf)&&latestSmsBalanceRwf>=0,
+    'invalid_snapshot',503);
+  const walletGapRwf=latestSmsBalanceRwf===null?null:
+    (BigInt(incomingRwf)-BigInt(outgoingRwf)-BigInt(latestSmsBalanceRwf)).toString();
+  return {incomingRwf,outgoingRwf,latestSmsBalanceRwf,walletGapRwf};
+}
+
+export async function readPaymentsHome(sql,groupId,asOf,projection,{includeSavings=false,includeWallet=false,adminTotals=false}={}) {
+  const showTotals = adminTotals || includeWallet;
+  const showSmsBalance = showTotals && projection.canAnalyzeSms === true;
+  const movementTotals = showTotals ? `,
     coalesce(sum(amount_rwf) FILTER (WHERE direction='incoming'),0)::text AS incoming,
     coalesce(sum(amount_rwf) FILTER (WHERE direction='outgoing'),0)::text AS outgoing` :
     includeSavings ? ", (sum(amount_rwf) FILTER (WHERE direction='outgoing'))::text AS outgoing" : '';
@@ -48,23 +63,26 @@ export async function readPaymentsHome(sql,groupId,asOf,projection,{includeSavin
     count(*) FILTER (WHERE allocation_state='unallocated') AS unallocated,
     (SELECT count(*) FROM app.memberships WHERE collection_id=$1 AND active=1) AS members${movementTotals}
     FROM burimunsi.payments WHERE collection_id=$1`;
-  const query=includeSavings?`WITH counts AS (${counts})
+  let query=counts;
+  if(includeSavings)query=`WITH counts AS (${counts})
     SELECT counts.*,s.lifetime_contributions_rwf::text AS lifetime_contributions,
       s.latest_wallet_balance_rwf::text AS latest_wallet_balance,s.reconciliation_status
-    FROM counts CROSS JOIN private.burimunsi_home_savings($1) s`:showSmsBalance?`WITH counts AS (${counts})
-    SELECT counts.*,private.burimunsi_admin_home_sms_balance($1)::text AS latest_sms_balance FROM counts`:counts;
+    FROM counts CROSS JOIN private.burimunsi_home_savings($1) s`;
+  else if(showSmsBalance){
+    // Each existing wrapper rechecks its caller's authority for the same wallet evidence.
+    const wallet=adminTotals?'SELECT private.burimunsi_admin_home_sms_balance($1)::text':
+      'SELECT latest_wallet_balance_rwf::text FROM private.burimunsi_home_savings($1)';
+    query=`WITH counts AS (${counts}) SELECT counts.*,(${wallet}) AS latest_sms_balance FROM counts`;
+  }
   const totalsRows=await sql.unsafe(query,[groupId]);
   requireThat(totalsRows.length===1,'invalid_snapshot',503);
   const [totals]=totalsRows;
   const rows=await sql.unsafe(display+newest+' LIMIT 3',[groupId]);
   const home={paymentCount:pgInteger(totals.payments),memberCount:pgInteger(totals.members),
     unallocatedCount:pgInteger(totals.unallocated),recentPayments:rows.map(row=>paymentRecord(row,projection)),asOf};
-  if(adminTotals){
-    for (const value of [totals.incoming,totals.outgoing]) {
-      requireThat(typeof value==='string'&&/^(0|[1-9]\d{0,37})$/.test(value),'invalid_snapshot',503);
-    }
-    return {...home,paymentTotals:{incomingRwf:totals.incoming,outgoingRwf:totals.outgoing,
-      ...(showSmsBalance && {latestSmsBalanceRwf:wholeRwf(totals.latest_sms_balance)})}};
+  if(showTotals){
+    return {...home,paymentTotals:projectHomePaymentTotals({incomingRwf:totals.incoming,outgoingRwf:totals.outgoing,
+      ...(showSmsBalance&&{latestSmsBalanceRwf:wholeRwf(totals.latest_sms_balance)})},showSmsBalance)};
   }
   if(!includeSavings)return home;
   return {...home,savings:{lifetimeContributionsRwf:wholeRwf(totals.lifetime_contributions),

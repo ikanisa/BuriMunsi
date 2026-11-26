@@ -1155,7 +1155,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             state.route == Route.HOME && state.sheet == null &&
             state.home === base && state.operator === grant.operator && hasAccess(Capability.READ) &&
             (queuedNavigation == null || queuedNavigation?.first == Route.HOME)
-        if (base.savings != null || !stillShowingBase()) return
+        if (base.paymentTotals != null || base.savings != null || !stillShowingBase()) return
         val records = repo()
         state = state.copy(homeSavingsLoading = true)
         viewModelScope.launch {

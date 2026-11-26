@@ -18,11 +18,12 @@ const fullPhone=value=>{try{return normalizePhone(value);}catch{return null;}};
  * Missing bridges fail at construction; there is no memory or SQL-write fallback.
  */
 export class PostgresCanonicalStore {
-  constructor({authority,commands,identities,jobs,clock=()=>Date.now()}) {
+  constructor({authority,commands,identities,jobs,clock=()=>Date.now(),paymentsOnly=false}) {
     requirePort(authority,['write','session']);requireId(authority.groupId);
     requirePort(commands,['postContribution','createDirectMember','setMembershipActive','enqueueEligibleRematch']);
     requirePort(identities,['policy','members','verified']);requirePort(jobs,['assertPostingLease']);
-    Object.assign(this,{authority,commands,identities,jobs,clock});this.groupId=authority.groupId;
+    requireThat(typeof paymentsOnly==='boolean','invalid_worker_config',503);
+    Object.assign(this,{authority,commands,identities,jobs,clock,paymentsOnly});this.groupId=authority.groupId;
   }
   inCanonicalTransaction(fn) {
     return this.inScopedTransaction(fn,false);
@@ -236,7 +237,7 @@ export class PostgresCanonicalStore {
         },
         onboardingCandidate:async cmd=>{
           ensure();scope(cmd.groupId);await checkActor(cmd,'members.enroll');
-          const result=await findOnboardingCandidate(sql,{groupId:group,candidateId:cmd.candidateId,phone:cmd.phone});
+          const result=await findOnboardingCandidate(sql,cmd,{paymentsOnly:this.paymentsOnly});
           await checkActor(cmd,'members.enroll');return result;
         },
         recordMemberImportAttestation:async cmd=>{

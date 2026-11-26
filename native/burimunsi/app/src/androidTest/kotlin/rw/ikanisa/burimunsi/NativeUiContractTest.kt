@@ -306,7 +306,7 @@ class NativeUiContractTest {
         ui.onNodeWithContentDescription("Total outgoing payments · Unavailable").assertIsDisplayed()
         ui.onNodeWithContentDescription("MoMo balance · last SMS · Unavailable").assertIsDisplayed()
         ui.runOnIdle { c.state=c.state.copy(homeSavingsLoading=true) }
-        ui.onNodeWithText("Loading savings").assertExists()
+        ui.onNodeWithText("Loading payment totals").assertExists()
         ui.onNodeWithText("Savings figures unavailable.").assertDoesNotExist()
         ui.runOnIdle { c.state=c.state.copy(homeSavingsLoading=false) }
         val list=ui.onNode(hasScrollToIndexAction())
@@ -319,6 +319,46 @@ class NativeUiContractTest {
         check(actionBounds.bottom<=navBounds.top){"All payments is covered by navigation: action=$actionBounds; nav=$navBounds"}
         allPayments.performClick()
         ui.runOnIdle{check(c.state.route==Route.PAYMENTS){"All payments opened ${c.state.route}"}}
+    }
+    @Test fun walletHomeShowsExactAmountsAndOnlyAuthorizedSmsFigures(){
+        val c=FakeController(Route.HOME,Role.ADMIN)
+        val home=checkNotNull(c.state.home)
+        fun use(totals:HomeWalletTotals){ c.state=c.state.copy(home=home.copy(paymentTotals=totals)) }
+        val totals=HomeWalletTotals("9007199254740993".toBigInteger(),"9007199254740994".toBigInteger(),
+            500L,"-501".toBigInteger(),true)
+        use(totals)
+        show(c)
+        val list=ui.onNode(hasScrollToIndexAction())
+        fun expectAmount(label:String){
+            list.performScrollToNode(hasContentDescription(label))
+            ui.onNodeWithContentDescription(label).performScrollTo().assertIsDisplayed()
+        }
+        expectAmount("Cumulative incoming payments · 9,007,199,254,740,993 RWF")
+        expectAmount("Cumulative outgoing payments · 9,007,199,254,740,994 RWF")
+        expectAmount("Latest MoMo SMS balance · 500 RWF")
+        list.performScrollToNode(hasText("Wallet difference · -501 RWF"))
+        ui.onNodeWithText("Wallet difference · -501 RWF").performScrollTo().assertIsDisplayed()
+        ui.onNodeWithText("Contributions less outgoing payments differ from the last MoMo balance.").assertDoesNotExist()
+        val zero="0".toBigInteger()
+        ui.runOnIdle { use(HomeWalletTotals(zero,zero,0L,zero,true)) }
+        expectAmount("Cumulative incoming payments · 0 RWF")
+        expectAmount("Cumulative outgoing payments · 0 RWF")
+        expectAmount("Latest MoMo SMS balance · 0 RWF")
+        ui.onNodeWithText("Wallet difference",substring=true).assertDoesNotExist()
+        ui.runOnIdle { use(HomeWalletTotals(zero,zero,null,null,true)) }
+        expectAmount("Latest MoMo SMS balance · Unavailable")
+        ui.onNodeWithText("Wallet difference",substring=true).assertDoesNotExist()
+        ui.runOnIdle { use(HomeWalletTotals(zero,zero,null,null,false)) }
+        expectAmount("Cumulative outgoing payments · 0 RWF")
+        ui.onNodeWithContentDescription("Latest MoMo SMS balance",substring=true).assertDoesNotExist()
+        ui.onNodeWithText("Wallet difference",substring=true).assertDoesNotExist()
+        ui.runOnIdle {
+            use(totals)
+            c.state=c.state.copy(operator=c.operator.copy(role=Role.STAFF))
+        }
+        expectAmount("Cumulative outgoing payments · 9,007,199,254,740,994 RWF")
+        ui.onNodeWithContentDescription("Latest MoMo SMS balance",substring=true).assertDoesNotExist()
+        ui.onNodeWithText("Wallet difference",substring=true).assertDoesNotExist()
     }
     @Test fun homeOpensActualRecentPaymentsAndShowsAllocationState(){
         val c=FakeController(Route.HOME,Role.STAFF)

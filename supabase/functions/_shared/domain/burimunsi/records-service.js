@@ -5,6 +5,7 @@ import {requireId,requireRequestId,canonicalJson,sha256,normalizePhone} from './
 import {ledgerCsv} from './csv.js';
 import {projectRecoveredOutcome,requireOriginDigest} from './operation-recovery.js';
 import {projectPaymentHistory,HISTORY_LIMIT} from './payment-history.js';
+import {projectHomePaymentTotals} from './postgres-payments.js';
 import {previewSmartOnboardingImport} from './smart-onboarding-import.js';
 import {normalizeListingQuery,selectListing,canonicalListingInstant,listingText,listingFilterIdentity} from './listing-query.js';
 /** Readers must use the existing ledger snapshot, not SUM(received SMS).
@@ -64,21 +65,27 @@ export class RecordsService {
     },true);
   }
 
-  home(actor,{includeSavings=false}={}) {
-    requireThat(!includeSavings||this.paymentsOnly,'invalid_query',400);
-    return this.within(actor,'records.read',tx=>this.#home(tx,includeSavings));
+  home(actor,{includeSavings=false,includeWallet=false}={}) {
+    requireThat((!includeSavings&&!includeWallet)||this.paymentsOnly&&!(includeSavings&&includeWallet),'invalid_query',400);
+    return this.within(actor,'records.read',(tx,current)=>this.#home(tx,{includeSavings,includeWallet,current}));
   }
   sessionHome(actor) {
     return this.within(actor,'records.read',async(tx,current)=>({current,home:await this.#home(tx)}));
   }
-  async #home(tx,includeSavings=false) {
+  async #home(tx,{includeSavings=false,includeWallet=false,current}={}) {
     requirePort(tx,['canonicalHome']);
-    const value=await tx.canonicalHome(this.groupId,{includeSavings});
+    const value=await tx.canonicalHome(this.groupId,{includeSavings,includeWallet});
     if(this.paymentsOnly){
       requireThat(value&&[value.paymentCount,value.memberCount,value.unallocatedCount].every(n=>Number.isSafeInteger(n)&&n>=0)&&
         typeof value.asOf==='string','invalid_snapshot',503);
       const home={paymentCount:value.paymentCount,memberCount:value.memberCount,unallocatedCount:value.unallocatedCount,
         asOf:value.asOf,recentPayments:this.projectRows(value.recentPayments,'payments')};
+      if(includeWallet){
+        const showSmsBalance=current.role==='admin'&&current.capabilities.includes('sms.read');
+        const paymentTotals=projectHomePaymentTotals(value.paymentTotals,showSmsBalance);
+        if(showSmsBalance)requireThat(value.paymentTotals.walletGapRwf===paymentTotals.walletGapRwf,'invalid_snapshot',503);
+        return {...home,paymentTotals};
+      }
       if(!includeSavings)return home;
       const {lifetimeContributionsRwf,outgoingPaymentsRwf,latestWalletBalanceRwf,reconciliationStatus}=value.savings??{};
       const amounts=[lifetimeContributionsRwf,outgoingPaymentsRwf,latestWalletBalanceRwf];
@@ -100,8 +107,9 @@ export class RecordsService {
     const q=query.q??'',limit=query.limit??40;
     requireThat(typeof q==='string'&&q.length<=80&&Number.isSafeInteger(limit)&&limit>=1&&limit<=100,'invalid_query');
     return this.within(actor,'members.enroll',async(tx,current)=>{
-      requirePort(tx,['listRevision','onboardingSuggestions']);
-      const revision=await sha256(canonicalJson({payments:await tx.listRevision(this.groupId,'payments',null),
+      requirePort(tx,['onboardingSuggestions',this.paymentsOnly?'onboardingSuggestionsRevision':'listRevision']);
+      const revision=this.paymentsOnly?await tx.onboardingSuggestionsRevision({groupId:this.groupId,q}):
+        await sha256(canonicalJson({payments:await tx.listRevision(this.groupId,'payments',null),
         members:await tx.listRevision(this.groupId,'members',null)}));
       const scope={groupId:this.groupId,actorId:current.id,snapshot:revision,
         filterHash:await sha256(canonicalJson({kind:'onboarding_suggestions',q,limit})),sort:'newest'};

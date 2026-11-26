@@ -2895,6 +2895,31 @@
       "key": "ui_home_loading_savings",
       "en": "Loading savings",
       "rw": "Harimo gutegurwa imibare y’ubwizigame"
+    },
+    {
+      "key": "ui_home_wallet_incoming",
+      "en": "Cumulative incoming payments",
+      "rw": "Igiteranyo cy’amafaranga yose yinjiye"
+    },
+    {
+      "key": "ui_home_wallet_outgoing",
+      "en": "Cumulative outgoing payments",
+      "rw": "Igiteranyo cy’amafaranga yose yasohotse"
+    },
+    {
+      "key": "ui_home_wallet_sms_balance",
+      "en": "Latest MoMo SMS balance",
+      "rw": "Amafaranga asigaye kuri MoMo nk’uko SMS ya nyuma ibigaragaza"
+    },
+    {
+      "key": "ui_home_wallet_difference",
+      "en": "Wallet difference",
+      "rw": "Ikinyuranyo cy’amafaranga kuri MoMo"
+    },
+    {
+      "key": "ui_home_wallet_loading",
+      "en": "Loading payment totals",
+      "rw": "Harimo gutegurwa ibiteranyo by’amafaranga yinjiye n’ayasohotse"
     }
   ]
 }

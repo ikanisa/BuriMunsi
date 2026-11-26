@@ -37,12 +37,14 @@ fun main(){
   .put("state",state).put("operation","burimunsi.allocate").put("allocationState","allocated").toString() else JSONObject()
   .put("protocol","burimunsi.operation-recovery.v1").put("requestId",id).put("state",state)
   .put("originDigest",req.recoveryOrigin).put("groupId","group-1").put("actorId","admin-1").put("installationId","installation-1").toString()
+ val walletPath="/v1/burimunsi/home?include=wallet"
  val enhancedPath="/v1/burimunsi/home?include=savings"
+ val selectors=listOf(walletPath,enhancedPath)
  fun enhancedHome(savings:JSONObject)=JSONObject(home()).put("savings",savings).toString()
  fun savings()=JSONObject().put("lifetimeContributionsRwf",12000L).put("outgoingPaymentsRwf",0L)
   .put("latestWalletBalanceRwf",JSONObject.NULL).put("reconciliationStatus","unavailable")
  val api=ApiClient()
- api.handler={r->when{r.path==enhancedPath->throw ApiFailure("contract_query",400);r.path.endsWith("/session/login")||r.path.endsWith("/session")->session();r.path.endsWith("/logout")->signedOut();r.path.endsWith("/home")->home();r.path.endsWith("/payments/tx-1")->pay();r.path.contains("/sms?")||r.path.contains("/staff?")->emptyPage();else->"{}"}}
+ api.handler={r->when{r.path in selectors->throw ApiFailure("contract_query",400);r.path.endsWith("/session/login")||r.path.endsWith("/session")->session();r.path.endsWith("/logout")->signedOut();r.path.endsWith("/home")->home();r.path.endsWith("/payments/tx-1")->pay();r.path.contains("/sms?")||r.path.contains("/staff?")->emptyPage();else->"{}"}}
  val happy=api.handler
  SecureStore.reset();val repo=NativeRepository(Context(),api,"group-1")
  ck("empty store restores no session",repo.restore()==null)
@@ -59,29 +61,69 @@ fun main(){
  val count=api.calls.size;runCatching{repo.login("bad","2468")};ck("invalid login does not dispatch or replace operator",api.calls.size==count&&repo.current()?.id=="admin-1")
  ck("home reads the payment count",repo.home().paymentCount==17)
  ck("live read is not cached provenance",!repo.lastReadFromCache&&repo.lastReadSavedAt!=null)
- ck("only explicit legacy selector rejection negotiates the original Home",api.calls.takeLast(2).map{it.path}==
-  listOf(enhancedPath,"/v1/burimunsi/home"))
+ ck("only explicit legacy selector rejection negotiates the original Home",api.calls.takeLast(3).map{it.path}==
+  selectors + "/v1/burimunsi/home")
  ck("legacy Home never manufactures a savings model",repo.home().savings==null)
  api.handler={r->if(r.path==enhancedPath)enhancedHome(savings()) else happy(r)}
  var cursor=api.calls.size
  ck("negotiated Home retains exact reported zero but leaves absent balance unavailable",
   repo.home().savings==HomeSavings(12000L,0L,null,"unavailable"))
  ck("negotiated Home GET keeps the original authenticated owner scope",
-  api.calls.drop(cursor).single().let{it.method=="GET"&&it.path==enhancedPath&&it.token==token&&
+  api.calls.drop(cursor).map{it.path}==selectors&&api.calls.drop(cursor).all{it.method=="GET"&&it.token==token&&
    it.contractContext["groupId"]=="group-1"&&it.contractContext["actorId"]=="admin-1"})
  api.handler={throw ApiFailure("connection_unavailable",0)}
  cursor=api.calls.size
  ck("offline enhanced Home keeps the scoped snapshot and does not try a legacy request",
   repo.home().savings==HomeSavings(12000L,0L,null,"unavailable")&&repo.lastReadFromCache&&
-   api.calls.drop(cursor).single().path==enhancedPath)
+   api.calls.drop(cursor).single().path==walletPath)
  api.handler={r->if(r.path==enhancedPath)enhancedHome(savings().put("outgoingPaymentsRwf","0")) else happy(r)}
  cursor=api.calls.size
  ck("malformed negotiated Home is refused, without cache or legacy fallback",
-  runCatching{repo.home()}.exceptionOrNull() is ContractFailure&&api.calls.drop(cursor).single().path==enhancedPath)
+  runCatching{repo.home()}.exceptionOrNull() is ContractFailure&&api.calls.drop(cursor).map{it.path}==selectors)
  api.handler={r->if(r.path==enhancedPath)throw ApiFailure("forbidden",403) else happy(r)}
  cursor=api.calls.size
  ck("negotiated Home denial does not fall back or leak a cached snapshot",
-  (runCatching{repo.home()}.exceptionOrNull() as? ApiFailure)?.status==403&&api.calls.drop(cursor).single().path==enhancedPath)
+  (runCatching{repo.home()}.exceptionOrNull() as? ApiFailure)?.status==403&&api.calls.drop(cursor).map{it.path}==selectors)
+ fun walletResponse(totals:JSONObject)=JSONObject(home()).put("paymentTotals",totals).toString()
+ fun wallet(incoming:String="100",outgoing:String="25")=JSONObject().put("incomingRwf",incoming).put("outgoingRwf",outgoing)
+ fun useWallet(totals:JSONObject){api.handler={r->if(r.path==walletPath)walletResponse(totals) else happy(r)}}
+ val huge="9".repeat(38)
+ val negativeGap=(-huge.toBigInteger()-9_007_199_254_740_991L.toBigInteger()).toString()
+ useWallet(wallet("0",huge).put("latestSmsBalanceRwf",9_007_199_254_740_991L).put("walletGapRwf",negativeGap))
+ cursor=api.calls.size
+ val precise=repo.home()
+ ck("wallet Home sends one authenticated records read and preserves 38-digit outgoing and signed 39-digit difference",
+  api.calls.drop(cursor).single().let{it.path==walletPath&&it.token==token&&it.contractContext["groupId"]=="group-1"&&it.contractContext["actorId"]=="admin-1"}&&
+   precise.savings==null&&precise.paymentTotals==HomeWalletTotals("0".toBigInteger(),huge.toBigInteger(),9_007_199_254_740_991L,negativeGap.toBigInteger(),true))
+ api.handler={throw ApiFailure("connection_unavailable",0)}
+ ck("offline wallet uses only the previously authorized, validated snapshot",repo.home()==precise&&repo.lastReadFromCache)
+ useWallet(wallet().put("latestSmsBalanceRwf",JSONObject.NULL).put("walletGapRwf",JSONObject.NULL))
+ ck("authorized missing wallet evidence stays unavailable",repo.home().paymentTotals==HomeWalletTotals(
+  "100".toBigInteger(),"25".toBigInteger(),null,null,true))
+ useWallet(wallet("0","0").put("latestSmsBalanceRwf",0L).put("walletGapRwf","0"))
+ ck("verified zero SMS balance and zero difference remain genuine zero",repo.home().paymentTotals==HomeWalletTotals(
+  "0".toBigInteger(),"0".toBigInteger(),0,"0".toBigInteger(),true))
+ useWallet(wallet())
+ val limited=repo.home()
+ ck("records-only wallet omits both SMS values and visibility",limited.paymentTotals==HomeWalletTotals(
+  "100".toBigInteger(),"25".toBigInteger(),null,null,false))
+ api.handler={throw ApiFailure("connection_unavailable",0)}
+ ck("latest authorized snapshot does not resurrect previously visible SMS evidence offline",repo.home()==limited&&repo.lastReadFromCache)
+ listOf(
+  wallet().put("latestSmsBalanceRwf",0),
+  wallet().put("latestSmsBalanceRwf",JSONObject.NULL).put("walletGapRwf","0"),
+  wallet().put("latestSmsBalanceRwf",0).put("walletGapRwf","74"),
+  wallet("01","0"),wallet("1".repeat(39),"0"),
+ ).forEachIndexed { index, invalid ->
+  useWallet(invalid);cursor=api.calls.size
+  ck("invalid wallet response ${index+1} cannot downgrade or use cached figures",
+   runCatching { repo.home() }.exceptionOrNull() is ContractFailure&&api.calls.drop(cursor).map{it.path}==listOf(walletPath))
+ }
+ for (error in listOf(ApiFailure("forbidden",403),ApiFailure("contract_json",400),ApiFailure("contract_query",400,true))) {
+  api.handler={r->if(r.path==walletPath)throw error else happy(r)};cursor=api.calls.size
+  ck("wallet ${error.code}/${error.status} uncertain=${error.uncertain} cannot downgrade or borrow cached authority",
+   runCatching { repo.home() }.exceptionOrNull()===error&&api.calls.drop(cursor).map{it.path}==listOf(walletPath))
+ }
  api.handler=happy
  ck("fresh legacy snapshot replaces enhanced savings, rather than lending it unproven facts",repo.home().savings==null)
  api.handler={throw ApiFailure("connection_unavailable",0)}
@@ -92,7 +134,7 @@ fun main(){
  val releaseQuietHome=CountDownLatch(1)
  var quietHomeResponse:Result<NativeRepository.QuietHome>?=null
  api.handler={request->
-  if(request.path==enhancedPath)throw ApiFailure("contract_query",400)
+  if(request.path in selectors)throw ApiFailure("contract_query",400)
   if(request.path.endsWith("/home")){
    quietHomeStarted.countDown()
    check(releaseQuietHome.await(5,TimeUnit.SECONDS))
