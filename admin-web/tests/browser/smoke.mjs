@@ -404,20 +404,29 @@ try {
   page.on('request',captureLinkedSms);
   await paymentRow(fixturePayment).getByRole('button', {name: 'Review linked SMS', exact: true}).click();
   const paymentDetail = page.getByRole('region', {name: 'Payment details', exact: true});
-  await paymentDetail.getByText(fixturePayment.ftId, {exact: true}).waitFor();
   await paymentDetail.getByRole('region', {name:'Original SMS', exact:true}).getByText(fixtureOriginalSms, {exact:true}).waitFor();
+  assert.equal(await paymentDetail.evaluate(detail => document.getElementById(detail.getAttribute('aria-describedby'))?.textContent),fixturePayment.ftId);
+  assert.equal(await paymentDetail.getByRole('heading',{name:'Original SMS',exact:true}).count(),1);
+  assert.equal(await paymentDetail.getByText(fixturePayment.ftId,{exact:true}).count(),0);
   page.off('request',captureLinkedSms);
   assert.deepEqual(linkedSmsReads,[['GET','/api/admin/burimunsi/payments/'+fixturePayment.id+'/sms-evidence','',null],
     ['GET','/api/admin/momo/observations/'+fixtureSmsEvidenceId+'/content','?collectionId='+fixturePayment.groupId,'View SMS from payment details']]);
   assert.equal(await paymentDetail.getByRole('textbox').count(),0);
 
-  await paymentDetail.getByText('Unallocated', {exact: true}).waitFor();
+  assert.equal(await paymentDetail.getByText('Unallocated', {exact:true}).count(),0);
+  await paymentRow(fixturePayment).getByTitle('Unallocated',{exact:true}).waitFor();
   await paymentDetail.getByRole('button', {name: 'Close', exact: true}).click();
   await paymentDetail.waitFor({state: 'hidden'});
+  assert(await paymentRow(fixturePayment).getByRole('button',{name:'Review linked SMS',exact:true}).evaluate(button=>button===document.activeElement));
   await page.getByRole('button', {name: 'Clear all filters', exact: true}).click();
   await paymentRow(fixtureOutgoingPayment).getByRole('button', {name: fixtureOutgoingPayment.ftId, exact: true}).click();
-  await paymentDetail.getByText(fixtureOutgoingPayment.ftId, {exact: true}).waitFor();
-  await paymentDetail.getByText('RWF 5,000', {exact: true}).waitFor();
+  await page.waitForFunction(reference => {
+    const detail=document.querySelector('[aria-label="Payment details"]');
+    return detail && document.getElementById(detail.getAttribute('aria-describedby'))?.textContent===reference;
+  },fixtureOutgoingPayment.ftId);
+  assert.equal(await paymentDetail.getByText(fixtureOutgoingPayment.ftId, {exact: true}).count(),0);
+  assert.equal(await paymentDetail.getByText('RWF 5,000', {exact: true}).count(),0);
+  await paymentRow(fixtureOutgoingPayment).getByText('5,000',{exact:true}).waitFor();
   assert.equal(await paymentDetail.getByRole('region', {name:'Original SMS', exact:true}).count(), 0);
   assert.equal(await paymentDetail.getByText(fixtureOriginalSms,{exact:true}).count(),0);
   assert.equal(await paymentDetail.getByText(fixtureSmsEvidenceId, {exact: true}).count(), 0);

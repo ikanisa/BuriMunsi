@@ -142,7 +142,8 @@ try {
   async function openAllocation(page) {
     await page.getByRole('link', {name:'Payments',exact:true}).click();
     await page.getByRole('button', {name:fixturePayment.ftId,exact:true}).click();
-    const wizardEntry = page.getByRole('link',{name:'Allocate to member',exact:true});
+    const wizardEntry = page.getByRole('link',{name:'Allocate to member',exact:true}).or(
+      page.getByRole('link',{name:'Unallocated – allocate payment '+fixturePayment.ftId,exact:true})).first();
     const inlineEntry = page.getByRole('combobox',{name:'Member',exact:true});
     await wizardEntry.or(inlineEntry).first().waitFor();
     if (await wizardEntry.count()) {
@@ -189,10 +190,12 @@ try {
     assert.equal(await body.getByRole('button',{name:'Retry allocation',exact:true}).count(),0);
     await check.click();
     await body.waitFor({state:'hidden'});
-    await page.getByRole('region',{name:'Payment details'}).getByText('Allocated',{exact:true}).waitFor();
+    const allocated = page.getByRole('row').filter({has:page.getByRole('button',{name:fixturePayment.ftId,exact:true})})
+      .getByTitle('Allocated',{exact:true}).or(page.getByRole('region',{name:'Payment details'}).getByText('Allocated',{exact:true})).first();
+    await allocated.waitFor();
     await page.reload({waitUntil:'domcontentloaded'});
-    await page.getByRole('heading',{name:'Payment details',exact:true}).waitFor();
-    await page.getByRole('region',{name:'Payment details'}).getByText('Allocated',{exact:true}).waitFor();
+    await page.getByRole('region',{name:'Payment details'}).waitFor();
+    await allocated.waitFor();
     assert.equal(await body.count(),0);
     assert.equal(await page.getByRole('button',{name:'Allocate',exact:true}).count(),0);
     if (await openRecovery.count()) {

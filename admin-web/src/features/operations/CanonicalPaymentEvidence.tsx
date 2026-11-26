@@ -10,7 +10,7 @@ import {receiverEvidenceItem} from './receiverSmsContract';
 import {useOperationRead} from './useOperationRead';
 
 const linkedEvidence = z.object({paymentId:paymentIdSchema,groupId:paymentIdSchema,evidence:receiverEvidenceItem.nullable()}).strict();
-type EvidenceLink = {paymentId: string; group: string; sourceId: string};
+type EvidenceLink = {paymentId: string; group: string; sourceId: string; headingId?: string};
 
 export function mayViewPaymentSms(user: AdminUser | null, group: string | null | undefined): user is AdminUser {
   return !!user && !!group && user.financialModel === 'canonical_evidence_ledger' && hasScopedAdminAuthority(user) &&
@@ -25,7 +25,7 @@ export function CanonicalPaymentEvidence(link: EvidenceLink) {
   return <OriginalSms key={authority} {...link} authority={authority} session={session} />;
 }
 
-function OriginalSms({paymentId,group,sourceId,authority,session}: EvidenceLink & {authority:string;session:SessionContextValue}) {
+function OriginalSms({paymentId,group,sourceId,headingId,authority,session}: EvidenceLink & {authority:string;session:SessionContextValue}) {
   const live = useRef<SessionContextValue | null>(null);
   const dispatched = useRef(false);
   useLayoutEffect(() => {live.current = session; return () => {live.current = null;};}, [session]);
@@ -58,7 +58,8 @@ function OriginalSms({paymentId,group,sourceId,authority,session}: EvidenceLink 
   const {result,retry} = useOperationRead(authority,true,load,{reuseSettledOnResume:true});
   const user = session.user;
   if (session.status !== 'authenticated' || !user || !session.isCurrentAuthority(session.epoch,user.id,user.sessionId)) return null;
-  return <section className="payment-detail-evidence" aria-label="Original SMS"><h3>Original SMS</h3>
+  return <section className="payment-detail-evidence" aria-labelledby={headingId} aria-label={headingId ? undefined : 'Original SMS'}>
+    {!headingId && <h3>Original SMS</h3>}
     {!result ? <LoadingState label="Loading original SMS" /> : result.status === 'error' ? <p role="alert">
       The original SMS could not be verified. <button type="button" className="operations-link"
         onClick={() => {dispatched.current = false; retry();}}>Try again</button></p> :

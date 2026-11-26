@@ -1,4 +1,4 @@
-import {useCallback, useState} from 'react';
+import {useCallback, useId, useRef, useState} from 'react';
 import {Link, useLocation, useNavigate, useSearchParams} from 'react-router';
 import {AdminRequestError} from '../../api/client';
 import {useSession} from '../../session/SessionProvider';
@@ -58,6 +58,7 @@ const categoryBookmarks = [{key:'allocation',kind:'category'},{key:'direction',k
 function ScopedPaymentRecords() {
   const {epoch, request, user} = useSession(), [params, setParams] = useSearchParams();
   const location = useLocation(), navigate = useNavigate();
+  const detailId = useId(), opener = useRef<HTMLButtonElement | null>(null);
   const [confirmation, setConfirmation] = useState(''), [detailRevision, setDetailRevision] = useState(0);
   const [allocationRevision, setAllocationRevision] = useState(0);
   const canReadSms = canReadSmsEvidence(user), group = user?.adminIdentity?.collectionId;
@@ -88,8 +89,9 @@ function ScopedPaymentRecords() {
   const data = result?.status === 'success' ? result.value : null;
   const rows = data?.items ?? [];
   const scopedGroup = group ?? rows[0]?.groupId;
+  const selectedRow = rows.find(row => row.id === selected);
   const detailRead = usePaymentDetail(selected, scopedGroup, !!group || !!result,
-    rows.find(row => row.id === selected)?.version, JSON.stringify([payload, detailRevision, allocationRevision]));
+    selectedRow?.version, JSON.stringify([payload, detailRevision, allocationRevision]));
   const refresh = () => {
     retry();
     if (selected) setDetailRevision(value => value + 1);
@@ -114,11 +116,16 @@ function ScopedPaymentRecords() {
     } else next.delete('payment');
     setParams(next);
   }
-  function rowButton(row: BuriMunsiPayment, name: string) {
-    return <button type="button" className="operations-link" aria-expanded={selected === row.id} onClick={() => show(row.id)}><CompactText cell>{name}</CompactText></button>;
+  function rowButton(row: BuriMunsiPayment, name: string, reference = false) {
+    return <button type="button" className="operations-link" aria-expanded={selected === row.id}
+      id={reference && selected === row.id ? detailId+'-row-reference' : undefined}
+      aria-controls={selected === row.id ? detailId : undefined} onClick={event => {
+        opener.current = event.currentTarget;
+        show(row.id);
+      }}><CompactText cell>{name}</CompactText></button>;
   }
   const columns: FinancialColumn<BuriMunsiPayment>[] = [
-    {key:'reference',label:'FT reference',kind:'text',value:r=>recordedText(r.ftId),render:r=>rowButton(r, recordedText(r.ftId) ?? 'View payment')},
+    {key:'reference',label:'FT reference',kind:'text',value:r=>recordedText(r.ftId),render:r=>rowButton(r, recordedText(r.ftId) ?? 'View payment',true)},
     {key:'time',label:'Time',kind:'date',value:r=>paymentInstant(r.atRaw),render:r=>paymentTime(r.atRaw)},
     {key:'amount',label:'Amount',kind:'number',align:'end',value:r=>r.amountRwf,render:r=>r.amountRwf === null ? '—' :
       <span className="payment-flow-amount" data-payment-flow={r.direction}>{amountFormat.format(r.amountRwf)}</span>},
@@ -133,7 +140,10 @@ function ScopedPaymentRecords() {
     options:[{value:'linked',label:'Linked'},{value:'none',label:'None linked'}],render:r=>!r.sourceId ? 'None linked' :
       mayViewPaymentSms(user,r.groupId) ? rowButton(r,'Review linked SMS') : 'Linked'});
   const detail = selected ? <PaymentDetail key={selected} {...detailRead}
-    search={params} onClose={() => show()} /> : null;
+    id={detailId} row={selectedRow} search={params} onClose={() => {
+      show();
+      if (opener.current?.isConnected) opener.current.focus({preventScroll:true});
+    }} /> : null;
   const actions = <>{query && <Button onClick={() => {
     const next = new URLSearchParams(params);
     next.delete('q'); next.delete('offset');
@@ -148,7 +158,7 @@ function ScopedPaymentRecords() {
       actions={actions} summary={data ? () => <><PaymentTotalsSummary {...data.directionTotalsRwf} missing={data.missing} />
         <p>Payment totals as of <time dateTime={data.asOf}>{paymentTime(data.asOf)} (Kigali)</time>.</p></> : undefined}
       pageSize={25} page={page} onPageChange={changePage} expanded={selected && detail ? {key:selected,content:detail} : null} />
-    {selected && result && !rows.some(r=>r.id===selected) && detail}
+    {selected && result && !selectedRow && detail}
     {allocating && <PaymentAllocationWizard key={JSON.stringify([epoch,scopedGroup,allocating])} id={allocating} group={scopedGroup}
       onClose={closeAllocation} onStale={() => setAllocationRevision(value => value + 1)} onAllocated={() => {
         setConfirmation('Payment allocated.'); closeAllocation(); setAllocationRevision(value => value + 1);
@@ -181,35 +191,45 @@ function usePaymentDetail(paymentKey: string | undefined, group: string | undefi
   return current;
 }
 
-function PaymentDetail({search, onClose, result, retry}: {search: URLSearchParams; onClose: () => void;
+function PaymentDetail({id, row, search, onClose, result, retry}: {id:string; row?:BuriMunsiPayment; search: URLSearchParams; onClose: () => void;
   result: OperationReadState<BuriMunsiPayment> | null; retry: () => void}) {
-  const {user} = useSession();
+  const session = useSession(), {user} = session;
   const payment = result?.status === 'success' ? result.value : null;
-  const recordedParty = payment ? paymentCounterpartyEvidence(payment) : null;
+  const reference = recordedText(payment?.ftId);
+  const referenceId = reference ? id+(row && reference === recordedText(row.ftId) ? '-row-reference' : '-reference') : undefined;
   const member = payment && paymentMemberName(payment);
-  const memberPhone = payment && paymentMemberNumber(payment);
-  return <section className={'payment-detail' + (payment ? ' admin-content-enter' : '')} aria-label="Payment details">
+  const recordedParty = payment ? paymentCounterpartyEvidence(payment) : null;
+  const counterparty = (recordedParty?.name || recordedParty?.number) && <details className="payment-detail-disclosure">
+    <summary>Recorded counterparty details</summary><Facts items={[
+      ...(recordedParty.name ? [['Name', recordedParty.name] as [string,string]] : []),
+      ...(recordedParty.number ? [['Number or code', recordedParty.number] as [string,string]] : []),
+    ]} />
+  </details>;
+  const recovery = user && payment?.groupId && payment.state === 'allocated' && payment.canAllocate === true &&
+    <Link className="operations-link" to={buriMunsiPaymentsPath + '?' + new URLSearchParams({...Object.fromEntries(search),allocate:payment.id})}
+      state={{allocationReturn:payment.id}} preventScrollReset aria-haspopup="dialog">Review allocation request</Link>;
+  const hasSms = payment?.sourceId && mayViewPaymentSms(user,payment.groupId) && session.status === 'authenticated' &&
+    session.isCurrentAuthority(session.epoch,user.id,user.sessionId);
+  const inlineSmsHeading = row && hasSms ? id+'-original' : undefined;
+  const heading = !payment || !row ? reference ?? 'Payment details' : inlineSmsHeading ? 'Original SMS' : null;
+  const extra = (counterparty || recovery) && <div className="payment-detail-options">{counterparty}{recovery}</div>;
+  return <section id={id} className={'payment-detail' + (payment ? ' admin-content-enter' : '')}
+    aria-label="Payment details" aria-describedby={referenceId}>
     <header className="payment-detail-heading">
-      <h2>{recordedText(payment?.ftId) ?? 'Payment details'}</h2>
-      <div>{payment && <AllocationStatus row={payment} search={search} text />}<Button onClick={onClose}>Close</Button></div>
+      {heading ? <h2 id={inlineSmsHeading ?? (!row ? referenceId : undefined)}>{heading}</h2> : extra || <p>No additional details.</p>}
+      <Button onClick={onClose}>Close</Button>
     </header>
     {!result ? <LoadingState label="Loading payment" layout="details" /> : result.status === 'error' ? <ErrorState message={result.message} onRetry={retry} /> :
-      payment && <><Facts items={[['Amount', paymentAmount(payment.amountRwf)], ['IN/OUT', <PaymentDirection direction={payment.direction} />],
-        ['Time', paymentTime(payment.atRaw)],
-        ...(member ? [['Member', member] as [string,string]] : []),
-        ...(memberPhone ? [['Member phone', memberPhone] as [string,string]] : [])]} />
-        {(recordedParty?.name || recordedParty?.number) && <details className="payment-detail-disclosure">
-          <summary>Recorded counterparty details</summary><Facts items={[
-            ...(recordedParty.name ? [['Name', recordedParty.name] as [string,string]] : []),
-            ...(recordedParty.number ? [['Number or code', recordedParty.number] as [string,string]] : []),
-          ]} />
-        </details>}
+      payment && <>
+        {!row && <div className="payment-detail-summary" role="group" aria-label="Payment summary">
+          <strong>{paymentAmount(payment.amountRwf)}</strong><PaymentDirection direction={payment.direction} />
+          <span>{paymentTime(payment.atRaw)}</span><AllocationStatus row={payment} search={search} text />
+          {member && <CompactText>{member}</CompactText>}
+        </div>}
+        {row && reference && reference !== recordedText(row.ftId) && <p>Current reference <span id={referenceId}>{reference}</span></p>}
         {payment.sourceId && payment.groupId && <CanonicalPaymentEvidence key={payment.sourceId} paymentId={payment.id}
-          group={payment.groupId} sourceId={payment.sourceId} />}
-        {user && payment.groupId && payment.state === 'allocated' && payment.canAllocate === true && <Link className="operations-link"
-          to={buriMunsiPaymentsPath + '?' + new URLSearchParams({...Object.fromEntries(search),allocate:payment.id})}
-          state={{allocationReturn:payment.id}} preventScrollReset aria-haspopup="dialog">
-          Review allocation request</Link>}
+          group={payment.groupId} sourceId={payment.sourceId} headingId={inlineSmsHeading} />}
+        {heading && extra}
       </>}
   </section>;
 }
