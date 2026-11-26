@@ -20,6 +20,7 @@ import {PostgresRecordsStore} from '../../functions/_shared/domain/burimunsi/pos
 import {RecordsService} from '../../functions/_shared/domain/burimunsi/records-service.js';
 import {handleAdmin} from '../../functions/_shared/domain/admin_bridge.js';
 import {createNativeHandler} from '../../functions/_shared/domain/burimunsi/http.js';
+import {verifyBrowserHomeBootstrap} from './fresh-browser-home.mjs';
 
 const group = 'browser-fixture-group';
 const origin = 'https://synthetic.invalid';
@@ -386,4 +387,5 @@ export async function qualifyNativeReads({pool, competingPool, admissionPool, bu
   await denial;
   assert.equal((await lease(revoked)).renewed,null);
   console.log('PASS per-installation renewals serialize, another installation proceeds, logout denies renewal and disabled SMS consent persists');
+  await verifyBrowserHomeBootstrap({admitted,pool,fixtureSql:inspect,businessStatements,group,accounts});
 }

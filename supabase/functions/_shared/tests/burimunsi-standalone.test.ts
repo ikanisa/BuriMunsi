@@ -87,9 +87,13 @@ Deno.test('standalone preserves native and dedicated Admin admission without bro
     const handler = createHandler(surface, () => env, {standalone: true, reportHealth: () => false});
     const req = request(surface, path, 'OPTIONS', origin);
     req.headers.set('Access-Control-Request-Method', method);
+    req.headers.set('Access-Control-Request-Headers', 'x-burimunsi-session-home');
     const response = await handler(req);
     assertEquals(response.status, status, `${path} from ${origin}`);
     assertEquals(response.headers.get('Access-Control-Allow-Origin'), status === 204 ? origin : null);
+    assertEquals(response.headers.get('Access-Control-Allow-Headers')?.includes('X-BuriMunsi-Session-Home') ?? false,
+      status === 204 && surface === 'admin-api' && origin === BURIMUNSI_ADMIN_ORIGIN &&
+      method === 'GET' && path === '/api/admin/auth/session');
   }
   const sessionRequest = request('admin-api', '/api/admin/auth/session', 'GET', BURIMUNSI_ADMIN_ORIGIN);
   assertEquals(adminSessionOriginMatches(sessionRequest, env, profile, {origin: BURIMUNSI_ADMIN_ORIGIN}), true);

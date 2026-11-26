@@ -1,31 +1,17 @@
 import {adminAccountSession,validateAdminOrigin} from './admin_accounts.js';
 import {managedAdminObservationsEnabled,readPaymentSmsEvidence} from './admin_burimunsi_observations.js';
 import {BURI_ADMIN_PRIVATE_HEADERS} from './admin_burimunsi_authority.js';
-import {activePhoneOperator} from './admin_email_policy.js';
+import {paymentsContext,readScopedAdminHome} from './admin_burimunsi_payment_scope.js';
 import {ApiError,json,readJson} from './core.js';
 import {lockCollectMutation} from '../postgres-mutation-lock.js';
 import {BuriError,requireThat} from './burimunsi/errors.js';
-import {PostgresNativeAuthority} from './burimunsi/postgres-authority.js';
-import {assignPayment,readPayment,readPaymentAnalysisRows,readPayments,readPaymentsHome,setPaymentsScope,
+import {assignPayment,readPayment,readPaymentAnalysisRows,readPayments,
   readMemberPaymentStatement,readOptionalMemberPaymentBalance,MEMBER_STATEMENT_PAGE_SIZE,MEMBER_STATEMENT_MAX_ROWS} from './burimunsi/postgres-payments.js';
 import {analyzeCanonicalPaymentRows,parsePaymentAnalysisQuery} from './burimunsi/payment-analysis-shared.mjs';
 import {canonicalJson,exactKeys,requireId,requireRequestId,sha256} from './burimunsi/values.js';
 
 const base='/api/admin/burimunsi/';
 const operation='burimunsi.allocate';
-const scopeSql=`SELECT a.id,a.role,'payments.allocate'=ANY(a.capabilities) AS can_allocate,
- (resolved.actor->'permissions' ? 'sms.read') AND ('sms.read'=ANY(a.capabilities)) AS can_read_sms,
- resolved.actor->'permissions' ?& ARRAY['users.read','collections.read'] AS can_read_statement
- FROM private.burimunsi_browser_pin_session($1,$2,$3) AS resolved(actor)
- JOIN private.burimunsi_accounts a ON a.id=$4::uuid AND a.collection_id=$1
- WHERE resolved.actor->>'collectionId'=a.collection_id AND resolved.actor->>'accountId'=a.id::text
-   AND resolved.actor->>'principalId'=a.principal_user_id AND a.principal_user_id=$5
-   AND resolved.actor->>'sessionId'=$6 AND resolved.actor->>'publicId'=$7 AND resolved.actor->>'adminId'=$8
-   AND resolved.actor->>'operatorRole'=a.role AND a.role IN ('admin','staff') AND a.active AND NOT a.removed
-   AND 'records.read'=ANY(a.capabilities) AND resolved.actor->'permissions' ? 'payments.read'
-   AND private.assert_actor('payments.read',NULL,NULL,1::bigint,NULL::bigint)=a.principal_user_id
- FOR SHARE OF a`;
-
 function query(url,allowed,{maxOffset=100000}={}) {
   const values={};
   for(const [key,value] of url.searchParams){
@@ -43,27 +29,6 @@ function query(url,allowed,{maxOffset=100000}={}) {
   requireThat(!values.direction||['incoming','outgoing'].includes(values.direction),'invalid_query');
   if(values.memberId!==undefined)requireId(values.memberId);
   return values;
-}
-
-function paymentsContext(env,account) {
-  const proof=activePhoneOperator(account);
-  const groupId=env.BURIMUNSI_COLLECTION_ID;
-  if(!proof||proof.collectionId!==groupId||!account.permissions.includes('payments.read'))
-    throw new ApiError(403,'permission_required','Payments are unavailable for this account.');
-  const db=env.DB,authority=new PostgresNativeAuthority({db,groupId});
-  const scopeArgs=[groupId,account.token_hash,account.origin,proof.accountId,
-    account.principal_id,account.auth_session_id,account.public_id,account.id];
-  const scoped=async sql=>{
-    await setPaymentsScope(sql,groupId);
-    const rows=await sql.unsafe(scopeSql,scopeArgs);
-    requireThat(rows.length===1,'access_denied',403);
-    const actor=rows[0];
-    return {showSms:actor.role==='admin'&&account.permissions.includes('sms.read'),
-      canAnalyzeSms:actor.role==='admin'&&actor.can_read_sms===true&&account.permissions.includes('sms.read'),
-      canReadStatement:actor.can_read_statement===true,
-      canAllocate:actor.can_allocate===true};
-  };
-  return {db,groupId,proof,authority,scoped};
 }
 
 export async function readScopedAdminMemberPaymentDetail(env,account,{memberId,include,readProfile}) {
@@ -138,11 +103,7 @@ export async function adminBuriMunsiPayments(request,env) {
         directionTotalsRwf:{incoming:incoming.toString(),outgoing:outgoing.toString()},missing:0,offset,limit,asOf};
     }else if(request.method==='GET'&&relative==='home'){
       query(url,[]);
-      result=await db.withLockedReadSnapshot(async sql=>{
-        const projection=await scoped(sql);
-        const home=await readPaymentsHome(sql,groupId,new Date().toISOString(),projection,{adminTotals:true});
-        return {...home,recentPayments:home.recentPayments.map(row=>({...row,canAllocate:projection.canAllocate}))};
-      });
+      result=await db.withLockedReadSnapshot(sql=>readScopedAdminHome(sql,{groupId,scoped}));
     }else if(request.method==='GET'&&relative==='payments'&&url.searchParams.has('statement')){
       const {statement,memberId,offset,revision}=query(url,['statement','memberId','offset','revision'],{maxOffset:MEMBER_STATEMENT_MAX_ROWS-1});
       requireThat(statement==='1'&&memberId&&offset%MEMBER_STATEMENT_PAGE_SIZE===0&&

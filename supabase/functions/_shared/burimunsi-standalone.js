@@ -2,6 +2,7 @@ import {MANAGED_SUPABASE_ORIGIN} from './deployment-profile.js';
 
 export const BURIMUNSI_ADMIN_ORIGIN = 'https://burimunsi-admin.ikanisa.com';
 export const BURIMUNSI_PRODUCT_MODE = 'standalone';
+export const BURIMUNSI_SESSION_HOME_HEADER = 'X-BuriMunsi-Session-Home';
 export const MANAGED_PRODUCTION_PROFILE_SHA256 = '55ea350d7bf9ddef3e98022952bfe179da6216d52051ae0f4d6457d884ed1c61';
 
 const privacyDocuments = new Set([
