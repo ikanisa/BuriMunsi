@@ -3,7 +3,6 @@
 .admin-auth-brand { display: flex; align-items: center; gap: 12px; padding: 0 0 24px; font-size: 1.2rem; font-weight: 750; }
 .admin-auth-brand img { width: 42px; height: 42px; object-fit: contain; border-radius: 12px; }
 .admin-auth-brand .admin-auth-wordmark { width: 120px; height: auto; border-radius: 0; }
-.admin-auth-brand small { display: block; color: var(--admin-muted); font-size: .6875rem; letter-spacing: .08em; text-transform: uppercase; }
 .admin-auth-card { padding: clamp(24px, 5vw, 36px); }
 .admin-auth-card h1, .admin-auth-task h1 { margin: 0; font-size: 1.75rem; line-height: 1.2; letter-spacing: -.04em; }
 .admin-auth-subtitle, .admin-auth-task > p { margin: 10px 0 24px; color: var(--admin-muted); }

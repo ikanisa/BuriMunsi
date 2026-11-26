@@ -8,7 +8,7 @@ import {parsePhoneTeam, type PhoneTeamMember} from '../../src/session/phoneTeam'
 import {parsePhoneLoginSession, parseSessionUser} from '../../src/session/sessionResponses';
 import {hasScopedAdminAuthority} from '../../src/session/ownerIdentity';
 import {sensitiveVerificationDeadline} from '../../src/session/sessionPolicy';
-import {scopes} from '../burimunsi/fixture';
+import {directory, provisioning, scopes, staffPrincipal} from '../burimunsi/fixture';
 import {BuriDirectoryView} from '../../src/features/burimunsi/BuriDirectoryView';
 import type {BuriSharedOperator} from '../../src/features/burimunsi/contracts';
 
@@ -50,19 +50,24 @@ describe('dedicated phone accounts', () => {
   });
 
   it.each([
-    {sharedRole: 'staff', assignedRole: 'admin', active: true, label: 'Admin', hiddenLabel: 'Staff', status: 'Recorded enabled'},
-    {sharedRole: 'admin', assignedRole: 'staff', active: false, label: 'Staff', hiddenLabel: 'Admin', status: 'Recorded disabled'},
-    {sharedRole: 'owner', assignedRole: null, active: false, label: 'Unassigned', hiddenLabel: 'Admin', status: 'No approval recorded'},
-  ] as const)('shows $label for an operator with shared $sharedRole authority', ({sharedRole, assignedRole, active, label, hiddenLabel, status}) => {
+    {sharedRole: 'staff', sharedStatus: 'active', assignedRole: 'admin', active: true, label: 'Admin', hiddenLabel: 'Staff', status: 'Enabled'},
+    {sharedRole: 'admin', sharedStatus: 'revoked', assignedRole: 'staff', active: false, label: 'Staff', hiddenLabel: 'Admin', status: 'Disabled'},
+    {sharedRole: 'owner', sharedStatus: 'active', assignedRole: null, active: false, label: 'Unassigned', hiddenLabel: 'Admin', status: 'No approval recorded'},
+  ] as const)('shows $label for an operator with shared $sharedRole authority', ({sharedRole, sharedStatus, assignedRole, active, label, hiddenLabel, status}) => {
     const operator: BuriSharedOperator = {adminId, principalId, displayName: 'Test operator', role: sharedRole, email: ''};
     const directory = {collectionId: 'group-one', configured: true, team: [operator],
       approvals: assignedRole ? [{operator, phone: assignedRole === 'admin' ? admin.phone : staff.phone, role: assignedRole,
-        active, version: 1, sharedStatus: 'active' as const, capabilities: ['records.read']}] : []};
+        active, version: 1, sharedStatus, capabilities: ['records.read']}] : []};
     render(<BuriDirectoryView directory={directory} provisioning={null} provisioningError={false} phoneAccounts />);
     const row = within(screen.getByRole('row', {name: /Test operator/}));
     expect(row.getByRole('cell', {name: label})).toBeVisible();
     expect(row.queryByRole('cell', {name: hiddenLabel})).toBeNull();
     expect(row.getByText(status)).toBeVisible();
+    if (assignedRole) {
+      expect(row.getByText('Account ' + sharedStatus)).toBeVisible();
+      expect(row.getByText('View records')).toBeVisible();
+      expect(row.queryByText(/records\.read|Collect status/)).toBeNull();
+    }
   });
 
   it('binds the two-role directory and scoped administrator to the authenticated native account', () => {
@@ -127,11 +132,22 @@ describe('dedicated phone accounts', () => {
       if (path === '/api/admin/momo/native-setup') return Response.json({...scopes,
         collections: groups.map(id => ({...scopes.collections[0], id, title: id})),
         scopes: groups.map(collectionId => ({...scopes.scopes[0], collectionId}))});
+      if (path.startsWith('/api/admin/burimunsi/operators?')) return Response.json({...directory, collectionId:'group-one', approvalContract:2});
+      if (path.startsWith('/api/admin/burimunsi/provisioning?')) return Response.json({...provisioning, collectionId:'group-one', scopeEnabled:false, configured:false});
       return Response.json({error: 'unavailable'}, {status: 503});
     });
     open('/admin/burimunsi', fetchImpl);
     fireEvent.click(await screen.findByRole('button', {name: 'Load BuriMunsi access'}, {timeout: 5000}));
     expect(await screen.findByText('group-one')).toBeVisible();
+    expect(await screen.findByRole('heading', {name:'Android app access'})).toBeVisible();
+    expect(screen.getByText('Group access is disabled.')).toBeVisible();
+    expect(screen.getByText('Android app setup is incomplete.')).toBeVisible();
+    expect(screen.queryByText(/Recorded scope|Group access is enabled/)).toBeNull();
+    fireEvent.change(screen.getByRole('combobox', {name:'Account'}), {target:{value:staffPrincipal}});
+    fireEvent.click(screen.getByRole('button', {name:'Review access'}));
+    const preview = within(await screen.findByRole('region', {name:'Access preview'}));
+    expect(preview.getByText(/View records.*Enroll members/)).toBeVisible();
+    expect(preview.queryByText(/records\.read|members\.enroll/)).toBeNull();
     expect(screen.queryByText('another-group')).toBeNull();
     expect(fetchImpl.mock.calls.some(([path]) => String(path).includes('collectionId=another-group'))).toBe(false);
     expect(screen.queryByText('Owner verification')).toBeNull();
@@ -164,10 +180,13 @@ describe('dedicated phone accounts', () => {
       throw new Error('Unexpected request');
     });
     open('/admin/admin-users', fetchImpl);
-    await screen.findByRole('row', {name: /Group administrator/});
-    expect(screen.getByRole('heading', {name: 'Admin'})).toBeVisible();
-    expect(screen.getByRole('heading', {name: 'Staff'})).toBeVisible();
-    expect(screen.queryByRole('heading', {name: 'Owner'})).toBeNull();
+    const adminRow = await screen.findByRole('row', {name: /Group administrator/});
+    const staffRow = screen.getByRole('row', {name: /Group operator/});
+    expect(within(adminRow).getByRole('cell', {name: 'Admin'})).toBeVisible();
+    expect(within(staffRow).getByRole('cell', {name: 'Staff'})).toBeVisible();
+    expect(screen.queryByRole('cell', {name: 'Owner'})).toBeNull();
+    expect(screen.queryByRole('heading', {name: 'Role permissions'})).toBeNull();
+    expect(screen.queryByText(/admin_users\.manage|overview\.read/)).toBeNull();
     expect(screen.queryByRole('button', {name: /Manage Group administrator|verify|invit/i})).toBeNull();
     fireEvent.click(screen.getByRole('button', {name: 'Create account'}));
     fireEvent.change(screen.getByLabelText('Name'), {target: {value: 'New operator'}});

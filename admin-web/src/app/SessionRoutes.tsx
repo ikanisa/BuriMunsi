@@ -4,11 +4,9 @@ import {LoginPage} from '../session/LoginPage';
 import {publicSessionPaths, safeAdminReturnLocation} from '../session/returnLocation';
 import {useSession, type SessionContextValue} from '../session/SessionProvider';
 import {AdminShell, type AdminNavItem} from '../layout/AdminShell';
-import {androidHelpDestinations} from '../layout/AdminAccountMenu';
-import {usesPhoneCanonicalRecords} from '../session/sessionContext';
 import {Button, ErrorState, LoadingState} from '../ui';
 import {InteractionSuspendedContext} from '../ui/useFocusScope';
-import {canOpenAdminPath} from './route-access';
+import {canOpenAdminPath, redirectsToBuriMunsiHome} from './route-access';
 import type {AccountNavigationItem} from './navigation';
 
 export function SessionProblem({session}: {session: Pick<SessionContextValue, 'logoutUnconfirmed' | 'mfaRecoveryPending' | 'error' | 'signOut' | 'refresh'>}) {
@@ -37,10 +35,8 @@ export function ProtectedShell({navigation, accountNavigation = []}: {navigation
     return <Navigate to={`/admin/login${requested ? `?${new URLSearchParams({returnTo: requested})}` : ''}`} replace />;
   }
   const user = session.user;
+  if (redirectsToBuriMunsiHome(location.pathname, user)) return <Navigate to="/admin" replace />;
   const permitted = navigation.filter(item => canOpenAdminPath(item.path, user));
-  const androidHelpPaths = usesPhoneCanonicalRecords(session)
-    ? androidHelpDestinations.map(item => item.path).filter(path => canOpenAdminPath(path, user))
-    : undefined;
   const permittedAccount = accountNavigation.filter(item => canOpenAdminPath(item.path, user) &&
     (!item.contextualPath || !canOpenAdminPath(item.contextualPath, user)));
   const rechecking = session.status === 'rechecking';
@@ -50,8 +46,8 @@ export function ProtectedShell({navigation, accountNavigation = []}: {navigation
       <span role="status">Rechecking account access…</span><Button onClick={signOut}>Sign out</Button>
     </div>}
     <InteractionSuspendedContext.Provider value={rechecking}><div inert={rechecking}>
-      <AdminShell navigation={permitted} accountNavigation={permittedAccount} currentPath={`${location.pathname}${location.search}`}
-        identity={{androidHelpPaths, name: session.verificationMode === 'passcode' ? user.displayName ?? user.phone ?? 'BuriMunsi account' : user.email,
+      <AdminShell navigation={permitted} accountNavigation={permittedAccount} showAccountHelp={user.authMethod !== 'phone_passcode'} currentPath={`${location.pathname}${location.search}`}
+        identity={{name: session.verificationMode === 'passcode' ? user.displayName ?? user.phone ?? 'BuriMunsi account' : user.email,
           role: user.role === 'staff' ? 'Staff' : user.role === 'admin' || session.verificationMode === 'passcode' ? 'Admin' : 'Owner'}} onSignOut={signOut}>
         {canOpenAdminPath(location.pathname, user) ? <ScreenBoundary key={location.pathname}><Suspense fallback={<LoadingState label="Opening workspace" />}><Outlet /></Suspense></ScreenBoundary> : <ErrorState title="Access unavailable"
           message="Your account cannot open this page." />}

@@ -140,8 +140,15 @@ try {
     paymentCardBackgrounds.add(await card.evaluate(element => getComputedStyle(element).backgroundColor));
   }
   assert.equal(paymentCardBackgrounds.size, 3);
-  await page.getByText('Inbox status unknown', {exact: true}).waitFor();
-  assert.equal(await page.getByRole('link', {name: 'M-Money SMS', exact: true}).getAttribute('href'), '#/admin/payments?view=sms');
+  assert.equal(await page.getByText(/sync pending|checking sync|inbox status unknown/i).count(),0);
+  assert.equal(await page.getByRole('link', {name:'M-Money SMS',exact:true}).count(),0);
+  await page.getByRole('button', {name:/^Account:/}).click();
+  const accountMenu = page.locator('#admin-account-options');
+  assert(await accountMenu.getByRole('link',{name:'Account security',exact:true}).isVisible());
+  assert(await accountMenu.getByRole('link',{name:'Team',exact:true}).isVisible());
+  assert.equal(await accountMenu.getByText(/^(Help|Activity|Workspace|Privacy requests|Open-source notices)$/).count(),0);
+  assert.equal(await accountMenu.getByRole('link',{name:/WhatsApp support/}).count(),0);
+  await page.getByRole('button', {name:/^Account:/}).click();
   page.off('request', recordLogin);
   assert.deepEqual(loginRequests, legacySessions ? [signInPath, sessionPath] : [signInPath]);
   const cookies = await desktop.context.cookies(origin);
@@ -194,6 +201,11 @@ try {
   const nav = page.getByRole('navigation', {name: 'Admin sections'});
   assert.deepEqual(await nav.getByRole('link').allTextContents(), ['Home', 'Members', 'Payments']);
   assert.equal(await page.getByRole('searchbox', {name: 'Search admin sections'}).count(), 0);
+  for (const retiredPath of ['/admin/requests', '/admin/privacy-requests', '/admin/groups']) {
+    await page.goto(origin + '/#' + retiredPath);
+    await page.waitForURL(url => url.hash === '#/admin');
+    await overview.waitFor();
+  }
   const payments = nav.getByRole('link', {name: 'Payments', exact: true});
   assert.equal(await payments.getAttribute('href'), '#/admin/payments');
   const paymentListResponse = page.waitForResponse(response => {
@@ -232,6 +244,7 @@ try {
   await page.waitForURL(url => url.hash === '#/admin/payments?view=sms');
   const observationTable = receiptInbox.getByRole('region', {name: 'Android receiver observations', exact: true}).getByRole('table');
   await observationTable.waitFor();
+  await receiptInbox.getByRole('region',{name:'Inbox completeness',exact:true}).getByRole('status').waitFor();
   assert.equal(await inboxToggle.getAttribute('aria-expanded'), 'true');
   await paymentRow(fixturePayment).waitFor();
   await page.setViewportSize({width: 390, height: 844});
@@ -431,7 +444,7 @@ try {
   const protectedReads = [];
   sessionPage.on('request', request => {
     const { pathname } = new URL(request.url());
-    if (pathname.startsWith('/api/admin/burimunsi/') || ['/api/admin/momo/native-setup', '/api/admin/core/groups'].includes(pathname)) protectedReads.push(pathname);
+    if (pathname.startsWith('/api/admin/burimunsi/') || ['/api/admin/momo/native-setup', '/api/admin/team/accounts'].includes(pathname)) protectedReads.push(pathname);
   });
 
   await sessionPage.goto(origin + '/admin/security/authenticator?' + new URLSearchParams({ returnTo: '/admin/burimunsi?draft=private' }));
@@ -459,9 +472,9 @@ try {
   // Advance only wall time, as on tab resume before the browser runs due timers.
   await sessionPage.clock.setSystemTime(new Date(Date.parse(expiresAt) + 1));
   await sessionPage.getByRole('button', {name: /^Account:/}).click();
-  await sessionPage.getByRole('link', {name: 'Workspace', exact: true}).click();
+  await sessionPage.getByRole('link', {name: 'Team', exact: true}).click();
   await sessionPage.getByRole('heading', { name: 'Welcome to BuriMunsi' }).waitFor();
-  assert.equal(new URL(sessionPage.url()).hash, '#/admin/login?returnTo=%2Fadmin%2Fgroups');
+  assert.equal(new URL(sessionPage.url()).hash, '#/admin/login?returnTo=%2Fadmin%2Fadmin-users');
   await sessionPage.goBack();
   await sessionPage.waitForURL(url => url.hash === '#/admin/login?returnTo=%2Fadmin%2Flicenses');
   assert.equal(await sessionPage.getByRole('heading', { name: 'Open-source licenses' }).count(), 0);
@@ -551,7 +564,7 @@ try {
   assert.deepEqual(denied, []);
   assert.deepEqual(unexpectedAuth, []);
   assert.deepEqual(incorrectIdentityHeaders, []);
-  const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'admin_home_reports_scoped_sms_health', 'retired_passcode_bookmark_returns_to_overview', 'three_daily_links_and_no_redundant_sidebar_search', 'canonical_payment_direction_filter_and_clear', 'inline_inbox_preserves_financial_table_and_390px_scroll', 'protected_sms_deep_link', 'filtered_member_detail_and_return', 'single_mobile_number_in_member_roster_and_detail', 'member_statement_pinned_revision_full_balance_and_320px_reflow', 'payment_details_link_to_authorized_sms_evidence', 'payment_without_source_and_320px_reflow', 'sms_read_failure_retry',
+  const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'home_has_no_sms_status_and_retired_admin_pages_return_home', 'retired_passcode_bookmark_returns_to_overview', 'three_daily_links_and_no_redundant_sidebar_search', 'canonical_payment_direction_filter_and_clear', 'inline_inbox_preserves_financial_table_and_390px_scroll', 'protected_sms_deep_link', 'filtered_member_detail_and_return', 'single_mobile_number_in_member_roster_and_detail', 'member_statement_pinned_revision_full_balance_and_320px_reflow', 'payment_details_link_to_authorized_sms_evidence', 'payment_without_source_and_320px_reflow', 'sms_read_failure_retry',
       'payer_sms_empty_and_reported_delivered', 'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
       'retired_authenticator_bookmark_preserves_safe_destination', 'missing_scoped_admin_identity_removes_controls', 'session_failure_and_recovery_require_server_authority', 'expired_request_and_history_return_require_sign_in',
       'mobile_drawer_traps_and_restores_focus_and_reflows', 'tablet_core_routes_fit_viewport_and_collect_reconciliation_stays_closed', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, ...authorityChecks, 'no_unexpected_auth_request', 'identity_version_only_on_session_exchanges'];

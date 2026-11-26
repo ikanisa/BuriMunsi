@@ -4,7 +4,7 @@ import {useOperationRead} from '../features/operations/useOperationRead';
 import {Button, Card, EmptyState, ErrorState, Field, LoadingState, PageHeader, StatusBadge} from '../ui';
 import {hasScopedAdminAuthority} from './ownerIdentity';
 import {confirmTeamReceipt, parsePhoneTeam, phoneTeamRoles, prepareTeamAccount,
-  type PhoneTeam, type PhoneTeamMember, type PhoneTeamRole, type TeamChange} from './phoneTeam';
+  type PhoneTeam, type PhoneTeamMember, type TeamChange} from './phoneTeam';
 import {useSession} from './SessionProvider';
 
 export function PhoneTeamPage({profileAccess}: {profileAccess?: ReactNode} = {}) {
@@ -19,7 +19,7 @@ export function PhoneTeamPage({profileAccess}: {profileAccess?: ReactNode} = {})
   }, [request, accountId, phone, role, manageGrant]);
   const {result, retry} = useOperationRead(JSON.stringify([epoch, accountId]), canRead, load);
   const team = result?.status === 'success' ? result.value : null;
-  return <><PageHeader title="Team access" subtitle="Manage who can sign in to BuriMunsi." actions={<>{canRead && profileAccess}<Button onClick={retry} icon="refresh">Refresh</Button></>} />
+  return <><PageHeader title="Team access" actions={<>{canRead && profileAccess}<Button onClick={retry} icon="refresh">Refresh</Button></>} />
     {!canRead ? <ErrorState title="Access unavailable" message="Your account cannot view team access." /> :
       !result ? <LoadingState label="Loading team access" /> :
       result.status === 'error' ? <ErrorState title="Team access unavailable" message={result.message} onRetry={retry} /> :
@@ -87,7 +87,7 @@ function PhoneTeamDirectory({team, canManage, reload}: {team: PhoneTeam; canMana
         {editing ? <p>{editing.displayName} · {editing.phone}</p> : <>
           <Field label="Name" htmlFor="team-name"><input className="admin-input" id="team-name" name="displayName" autoComplete="off" minLength={2} maxLength={100} required /></Field>
           <Field label="Mobile number" htmlFor="team-phone"><input className="admin-input" id="team-phone" name="phone" type="tel" autoComplete="off" maxLength={40} required /></Field>
-          <p>The account starts with the configured four-digit passcode. The user can change it after signing in.</p>
+          <p>Staff can change their default four-digit passcode after signing in.</p>
         </>}
         <p>Role: Staff</p>
         {editing && <Field label="Access" htmlFor="team-access"><select className="admin-input" id="team-access" name="access" defaultValue={editing.active ? 'active' : 'disabled'}>
@@ -101,9 +101,5 @@ function PhoneTeamDirectory({team, canManage, reload}: {team: PhoneTeam; canMana
       </>}
       {feedback && <p role="status">{feedback}</p>}
     </Card>}
-    <Card className="admin-security-card"><h2>Role permissions</h2>
-      {(Object.keys(phoneTeamRoles) as PhoneTeamRole[]).map(role => <div key={role}><h3>{phoneTeamRoles[role]}</h3>
-        <p>{team.permissionsByRole[role].length ? team.permissionsByRole[role].join(', ') : 'No permissions recorded'}</p></div>)}
-    </Card>
   </>;
 }

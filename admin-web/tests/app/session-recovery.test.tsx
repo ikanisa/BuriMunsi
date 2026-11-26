@@ -108,6 +108,18 @@ describe('Admin session recovery through the router', () => {
 });
 
 describe('Admin navigation for the current session', () => {
+  it.each(['/admin/groups','/admin/groups/group-one/edit','/admin/groups/group-one/members/member-one/edit','/admin/requests?key=example-key','/admin/privacy-requests'])(
+    'replaces the BuriMunsi bookmark %s with Home before reading the retired feature', async path => {
+      const {requests} = openAdmin(path, {phonePasscodeOnly:true,session:{user:{...account,...phoneIdentity(),
+        permissions:['overview.read','collections.read','collections.manage','users.read','users.manage','account.manage','privacy.review']}}});
+      await waitFor(() => expect(router.state.location.pathname + router.state.location.search).toBe('/admin'));
+      expect(router.state.historyAction).toBe('REPLACE');
+      expect(requests.some(url => /\/(?:groups|requests|privacy)(?:\/|$)/.test(url))).toBe(false);
+      fireEvent.click(await screen.findByRole('button', {name:/^Account:/}));
+      expect(screen.queryByText('Help', {selector:'summary'})).toBeNull();
+      expect(screen.queryByRole('link', {name:/^(?:Workspace|Activity|Privacy requests|Open-source notices)$/})).toBeNull();
+      expect(screen.getByRole('link', {name:'Account security'})).toBeVisible();
+    });
   it('takes old People list bookmarks to the same filtered member roster', async () => {
     const {requests} = openAdmin('/admin/users?search=Group+One&sort=public_id_asc&status=suspended&unknown=drop',
       {phonePasscodeOnly:true, session: {user: {...account, ...phoneIdentity(), permissions: ['users.read']}}});

@@ -25,10 +25,7 @@ export function AccountSecurityPage({onVerify, onAuthenticator, onLicenses, onPa
 
   if (session.verificationMode === 'passcode') {
     return <>
-      <PageHeader title="Account security" subtitle="Manage your BuriMunsi sign-in." />
-      <Card className="admin-security-links">
-        <Button onClick={onLicenses}>Open-source licenses</Button>
-      </Card>
+      <PageHeader title="Account security" />
       {session.user?.accountId && <ChangePasscodeForm onSignIn={onSignIn} />}
     </>;
   }

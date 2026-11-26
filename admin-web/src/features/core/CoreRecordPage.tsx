@@ -83,7 +83,8 @@ export function CoreRecordPage({ area, id, request, permissions, actorId, princi
   const displayRow = memberProfile && resourceRow ? {...resourceRow, mobile_number:memberMobileNumber(resourceRow)} : resourceRow;
   const detailFields = memberProfile ? fields.members : fields[area];
   return <>
-    <PageHeader title={area === 'users' ? 'Person' : AREA_TITLES[area]} subtitle="Review this record and its related information." actions={<>
+    <PageHeader title={area === 'users' ? 'Person' : AREA_TITLES[area]} subtitle={simplePayments && memberProfile ? undefined :
+      'Review this record and its related information.'} actions={<>
       <Button type="button" onClick={() => navigate(back)}>Back to {paymentsReturn ? 'payments' : scopedMember && area === 'users' ? 'members' : AREA_TITLES[area].toLowerCase()}</Button>
       {actions.map(action => <Button key={action.path} type="button" variant={action.variant} onClick={() => navigate(action.path)}>{action.label}</Button>)}
     </>} />

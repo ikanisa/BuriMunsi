@@ -57,7 +57,7 @@ export function OperatorPreparation({directory, blocked, context, onRecorded, ph
         <label>{phoneAccounts ? 'Account' : 'Collect account'}<select className="admin-input" value={principal} onChange={event => select(event.target.value)}><option value="">Select an account</option>{choices.map(item => <option key={item.principalId} value={item.principalId}>{item.displayName || (phoneAccounts ? item.principalId : item.email)} · {phoneAccounts ? directory.approvals.find(approval => approval.operator.principalId === item.principalId)?.phone ?? item.principalId : item.email}</option>)}</select></label>
         {current && <>
           <label>Login phone<input className="admin-input" value={phone} inputMode="tel" autoComplete="off" onChange={event => {setPhone(event.target.value); invalidate();}} /></label>
-          <label>BuriMunsi role<select className="admin-input" value={role} disabled={!!existing} onChange={event => {setRole(event.target.value); setCapabilities([REQUIRED_CAPABILITY]); invalidate();}}><option value="staff">Staff</option>{(current.role !== 'staff' || existing?.role === 'admin') && <option value="admin">Administrator</option>}</select></label>
+          <label>BuriMunsi role<select className="admin-input" value={role} disabled={!!existing} onChange={event => {setRole(event.target.value); setCapabilities([REQUIRED_CAPABILITY]); invalidate();}}><option value="staff">Staff</option>{(current.role !== 'staff' || existing?.role === 'admin') && <option value="admin">{phoneAccounts ? 'Admin' : 'Administrator'}</option>}</select></label>
           <label>Access status<select className="admin-input" value={active ? 'enabled' : 'disabled'} disabled={!existing} onChange={event => {setActive(event.target.value === 'enabled'); invalidate();}}><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select></label>
           <fieldset><legend>Capabilities</legend>{BURI_CAPABILITIES.map(([name, label]) => <label key={name}><input type="checkbox" checked={capabilities.includes(name)} disabled={name === REQUIRED_CAPABILITY || !roleAllowsCapability(role, name)} onChange={event => {setCapabilities(previous => event.target.checked ? [...previous, name] : previous.filter(item => item !== name)); invalidate();}} /> {label}</label>)}</fieldset>
         </>}
@@ -74,10 +74,12 @@ export function OperatorPreparation({directory, blocked, context, onRecorded, ph
     {result?.status === 'not_found' && result.canRetry && canWrite && context &&
       <Button type="button" disabled={working} onClick={() => void run(() => checkBuriApproval(context, result.requestId))}>Retry original approval</Button>}
     {review?.directory === directory && <section aria-label="Access preview"><h3>Access preview</h3><p>Nothing has been sent or changed.</p><dl>
-      <div><dt>Group reference</dt><dd>{review.draft.collectionId}</dd></div><div><dt>Account</dt><dd>{phoneAccounts ? review.draft.operator.displayName || review.draft.operator.principalId : review.draft.operator.email}</dd></div><div><dt>Person reference</dt><dd>{review.draft.operator.principalId}</dd></div>
-      <div><dt>Login phone</dt><dd>{review.draft.phone}</dd></div><div><dt>Role</dt><dd>{review.draft.role}</dd></div>
-      <div><dt>Status</dt><dd>{review.draft.active ? 'Enabled' : 'Disabled'}</dd></div><div><dt>Capabilities</dt><dd>{review.draft.capabilities.join(', ')}</dd></div>
-      <div><dt>Current approval version</dt><dd>{review.draft.expectedVersion}</dd></div>
+      {!phoneAccounts && <div><dt>Group reference</dt><dd>{review.draft.collectionId}</dd></div>}
+      <div><dt>Account</dt><dd>{phoneAccounts ? review.draft.operator.displayName || review.draft.operator.principalId : review.draft.operator.email}</dd></div>
+      {!phoneAccounts && <div><dt>Person reference</dt><dd>{review.draft.operator.principalId}</dd></div>}
+      <div><dt>Login phone</dt><dd>{review.draft.phone}</dd></div><div><dt>Role</dt><dd>{phoneAccounts ? (review.draft.role === 'admin' ? 'Admin' : 'Staff') : review.draft.role}</dd></div>
+      <div><dt>Status</dt><dd>{review.draft.active ? 'Enabled' : 'Disabled'}</dd></div><div><dt>{phoneAccounts ? 'Allowed actions' : 'Capabilities'}</dt><dd>{(phoneAccounts ? BURI_CAPABILITIES.filter(([key]) => review.draft.capabilities.includes(key)).map(([,label]) => label) : review.draft.capabilities).join(', ')}</dd></div>
+      {!phoneAccounts && <div><dt>Current approval version</dt><dd>{review.draft.expectedVersion}</dd></div>}
     </dl>
     {canWrite && context && canApplyBuriApproval(review.draft) &&
       <Button type="button" disabled={blocked || working || needsRecovery}

@@ -1,4 +1,5 @@
 import {fireEvent, render, screen, waitFor} from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import {describe, expect, it, vi} from 'vitest';
 import type {ReactNode} from 'react';
 import {AccountSecurityPage} from '../../src/session/AccountSecurityPage';
@@ -18,6 +19,76 @@ function submitNewPassword() {
 }
 
 describe('account security', () => {
+  it('keeps phone Account security focused on one four-digit change and preserves leading zeros in the request', async () => {
+    const actor = {
+      id: '10000000-0000-4000-8000-000000000001', accountId: '40000000-0000-4000-8000-000000000002',
+      principalId: '20000000-0000-4000-8000-000000000001', sessionId: '30000000-0000-4000-8000-000000000001',
+      role: 'staff', phone: '+250780000002', displayName: 'Test Staff', permissions: ['overview.read'],
+      authMethod: 'phone_passcode', passcodeVerifiedAt: null, financialModel: 'canonical_evidence_ledger',
+    };
+    const writes: unknown[] = [];
+    let authenticated = true, finishChange!: (value: Response) => void;
+    const pending = new Promise<Response>(resolve => {finishChange = resolve;});
+    const fetchImpl = vi.fn<typeof fetch>(async (url, options) => {
+      if (String(url).endsWith('/auth/session')) return reply(authenticated
+        ? {user: actor, csrfToken: 'c'.repeat(64), expiresAt, ownerEmail: null}
+        : {user: null, csrfToken: null, expiresAt: null, ownerEmail: null});
+      if (String(url).endsWith('/auth/passcode/change')) {
+        writes.push(JSON.parse(String(options?.body)));
+        return pending;
+      }
+      throw new Error('Unexpected account request');
+    });
+    const onSignIn = vi.fn(), user = userEvent.setup();
+    render(<SessionProvider config={{backend: 'supabase', phonePasscodeOnly: true, publishableKey: 'sb_publishable_' + 'a'.repeat(32),
+      captchaEnabled: false, googleEnabled: false, fetchImpl}}><Protected><AccountSecurityPage
+      onVerify={() => undefined} onLicenses={() => undefined} onPasswordRecovery={() => undefined} onSignIn={onSignIn} /></Protected></SessionProvider>);
+    await screen.findByRole('heading', {name: 'Change passcode'});
+    expect(screen.queryByRole('button', {name: 'Open-source licenses'})).toBeNull();
+    expect(screen.queryByText('Manage your BuriMunsi sign-in.')).toBeNull();
+    const current = screen.getByLabelText('Current passcode'), next = screen.getByLabelText('New passcode');
+    const confirm = screen.getByLabelText('Confirm new passcode'), change = screen.getByRole('button', {name: 'Change passcode'});
+    const form = current.closest('form')!;
+    for (const input of [current, next, confirm]) {
+      expect(input).toHaveAttribute('type', 'password');
+      expect(input).toHaveAttribute('inputmode', 'numeric');
+      expect(input).toHaveAttribute('pattern', '[0-9]{4}');
+      expect(input).toHaveAttribute('minlength', '4');
+      expect(input).toHaveAttribute('maxlength', '4');
+      await user.click(input);
+      for (const invalid of ['00420', '00a2', '１２３４', '٠١٢٣', '01 2']) {
+        await user.paste(invalid);
+        expect(input).toHaveValue('');
+      }
+      fireEvent.change(input, {target: {value: '1x'}});
+      expect(input).toHaveValue('');
+    }
+    await user.click(current); await user.paste('0007');
+    await user.click(next); await user.paste('0007');
+    await user.click(confirm); await user.paste('0007');
+    expect(next).toHaveAttribute('aria-invalid', 'true');
+    expect(change).toBeDisabled();
+    fireEvent.submit(form);
+    await user.clear(next); await user.type(next, '004');
+    expect(change).toBeDisabled();
+    fireEvent.submit(form);
+    await user.type(next, '2');
+    expect(confirm).toHaveAccessibleDescription('The new passcodes do not match.');
+    expect(change).toBeDisabled();
+    fireEvent.submit(form);
+    expect(writes).toEqual([]);
+    await user.clear(confirm); await user.paste('0042');
+    expect(change).toBeEnabled();
+    await user.click(change);
+    await waitFor(() => expect(writes).toEqual([{current: '0007', newPin: '0042', confirm: '0042'}]));
+    for (const input of [current, next, confirm]) expect(input).toHaveValue('');
+    fireEvent.submit(form);
+    expect(writes).toHaveLength(1);
+    authenticated = false;
+    finishChange(reply({ok: true}));
+    await waitFor(() => expect(onSignIn).toHaveBeenCalledOnce());
+  });
+
   it.each([true, false])('shows managed authenticator access only when the server advertises it: %s', async (mfaAvailable) => {
     const publishableKey = 'sb_publishable_' + 'a'.repeat(32), csrf = 'c'.repeat(64), onAuthenticator = vi.fn();
     const fetchImpl = vi.fn(async (url: RequestInfo | URL) => String(url).endsWith('/auth/session')
@@ -25,6 +96,7 @@ describe('account security', () => {
       : reply({contractVersion: 1, sessionId: 'session-one', emailVerifiedAt: null}));
     render(<SessionProvider config={{backend: 'supabase', publishableKey, captchaEnabled: false, googleEnabled: false, fetchImpl}}><Protected><AccountSecurityPage onVerify={() => undefined} onAuthenticator={onAuthenticator} onLicenses={() => undefined} onPasswordRecovery={() => undefined} onSignIn={() => undefined} /></Protected></SessionProvider>);
     await screen.findByRole('button', {name: 'Verify email'});
+    expect(screen.getByRole('button', {name: 'Open-source licenses'})).toBeVisible();
     const button = screen.queryByRole('button', {name: 'Authenticator'});
     if (mfaAvailable) {expect(button).toBeInTheDocument(); fireEvent.click(button!); expect(onAuthenticator).toHaveBeenCalledOnce();}
     else expect(button).not.toBeInTheDocument();

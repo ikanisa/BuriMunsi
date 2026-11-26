@@ -44,10 +44,8 @@ export async function qualifyPhoneTeam({admin, origin, open, legacySessions}) {
   }
   await admin.goto(teamUrl);
   await heading(admin, 'Team access').waitFor();
-  const permissions = heading(admin, 'Role permissions');
-  await permissions.waitFor();
-  const matrix = permissions.locator('..');
-  assert.deepEqual(await matrix.getByRole('heading', {level: 3}).allTextContents(), ['Admin', 'Staff']);
+  await heading(admin, 'Team members').waitFor();
+  assert.equal(await heading(admin, 'Role permissions').count(), 0);
   assert.equal(await admin.getByRole('button', {name: /invite|verif/i}).count(), 0);
   const adminRow = admin.getByRole('row').filter({has: admin.getByRole('cell', {name: 'Admin', exact: true})});
   assert.equal(await adminRow.count(), 1);

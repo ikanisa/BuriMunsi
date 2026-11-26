@@ -1,4 +1,4 @@
-import {useCallback,useState} from 'react';
+import {useCallback} from 'react';
 import {Link} from 'react-router';
 import {z} from 'zod';
 import {useSession} from '../../session/SessionProvider';
@@ -6,9 +6,7 @@ import {hasScopedAdminAuthority} from '../../session/ownerIdentity';
 import {canDisplaySessionRecords, canReadSmsEvidence} from '../../session/sessionContext';
 import {Button, Card, EmptyState, ErrorState, Icon, LoadingState, PageHeader} from '../../ui';
 import {BuriMunsiPaymentRows, buriMunsiPaymentsPath, buriMunsiSmsPath} from '../operations/BuriMunsiPaymentRows';
-import {buriMunsiPayment, paymentTime} from '../operations/canonicalPaymentAnalysis';
-import {inboxReadClock,useInboxFreshness} from '../operations/inboxFreshness';
-import {receiverPage} from '../operations/receiverSmsContract';
+import {buriMunsiPayment} from '../operations/canonicalPaymentAnalysis';
 import {useOperationRead} from '../operations/useOperationRead';
 import './overview.css';
 
@@ -20,11 +18,6 @@ const snapshot = z.object({
   asOf: z.string().refine(value => Number.isFinite(Date.parse(value))),
 }).refine(value => value.unallocatedCount <= value.paymentCount && value.recentPayments.length <= value.paymentCount &&
   new Set(value.recentPayments.map(row => row.id)).size === value.recentPayments.length);
-const smsHealthLabels = {
-  unknown: 'Inbox status unknown', checking: 'Checking Admin inbox',
-  incomplete: 'Sync pending', verified: 'Last inbox check matched',
-} as const;
-
 const amountFormat = new Intl.NumberFormat('en-RW');
 
 function Figure({label, icon, value, to, paymentMetric}:
@@ -46,11 +39,9 @@ export function BuriMunsiHome() {
   const collection = visible && user && sms && hasScopedAdminAuthority(user) ? user.adminIdentity?.collectionId : undefined;
   const authority=JSON.stringify([epoch,user?.id,user?.sessionId,user?.role,collection,[...(user?.permissions ?? [])].sort()]);
   const {result, retry} = useOperationRead('burimunsi-home:' + authority, visible, load);
-  const showInbox=!!collection && session.status==='authenticated';
+  const canOpenSms=!!collection && session.status==='authenticated';
   const totals = result?.status === 'success' ? result.value.paymentTotals : undefined;
-  const [inboxRefresh,setInboxRefresh]=useState(0);
-  return <><PageHeader title="Home" actions={<Button icon="refresh" aria-label="Refresh Home" onClick={()=>{retry();setInboxRefresh(value=>value+1);}} />} />
-    {showInbox && <HomeInboxStatus key={authority} collection={collection} refresh={inboxRefresh} />}
+  return <><PageHeader title="Home" actions={<Button icon="refresh" aria-label="Refresh Home" onClick={retry} />} />
     {!visible ? <ErrorState title="Access unavailable" message="Your account cannot view the group snapshot." /> : !result ? <LoadingState label="Loading Home" /> :
       result.status === 'error' ? <ErrorState message={result.message} onRetry={retry} /> : <>
         <section className="overview-summary" aria-label="Group snapshot">
@@ -65,7 +56,7 @@ export function BuriMunsiHome() {
             <Figure label="Cumulative outgoing payments" icon="outgoing" value={totals?.outgoingRwf ?? null}
               to={buriMunsiPaymentsPath + '?direction=outgoing'} paymentMetric="outgoing" />
             {sms && <Figure label="Latest MoMo SMS balance" icon="message" value={totals?.latestSmsBalanceRwf ?? null}
-              to={showInbox ? buriMunsiSmsPath : undefined} paymentMetric="sms-balance" />}
+              to={canOpenSms ? buriMunsiSmsPath : undefined} paymentMetric="sms-balance" />}
           </div>}
         </section>
         {payments && <Card className="operations-records"><div className="operations-toolbar"><h2>Recent payments</h2>
@@ -75,22 +66,4 @@ export function BuriMunsiHome() {
         </Card>}
       </>}
   </>;
-}
-
-function HomeInboxStatus({collection,refresh}: {collection:string;refresh:number}) {
-  const {request}=useSession();
-  const load=useCallback(async(signal:AbortSignal)=>{
-    const query=new URLSearchParams({collectionId:collection,limit:'1',includeProcessing:'1'});
-    const started=inboxReadClock();
-    const {inboxCheck:check,asOf}=receiverPage(await request(`momo/observations?${query}`,{signal}),collection);
-    return {check,asOf,started};
-  },[collection,request]);
-  const {result}=useOperationRead(`burimunsi-inbox-health:${refresh}`,true,load);
-  const sample=result?.status==='success' ? result.value : null;
-  const {fresh,lastVerified}=useInboxFreshness(sample);
-  const label=sample?.check.state==='verified' && !fresh ? 'Last inbox check is out of date' :
-    sample ? smsHealthLabels[sample.check.state] : result?.status==='error' ? 'Inbox status unavailable' : 'Checking sync';
-  return <p className="operations-note"><Link className="operations-link" to={buriMunsiSmsPath}>M-Money SMS</Link>
-    {' · '}<span role="status"><span>{label}</span>{lastVerified && <>{' · Last verified: '}<time dateTime={lastVerified}>{paymentTime(lastVerified)} Kigali</time></>}</span>
-  </p>;
 }

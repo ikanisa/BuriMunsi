@@ -65,7 +65,7 @@ function previewFailure(error: unknown) {
     const code = error.code ?? '';
     if (/headers_invalid/.test(code)) return 'Use a Name column and a Phone column in the file.';
     if (/^(smart_import_(ocr|decoder)_unavailable|smart_import_decoder_invalid)$/.test(code))
-      return 'This file format cannot be previewed right now. Try a CSV file or add the member manually. (' + code + ')';
+      return 'This file format cannot be previewed right now. Try a CSV file or add the member manually.';
     if (/unconfirmed|pending|in_progress/.test(code) || error.outcomeUnknown)
       return 'The preview could not be confirmed. Retry this selected file to check its original request.';
     if (/consent_required|disclosure/.test(code)) return 'Permission for this file could not be confirmed. Choose the file again.';

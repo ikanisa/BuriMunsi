@@ -39,7 +39,7 @@ export function LoginPage({onSignedIn}: {onSignedIn: () => void}) {
     finally {setBusy(false);}
   }
 
-  return <AuthFrame title={`Welcome to ${adminBrand.product}`} subtitle="Use your BuriMunsi mobile number and passcode.">
+  return <AuthFrame title={`Welcome to ${adminBrand.product}`}>
     <form className="admin-auth-form" onSubmit={submit}>
       <Field label="Mobile number" htmlFor="admin-phone"><input className="admin-input" id="admin-phone" type="tel"
         maxLength={40} autoComplete="username" required value={phone} onChange={event => setPhone(event.target.value)}

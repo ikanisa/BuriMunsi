@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {canOpenAdminPath} from '../../src/app/route-access';
+import {canOpenAdminPath, redirectsToBuriMunsiHome} from '../../src/app/route-access';
 import type {AdminUser} from '../../src/session/SessionProvider';
 
 const user: AdminUser = {id: 'actor', email: 'staff@example.test', role: 'staff', sessionId: 'session',
@@ -7,6 +7,20 @@ const user: AdminUser = {id: 'actor', email: 'staff@example.test', role: 'staff'
   assuranceLevel: 1, mfaAt: null, emailVerifiedAt: null, principalId: null, financialModel: 'transaction_journals'};
 
 describe('Admin route access', () => {
+  it('retires single-group management, request history, and privacy screens only for BuriMunsi', () => {
+    const collect: AdminUser = {...user, role: 'admin', permissions: [...user.permissions, 'account.manage', 'privacy.review', 'collections.manage', 'users.read', 'users.manage', 'payments.read']};
+    const phone: AdminUser = {...collect, authMethod: 'phone_passcode'};
+    for (const path of ['/admin/groups','/admin/gr%6Fups/group-one','/admin/groups/group-one/edit','/admin/groups/group-one/members/new','/admin/requests?key=example-key','/admin/privacy-requests/']) {
+      expect(redirectsToBuriMunsiHome(path, phone)).toBe(true);
+      expect(canOpenAdminPath(path, phone)).toBe(false);
+      expect(redirectsToBuriMunsiHome(path, collect)).toBe(false);
+      expect(canOpenAdminPath(path, collect)).toBe(true);
+    }
+    for (const path of ['/admin','/admin/security','/admin/members','/admin/payments','/admin/licenses']) {
+      expect(redirectsToBuriMunsiHome(path, phone)).toBe(false);
+      expect(canOpenAdminPath(path, phone)).toBe(true);
+    }
+  });
   it('matches registered route shapes and applies the same rule to encoded route segments', () => {
     expect(canOpenAdminPath('/admin/groups/record/unsupported', user)).toBe(false);
     expect(canOpenAdminPath('/admin/groups/%6Eew', user)).toBe(false);

@@ -10,6 +10,7 @@ export type {AdminNavItem} from './AdminNavigation';
 export interface AdminShellProps {
   navigation: readonly AdminNavItem[];
   accountNavigation?: readonly AdminAccountDestination[];
+  showAccountHelp?: boolean;
   currentPath: string;
   identity?: AdminShellIdentity | null;
   onSignOut?: () => void;
@@ -20,7 +21,7 @@ export interface AdminShellProps {
 
 const compactNavigation = '(max-width: 720px)';
 
-export function AdminShell({navigation, accountNavigation, currentPath, identity, onSignOut, toolbar, status, children}: AdminShellProps) {
+export function AdminShell({navigation, accountNavigation, showAccountHelp, currentPath, identity, onSignOut, toolbar, status, children}: AdminShellProps) {
   const [menuRequested, setMenuOpen] = useState(false);
   const menuTrigger = useRef<HTMLElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
@@ -56,7 +57,7 @@ export function AdminShell({navigation, accountNavigation, currentPath, identity
         <div className="admin-top-spacer" />
         {toolbar}
         {identity && <AdminAccountMenu key={JSON.stringify([identity.name, identity.role, currentPath])} identity={identity}
-          destinations={accountNavigation} pathname={pathname} onSignOut={onSignOut} />}
+          destinations={accountNavigation} showHelp={showAccountHelp} pathname={pathname} onSignOut={onSignOut} />}
       </header>
       <main id="main-content" className="admin-content" ref={contentRef} tabIndex={-1}>{children}</main>
     </div>

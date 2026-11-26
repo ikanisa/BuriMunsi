@@ -70,20 +70,18 @@ describe('Admin shell', () => {
     expect(signOut).not.toHaveBeenCalled();
   });
 
-  it('puts permitted BuriMunsi workflows and receiver guidance in account Help', async () => {
+  it('omits the entire Help flyout for the BuriMunsi workspace and keeps the account controls', async () => {
     const user = userEvent.setup();
-    render(<AdminShell navigation={navigation} currentPath="/admin"
-      identity={{name:'Member reader', role:'Staff', androidHelpPaths:['/admin/members', '/admin/payments']}}>
+    render(<AdminShell navigation={navigation} currentPath="/admin" showAccountHelp={false} onSignOut={() => {}}
+      accountNavigation={[{label:'Account security',path:'/admin/security'},{label:'Open-source notices',path:'/admin/licenses',group:'help'}]}
+      identity={{name:'Member reader', role:'Staff'}}>
       <p>Overview</p></AdminShell>);
     await user.click(screen.getByRole('button', {name:'Account: Member reader'}));
-    await user.click(screen.getByText('Help', {selector:'summary'}));
-    const help = within(screen.getByRole('group', {name:'BuriMunsi on web and Android'}));
-    expect(help.getAllByRole('link').map(link => link.getAttribute('href'))).toEqual(['#/admin/members', '#/admin/payments']);
-    expect(help.getByText(/registered Android receiver/)).toBeVisible();
-    expect(help.queryByRole('link', {name:'Add or import members'})).not.toBeInTheDocument();
-    expect(help.queryByRole('link', {name:'Open the M-Money SMS inbox'})).not.toBeInTheDocument();
-    expect(help.queryByRole('link', {name:'Manage staff access'})).not.toBeInTheDocument();
-    await user.click(help.getByRole('link', {name:'Review payments'}));
+    expect(screen.queryByText('Help', {selector:'summary'})).not.toBeInTheDocument();
+    expect(screen.queryByText(/registered Android receiver/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', {name:/WhatsApp support|Open-source notices|Review payments/})).not.toBeInTheDocument();
+    expect(screen.getByRole('button',{name:'Sign out'})).toBeVisible();
+    await user.click(screen.getByRole('link', {name:'Account security'}));
     expect(screen.getByRole('button', {name:'Account: Member reader'})).toHaveAttribute('aria-expanded','false');
   });
 

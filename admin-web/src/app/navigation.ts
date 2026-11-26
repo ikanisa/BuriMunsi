@@ -12,6 +12,12 @@ export const primaryAdminNavigation: readonly AdminNavItem[] = [
 // These are entry points, not grants. ProtectedShell runs the same existing
 // route-policy filter for both groups before presenting anything.
 export type AccountNavigationItem = AdminAccountDestination & {contextualPath?: string};
+// Bookmarks from the former multi-group workspace resolve to Home for BuriMunsi operators.
+export const retiredBuriMunsiRoutes = [
+  {path: '/admin/groups/*', caseSensitive: true},
+  {path: '/admin/requests', caseSensitive: true},
+  {path: '/admin/privacy-requests', caseSensitive: true},
+];
 export const adminAccountNavigation: readonly AccountNavigationItem[] = [
   {label: 'Account security', path: '/admin/security', icon: 'lock'},
   {label: 'Team', path: '/admin/admin-users', icon: 'users'},
