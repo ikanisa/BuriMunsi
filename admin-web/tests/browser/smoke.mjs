@@ -124,17 +124,37 @@ try {
   };
   page.on('request', recordLogin);
   const longMember = 'Fixture Member With A Very Long Registered Mobile Money Name For A Compact Payment Table';
+  let finishHome;
+  const heldHome = new Promise(resolve => {finishHome = resolve;});
   await desktop.context.route(url => url.pathname === '/api/admin/burimunsi/home', async route => {
     const response = await route.fetch();
     const json = await response.json();
+    await heldHome;
     await route.fulfill({response,json:{...json,recentPayments:json.recentPayments.map((payment,index) =>
       index === 0 ? {...payment,[payment.memberId ? 'memberName' : 'payerNameRaw']:longMember} : payment)}});
   }, {times:1});
   const firstOverview = page.waitForResponse(response => new URL(response.url()).pathname === '/api/admin/burimunsi/home' && response.ok());
+  await page.emulateMedia({reducedMotion:'no-preference'});
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   const overview = page.getByRole('heading', { name: 'Home' });
   await overview.waitFor();
+  const homeLoading = page.locator('[data-loading-layout="home"]');
+  await homeLoading.waitFor();
+  assert.equal(await homeLoading.getAttribute('role'),'status');
+  assert.match(await homeLoading.textContent(),/Loading Home/);
+  assert.equal(await page.getByRole('heading',{name:'Recent payments',exact:true}).count(),0);
+  const hasMotion = () => homeLoading.evaluate(root => [root,...root.querySelectorAll('*')].some(node => {
+    const style = getComputedStyle(node);
+    return style.animationName !== 'none' && Number.parseFloat(style.animationDuration) > .02;
+  }));
+  assert.equal(await hasMotion(),true);
+  await page.emulateMedia({reducedMotion:'reduce'});
+  assert.equal(await hasMotion(),false);
+  finishHome();
   await firstOverview;
+  await homeLoading.waitFor({state:'hidden'});
+  await page.getByRole('heading',{name:'Recent payments',exact:true}).waitFor();
+  await page.emulateMedia({reducedMotion:'no-preference'});
   const paymentCardBackgrounds = new Set();
   for (const [name, href] of [
     [/Cumulative incoming payments.*RWF 5,000/, '#/admin/payments?direction=incoming'],
@@ -579,7 +599,7 @@ try {
   assert.deepEqual(denied, []);
   assert.deepEqual(unexpectedAuth, []);
   assert.deepEqual(incorrectIdentityHeaders, []);
-  const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'home_has_no_sms_status_and_retired_admin_pages_return_home', 'long_home_member_names_truncate_with_full_text', 'retired_passcode_bookmark_returns_to_overview', 'three_daily_links_and_no_redundant_sidebar_search', 'canonical_payment_direction_filter_and_clear', 'inline_inbox_preserves_financial_table_and_390px_scroll', 'protected_sms_deep_link', 'filtered_member_detail_and_return', 'single_mobile_number_in_member_roster_and_detail', 'member_statement_pinned_revision_full_balance_and_320px_reflow', 'payment_details_link_to_authorized_sms_evidence', 'payment_without_source_and_320px_reflow', 'sms_read_failure_retry',
+  const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'home_has_no_sms_status_and_retired_admin_pages_return_home', 'long_home_member_names_truncate_with_full_text', 'home_loading_follows_the_request_and_respects_motion_preference', 'retired_passcode_bookmark_returns_to_overview', 'three_daily_links_and_no_redundant_sidebar_search', 'canonical_payment_direction_filter_and_clear', 'inline_inbox_preserves_financial_table_and_390px_scroll', 'protected_sms_deep_link', 'filtered_member_detail_and_return', 'single_mobile_number_in_member_roster_and_detail', 'member_statement_pinned_revision_full_balance_and_320px_reflow', 'payment_details_link_to_authorized_sms_evidence', 'payment_without_source_and_320px_reflow', 'sms_read_failure_retry',
       'payer_sms_empty_and_reported_delivered', 'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
       'retired_authenticator_bookmark_preserves_safe_destination', 'missing_scoped_admin_identity_removes_controls', 'session_failure_and_recovery_require_server_authority', 'expired_request_and_history_return_require_sign_in',
       'mobile_drawer_traps_and_restores_focus_and_reflows', 'tablet_core_routes_fit_viewport_and_collect_reconciliation_stays_closed', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, ...authorityChecks, 'no_unexpected_auth_request', 'identity_version_only_on_session_exchanges'];

@@ -1,9 +1,9 @@
 import {useEffect, useState, type ComponentType} from 'react';
-import {LoadingState} from '../../ui';
+import {LoadingState, type LoadingLayout} from '../../ui';
 
 // Keep the module split without delaying its first render after the import resolves.
 // The authorized outlet owns the loader; the only shared state is the page module.
-export function loadWorkspacePage<Props extends object>(load: () => Promise<ComponentType<Props>>) {
+export function loadWorkspacePage<Props extends object>(load: () => Promise<ComponentType<Props>>, layout: LoadingLayout = 'workspace') {
   type Page = {Component: ComponentType<Props>} | {error: unknown};
   let pending: Promise<Page> | undefined;
   let loaded: Page | null = null;
@@ -18,7 +18,7 @@ export function loadWorkspacePage<Props extends object>(load: () => Promise<Comp
       return () => {active = false;};
     }, [page]);
 
-    if (page === null) return <LoadingState label="Opening workspace" />;
+    if (page === null) return <LoadingState label="Opening workspace" layout={layout} />;
     if ('error' in page) throw page.error;
     return <page.Component {...props} />;
   };

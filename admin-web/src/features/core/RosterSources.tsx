@@ -47,7 +47,7 @@ export function RosterSuggestions({request, group, onSelect, onBack}: {
       <label htmlFor="payer-query">Name or last three digits</label>
       <input className="admin-input" id="payer-query" type="search" value={text} maxLength={80} onChange={e=>setText(e.target.value)} />
     </div><Button type="submit">Search</Button></form>
-    {!result ? <LoadingState label="Loading suggestions" /> : result.status === 'error'
+    {!result ? <LoadingState label="Loading suggestions" layout="table" /> : result.status === 'error'
       ? <ErrorState title="Suggestions unavailable" message={result.message} onRetry={search.cursor
         ? ()=>setSearch({q:search.q,cursor:'',revision:''}) : retry} />
       : <>{!result.value.items.length && <p role="status">No suggested payers found.</p>}

@@ -80,7 +80,11 @@ export function useOperationRead<T>(
   }, []);
   useVisibleOperationsRefresh(enabled && !suspended, pollMs, refresh, collectionId, live);
 
-  const result = enabled && (read?.result.key === attemptKey ||
-    (pollMs !== undefined || live || retainDuringRefresh) && read?.scope === key && read.result.status === 'success') ? read?.result ?? null : null;
-  return {result, retry};
+  const scoped = enabled && read?.scope === key ? read.result : null;
+  // Retire the old sample even if the operator later returns to the same query.
+  if (read && !scoped) setRead(null);
+  const retain = pollMs !== undefined || live || retainDuringRefresh;
+  const result = scoped?.key === attemptKey || (retain && scoped?.status === 'success') ? scoped : null;
+  const refreshing = !suspended && result?.status === 'success' && result.key !== attemptKey;
+  return {result, retry, refreshing};
 }

@@ -59,6 +59,7 @@ function ScopedPaymentRecords() {
   const {epoch, request, user} = useSession(), [params, setParams] = useSearchParams();
   const location = useLocation(), navigate = useNavigate();
   const [confirmation, setConfirmation] = useState(''), [detailRevision, setDetailRevision] = useState(0);
+  const [allocationRevision, setAllocationRevision] = useState(0);
   const canReadSms = canReadSmsEvidence(user), group = user?.adminIdentity?.collectionId;
   const allocating = params.getAll('allocate').length === 1 ? paymentId.safeParse(params.get('allocate')).data : undefined;
   const selected = params.get('view') === 'sms' ? undefined : paymentId.safeParse(params.get('payment')).data;
@@ -82,13 +83,13 @@ function ScopedPaymentRecords() {
       throw error;
     }
   }, [group, canReadSms, payload, request]);
-  const {result, retry} = useOperationRead(JSON.stringify([epoch, group, canReadSms, payload]), true, load,
-    {invalidResponse:'Matching payments and totals could not be confirmed. Please refresh.'});
+  const {result, retry, refreshing} = useOperationRead(JSON.stringify([epoch, group, canReadSms, payload, allocationRevision]), true, load,
+    {retainDuringRefresh:true, invalidResponse:'Matching payments and totals could not be confirmed. Please refresh.'});
   const data = result?.status === 'success' ? result.value : null;
   const rows = data?.items ?? [];
   const scopedGroup = group ?? rows[0]?.groupId;
   const detailRead = usePaymentDetail(selected, scopedGroup, !!group || !!result,
-    rows.find(row => row.id === selected)?.version, JSON.stringify([payload, detailRevision]));
+    rows.find(row => row.id === selected)?.version, JSON.stringify([payload, detailRevision, allocationRevision]));
   const refresh = () => {
     retry();
     if (selected) setDetailRevision(value => value + 1);
@@ -137,19 +138,19 @@ function ScopedPaymentRecords() {
     next.delete('q'); next.delete('offset');
     setParams(next);
   }}>Clear search “{query}”</Button>}
-    <Button icon="refresh" onClick={refresh}>Refresh</Button></>;
+    <Button icon="refresh" onClick={refresh} loading={!result || refreshing}>Refresh</Button></>;
   return <Card className="operations-records">
     {confirmation && !allocating && <p className="operations-note" role="status">{confirmation}</p>}
-    {result?.status === 'error' && <ErrorState message={result.message} onRetry={refresh} />}
     <FinancialAnalysisTable label="Payments" rows={rows} columns={columns} rowKey={r=>r.id}
-      remote={{filters,sort,total:data?.totalCount ?? 0,matching:data?.matchingCount ?? 0,busy:!result || result.status==='error',onCriteria:changeCriteria}}
+      remote={{filters,sort,total:data?.totalCount ?? null,matching:data?.matchingCount ?? null,refreshing,onCriteria:changeCriteria,
+        error:result?.status === 'error' ? <ErrorState message={result.message} onRetry={refresh} /> : undefined}}
       actions={actions} summary={data ? () => <><PaymentTotalsSummary {...data.directionTotalsRwf} missing={data.missing} />
         <p>Payment totals as of <time dateTime={data.asOf}>{paymentTime(data.asOf)} (Kigali)</time>.</p></> : undefined}
       pageSize={25} page={page} onPageChange={changePage} expanded={selected && detail ? {key:selected,content:detail} : null} />
     {selected && result && !rows.some(r=>r.id===selected) && detail}
     {allocating && <PaymentAllocationWizard key={JSON.stringify([epoch,scopedGroup,allocating])} id={allocating} group={scopedGroup}
-      onClose={closeAllocation} onStale={refresh} onAllocated={() => {
-        setConfirmation('Payment allocated.'); closeAllocation(); refresh();
+      onClose={closeAllocation} onStale={() => setAllocationRevision(value => value + 1)} onAllocated={() => {
+        setConfirmation('Payment allocated.'); closeAllocation(); setAllocationRevision(value => value + 1);
       }} />}
   </Card>;
 }
@@ -187,12 +188,12 @@ function PaymentDetail({group, search, onClose, result, retry}: {group?: string;
   const recordedParty = payment ? paymentCounterpartyEvidence(payment) : null;
   const member = payment && paymentMemberName(payment);
   const memberPhone = payment && paymentMemberNumber(payment);
-  return <section className="payment-detail" aria-label="Payment details">
+  return <section className={'payment-detail' + (payment ? ' admin-content-enter' : '')} aria-label="Payment details">
     <header className="payment-detail-heading">
       <h2>{recordedText(payment?.ftId) ?? 'Payment details'}</h2>
       <div>{payment && <AllocationStatus row={payment} search={search} text />}<Button onClick={onClose}>Close</Button></div>
     </header>
-    {!result ? <LoadingState label="Loading payment" /> : result.status === 'error' ? <ErrorState message={result.message} onRetry={retry} /> :
+    {!result ? <LoadingState label="Loading payment" layout="details" /> : result.status === 'error' ? <ErrorState message={result.message} onRetry={retry} /> :
       payment && <><Facts items={[['Amount', paymentAmount(payment.amountRwf)], ['IN/OUT', <PaymentDirection direction={payment.direction} />],
         ['Time', paymentTime(payment.atRaw)],
         ...(member ? [['Member', member] as [string,string]] : []),

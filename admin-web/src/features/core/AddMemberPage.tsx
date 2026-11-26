@@ -42,7 +42,7 @@ function MemberAccess({request, user}: {request: AdminRequest; user: AdminUser})
   }, [request, expectedGroup, identity]);
   const {result, retry} = useOperationRead(JSON.stringify([user.id, user.sessionId, expectedGroup, identity.permissions]),
     true, load, {invalidResponse: 'The group or the original member request could not be confirmed.'});
-  if (!result) return <LoadingState label="Loading member form" />;
+  if (!result) return <LoadingState label="Loading member form" layout="details" />;
   if (result.status === 'error') return <ErrorState title="Member form unavailable" message={result.message} onRetry={retry} />;
   const {scope, attempt, roster} = result.value;
   if (!scope.canEnroll) return <ErrorState title="Access unavailable" message="Your account cannot add members to this group." />;

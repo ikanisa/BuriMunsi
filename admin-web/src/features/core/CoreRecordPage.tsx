@@ -90,9 +90,9 @@ export function CoreRecordPage({ area, id, request, permissions, actorId, princi
     </>} />
     {!allowed ? <ErrorState title="Access unavailable" message="Your account does not have permission to view this record." /> :
       !isId(id) ? <ErrorState message="Select a valid record." /> :
-      state === 'loading' || detailScope !== currentScope ? <LoadingState label="Loading record" /> :
+      state === 'loading' || detailScope !== currentScope ? <LoadingState label="Loading record" layout="details" /> :
       state === 'error' || !detail ? <ErrorState message="The record could not be verified or the service is unavailable." onRetry={reload} /> : <>
-        <Card><div className="core-detail"><h2>Record details</h2><dl>{detailFields.filter(([key]) => (!scopedProfile || key !== 'momo_pay_code') && (!simplePayments || key !== 'total_contributed_rwf') &&
+        <Card className="admin-content-enter"><div className="core-detail"><h2>Record details</h2><dl>{detailFields.filter(([key]) => (!scopedProfile || key !== 'momo_pay_code') && (!simplePayments || key !== 'total_contributed_rwf') &&
           displayRow?.[key] !== undefined).map(([key, title]) => <div key={key}><dt>{title}</dt><dd>{area === 'transactions' && financialModel === 'canonical_evidence_ledger' && key === 'title' ? paymentReference(detail.resource as Record<string, unknown>) : formatField(key, displayRow?.[resource === 'members' && key === 'status' ? 'membership_status' : key])}</dd></div>)}</dl></div></Card>
         {area === 'transactions' && <p className="core-note">Recorded evidence does not establish provider settlement.</p>}
         {area === 'transactions' && financialModel === 'transaction_journals' && identity && identity.id === actorId && identity.role === role && isCurrent &&

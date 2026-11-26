@@ -67,6 +67,11 @@ const visit = (path: string, permissions: string[], role = 'admin') => {
 };
 const location = () => screen.getByLabelText('Current location');
 const called = (prefix: string) => mock.request.mock.calls.filter(([path]) => path.startsWith(prefix));
+function pendingRead() {
+  let resolve!: (value: unknown) => void, reject!: (error: Error) => void;
+  const promise = new Promise<unknown>((done, fail) => {resolve = done; reject = fail;});
+  return {promise, resolve, reject};
+}
 afterEach(() => {mock.request.mockReset();mock.status='authenticated';mock.role='admin';mock.authMethod=undefined;mock.scoped=false;mock.sessionId='fixture-session';mock.currentAuthority=true;sessionStorage.clear();});
 
 describe('consolidated Payments routes',()=>{
@@ -335,17 +340,56 @@ describe('BuriMunsi phone Payments', () => {
     expect(screen.queryByText(/Wallet difference/)).not.toBeInTheDocument();
   });
 
-  it('updates the wallet difference when Home refreshes', async () => {
+  it('keeps the verified Home snapshot until the requested refresh settles', async () => {
     mock.authMethod = 'phone_passcode';
     const home = {paymentCount:0,memberCount:0,unallocatedCount:0,recentPayments:[],asOf:time};
     const totals = {incomingRwf:'9007199254740992',outgoingRwf:'9007199254740993',latestSmsBalanceRwf:0};
     mock.request.mockResolvedValue({...home,paymentTotals:{...totals,walletGapRwf:'-1'}});
     visit('/admin', ['overview.read','payments.read','sms.read']);
     expect(await screen.findByText('Wallet difference · RWF -1')).toBeVisible();
-    mock.request.mockResolvedValue({...home,paymentTotals:{...totals,outgoingRwf:totals.incomingRwf,walletGapRwf:'0'}});
-    fireEvent.click(screen.getByRole('button',{name:'Refresh Home'}));
+    const snapshot = screen.getByRole('region',{name:'Group snapshot'}), refresh = screen.getByRole('button',{name:'Refresh Home'});
+    const held = pendingRead();
+    mock.request.mockReturnValueOnce(held.promise);
+    fireEvent.click(refresh);
+    expect(screen.getByRole('region',{name:'Group snapshot'})).toBe(snapshot);
+    expect(snapshot).toHaveAttribute('aria-busy','true');
+    expect(refresh).toBeDisabled();
+    expect(refresh).toHaveAttribute('aria-busy','true');
+    expect(screen.getByText('Wallet difference · RWF -1')).toBeVisible();
+    expect(screen.queryByText('Loading Home')).not.toBeInTheDocument();
+    fireEvent.click(refresh);
+    expect(called('burimunsi/home')).toHaveLength(2);
+    await act(async () => held.resolve({...home,paymentTotals:{...totals,outgoingRwf:totals.incomingRwf,walletGapRwf:'0'}}));
     expect(await screen.findByRole('link',{name:/Cumulative outgoing payments.*RWF 9,007,199,254,740,992/})).toBeVisible();
     expect(screen.queryByText(/Wallet difference/)).not.toBeInTheDocument();
+    expect(refresh).toBeEnabled();
+    expect(snapshot).not.toHaveAttribute('aria-busy');
+  });
+
+  it('removes a retained wallet balance immediately when the session loses SMS access', async () => {
+    mock.authMethod = 'phone_passcode';
+    mock.scoped = true;
+    const home = {paymentCount:0,memberCount:1,unallocatedCount:0,recentPayments:[],asOf:time};
+    const totals = {incomingRwf:'10',outgoingRwf:'0'};
+    const prior = pendingRead(), current = pendingRead();
+    mock.request.mockResolvedValueOnce({...home,paymentTotals:{...totals,latestSmsBalanceRwf:10}})
+      .mockReturnValueOnce(prior.promise).mockReturnValueOnce(current.promise);
+    const app = visit('/admin',['overview.read','payments.read','sms.read']);
+    const balance = await screen.findByRole('link',{name:/Latest MoMo SMS balance.*RWF 10/});
+    fireEvent.click(screen.getByRole('button',{name:'Refresh Home'}));
+    expect(balance).toBeVisible();
+    mock.permissions = ['overview.read','payments.read'];
+    app.rerender(<MemoryRouter initialEntries={['/admin']}><RouteHarness /></MemoryRouter>);
+    expect(balance).not.toBeInTheDocument();
+    expect(screen.queryByRole('region',{name:'Group snapshot'})).not.toBeInTheDocument();
+    const reads = called('burimunsi/home');
+    await waitFor(() => expect(reads[1][1].signal.aborted).toBe(true));
+    await act(async () => prior.resolve({...home,paymentTotals:{...totals,latestSmsBalanceRwf:99}}));
+    expect(screen.queryByText('Latest MoMo SMS balance')).not.toBeInTheDocument();
+    await act(async () => current.resolve({...home,paymentTotals:totals}));
+    expect(screen.getByRole('region',{name:'Group snapshot'})).toBeVisible();
+    expect(screen.queryByText('Latest MoMo SMS balance')).not.toBeInTheDocument();
+    expect(called('burimunsi/home')).toHaveLength(3);
   });
 
   it('shows both directions together and links recent Home payments to the same workspace', async () => {
@@ -396,6 +440,76 @@ describe('BuriMunsi phone Payments', () => {
       ['POST',25,{key:'time',direction:'desc'}], ['POST',0,{key:'amount',direction:'asc'}],
     ]);
     expect(screen.getByRole('region',{name:'Totals for matching payments'})).toHaveTextContent('RWF 5,565');
+  });
+
+  it.each([403,503])('keeps the Payments page during refresh and stops loading on a %i without reporting a zero balance', async status => {
+    mock.authMethod = 'phone_passcode';
+    const rows = Array.from({length:26}, (_, i) => ({...buriPayment,id:'pay-' + i,ftId:'FT-' + i}));
+    const page = buriPage(rows,{...query99,offset:25});
+    const held = pendingRead();
+    mock.request.mockResolvedValueOnce(page).mockReturnValueOnce(held.promise).mockResolvedValueOnce(page);
+    visit('/admin/payments?offset=25',['payments.read'],'staff');
+    const record = await screen.findByRole('button',{name:page.items[0].ftId!});
+    const totals = screen.getByRole('region',{name:'Totals for matching payments'});
+    const table = screen.getByRole('table',{name:'Payments'}), refresh = screen.getByRole('button',{name:'Refresh'});
+    const asOf = screen.getByText(/Payment totals as of/).querySelector('time');
+    fireEvent.click(refresh);
+    expect(screen.getByRole('button',{name:page.items[0].ftId!})).toBe(record);
+    expect(screen.getByRole('region',{name:'Totals for matching payments'})).toBe(totals);
+    expect(asOf).toHaveAttribute('dateTime',time);
+    expect(totals).toHaveTextContent('RWF 130,000');
+    expect(table).toHaveAttribute('aria-busy','true');
+    expect(refresh).toBeDisabled();
+    expect(refresh).toHaveAttribute('aria-busy','true');
+    expect(screen.queryByText('Loading payments')).not.toBeInTheDocument();
+    fireEvent.click(refresh);
+    expect(called('burimunsi/payments/analysis')).toHaveLength(2);
+
+    await act(async () => held.reject(new AdminRequestError('The payment view is unavailable.',{statusCode: status})));
+    expect(screen.getByRole('alert')).toHaveTextContent('The payment view is unavailable.');
+    expect(table).not.toHaveAttribute('aria-busy');
+    expect(refresh).toBeEnabled();
+    expect(record).not.toBeInTheDocument();
+    expect(asOf).not.toBeInTheDocument();
+    expect(totals).not.toBeInTheDocument();
+    expect(screen.queryByText(/^(Loading payments|0 records|No (?:matching )?records\.)/)).not.toBeInTheDocument();
+    expect(location()).toHaveTextContent('/admin/payments?offset=25');
+    fireEvent.click(screen.getByRole('button',{name:'Try again'}));
+    expect(await screen.findByRole('button',{name:page.items[0].ftId!})).toBeVisible();
+    expect(called('burimunsi/payments/analysis').map(([,options]) => options.body.offset)).toEqual([25,25,25]);
+  });
+
+  it('drops a retained payment on criteria or session changes and ignores late responses from each previous scope', async () => {
+    mock.authMethod = 'phone_passcode';
+    const refresh = pendingRead(), sorted = pendingRead(), newSession = pendingRead();
+    mock.request.mockResolvedValueOnce(buriPage([buriPayment])).mockReturnValueOnce(refresh.promise)
+      .mockReturnValueOnce(sorted.promise).mockReturnValueOnce(newSession.promise);
+    const url = '/admin/payments';
+    const app = visit(url,['payments.read'],'staff');
+    const record = await screen.findByRole('button',{name:momoRef});
+    fireEvent.click(screen.getByRole('button',{name:'Refresh'}));
+    expect(record).toBeVisible();
+    fireEvent.click(screen.getByRole('button',{name:'Sort Amount ascending'}));
+    expect(record).not.toBeInTheDocument();
+    expect(screen.queryByRole('region',{name:'Totals for matching payments'})).not.toBeInTheDocument();
+    expect(screen.getByText('Loading payments')).toBeVisible();
+    const calls = called('burimunsi/payments/analysis');
+    expect(calls[2][1].body.sort).toEqual({key:'amount',direction:'asc'});
+    await waitFor(() => expect(calls[1][1].signal.aborted).toBe(true));
+    await act(async () => refresh.resolve(buriPage([buriPayment])));
+    expect(screen.queryByRole('button',{name:momoRef})).not.toBeInTheDocument();
+
+    mock.sessionId = 'other-session';
+    app.rerender(<MemoryRouter initialEntries={[url]}><RouteHarness /></MemoryRouter>);
+    await waitFor(() => expect(calls[2][1].signal.aborted).toBe(true));
+    await act(async () => sorted.resolve(buriPage([outgoing])));
+    expect(screen.queryByRole('button',{name:outgoing.ftId})).not.toBeInTheDocument();
+    expect(screen.getByText('Loading payments')).toBeVisible();
+    await act(async () => newSession.resolve(buriPage([])));
+    expect(screen.getByText('0 records')).toBeVisible();
+    expect(screen.getByText('No records.')).toBeVisible();
+    expect(screen.getByRole('button',{name:'Refresh'})).toBeEnabled();
+    expect(called('burimunsi/payments/analysis')).toHaveLength(4);
   });
 
   it('loads sync status when opening the SMS inbox from Home', async () => {

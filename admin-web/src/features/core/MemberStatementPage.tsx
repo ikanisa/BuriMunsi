@@ -37,8 +37,8 @@ export function MemberStatementPage({id, expectedGroup, returnTo, actorId, autho
     <PageHeader title="Member statement" subtitle={data?.name ?? undefined}
       actions={<Button onClick={() => navigate(isId(id) ? '/admin/members/' + id + profileQuery : '/admin/members')}>Back to member</Button>} />
     {!allowed ? <ErrorState title="Access unavailable" message="This account cannot open this member statement." /> :
-      !result ? <LoadingState label="Loading member statement" /> :
-      result.status === 'error' ? <ErrorState message={result.message} onRetry={restart} /> : data && <Card><div className="core-detail">
+      !result ? <LoadingState label="Loading member statement" layout="table" /> :
+      result.status === 'error' ? <ErrorState message={result.message} onRetry={restart} /> : data && <Card className="admin-content-enter"><div className="core-detail">
         <h2>{data.membership.groupTitle ?? 'Membership'}</h2>
         <dl><div><dt>Record ID</dt><dd>{data.membership.recordNumber ?? 'Unavailable'}</dd></div>
           <div><dt>Closing balance</dt><dd>{statementAmount(data.closingRwf, true)}</dd></div></dl>

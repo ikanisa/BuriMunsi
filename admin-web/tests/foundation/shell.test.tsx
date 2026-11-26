@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { AdminShell } from '../../src/layout/AdminShell';
-import { Button, Dialog } from '../../src/ui';
+import { Button, Dialog, LoadingState, type LoadingLayout } from '../../src/ui';
 
 const navigation = [
   {label: 'Home', path: '/admin', icon: 'home'},
@@ -93,6 +93,26 @@ function DialogExample() {
 }
 
 describe('Shared controls', () => {
+  it.each<LoadingLayout>(['inline', 'workspace', 'home', 'table', 'details'])('announces one status for the %s loading layout', layout => {
+    render(<LoadingState label="Retrieving records" layout={layout} />);
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent(/^Retrieving records$/);
+    expect(status).toHaveAttribute('aria-live', 'polite');
+    expect(status.querySelector('[aria-hidden="true"]')).toBeInTheDocument();
+    expect(within(status).queryByRole('button')).not.toBeInTheDocument();
+    expect(within(status).queryByRole('row')).not.toBeInTheDocument();
+  });
+
+  it('reserves only the Home cards and table available to the current account', () => {
+    const {rerender} = render(<LoadingState layout="home" homeCards={[1, 0]} />);
+    const status = screen.getByRole('status');
+    expect(status.querySelectorAll('.admin-loading-metric')).toHaveLength(1);
+    expect(status.querySelector('.admin-loading-table')).not.toBeInTheDocument();
+    rerender(<LoadingState layout="home" homeCards={[3, 2]} />);
+    expect(status.querySelectorAll('.admin-loading-metric')).toHaveLength(5);
+    expect(status.querySelector('.admin-loading-table')).toBeInTheDocument();
+  });
+
   it('traps dialog keyboard focus and restores the trigger on Escape', async () => {
     const user = userEvent.setup();
     render(<DialogExample />);

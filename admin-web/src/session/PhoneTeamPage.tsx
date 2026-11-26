@@ -21,7 +21,7 @@ export function PhoneTeamPage({profileAccess}: {profileAccess?: ReactNode} = {})
   const team = result?.status === 'success' ? result.value : null;
   return <><PageHeader title="Team access" actions={<>{canRead && profileAccess}<Button onClick={retry} icon="refresh">Refresh</Button></>} />
     {!canRead ? <ErrorState title="Access unavailable" message="Your account cannot view team access." /> :
-      !result ? <LoadingState label="Loading team access" /> :
+      !result ? <LoadingState label="Loading team access" layout="table" /> :
       result.status === 'error' ? <ErrorState title="Team access unavailable" message={result.message} onRetry={retry} /> :
       team && actor && <PhoneTeamDirectory key={`${epoch}:${accountId}`} team={team} canManage={team.canManage && hasScopedAdminAuthority(actor)}
         reload={retry} />}
@@ -73,7 +73,7 @@ function PhoneTeamDirectory({team, canManage, reload}: {team: PhoneTeam; canMana
     } finally {inFlight.current = false; if (mounted.current) setBusy(false);}
   }
   return <>
-    <Card className="admin-security-card"><h2>Team members</h2>
+    <Card className="admin-security-card admin-content-enter"><h2>Team members</h2>
       {canManage && !creating && !editing && <Button onClick={() => {cancel(); setCreating(true);}}>Create account</Button>}
       {team.members.length === 0 ? <EmptyState title="No team members" /> : <div className="admin-table-wrap"><table className="admin-table">
         <thead><tr><th>Account</th><th>Mobile number</th><th>Role</th><th>Access</th>{canManage && <th>Actions</th>}</tr></thead>

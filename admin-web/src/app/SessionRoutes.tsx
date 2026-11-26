@@ -28,7 +28,7 @@ export class ScreenBoundary extends Component<{children: ReactNode}, {failed: bo
 
 export function ProtectedShell({navigation, accountNavigation = []}: {navigation: readonly AdminNavItem[]; accountNavigation?: readonly AccountNavigationItem[]}) {
   const session = useSession(), location = useLocation();
-  if (session.status === 'loading') return <LoadingState label="Checking account access" />;
+  if (session.status === 'loading') return <LoadingState label="Checking account access" layout="workspace" />;
   if (session.status === 'error') return <SessionProblem session={session} />;
   if (!session.user) {
     const requested = safeAdminReturnLocation(`${location.pathname}${location.search}`);
@@ -49,7 +49,7 @@ export function ProtectedShell({navigation, accountNavigation = []}: {navigation
       <AdminShell navigation={permitted} accountNavigation={permittedAccount} showAccountHelp={user.authMethod !== 'phone_passcode'} currentPath={`${location.pathname}${location.search}`}
         identity={{name: session.verificationMode === 'passcode' ? user.displayName ?? user.phone ?? 'BuriMunsi account' : user.email,
           role: user.role === 'staff' ? 'Staff' : user.role === 'admin' || session.verificationMode === 'passcode' ? 'Admin' : 'Owner'}} onSignOut={signOut}>
-        {canOpenAdminPath(location.pathname, user) ? <ScreenBoundary key={location.pathname}><Suspense fallback={<LoadingState label="Opening workspace" />}><Outlet /></Suspense></ScreenBoundary> : <ErrorState title="Access unavailable"
+        {canOpenAdminPath(location.pathname, user) ? <ScreenBoundary key={location.pathname}><Suspense fallback={<LoadingState label="Opening workspace" layout="workspace" />}><Outlet /></Suspense></ScreenBoundary> : <ErrorState title="Access unavailable"
           message="Your account cannot open this page." />}
       </AdminShell>
     </div></InteractionSuspendedContext.Provider>
@@ -58,7 +58,7 @@ export function ProtectedShell({navigation, accountNavigation = []}: {navigation
 
 function SessionState({children}: {children: ReactNode}) {
   const session = useSession();
-  if (session.status === 'loading') return <LoadingState label="Checking account access" />;
+  if (session.status === 'loading') return <LoadingState label="Checking account access" layout="workspace" />;
   if (session.logoutUnconfirmed || session.status === 'error' && session.mfaRecoveryPending) return <SessionProblem session={session} />;
   return children;
 }

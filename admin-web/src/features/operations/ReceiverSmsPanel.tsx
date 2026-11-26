@@ -22,7 +22,7 @@ export function ReceiverSmsPanel({simplePayments = false}: {simplePayments?: boo
   const {result, retry} = useOperationRead(authority, enabled && !scopedCollection, load, {...momoReadOptions, live:false});
   const [selection, setSelection] = useState('');
   if (!enabled) return null;
-  if (!scopedCollection && !result) return <LoadingState label="Loading receiver collections" />;
+  if (!scopedCollection && !result) return <LoadingState label="Loading receiver collections" layout="table" />;
   if (result?.status === 'error') return <ErrorState message={result.message} onRetry={retry} />;
   const groups = result?.value ?? [];
   const collection = scopedCollection ?? (groups.find(item => item.collectionId === selection) ?? groups[0])?.collectionId;
@@ -48,13 +48,13 @@ function CollectionReceipts({group, simplePayments}: {group: string; simplePayme
   const sample=session.status==='authenticated' && result?.status==='success' ? {check:result.value.page.inboxCheck,asOf:result.value.page.asOf,started:result.value.started} : null;
   const {fresh}=useInboxFreshness(sample);
   const refresh = () => {setSource(null); setCursors([null]); retry();};
-  if (!result) return <LoadingState label="Loading receiver SMS" />;
+  if (!result) return <LoadingState label="Loading receiver SMS" layout="table" />;
   if (result.status === 'error') return <ErrorState message={result.message} onRetry={refresh} />;
   const page = result.value.page, check = page.inboxCheck, selected = page.items.find(item => item.sourceId === source);
   const canReveal = permissions.includes('sms.reveal'), financial = permissions.includes('payments.read'), showReference = financial && !simplePayments;
   const headings = ['Received by server · Kigali', 'Processing', ...(showReference ? ['Payment reference'] : []), ...(financial ? ['Payer SMS'] : []),
     ...(canReveal ? ['Source'] : [])];
-  return <><div className="operations-toolbar"><h2>{simplePayments ? 'M-Money SMS' : 'Receiver SMS'}</h2><Button icon="refresh" onClick={refresh}>Refresh receiver</Button></div>
+  return <div className="admin-content-enter"><div className="operations-toolbar"><h2>{simplePayments ? 'M-Money SMS' : 'Receiver SMS'}</h2><Button icon="refresh" onClick={refresh}>Refresh receiver</Button></div>
     <InboxCompleteness check={check} fresh={fresh} simplePayments={simplePayments} />
     {page.items.length ? <MomoTable name="Android receiver observations" headings={headings} compact>{page.items.map(item => <tr key={item.sourceId} role="row">
       <MomoCell label="Received by server · Kigali">{formatTime(item.admittedAt)}</MomoCell><MomoCell label="Processing">
@@ -67,7 +67,7 @@ function CollectionReceipts({group, simplePayments}: {group: string; simplePayme
     {(cursor || page.nextCursor) && <div className="operations-pagination"><Button disabled={!cursor} onClick={() => {setSource(null); setCursors(values => values.slice(0,-1));}}>Previous</Button>
       <Button disabled={!page.nextCursor} onClick={() => {setSource(null); setCursors(values => [...values,page.nextCursor]);}}>Next</Button></div>}
     {canReveal && selected?.bodySha256 && <MomoSourceRevealPanel source={{raw_sms_id:selected.sourceId,body_sha256:selected.bodySha256}} observationGroup={group} enabled />}
-  </>;
+  </div>;
 }
 
 function InboxCompleteness({check,fresh,simplePayments}: {check:ReceiverInboxCheck;fresh:boolean;simplePayments:boolean}) {

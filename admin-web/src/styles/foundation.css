@@ -67,3 +67,12 @@ a { color: inherit; text-decoration: none; }
 .admin-icon-button:hover { background: var(--admin-surface-soft); color: var(--admin-ink); }
 .admin-skip-link { position: fixed; z-index: 250; top: -100px; left: 12px; padding: 12px 18px; background: var(--admin-surface); color: var(--admin-ink); border: 1px solid var(--admin-line); border-radius: 10px; }
 .admin-skip-link:focus { top: 12px; }
+
+.admin-startup {
+  max-inline-size: 30rem;
+  margin-inline: auto;
+  padding: clamp(1rem, 5vw, 2.25rem);
+  padding-block-start: clamp(3rem, 14vh, 8rem);
+}
+.admin-startup h1 { margin: 0; font-size: clamp(1.5rem, 5vw, 2rem); }
+.admin-startup p { margin-block: .5rem 0; color: var(--admin-muted); }

@@ -122,10 +122,10 @@ export function CoreListPage({ area, request, permissions, actorId, role, author
           {baseSorts[area].flatMap(([field, name]) => [<option key={`${field}_asc`} value={`${field}_asc`}>{name} · ascending</option>, <option key={`${field}_desc`} value={`${field}_desc`}>{name} · descending</option>])}
         </select></label>
       </div>
-      {state === 'loading' || pageScope !== currentScope ? <LoadingState label={`Loading ${AREA_TITLES[area].toLowerCase()}`} /> :
+      {state === 'loading' || pageScope !== currentScope ? <LoadingState label={`Loading ${AREA_TITLES[area].toLowerCase()}`} layout="table" /> :
        state === 'unavailable' || state === 'error' ? <ErrorState message={state === 'unavailable' ? 'Members are temporarily unavailable. Try again.' : 'The records could not be verified or the service is unavailable.'} onRetry={() => { setState('loading'); setRetry(value => value + 1); }} /> :
        !page || page.rows.length === 0 ? <EmptyState title="No records found" description="Change your search or filters and try again." /> : <>
-        <div className="admin-table-wrap" role="region" aria-label={`${AREA_TITLES[area]} records`} tabIndex={0}>
+        <div className="admin-table-wrap admin-content-enter" role="region" aria-label={`${AREA_TITLES[area]} records`} tabIndex={0}>
           <table className={paymentsWorkspace ? "admin-table operations-receipt-table" : "admin-table"} role="table"><thead role="rowgroup"><tr role="row">{tableColumns.map(column => <th role="columnheader" scope="col" key={column.label}><CompactText cell>{column.label}</CompactText></th>)}<th role="columnheader" scope="col">Status</th>{!paymentsWorkspace && <th role="columnheader" scope="col">Open</th>}</tr></thead>
             <tbody role="rowgroup">{page.rows.map(row => {
               const href = recordLocation(area, row.id, listLocation(area, filter, paymentsWorkspace));

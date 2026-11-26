@@ -1,5 +1,5 @@
 import {Fragment, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode} from 'react';
-import {CompactText, Button, Dialog, Icon} from '../../ui';
+import {CompactText, Button, Dialog, Icon, LoadingState} from '../../ui';
 import {validPaymentAmountBound} from '../../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
 import {useFocusScope} from '../../ui/useFocusScope';
 import {analyzeFinancialRows, categoryChoices, describeColumnFilter, emptyFilter, formatAnalysisCell, hasCriteria, initialColumnFilters, rangeError,
@@ -20,8 +20,8 @@ export interface FinancialAnalysisTableProps<T> {
   onPageChange?: (page: number) => void;
   summary?: (matching: readonly T[]) => ReactNode;
   actions?: ReactNode;
-  remote?: {filters: ReadonlyMap<string,ColumnFilter>; sort: FinancialSort; total: number; matching: number;
-    busy?: boolean; onCriteria: (filters: ReadonlyMap<string,ColumnFilter>,sort: FinancialSort)=>void};
+  remote?: {filters: ReadonlyMap<string,ColumnFilter>; sort: FinancialSort; total: number | null; matching: number | null;
+    refreshing?: boolean; error?: ReactNode; onCriteria: (filters: ReadonlyMap<string,ColumnFilter>,sort: FinancialSort)=>void};
 }
 
 function FilterEditor<T>({column, rows, active, close, apply, remote}: {
@@ -87,13 +87,14 @@ export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, i
   useFocusScope(maximized,panel,() => setMaximized(false),expandControl);
   const matching = useMemo(() => remote ? rows : analyzeFinancialRows(rows,columns,filters,sort),[rows,columns,filters,sort,remote]);
   const size = Number.isSafeInteger(pageSize) && pageSize > 0 ? pageSize : 25;
-  const count = Math.max(1,Math.ceil((remote?.matching ?? matching.length) / size));
+  const total = remote ? remote.total : rows.length, matched = remote ? remote.matching : matching.length;
+  const count = matched === null ? null : Math.max(1,Math.ceil(matched / size));
   const selected = expanded?.key;
   const selectedIndex = !remote && selected && selected !== navigation.revealed ? matching.findIndex(row => rowKey(row) === selected) : -1;
   const revealed = selected && selectedIndex >= 0 ? selected : selected ? navigation.revealed : undefined;
   const bookmark = Object.is(page,navigation.given) ? navigation.position : page ?? navigation.position;
   const requested = selectedIndex >= 0 ? Math.floor(selectedIndex / size) + 1 : bookmark;
-  const current = remote?.busy ? (page ?? 1) : Math.max(1,Math.min(count,Number.isFinite(requested) ? Math.trunc(requested) : 1));
+  const current = count === null ? (page ?? navigation.position) : Math.max(1,Math.min(count,Number.isFinite(requested) ? Math.trunc(requested) : 1));
   if (navigation.position !== current || navigation.revealed !== revealed || !Object.is(navigation.given,page)) {
     setNavigation({position:current,given:page,revealed});
   }
@@ -107,11 +108,11 @@ export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, i
   };
   const lastPage = useRef(1), corrected = useRef('');
   useEffect(() => {
-    const correction = remote?.busy || page === undefined || page === current ? '' : String(page) + '/' + current;
+    const correction = count === null || page === undefined || page === current ? '' : String(page) + '/' + current;
     if (page === undefined && lastPage.current !== current || correction && corrected.current !== correction) onPageChange?.(current);
     lastPage.current = current;
     corrected.current = correction;
-  },[page,current,onPageChange,remote?.busy]);
+  },[page,current,onPageChange,count]);
   const apply = (column: string, filter: ColumnFilter) => {
     const next = new Map(filters);
     if (hasCriteria(filter)) next.set(column,filter); else next.delete(column);
@@ -128,12 +129,12 @@ export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, i
     if (remote) remote.onCriteria(filters,next);
     else {setSort(next); changePage(1);}
   };
-  const total = remote?.total ?? rows.length, matched = remote?.matching ?? matching.length;
-  const numberLabel = activeColumns.length ? matched + ' of ' + total : total;
+  const loading = count === null && !remote?.error;
   return <div ref={panel} className={'financial-analysis' + (maximized ? ' financial-analysis--expanded' : '')}
     role={maximized ? 'dialog' : undefined} aria-modal={maximized || undefined} aria-label={maximized ? label : undefined}>
     <div className="financial-analysis-tools">
-      <span className="financial-analysis-count" role="status">{remote?.busy ? 'Loading payments' : numberLabel + (total === 1 ? ' record' : ' records')}</span>
+      {total !== null && matched !== null && <span className="financial-analysis-count" role="status">
+        {activeColumns.length ? matched + ' of ' + total : total}{total === 1 ? ' record' : ' records'}</span>}
       <button ref={expandControl} type="button" className="financial-analysis-expand" onClick={() => setMaximized(value => !value)}
         aria-label={maximized ? 'Restore table' : 'Expand table'} aria-expanded={maximized}>
         <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d={maximized ?
@@ -153,7 +154,7 @@ export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, i
       <button type="button" className="financial-analysis-clear" onClick={clearAll}>Clear all filters</button>
     </div>}
     <div className="financial-analysis-scroll" role="region" aria-label={label + ' table scroll area'} tabIndex={0}>
-      <table className="financial-analysis-grid" aria-label={label}>
+      <table className="financial-analysis-grid" aria-label={label} aria-busy={loading || remote?.refreshing || undefined}>
         <thead><tr>{columns.map((column,index) => {
           const selectedSort = sort?.key === column.key ? sort.direction : undefined;
           const next = selectedSort === 'asc' ? 'desc' : 'asc';
@@ -174,7 +175,7 @@ export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, i
             </div>
           </th>;
         })}</tr></thead>
-        <tbody>{visible.map(row => {
+        <tbody className={count === null ? undefined : 'admin-content-enter'}>{visible.map(row => {
           const key = rowKey(row);
           return <Fragment key={key}><tr>{columns.map(column => {
             const value = column.render ? column.render(row) : formatAnalysisCell(column,row);
@@ -187,13 +188,15 @@ export function FinancialAnalysisTable<T>({rows, columns, rowKey, initialSort, i
             <div className="financial-analysis-detail">{expanded.content}</div>
           </td></tr>}</Fragment>;
         })}
-        {!visible.length && <tr><td colSpan={Math.max(1,columns.length)} className="financial-analysis-empty">
-          <span>{remote?.busy ? 'Loading payments…' : activeColumns.length ? 'No matching records.' : 'No records.'}</span></td></tr>}
+        {!visible.length && count !== null && <tr><td colSpan={Math.max(1,columns.length)} className="financial-analysis-empty">
+          <span>{activeColumns.length ? 'No matching records.' : 'No records.'}</span></td></tr>}
         </tbody>
       </table>
     </div>
-    {summary && <div className="financial-analysis-summary">{summary(matching)}</div>}
-    {count > 1 && <nav className="financial-analysis-pager" aria-label={label + ' pages'}>
+    {loading && <LoadingState label="Loading payments" layout="table" />}
+    {remote?.error}
+    {summary && <div className="financial-analysis-summary admin-content-enter">{summary(matching)}</div>}
+    {count !== null && count > 1 && <nav className="financial-analysis-pager" aria-label={label + ' pages'}>
       <span>Page {current} of {count}</span>
       <button type="button" aria-label="Previous page" disabled={current === 1} onClick={() => changePage(current - 1)}>Previous</button>
       <button type="button" aria-label="Next page" disabled={current === count} onClick={() => changePage(current + 1)}>Next</button>

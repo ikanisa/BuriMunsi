@@ -1,5 +1,6 @@
 import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from 'react';
 import { Icon } from './Icon';
+export {LoadingState, type LoadingLayout} from './LoadingState';
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'soft' | 'danger';
@@ -43,10 +44,6 @@ export interface StatusBadgeProps {
 
 export function StatusBadge({ children, tone = 'neutral' }: StatusBadgeProps) {
   return <span className={`admin-badge admin-badge--${tone}`}><span className="admin-badge-dot" aria-hidden="true" />{typeof children === 'string' ? <CompactText>{children}</CompactText> : children}</span>;
-}
-
-export function LoadingState({ label = 'Loading' }: { label?: string }) {
-  return <div className="admin-state" role="status"><span className="admin-spinner" aria-hidden="true" /><span>{label}</span></div>;
 }
 
 export function ErrorState({ title = 'Unable to load this page', message, onRetry }: { title?: string; message: string; onRetry?: () => void }) {

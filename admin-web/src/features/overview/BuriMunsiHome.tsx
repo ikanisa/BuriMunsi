@@ -41,15 +41,17 @@ export function BuriMunsiHome() {
   const load = useCallback(async (signal: AbortSignal) => snapshot.parse(await request('burimunsi/home', {signal})), [request]);
   const sms = canReadSmsEvidence(user);
   const collection = visible && user && sms && hasScopedAdminAuthority(user) ? user.adminIdentity?.collectionId : undefined;
-  const authority=JSON.stringify([epoch,user?.id,user?.sessionId,user?.role,collection,[...(user?.permissions ?? [])].sort()]);
-  const {result, retry} = useOperationRead('burimunsi-home:' + authority, visible, load);
+  const authority=JSON.stringify([epoch,user?.id,user?.sessionId,user?.role,user?.adminIdentity?.collectionId,[...(user?.permissions ?? [])].sort()]);
+  const {result, retry, refreshing} = useOperationRead('burimunsi-home:' + authority, visible, load, {retainDuringRefresh: true});
   const canOpenSms=!!collection && session.status==='authenticated';
   const totals = result?.status === 'success' ? result.value.paymentTotals : undefined;
   const walletGap = sms && totals?.latestSmsBalanceRwf != null ? totals.walletGapRwf : null;
-  return <><PageHeader title="Home" actions={<Button icon="refresh" aria-label="Refresh Home" onClick={retry} />} />
-    {!visible ? <ErrorState title="Access unavailable" message="Your account cannot view the group snapshot." /> : !result ? <LoadingState label="Loading Home" /> :
+  return <><PageHeader title="Home" actions={<Button icon="refresh" aria-label="Refresh Home" onClick={retry}
+    loading={visible && (!result || refreshing)} />} />
+    {!visible ? <ErrorState title="Access unavailable" message="Your account cannot view the group snapshot." /> :
+      !result ? <LoadingState label="Loading Home" layout="home" homeCards={payments ? [3, sms ? 3 : 2] : [1, 0]} /> :
       result.status === 'error' ? <ErrorState message={result.message} onRetry={retry} /> : <>
-        <section className="overview-summary" aria-label="Group snapshot">
+        <section className="overview-summary admin-content-enter" aria-label="Group snapshot" aria-busy={refreshing || undefined}>
           <div className="overview-metrics">
             {payments && <Figure label="Payments" icon="swap" value={result.value.paymentCount} to={buriMunsiPaymentsPath} />}
             <Figure label="Members" icon="users" value={result.value.memberCount} to={user?.permissions.includes('users.read') ? '/admin/members' : undefined} />
@@ -67,7 +69,7 @@ export function BuriMunsiHome() {
             <StatusBadge tone="warning"><span>Wallet difference · RWF {amountFormat.format(walletGap)}</span></StatusBadge>
           </p>}
         </section>
-        {payments && <Card className="operations-records"><div className="operations-toolbar"><h2>Recent payments</h2>
+        {payments && <Card className="operations-records admin-content-enter"><div className="operations-toolbar"><h2>Recent payments</h2>
           <Link className="operations-link" to={buriMunsiPaymentsPath}>View all payments</Link></div>
           {result.value.recentPayments.length ? <BuriMunsiPaymentRows rows={result.value.recentPayments} /> :
             <EmptyState title="No payments yet" />}

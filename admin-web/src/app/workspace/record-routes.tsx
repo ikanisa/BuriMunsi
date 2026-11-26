@@ -14,9 +14,9 @@ import {LegacyJournalCreateRoute, LegacyJournalEditRoute, TransactionEvidenceRou
 import {loadWorkspacePage} from './loadWorkspacePage';
 import {collectWorkspaceOnly, requiresAdminRole, requiresPermissions, workspaceRoute, type WorkspaceAccess} from './routePolicy';
 
-const CoreListPage = loadWorkspacePage(() => import('../../features/core/CoreListPage').then(m => m.CoreListPage));
-const CoreRecordPage = loadWorkspacePage(() => import('../../features/core/CoreRecordPage').then(m => m.CoreRecordPage));
-const MemberStatementPage = loadWorkspacePage(() => import('../../features/core/MemberStatementPage').then(m => m.MemberStatementPage));
+const CoreListPage = loadWorkspacePage(() => import('../../features/core/CoreListPage').then(m => m.CoreListPage), 'table');
+const CoreRecordPage = loadWorkspacePage(() => import('../../features/core/CoreRecordPage').then(m => m.CoreRecordPage), 'details');
+const MemberStatementPage = loadWorkspacePage(() => import('../../features/core/MemberStatementPage').then(m => m.MemberStatementPage), 'table');
 const GroupCreatePage = lazy(() => import('../../features/core/GroupCreatePage').then(m => ({default: m.GroupCreatePage})));
 const GroupEditPage = lazy(() => import('../../features/core/GroupEditPage').then(m => ({default: m.GroupEditPage})));
 const UserCreatePage = lazy(() => import('../../features/core/UserCreatePage').then(m => ({default: m.UserCreatePage})));
@@ -128,7 +128,7 @@ function GroupSelectionRoute({action}: {action: 'member' | 'payee'}) {
 }
 
 const PaymentsWorkArea = lazy(() => import('../../features/operations/PaymentsWorkArea').then(m => ({default: m.PaymentsWorkArea})));
-const BuriMunsiPayments = loadWorkspacePage(() => import('../../features/operations/BuriMunsiPayments').then(m => m.BuriMunsiPayments));
+const BuriMunsiPayments = loadWorkspacePage(() => import('../../features/operations/BuriMunsiPayments').then(m => m.BuriMunsiPayments), 'table');
 
 function PaymentsRoute() {
   const access = useAccess(), {user} = useSession();
