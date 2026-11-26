@@ -8,6 +8,7 @@ import { containsControl, formatField, isId, isObject, memberMobileNumber, parse
 import { coreRecordActions } from './coreRecordActions';
 import { CoreRelatedSection, MembershipRecoveries } from './CoreRelatedRecords';
 import {MemberMemberships} from './MemberMemberships';
+import {canReadMemberStatement, readMemberDetails} from './memberStatement';
 import type { PendingIdentity } from './pendingAttempt';
 import { relatedPage, validateRelated } from './relatedRecordContract';
 import type { CoreArea, FeatureAccess } from './types';
@@ -49,11 +50,14 @@ export function CoreRecordPage({ area, id, request, permissions, actorId, princi
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [retry, setRetry] = useState(0);
   const scopedProfile = scopedMember && financialModel === 'canonical_evidence_ledger' && (area === 'members' || area === 'users');
+  const includeBalance = scopedProfile && canReadMemberStatement(permissions);
   const resource = scopedProfile ? 'members' : area === 'members' ? 'users' : area === 'ledgers' && financialModel === 'transaction_journals' ? 'journals' : area;
   useEffect(() => {
     if (!allowed || !isId(id)) return;
     const controller = new AbortController(); let active = true;
-    request(`operations/${resource}/${id}`, { signal: controller.signal }).then(data => {
+    const read = includeBalance ? readMemberDetails(request, controller.signal, id, 'balance') :
+      request(`operations/${resource}/${id}`, { signal: controller.signal });
+    read.then(data => {
       if (data.resource_type !== resource || data.current_actor_id !== actorId || typeof data.can_manage !== 'boolean' || !isObject(data.resource) || !isObject(data.related)) throw new Error('Invalid detail');
       if (financialModel === 'canonical_evidence_ledger') {
         if (data.contract_version !== 2 || data.model !== financialModel) throw new Error('Invalid model');
@@ -65,7 +69,7 @@ export function CoreRecordPage({ area, id, request, permissions, actorId, princi
       if (active) { setDetail(data); setDetailScope(currentScope); setState('ready'); }
     }).catch(() => { if (active) { setDetailScope(currentScope); setState('error'); } });
     return () => { active = false; controller.abort(); };
-  }, [allowed, id, resource, request, actorId, authorityKey, financialModel, area, currentScope, retry]);
+  }, [allowed, id, resource, request, actorId, authorityKey, financialModel, area, currentScope, retry, includeBalance]);
   const paymentsReturn = area === 'transactions' ? safePaymentListReturn(returnTo, 'recorded') : null;
   const back = paymentsReturn ?? safeReturn(area, financialModel, scopedMember, returnTo);
   const {actions, membershipRecovery, membershipWrite, journalRecovery, journalWrite} = coreRecordActions({
@@ -101,7 +105,7 @@ export function CoreRecordPage({ area, id, request, permissions, actorId, princi
         {Object.entries(detail.related as Record<string, unknown>).filter(([name]) => !simplePayments || name === 'memberships')
           .map(([name, values]) => scopedProfile && name === 'memberships'
             ? permissions.includes('collections.read') && <MemberMemberships key={currentScope} detail={detail} memberId={id} expectedGroup={expectedGroup}
-                request={request} authorityKey={authorityKey} permissions={permissions} returnTo={back} />
+                request={request} authorityKey={authorityKey} permissions={permissions} returnTo={back} onRetryBalance={reload} />
             : <CoreRelatedSection key={`${currentScope}:${name}`} name={name} initial={values as Record<string, unknown>[]} page={relatedPage(detail, name, values as unknown[])} resource={resource} id={id} actorId={actorId} financialModel={financialModel} request={request} version={(detail.resource as Record<string, unknown>).version} membershipRecovery={membershipRecovery} membershipWrite={membershipWrite} accountRead={!simplePayments && permissions.includes('ledger.read')} journalRecovery={journalRecovery} journalWrite={journalWrite} navigate={navigate} />)}
       </>}
   </>;

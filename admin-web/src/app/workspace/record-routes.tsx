@@ -6,17 +6,17 @@ import {CORE_PERMISSIONS, type CoreArea} from '../../features/core/types';
 import {canAddMember} from '../../features/core/addMemberAccess';
 import {canReadMemberStatement} from '../../features/core/memberStatement';
 import {listLocation, readFilters} from '../../features/core/coreListFilters';
-import {MemberDirectoryActions} from '../../features/core/MemberDirectory';
 import {useSession} from '../../session/SessionProvider';
 import {usesPhoneCanonicalRecords} from '../../session/sessionContext';
 import {UnavailablePage} from '../UnavailablePage';
 import {useAccess, useCurrentAuthority, useSensitiveAccess} from './access';
 import {LegacyJournalCreateRoute, LegacyJournalEditRoute, TransactionEvidenceRoute} from './financial-routes';
+import {loadWorkspacePage} from './loadWorkspacePage';
 import {collectWorkspaceOnly, requiresAdminRole, requiresPermissions, workspaceRoute, type WorkspaceAccess} from './routePolicy';
 
-const CoreListPage = lazy(() => import('../../features/core/CoreListPage').then(m => ({default: m.CoreListPage})));
-const CoreRecordPage = lazy(() => import('../../features/core/CoreRecordPage').then(m => ({default: m.CoreRecordPage})));
-const MemberStatementPage = lazy(() => import('../../features/core/MemberStatementPage').then(m => ({default: m.MemberStatementPage})));
+const CoreListPage = loadWorkspacePage(() => import('../../features/core/CoreListPage').then(m => m.CoreListPage));
+const CoreRecordPage = loadWorkspacePage(() => import('../../features/core/CoreRecordPage').then(m => m.CoreRecordPage));
+const MemberStatementPage = loadWorkspacePage(() => import('../../features/core/MemberStatementPage').then(m => m.MemberStatementPage));
 const GroupCreatePage = lazy(() => import('../../features/core/GroupCreatePage').then(m => ({default: m.GroupCreatePage})));
 const GroupEditPage = lazy(() => import('../../features/core/GroupEditPage').then(m => ({default: m.GroupEditPage})));
 const UserCreatePage = lazy(() => import('../../features/core/UserCreatePage').then(m => ({default: m.UserCreatePage})));
@@ -48,7 +48,7 @@ function MemberListRoute() {
   const scopedMember = usesPhoneCanonicalRecords(session);
   return <CoreListPage key={access.authorityKey} {...access} area="members" locationSearch={search}
     simplePayments={session.user?.authMethod === 'phone_passcode'} scopedMember={scopedMember}
-    memberActions={scopedMember && session.user && <MemberDirectoryActions user={session.user} identity={identity} />} />;
+    memberActions={scopedMember && session.user ? {user: session.user, identity} : undefined} />;
 }
 
 function MemberCreateRoute() {
@@ -128,7 +128,7 @@ function GroupSelectionRoute({action}: {action: 'member' | 'payee'}) {
 }
 
 const PaymentsWorkArea = lazy(() => import('../../features/operations/PaymentsWorkArea').then(m => ({default: m.PaymentsWorkArea})));
-const BuriMunsiPayments = lazy(() => import('../../features/operations/BuriMunsiPayments').then(m => ({default: m.BuriMunsiPayments})));
+const BuriMunsiPayments = loadWorkspacePage(() => import('../../features/operations/BuriMunsiPayments').then(m => m.BuriMunsiPayments));
 
 function PaymentsRoute() {
   const access = useAccess(), {user} = useSession();

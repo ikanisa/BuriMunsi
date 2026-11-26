@@ -1,13 +1,13 @@
 import {lazy} from 'react';
 import {Navigate, useLocation, useNavigate} from 'react-router';
 import {canReadMemberReceipts, paymentViewLocation} from '../../features/operations/paymentLocations';
-import {OverviewPage} from '../../features/overview/OverviewPage';
 import {canReadRequestHistory} from '../../features/requests/permissions';
 import {hasScopedAdminAuthority} from '../../session/ownerIdentity';
 import {useSession} from '../../session/SessionProvider';
 import {canReadSmsEvidence} from '../../session/sessionContext';
 import {verificationPath} from '../../session/returnLocation';
 import {useAccess, useSensitiveAccess} from './access';
+import {loadWorkspacePage} from './loadWorkspacePage';
 import {collectWorkspaceOnly, requiresAdminRole, requiresPermissions, workspaceRoute} from './routePolicy';
 import {canOpenOperatorProfile, canOpenTeam} from './team-access';
 
@@ -25,7 +25,8 @@ const EmailEventsPage = lazy(() => import('../../features/operations/EmailEvents
 const AssistedSmsPage = lazy(() => import('../../features/assisted/AssistedSmsPage').then(m => ({default: m.AssistedSmsPage})));
 const SmsControlsPage = lazy(() => import('../../features/assisted/SmsControlsPage').then(m => ({default: m.SmsControlsPage})));
 const BuriMunsiPage = lazy(() => import('../../features/burimunsi').then(m => ({default: m.BuriMunsiPage})));
-const BuriMunsiHome = lazy(() => import('../../features/overview/BuriMunsiHome').then(m => ({default: m.BuriMunsiHome})));
+const BuriMunsiHome = loadWorkspacePage(() => import('../../features/overview/BuriMunsiHome').then(m => m.BuriMunsiHome));
+const OverviewPage = loadWorkspacePage(() => import('../../features/overview/OverviewPage').then(m => m.OverviewPage));
 
 function LegacyMomoReceiptsRoute() {
   const {user} = useSession();

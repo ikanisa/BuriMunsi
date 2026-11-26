@@ -44,6 +44,7 @@ self.addEventListener('install', (event) => {
         // authenticated cookie or a redirect to an account page enter it.
         const request = new Request(url, {
           cache: url.startsWith('./_build/') ? 'default' : 'reload',
+          priority: 'low',
           credentials: 'omit',
           redirect: 'error',
         });

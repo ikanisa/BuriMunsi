@@ -43,6 +43,7 @@ export const memberStatementPageSize = 25;
 export type MemberStatementPosition = {offset: number; revision?: string};
 const revisionPattern = /^[0-9a-f]{64}$/;
 const signedRwf = z.string().regex(/^(0|-?[1-9]\d{0,30})$/).transform(value => BigInt(value));
+const balanceSummary = z.object({groupId: paymentId, memberId: paymentId, membershipId: paymentId, closingRwf: signedRwf}).strict();
 const statementPage = z.object({
   groupId: paymentId, memberId: paymentId, membershipId: paymentId,
   totalCount: z.number().int().nonnegative().max(100_100), offset: z.number().int().nonnegative(),
@@ -52,6 +53,32 @@ const statementPage = z.object({
     atRaw: z.string(), ftId: z.string().nullable(), balanceRwf: signedRwf,
   }).strict()).max(memberStatementPageSize),
 }).strict();
+
+export async function readMemberDetails(request: AdminRequest, signal: AbortSignal, memberId: string, include?: 'balance' | 'statement') {
+  if (!isId(memberId)) throw new Error('Invalid member.');
+  signal.throwIfAborted();
+  const path = 'operations/members/' + memberId;
+  if (!include) return request(path, {signal});
+  try {
+    const response = await request(path + '?include=' + include, {signal});
+    if (!Object.hasOwn(response, 'member_' + include)) throw new Error('Missing member projection.');
+    return response;
+  } catch (error) {
+    // Older servers explicitly reject the optional filter. Other failures retain their original meaning.
+    if (!(error instanceof AdminRequestError) || error.statusCode !== 400 || error.code !== 'invalid_filter') throw error;
+    signal.throwIfAborted();
+    return request(path, {signal});
+  }
+}
+
+export function readMemberBalanceProjection(raw: unknown, memberId: string, membership: ProfileMembership) {
+  if (raw === null) return null;
+  const result = balanceSummary.parse(raw);
+  if (result.memberId !== memberId || result.groupId !== membership.groupId || result.membershipId !== membership.id) {
+    throw new Error('The balance scope changed.');
+  }
+  return result.closingRwf;
+}
 
 export async function readMemberStatementPage(request: AdminRequest, signal: AbortSignal, memberId: string,
   membership: Pick<ProfileMembership, 'id' | 'groupId'>, {offset, revision}: MemberStatementPosition = {offset: 0}) {
@@ -75,6 +102,11 @@ export async function readMemberStatementPage(request: AdminRequest, signal: Abo
     throw error;
   }
   signal.throwIfAborted();
+  return parseStatementPage(raw, memberId, membership, {offset, revision});
+}
+
+function parseStatementPage(raw: unknown, memberId: string, membership: Pick<ProfileMembership, 'id' | 'groupId'>,
+  {offset, revision}: MemberStatementPosition) {
   const result = statementPage.parse(raw);
   const {items, totalCount, closingRwf} = result;
   if (result.memberId !== memberId || result.groupId !== membership.groupId || result.membershipId !== membership.id ||
@@ -96,8 +128,9 @@ export async function readMemberStatementPage(request: AdminRequest, signal: Abo
 
 export async function readMemberStatement(request: AdminRequest, signal: AbortSignal, memberId: string, actorId: string,
   expectedGroup: string | undefined, position: MemberStatementPosition) {
-  if (!isId(memberId)) throw new Error('Invalid member.');
-  const data = await request('operations/members/' + memberId, {signal});
+  const initial = position.offset === 0 && position.revision === undefined;
+  const data = await readMemberDetails(request, signal, memberId, initial ? 'statement' : undefined);
+  signal.throwIfAborted();
   if (data.current_actor_id !== actorId || data.resource_type !== 'members' || data.contract_version !== 2 ||
       data.model !== 'canonical_evidence_ledger' || typeof data.can_manage !== 'boolean') throw new Error('Invalid member response.');
   const member = parseCoreRow('users', 'canonical_evidence_ledger', data.resource);
@@ -106,7 +139,8 @@ export async function readMemberStatement(request: AdminRequest, signal: AbortSi
   validateRelated(data, 'members');
   const membership = profileMembership(data, memberId, expectedGroup);
   if (!membership?.groupId || !membership.id) throw new Error('Membership could not be verified.');
-  const statement = await readMemberStatementPage(request, signal, memberId, membership, position);
+  const statement = Object.hasOwn(data, 'member_statement') ? parseStatementPage(data.member_statement, memberId, membership, position) :
+    await readMemberStatementPage(request, signal, memberId, membership, position);
   return {...statement, membership, name: present(member.display_name)};
 }
 

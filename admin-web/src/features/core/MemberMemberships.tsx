@@ -3,14 +3,24 @@ import {Link} from 'react-router';
 import {Button, Card} from '../../ui';
 import {useOperationRead} from '../operations/useOperationRead';
 import {label} from './contracts';
-import {canReadMemberStatement, memberStatementPath, profileMembership, readMemberStatementPage, statementAmount, type ProfileMembership} from './memberStatement';
+import {canReadMemberStatement, memberStatementPath, profileMembership, readMemberBalanceProjection, readMemberStatementPage,
+  statementAmount, type ProfileMembership} from './memberStatement';
 import type {FeatureAccess} from './types';
 
 type MembershipProps = Pick<FeatureAccess, 'request' | 'permissions' | 'authorityKey'> & {
-  detail: Record<string, unknown>; memberId: string; expectedGroup?: string; returnTo: string;
+  detail: Record<string, unknown>; memberId: string; expectedGroup?: string; returnTo: string; onRetryBalance?: () => void;
 };
 
-function MembershipBalance({membership, memberId, request, authorityKey, returnTo}:
+function BalanceLink({memberId, returnTo, value, onRetry}:
+  Pick<MembershipProps, 'memberId' | 'returnTo'> & {value: bigint | null; onRetry?: () => void}) {
+  const amount = statementAmount(value, true);
+  const query = returnTo === '/admin/members' ? '' : '?' + new URLSearchParams({returnTo});
+  return <><Link className="operations-link" to={memberStatementPath(memberId) + query}
+    aria-label={'Open member statement, total balance ' + amount}>{amount}</Link>
+    {onRetry && <Button onClick={onRetry}>Retry balance</Button>}</>;
+}
+
+function SeparateMembershipBalance({membership, memberId, request, authorityKey, returnTo}:
   Pick<MembershipProps, 'memberId' | 'request' | 'authorityKey' | 'returnTo'> & {membership: ProfileMembership}) {
   const {groupId, id} = membership;
   const load = useCallback(async (signal: AbortSignal) => {
@@ -19,11 +29,18 @@ function MembershipBalance({membership, memberId, request, authorityKey, returnT
   const {result, retry} = useOperationRead(JSON.stringify([authorityKey, groupId, memberId, id]), !!groupId && !!id, load);
   if (!groupId || !id) return <>Unavailable</>;
   if (!result) return <span role="status">Loading balance</span>;
-  const amount = statementAmount(result.status === 'success' ? result.value : null, true);
-  const query = returnTo === '/admin/members' ? '' : '?' + new URLSearchParams({returnTo});
-  return <><Link className="operations-link" to={memberStatementPath(memberId) + query}
-    aria-label={'Open member statement, total balance ' + amount}>{amount}</Link>
-    {result.status === 'error' && <Button onClick={retry}>Retry balance</Button>}</>;
+  return <BalanceLink memberId={memberId} returnTo={returnTo} value={result.status === 'success' ? result.value : null}
+    onRetry={result.status === 'error' ? retry : undefined} />;
+}
+
+function MembershipBalance(props: MembershipProps & {membership: ProfileMembership}) {
+  if (!props.membership.groupId || !props.membership.id) return <>Unavailable</>;
+  if (!Object.hasOwn(props.detail, 'member_balance')) return <SeparateMembershipBalance {...props} />;
+  let amount: bigint | null = null;
+  try {amount = readMemberBalanceProjection(props.detail.member_balance, props.memberId, props.membership);}
+  catch { /* A mismatched current projection cannot establish a balance. */ }
+  return <BalanceLink memberId={props.memberId} returnTo={props.returnTo} value={amount}
+    onRetry={amount === null ? props.onRetryBalance : undefined} />;
 }
 
 export function MemberMemberships(props: MembershipProps) {
