@@ -6,7 +6,8 @@ import {validateDirectMemberInput,writeDirectMemberRecord} from './postgres-coll
 import {COLLECT_MUTATION_LOCK} from '../../postgres-mutation-lock.js';
 
 const OPERATION='burimunsi.browser_member_enrollment';
-const SCOPE_SQL=`SELECT c.title AS label,floor(extract(epoch FROM clock_timestamp())*1000)::bigint AS now_ms
+const SCOPE_SQL=`SELECT c.title AS label,floor(extract(epoch FROM clock_timestamp())*1000)::bigint AS now_ms,
+ a.role,a.active,a.capabilities,(resolved.actor->>'expiresAt')::bigint*1000 AS expires_at_ms
  FROM private.burimunsi_browser_pin_session($1,$2,$3) AS resolved(actor)
  JOIN private.burimunsi_accounts a ON a.id=$4::uuid AND a.collection_id=$1
  JOIN app.collections c ON c.id=a.collection_id AND c.status='active'
@@ -45,7 +46,9 @@ export class PostgresBrowserEnrollment {
     requireThat(rows.length===1,'access_denied',403);
     const {label,now_ms}=rows[0],now=Number(now_ms);
     requireThat(typeof label==='string'&&label.trim().length>0&&Number.isSafeInteger(now)&&now>0,'member_contract_violation',503);
-    return {label,now};
+    const dbActor={id:this.actorId,sessionId:this.sessionId,groupId:this.groupId,principalUserId:this.actor.userId,
+      role:rows[0].role,active:rows[0].active,capabilities:rows[0].capabilities,expiresAt:Number(rows[0].expires_at_ms)};
+    return {label,now,dbActor};
   }
 
   async read(operation) {
@@ -92,8 +95,30 @@ export class PostgresBrowserEnrollment {
     return this.read(async sql=>await this.prior(sql,requestId)??{requestId,outcome:'not_found'});
   }
 
+  createMemberRecord(sql,command,now) {
+    return writeDirectMemberRecord(this.authority,sql,{groupId:this.groupId,name:command.name,phone:command.phone},
+      now,{includeBalance:false});
+  }
+
+  async attestMember(sql,{memberId,existing,requestId,verifiedOwnership,acceptedTerms,consentRecorded},now) {
+    requireThat(verifiedOwnership===true&&acceptedTerms===true&&consentRecorded===true,'attestation_required');
+    const audited=await this.authority.db.statement(sql,auditStatement({DB:this.authority.db},this.actor,
+      existing?'burimunsi.enrollment.attested':'burimunsi.enroll','user',memberId,{
+        collection_id:this.groupId,browser_account_id:this.actorId,verifiedOwnership,acceptedTerms,consentRecorded
+      },requestId));
+    requireThat(audited?.success===true&&audited.meta?.changes===1,'member_contract_violation',503);
+    await this.audit(sql,this.actorId,'burimunsi.members_import.attested',memberId,requestId,now);
+  }
+
+  audit(sql,actorId,action,entityId,requestId,now=Date.now()) {
+    requireThat(actorId===this.actorId,'access_denied',403);
+    return sql.unsafe(`INSERT INTO private.burimunsi_audit (id,collection_id,actor_id,action,entity_id,request_id,at_ms)
+      VALUES ($1::uuid,$2,$3::uuid,$4,$5,$6::uuid,$7)`,
+      [crypto.randomUUID(),this.groupId,actorId,action,entityId,requestId,now]);
+  }
+
   async apply(command) {
-    const {name,phone,requestId}=command;
+    const {requestId}=command;
     requireRequestId(requestId);
     validateDirectMemberInput(command);
     requireThat(command.verifiedOwnership===true&&command.acceptedTerms===true&&command.consentRecorded===true,'attestation_required');
@@ -102,16 +127,9 @@ export class PostgresBrowserEnrollment {
       const current=await this.scope(sql);
       const prior=await this.prior(sql,requestId,fingerprint);
       if(prior)return prior;
-      const record=await writeDirectMemberRecord(this.authority,sql,{groupId:this.groupId,name,phone},current.now,{includeBalance:false});
+      const record=await this.createMemberRecord(sql,command,current.now);
       const member=checkedMember(record,this.groupId);
-      const audited=await this.authority.db.statement(sql,auditStatement({DB:this.authority.db},this.actor,
-        record.existing?'burimunsi.enrollment.attested':'burimunsi.enroll','user',member.id,{
-          collection_id:this.groupId,browser_account_id:this.actorId,verifiedOwnership:true,acceptedTerms:true,consentRecorded:true
-        },requestId));
-      requireThat(audited?.success===true&&audited.meta?.changes===1,'member_contract_violation',503);
-      await sql.unsafe(`INSERT INTO private.burimunsi_audit (id,collection_id,actor_id,action,entity_id,request_id,at_ms)
-        VALUES ($1::uuid,$2,$3::uuid,'burimunsi.members_import.attested',$4,$5::uuid,$6)`,
-        [crypto.randomUUID(),this.groupId,this.actorId,member.id,requestId,current.now]);
+      await this.attestMember(sql,{...command,memberId:member.id,existing:record.existing===true},current.now);
       await this.scope(sql);
       const retained=await sql.unsafe(`INSERT INTO private.burimunsi_command_receipts
         (collection_id,actor_id,request_id,session_id,operation,fingerprint,response,created_at)

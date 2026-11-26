@@ -6,6 +6,7 @@ import '../../../supabase/functions/_shared/tests/helpers/node-postgres-import.m
 import {ownedFixturePool} from '../../../supabase/tests/burimunsi/postgres-fixture-pool.mjs';
 import {primeJournalSchema} from './writer-journal-source.mjs';
 import {verifyBrowserMemberEnrollment} from './phone-member-enrollment.fixture.mjs';
+import {verifyBrowserMemberOnboarding} from './phone-member-onboarding.fixture.mjs';
 import {canonicalProfile,MANAGED_SUPABASE_ORIGIN} from '../../../supabase/functions/_shared/deployment-profile.js';
 
 const migration=name=>readFile(new URL('../../../supabase/migrations/'+name,import.meta.url),'utf8');
@@ -53,7 +54,7 @@ async function installSmsHealthSchedulerFixture(owner) {
   await owner.query(await migration('20261117135049_collect_sms_schedule_one_minute.sql'));
 }
 
-async function qualifyBrowserReads(pool,source,originalCookie,enrollmentFixture,installSmsScopeRepair){
+async function qualifyBrowserReads(pool,source,originalCookie,enrollmentFixture,installSmsScopeRepair,phoneOnboarding){
   const {PostgresDatabase}=await import('../../../supabase/functions/_shared/postgres.js');
   const {sqlFenceBackend,openApplicationWork}=await import('../../../supabase/functions/_shared/application-fence.js');
   const {handleAdmin}=await import('../../../supabase/functions/_shared/domain/admin_bridge.js');
@@ -62,6 +63,12 @@ async function qualifyBrowserReads(pool,source,originalCookie,enrollmentFixture,
   const profile=canonicalProfile({format:'collect.deployment.v1',id:'collect-managed-production-cloud',mode:'managed',environment:'production',
     supabase_origin:MANAGED_SUPABASE_ORIGIN,member_api_origin:MANAGED_SUPABASE_ORIGIN,admin_origin:MANAGED_SUPABASE_ORIGIN,
     public_origin:MANAGED_SUPABASE_ORIGIN,google_callback_origin:MANAGED_SUPABASE_ORIGIN});
+  let previewBindings={};
+  async function withPreviewBindings(bindings,run) {
+    assert.equal(phoneOnboarding,true);
+    previewBindings=bindings;
+    try{return await run();}finally{previewBindings={};}
+  }
   async function call(path,{cookie,csrf,body,key}={}) {
     const work=await openApplicationWork({backend,sourceSha256:source,kind:'http_admin'});
     let failed=true;
@@ -83,7 +90,7 @@ async function qualifyBrowserReads(pool,source,originalCookie,enrollmentFixture,
       const request=new Request(origin+'/api/admin/'+path,{method:body?'POST':'GET',headers,body:body?JSON.stringify(body):undefined});
       const res=await handleAdmin(request,{DB:db,COLLECT_FENCE_WORK:work,BUILD_SOURCE_ID:source,APP_ENVIRONMENT:'production',
         ADMIN_ORIGIN:MANAGED_SUPABASE_ORIGIN,SUPABASE_URL:MANAGED_SUPABASE_ORIGIN,COLLECT_DEPLOYMENT_PROFILE:profile,COLLECT_DEPLOYMENT_PROFILE_SHA256:hash(profile),
-        BURIMUNSI_COLLECTION_ID:group,BURIMUNSI_PRODUCT_MODE:'standalone',ADMIN_ORIGINS:origin,
+        BURIMUNSI_COLLECTION_ID:group,BURIMUNSI_PRODUCT_MODE:'standalone',ADMIN_ORIGINS:origin,...previewBindings,
         BURIMUNSI_DEFAULT_STAFF_PIN:initial,BURIMUNSI_PIN_PEPPER_ID:'fixture',BURIMUNSI_PIN_PEPPER_BASE64:Buffer.alloc(32,29).toString('base64')});
       const parsed=await res.json();
       failed=false;
@@ -116,14 +123,16 @@ async function qualifyBrowserReads(pool,source,originalCookie,enrollmentFixture,
     const groups=await call('core/groups?limit=5',view);
     assert.equal(groups.status,200,JSON.stringify(groups.data));
     assert.ok(groups.data.rows.some(row=>row.id===group));
-    const payments=await call('core/transactions?limit=5',view);
-    assert.equal(payments.status,200,JSON.stringify(payments.data));
-    assert.ok(Array.isArray(payments.data.rows));
+    if(!phoneOnboarding){
+      const payments=await call('core/transactions?limit=5',view);
+      assert.equal(payments.status,200,JSON.stringify(payments.data));
+      assert.ok(Array.isArray(payments.data.rows));
+    }
     const team=await call('team',view);
     assert.equal(team.status,role==='admin'?200:403,JSON.stringify(team.data));
     viewers[role]={...view,csrf:data.data.csrfToken,principalId:data.data.user.principalId};
   }
-  await verifyBrowserMemberEnrollment({call,group,admin:viewers.admin,otherAdmin:authorized,staff:viewers.staff,
+  const sessions={call,group,admin:viewers.admin,otherAdmin:authorized,staff:viewers.staff,
     inspect:enrollmentFixture.inspect,
     withoutGrant:(permission,verify)=>enrollmentFixture.withoutGrant(viewers.admin.principalId,permission,verify),
     relogin:async()=>{
@@ -131,7 +140,9 @@ async function qualifyBrowserReads(pool,source,originalCookie,enrollmentFixture,
       assert.equal(fresh.status,200);
       const session=await call('auth/session',{cookie:fresh.cookie});
       return {cookie:fresh.cookie,csrf:session.data.csrfToken};
-    }});
+    }};
+  if(phoneOnboarding)return verifyBrowserMemberOnboarding({...sessions,source,withPreviewBindings,inspectPreview:enrollmentFixture.inspectPreview});
+  await verifyBrowserMemberEnrollment(sessions);
   if(!installSmsScopeRepair)return;
   const routes=['oversight/sms-health','oversight/health?evidenceVersion=2'];
   const restored={cookie:originalCookie};
@@ -164,7 +175,7 @@ async function qualifyBrowserReads(pool,source,originalCookie,enrollmentFixture,
   return {narrowAndFull:{primaryAdmin:[200,200],peerAdmin:[503,200],staff:[403,403],guest:[401,401]},sameCookies:true,sqlstateBefore:'42501',queueParity:true};
 }
 
-export async function verifyPhoneOperatorAccounts({owner,database,fixtureRoot,phoneSmsHealth=false}) {
+export async function verifyPhoneOperatorAccounts({owner,database,fixtureRoot,phoneSmsHealth=false,phoneOnboarding=false}) {
   const [{actual,local,cluster}] = (await owner.query("SELECT current_database() AS actual,inet_server_addr() IS NULL AS local,current_setting('cluster_name') AS cluster")).rows;
   assert.ok(local && actual===database && /^collect_archive_[0-9a-f]{24}_test$/.test(database) && cluster==='collect_archive_next_fixture');
   await primeJournalSchema(owner);
@@ -202,6 +213,7 @@ export async function verifyPhoneOperatorAccounts({owner,database,fixtureRoot,ph
   await owner.query('SELECT private.collect_fence_begin_quiesce($1,$2,$3)',args);
   await owner.query('SELECT private.collect_fence_drain($1,$2,$3)',args);
   await owner.query(await migration('20261122190000_burimunsi_phone_operator_accounts.sql'));
+  if(phoneOnboarding)await owner.query(await migration('20261119041000_burimunsi_ocr_disclosure_binding.sql'));
   if(phoneSmsHealth){
     // The topic fixture supplies its own scheduler predecessor. Install the
     // same financial projection and its production ACLs from the source migration.
@@ -263,12 +275,24 @@ export async function verifyPhoneOperatorAccounts({owner,database,fixtureRoot,ph
       await owner.query('INSERT INTO app.admin_grants SELECT (jsonb_populate_record(NULL::app.admin_grants,$1::jsonb)).*',[JSON.stringify(removed.rows[0])]);
     }
   }
+  async function inspectPreview(sourceHash) {
+    await owner.query('BEGIN READ ONLY');
+    try{
+      await owner.query("SELECT set_config('burimunsi.collection_id',$1,true)",[group]);
+      const {rows}=await owner.query(`SELECT response->>'state' AS state,response->>'ocrDisclosureVersion' AS disclosure,
+        ((response->>'ciphertext')::jsonb->>'kid') AS kid,position('momoName' IN response::text)=0 AS encrypted
+        FROM private.burimunsi_command_receipts WHERE collection_id=$1 AND operation='burimunsi.smart_import.v1'
+        AND response->>'sourceSha256'=$2`,[group,sourceHash]);
+      return rows;
+    }finally{await owner.query('ROLLBACK');}
+  }
   let smsHealth;
-  try { smsHealth=await qualifyBrowserReads(pool,state.source_sha256,originalCookie,{inspect:inspectEnrollment,withoutGrant},phoneSmsHealth?installSmsScopeRepair:undefined); } finally { await pool.end(); }
+  try { smsHealth=await qualifyBrowserReads(pool,state.source_sha256,originalCookie,{inspect:inspectEnrollment,withoutGrant,inspectPreview},phoneSmsHealth?installSmsScopeRepair:undefined,phoneOnboarding); } finally { await pool.end(); }
   if(phoneSmsHealth){
     await owner.query(await fixture('burimunsi-phone-sms-read-scope.sql'));
     await owner.query(await fixture('burimunsi-screen-read-capacity.sql'));
   }
   assert.deepEqual(await receiverState(),originalReceiver);
+  if(phoneOnboarding)return {phoneOnboarding:smsHealth,unchangedDisabledReceiver:true};
   return {existingBrowserSession:true,existingNativeSession:true,phoneAccountLifecycle:true,browserEnrollment:true,adminAndStaffGroupsAndPayments:true,unchangedDisabledReceiver:true,...(smsHealth?{smsHealth}:{})};
 }

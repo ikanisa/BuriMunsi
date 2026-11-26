@@ -54,10 +54,12 @@ export class MemberService {
       else if(!item.verifiedOwnership||!item.acceptedTerms||!item.consentRecorded)status='needs_verification';
       else if(seenPhones.has(phone))status='duplicate_in_batch';
       if(phone!==null)seenPhones.add(phone);
-      prepared.push({row:item.row,name,phone,candidateId,status});
+      prepared.push({row:item.row,name,phone,candidateId,status,attestations:{
+        verifiedOwnership:item.verifiedOwnership,acceptedTerms:item.acceptedTerms,consentRecorded:item.consentRecorded}});
     }
     return this.store.inMemberTransaction(async tx=>{
-      requirePort(tx,['reloadActor','retainedCommand','retainCommand','createDirectMember','enqueueEligibleRematch','recordMemberImportAttestation']);
+      requirePort(tx,['reloadActor','retainedCommand','retainCommand','createDirectMember','recordMemberImportAttestation']);
+      if(!this.paymentsOnly)requirePort(tx,['enqueueEligibleRematch']);
       const fresh=await revalidateCommandActor(tx,actor,this.groupId,'members.enroll',this.clock());
       const prior=await tx.retainedCommand(this.groupId,fresh.id,requestId);
       if(prior){requireThat(prior.operation==='burimunsi.members_import'&&prior.fingerprint===fingerprint&&prior.sessionId===fresh.sessionId,'idempotency_conflict',409);return prior.response;}
@@ -75,7 +77,8 @@ export class MemberService {
           requireThat(member?.id&&member.groupId===this.groupId&&member.phone===row.phone&&
             (member.existing===undefined||member.existing===true),'member_contract_violation',503);
           memberId=member.id;status=member.existing?'already_registered':'created';
-          await tx.recordMemberImportAttestation({groupId:this.groupId,memberId,requestId:rowRequestId,actorId:fresh.id,sessionId:fresh.sessionId});
+          await tx.recordMemberImportAttestation({groupId:this.groupId,memberId,requestId:rowRequestId,actorId:fresh.id,
+            sessionId:fresh.sessionId,existing:member.existing===true,...row.attestations});
           if(!this.paymentsOnly&&!member.existing)await tx.enqueueEligibleRematch({groupId:this.groupId,memberId,requestId:rowRequestId,cause:'enrollment'});
         }
         results.push({row:row.row,status,memberId});

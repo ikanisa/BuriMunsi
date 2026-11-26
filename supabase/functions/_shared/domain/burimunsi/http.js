@@ -4,6 +4,7 @@ import {nativeRequestUrl,readNativeJson,requireNativeHttpsOrigin} from './wire/n
 import {BuriError,ObservationUploadUnresolved,requirePort,requireThat} from './errors.js';
 import {exactKeys,requireId,requireRequestId,sha256} from './values.js';
 import {LISTING_QUERY_KEYS} from './listing-query.js';
+import {previewOnboardingFile} from './smart-onboarding-request.js';
 
 const recordSnapshotReads = new Set(['home','homeSavings','payments','members','ledger','payment','member','history','staff','audit','onboardingSuggestions']);
 
@@ -120,20 +121,7 @@ export function createNativeHandler({auth,records,contributions,members,gateway,
         requirePort(records,['onboardingPreview']);
         const required=['mimeType','fileBytes','externalOcrConsent'];
         const input=await body(req,[...required,'importFlowId','ocrDisclosureVersion'],required);
-        requireThat(typeof input.fileBytes==='string'&&input.fileBytes.length>0&&input.fileBytes.length%4===0&&
-          /^[A-Za-z0-9+/]*={0,2}$/.test(input.fileBytes),'smart_import_invalid');
-        let binary;try{binary=atob(input.fileBytes);}catch{throw new BuriError('smart_import_invalid',400);}
-        requireThat(binary.length>0&&binary.length<=5*1024*1024&&btoa(binary)===input.fileBytes,'smart_import_invalid');
-        const bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);
-        let preview;
-        try{
-          preview=await records.onboardingPreview(actor,{bytes,mimeType:input.mimeType,externalOcrConsent:input.externalOcrConsent,
-            importFlowId:input.importFlowId,ocrDisclosureVersion:input.ocrDisclosureVersion,signal:req.signal});
-        }catch(error){
-          requireActiveNativeRequest(req);throw error;
-        }finally{bytes.fill(0);}
-        requireActiveNativeRequest(req);
-        return json(preview);
+        return json(await previewOnboardingFile(req,input,source=>records.onboardingPreview(actor,source)));
       }
       if(route==='/members/import'&&method==='POST'){
         requirePort(members,['importMembers']);return json(await members.importMembers(actor,await body(req,['requestId','rows'])));

@@ -126,6 +126,7 @@ const PHONE_HEADERS = [
   'nambari ya momo',
   'phone',
   'phone number',
+  'mobile number',
   'numero de telephone',
   'number',
   'nimero',
