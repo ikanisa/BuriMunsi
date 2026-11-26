@@ -147,3 +147,15 @@ actual outcome; it refuses a changed or dirty checkout and never overwrites a
 prior receipt. Output includes no test log or credentials. Hosted CI, Edge,
 gateway, jobs, PostgreSQL, Admin and Android are marked NOT RUN, even if the
 source receipt passes. Record real evidence for those lanes separately.
+
+### R06: Open-tab asset compatibility preflight
+
+Before proposing a traffic shift, compare both package inventories offline:
+
+```sh
+node scripts/qa/r06_compare_admin_assets.mjs BASELINE_DIR BASELINE_RECEIPT_SHA256 CANDIDATE_DIR CANDIDATE_RECEIPT_SHA256
+```
+
+Provide the independently retained SHA-256 of each adjacent build receipt (not just the asset version). The check rehashes the files, rejects a wrong receipt or malformed path, and separately counts missing or byte-different URLs for old tabs on promotion and new tabs on rollback. Exit 0 means a static inventory match only, 2 means invalid/unverified inputs, and 3 means a compatibility gap. The report never marks hosted acceptance. Reverify which version serves the baseline before changing traffic; provider history alone does not establish a safe rollback.
+
+In the isolated authenticated browser rehearsal, leave the two tabs open across the respective transitions, force lazy asset loads and verify response MIME/status, sign-out, and original-ID outcome readback for a synthetic interrupted write. Returning Worker traffic does not restore database state. Do not blindly retry or downgrade schema on a missing acknowledgement. Unit checks: `node --test scripts/qa/r06_compare_admin_assets.test.mjs`.
