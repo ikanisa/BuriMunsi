@@ -1,4 +1,5 @@
 import {isManagedAdminBrowserOrigin} from './admin-security.js';
+import {BURIMUNSI_ADMIN_ORIGIN,BURIMUNSI_PRODUCT_MODE,BURIMUNSI_SESSION_HOME_HEADER} from './burimunsi-standalone.js';
 import {COLLECT_SUPABASE_ORIGIN, isGoogleProviderNavigation} from './runtime-env.js';
 
 const projectHostname = new URL(COLLECT_SUPABASE_ORIGIN).hostname;
@@ -80,6 +81,10 @@ export function browserCors(env, request, admin, challengeParent) {
     'Access-Control-Max-Age': '600',
   };
   if (admin) {
+    const {pathname,search}=new URL(request.url);
+    if(env.BURIMUNSI_PRODUCT_MODE===BURIMUNSI_PRODUCT_MODE&&origin===BURIMUNSI_ADMIN_ORIGIN&&
+      request.method==='OPTIONS'&&request.headers.get('Access-Control-Request-Method')==='GET'&&
+      pathname==='/api/admin/auth/session'&&!search)headers['Access-Control-Allow-Headers']+=','+BURIMUNSI_SESSION_HOME_HEADER;
     headers['Access-Control-Allow-Credentials'] = 'true';
     headers['Access-Control-Expose-Headers'] = 'X-Collect-Evidence-Sensitivity';
   }

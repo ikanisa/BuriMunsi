@@ -25,9 +25,18 @@ const latest = [
   '20261122203000_burimunsi_phone_admin_sms_read_scope.sql',
   '20261123061132_burimunsi_single_admin.sql',
   '20261124080000_burimunsi_read_admission.sql',
+  '20261124081102_burimunsi_inbox_check_freshness.sql',
   '20261124091329_burimunsi_idle_native_jobs.sql',
   '20261124100000_burimunsi_payment_activity_source_metadata.sql',
+  '20261124114500_burimunsi_payments.sql',
+  '20261124114501_burimunsi_record_payments.sql',
+  '20261124114502_burimunsi_allocation_receipts.sql',
   '20261124114503_burimunsi_phone_renewal_lock.sql',
+  '20261124114504_burimunsi_verified_inbox_recovery.sql',
+  '20261124151857_burimunsi_payment_sms_evidence.sql',
+  '20261126150200_burimunsi_admin_sms_payment_scope.sql',
+  '20261126152453_burimunsi_home_savings.sql',
+  '20261126170200_burimunsi_admin_home_sms_balance.sql',
 ];
 
 export async function verifyFreshPhoneReads({owner,admin,database,fixtureRoot}) {
