@@ -70,7 +70,11 @@ fun main()=runBlocking{
         m.navigate(Route.PAYMENTS,"member-1");idle(m)
         ck("J07 member payments open the central list with the exact member scope",m.state.route==Route.PAYMENTS&&m.state.routeId=="member-1"&&m.state.payments?.items?.singleOrNull()?.memberId=="member-1")
         m.back();idle(m);ck("J07 Back returns to the original member",m.state.route==Route.MEMBER&&m.state.member?.id=="member-1")
-        val before=Fixture.lifecycleCalls;m.openSheet(Sheet.MEMBER_DETAILS);idle(m);m.setMemberActive(false);idle(m);ck("J07 lifecycle command remains explicit",Fixture.lifecycleCalls==before+1)
+        val before=Fixture.lifecycleCalls
+        val beforePanel=Fixture.memberReads
+        m.openSheet(Sheet.MEMBER_DETAILS);idle(m)
+        ck("J07 Admin independently revalidates member details before lifecycle actions",Fixture.memberReads==beforePanel+1)
+        m.setMemberActive(false);idle(m);ck("J07 lifecycle command remains explicit",Fixture.lifecycleCalls==before+1)
     }
     journey("J08","profile passcode and continued session"){m->
         m.openSheet(Sheet.PROFILE);idle(m);m.openSheet(Sheet.PIN);idle(m);m.back();idle(m);ck("J08 Close returns to the original route",m.state.sheet==null)
