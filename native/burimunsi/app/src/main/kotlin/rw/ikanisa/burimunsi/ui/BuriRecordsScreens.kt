@@ -100,11 +100,7 @@ import rw.ikanisa.burimunsi.core.*
             if(m.allows(Capability.ENROLL))RoundAction(R.drawable.ic_plus,t("Add member"),{m.openSheet(Sheet.ENROLL)},!s.busy&&!s.offline,52)
             if(m.allows(Capability.SMS))RoundAction(R.drawable.ic_sms,t("Messages"),{m.navigate(Route.SMS)},!s.busy,52)
         }}
-        item{HomeMetrics(home)}
-        ExactDisplay.timestamp(home.asOf,t.locale.toLanguageTag())?.let{
-            item{Text(t("As of %1\$s",it),Modifier.fillMaxWidth(),style=MaterialTheme.typography.bodySmall,
-                color=BuriTheme.Muted,textAlign=TextAlign.Center)}
-        }
+        item{HomeMemberCount(home.memberCount)}
         if(home.unallocatedCount>0)item{val label=t("%1\$d unallocated",home.unallocatedCount)
             Row(Modifier.fillMaxWidth().background(BuriTheme.Warn.copy(alpha=.075f),RoundedCornerShape(22.dp))
                 .clickable(enabled=!s.busy,role=SemanticRole.Button,onClickLabel=t("Open unallocated")){m.openUnallocated()}
@@ -128,13 +124,17 @@ import rw.ikanisa.burimunsi.core.*
     }
 }
 
-@Composable private fun HomeMetrics(home:Home){
+@Composable private fun HomeMemberCount(memberCount:Int){
     val t=LocalUiText.current
-    Row(Modifier.fillMaxWidth().background(BuriTheme.Group,RoundedCornerShape(20.dp)).padding(14.dp),
-        verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(16.dp)){
+    val count=money(memberCount.toLong(),t.locale)
+    val description=t("%1\$s · %2\$s",t("Members"),count)
+    Row(Modifier.fillMaxWidth().wrapContentWidth(Alignment.CenterHorizontally)
+        .background(BuriTheme.Group,CircleShape)
+        .clearAndSetSemantics { contentDescription=description }
+        .padding(horizontal=16.dp,vertical=8.dp),
+        verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)){
         Glyph(R.drawable.ic_members,null,BuriTheme.Muted)
-        Text(t("Members"),Modifier.weight(1f),style=MaterialTheme.typography.titleMedium)
-        Text(money(home.memberCount.toLong(),t.locale),style=MaterialTheme.typography.headlineMedium)
+        Text(count,style=MaterialTheme.typography.titleMedium)
     }
 }
 @Composable internal fun PaymentsScreen(s:UiState,m:BuriController,onExport:()->Unit){
