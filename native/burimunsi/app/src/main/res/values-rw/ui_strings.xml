@@ -575,7 +575,7 @@
     <string name="ui_home_wallet_last_sms">Amafaranga asigaye kuri MoMo · SMS ya nyuma</string>
     <string name="ui_home_savings_unavailable">Imibare y’ubwizigame ntiboneka.</string>
     <string name="ui_home_savings_mismatch">Imisanzu ukuyemo amafaranga yishyuwe ntihwanye n’amafaranga asigaye kuri MoMo nk’uko SMS ya nyuma ibigaragaza.</string>
-    <string name="ui_home_wallet_check_unavailable">Amakuru yemejwe ntahagije kugira ngo iyi mibare igereranywe.</string>
+    <string name="ui_home_wallet_check_unavailable">Kugenzura amafaranga ari kuri konti ya MoMo bisaba kumenya amafaranga yariho mu ntangiriro no kugira urutonde rwuzuye rw’amafaranga yinjiye, ayasohotse n’amafaranga ya serivisi.</string>
     <string name="ui_home_recorded_outgoing">Amafaranga yishyuwe yanditswe</string>
-    <string name="ui_home_recorded_outgoing_only">Hagaragazwa gusa amafaranga yishyuwe yanditswe. Kugereranya imibare ntibishoboka.</string>
+    <string name="ui_home_loading_savings">Harimo gutegurwa imibare y’ubwizigame</string>
 </resources>

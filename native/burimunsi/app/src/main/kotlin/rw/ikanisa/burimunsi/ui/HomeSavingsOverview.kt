@@ -50,8 +50,7 @@ internal fun HomeSavingsOverview(savings:HomeSavings?) {
         val message=when {
             savings==null -> t("Savings figures unavailable.")
             savings.reconciliationStatus=="mismatch" -> t("Contributions less outgoing payments differ from the last MoMo balance.")
-            savings.showsRecordedOutgoing() -> t("Outgoing shows recorded payments only. Reconciliation is unavailable.")
-            savings.reconciliationStatus=="unavailable" -> t("Reconciliation unavailable from the verified records.")
+            savings.reconciliationStatus=="unavailable" -> t("Wallet reconciliation needs a verified opening balance and a complete record of payments and fees.")
             else -> null
         }
         if(message!=null) {

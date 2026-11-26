@@ -4,7 +4,7 @@ data class PaymentStatus(val label: String, val icon: String, val tone: String)
 
 object PaymentPresentation {
     fun payment(value:Payment):PaymentStatus = if (value.state == "allocated" || value.state == "posted")
-        PaymentStatus("Allocated", "check", "good") else PaymentStatus("Unallocated", "link", "warn")
+        PaymentStatus("Allocated", "link", "good") else PaymentStatus("Unallocated", "unlinked", "warn")
 
     fun canAllocate(value:Payment) = value.state == "unallocated" &&
         (value.direction == "incoming" || value.direction == "outgoing") && value.outcome == "successful" &&

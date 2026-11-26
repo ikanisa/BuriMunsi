@@ -2883,8 +2883,8 @@
     },
     {
       "key": "ui_home_wallet_check_unavailable",
-      "en": "Reconciliation unavailable from the verified records.",
-      "rw": "Amakuru yemejwe ntahagije kugira ngo iyi mibare igereranywe."
+      "en": "Wallet reconciliation needs a verified opening balance and a complete record of payments and fees.",
+      "rw": "Kugenzura amafaranga ari kuri konti ya MoMo bisaba kumenya amafaranga yariho mu ntangiriro no kugira urutonde rwuzuye rw’amafaranga yinjiye, ayasohotse n’amafaranga ya serivisi."
     },
     {
       "key": "ui_home_recorded_outgoing",
@@ -2892,9 +2892,9 @@
       "rw": "Amafaranga yishyuwe yanditswe"
     },
     {
-      "key": "ui_home_recorded_outgoing_only",
-      "en": "Outgoing shows recorded payments only. Reconciliation is unavailable.",
-      "rw": "Hagaragazwa gusa amafaranga yishyuwe yanditswe. Kugereranya imibare ntibishoboka."
+      "key": "ui_home_loading_savings",
+      "en": "Loading savings",
+      "rw": "Harimo gutegurwa imibare y’ubwizigame"
     }
   ]
 }

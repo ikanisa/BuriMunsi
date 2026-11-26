@@ -43,8 +43,11 @@ import rw.ikanisa.burimunsi.core.*
                         Text(historyTime(it,t.locale),style=MaterialTheme.typography.bodySmall,color=BuriTheme.Muted)
                     }
                     if(!preview)p.ftId?.let{Text(t("FT Id: %1\$s",it),style=MaterialTheme.typography.bodySmall,color=BuriTheme.Muted)}
-                    if(p.sourceKind=="observation"||p.direction!="incoming")
-                        Text(t(PaymentPresentation.directionLabel(p.direction)),style=MaterialTheme.typography.bodySmall,color=BuriTheme.Muted)
+                    when(p.direction) {
+                        "incoming" -> Glyph(R.drawable.ic_payment_incoming,t("Incoming"),BuriTheme.Muted,22)
+                        "outgoing" -> Glyph(R.drawable.ic_payment_outgoing,t("Outgoing"),BuriTheme.Muted,22)
+                        else -> Text(t(PaymentPresentation.directionLabel(p.direction)),style=MaterialTheme.typography.bodySmall,color=BuriTheme.Muted)
+                    }
                 }
                 if(!stacked){
                     Spacer(Modifier.width(8.dp))
@@ -65,10 +68,7 @@ import rw.ikanisa.burimunsi.core.*
 }
 @Composable private fun PaymentStatusLabel(status:PaymentStatus){
     val tone=stateTone(status.tone)
-    Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(4.dp)){
-        Glyph(stateIcon(status.icon),null,tone,15)
-        Text(LocalUiText.current(status.label),style=MaterialTheme.typography.bodySmall,color=tone)
-    }
+    Glyph(stateIcon(status.icon),LocalUiText.current(status.label),tone,24)
 }
 @Composable private fun MemberRow(member:Member,first:Boolean=true,last:Boolean=true,click:()->Unit){
     val t=LocalUiText.current
@@ -90,7 +90,10 @@ import rw.ikanisa.burimunsi.core.*
     val t=LocalUiText.current;val home=s.home
     LazyColumn(Modifier.fillMaxSize(),state=routeList(s,m),contentPadding=PaddingValues(20.dp,12.dp,20.dp,22.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
         if(home==null){item{if(s.busy){BuriInlineLoading("Loading records");BuriSkeletonRows()}else Empty(t("No records available"))};return@LazyColumn}
-        item{HomeSavingsOverview(home.savings)}
+        item{
+            if(s.homeSavingsLoading && home.savings==null) BuriInlineLoading("Loading savings")
+            else HomeSavingsOverview(home.savings)
+        }
         item{Row(Modifier.fillMaxWidth().padding(vertical=5.dp),horizontalArrangement=Arrangement.SpaceEvenly){
             RoundAction(R.drawable.ic_activity,t("Open payments"),{m.navigate(Route.PAYMENTS)},!s.busy,52)
             RoundAction(R.drawable.ic_members,t("Open members"),{m.navigate(Route.MEMBERS)},!s.busy,52)
@@ -102,10 +105,13 @@ import rw.ikanisa.burimunsi.core.*
             item{Text(t("As of %1\$s",it),Modifier.fillMaxWidth(),style=MaterialTheme.typography.bodySmall,
                 color=BuriTheme.Muted,textAlign=TextAlign.Center)}
         }
-        if(home.unallocatedCount>0)item{Row(Modifier.fillMaxWidth().background(BuriTheme.Warn.copy(alpha=.075f),RoundedCornerShape(22.dp)).clickable(enabled=!s.busy){m.openUnallocated()}.padding(horizontal=16.dp,vertical=13.dp),verticalAlignment=Alignment.CenterVertically){
-            Glyph(R.drawable.ic_link,null,BuriTheme.Warn,24);Spacer(Modifier.width(12.dp))
-            Text(t("%1\$d unallocated",home.unallocatedCount),Modifier.weight(1f),fontSize=18.sp,color=BuriTheme.Warn)
-            Glyph(R.drawable.ic_arrow,t("Open unallocated"),BuriTheme.Warn,18)
+        if(home.unallocatedCount>0)item{val label=t("%1\$d unallocated",home.unallocatedCount)
+            Row(Modifier.fillMaxWidth().background(BuriTheme.Warn.copy(alpha=.075f),RoundedCornerShape(22.dp))
+                .clickable(enabled=!s.busy,role=SemanticRole.Button,onClickLabel=t("Open unallocated")){m.openUnallocated()}
+                .semantics { contentDescription=label }.padding(horizontal=16.dp,vertical=13.dp),verticalAlignment=Alignment.CenterVertically){
+            Glyph(R.drawable.ic_unlinked,null,BuriTheme.Warn,26);Spacer(Modifier.width(12.dp))
+            Text(money(home.unallocatedCount.toLong(),t.locale),Modifier.weight(1f).clearAndSetSemantics{},fontSize=18.sp,color=BuriTheme.Warn)
+            Glyph(R.drawable.ic_arrow,null,BuriTheme.Warn,20)
         }}
         item{Row(Modifier.fillMaxWidth().heightIn(min=48.dp),verticalAlignment=Alignment.CenterVertically){
             Text(t("Recent payments"),Modifier.weight(1f).semantics{heading()},style=MaterialTheme.typography.headlineSmall)
@@ -141,9 +147,9 @@ import rw.ikanisa.burimunsi.core.*
         }}
         item{Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical=12.dp),horizontalArrangement=Arrangement.spacedBy(10.dp)){
             FilterChipIcon(t("All"),R.drawable.ic_activity,s.filter=="all"){m.setFilter("all")}
-            FilterChipIcon(t("Allocated"),R.drawable.ic_check,s.filter=="allocated"){m.setFilter("allocated")}
+            FilterChipIcon(t("Allocated"),R.drawable.ic_link,s.filter=="allocated"){m.setFilter("allocated")}
             val count=s.home?.unallocatedCount?:if(s.filter=="unallocated"&&s.search.isBlank())s.payments?.totalCount else null
-            FilterChipIcon(t("Unallocated"),R.drawable.ic_link,s.filter=="unallocated",count){m.setFilter("unallocated")}
+            FilterChipIcon(t("Unallocated"),R.drawable.ic_unlinked,s.filter=="unallocated",count){m.setFilter("unallocated")}
         }}
         item{CountLine(s.payments?.totalCount?.toString().orEmpty(),"RWF")}
         val payments=s.payments?.items.orEmpty()

@@ -1155,15 +1155,16 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             state.route == Route.HOME && state.sheet == null &&
             state.home === base && state.operator === grant.operator && hasAccess(Capability.READ) &&
             (queuedNavigation == null || queuedNavigation?.first == Route.HOME)
-        if (!stillShowingBase()) return
+        if (base.savings != null || !stillShowingBase()) return
         val records = repo()
+        state = state.copy(homeSavingsLoading = true)
         viewModelScope.launch {
             try {
                 val enhanced = io { records.readHomeEnhancement(grant.operator) } ?: return@launch
                 if (!stillShowingBase()) return@launch
                 sessionBootstrap.withCurrent(grant) {
                     // Do not change shared cache/repository provenance or extend base freshness.
-                    if (stillShowingBase()) state = state.copy(home = enhanced)
+                    if (stillShowingBase()) state = state.copy(home = enhanced, homeSavingsLoading = false)
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -1195,12 +1196,16 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                 }
             } catch (_: Exception) {
                 // An optional read must not hide the confirmed base Home or invent values.
+            } finally {
+                if (state.home === base && state.operator === grant.operator && state.homeSavingsLoading) {
+                    state = state.copy(homeSavingsLoading = false)
+                }
             }
         }
     }
 
     private fun showHome(home:Home,cached:Boolean,savedAt:Long?) {
-        state=state.copy(home=home,gateway=null,offline=cached,savedAt=savedAt,readbackRequired=state.readbackRequired&&cached)
+        state=state.copy(home=home,homeSavingsLoading=false,gateway=null,offline=cached,savedAt=savedAt,readbackRequired=state.readbackRequired&&cached)
         if(!cached&&savedAt!=null)pendingFreshDraw=Route.HOME to home
         if(state.sheet==null)refreshHomeGatewayStatus()
     }

@@ -83,7 +83,7 @@ internal fun historyTime(value:String,locale:Locale):String=ExactDisplay.timesta
         }
     }
 }
-internal fun stateIcon(name:String)=when(name){"check"->R.drawable.ic_check;"link"->R.drawable.ic_link;"history"->R.drawable.ic_history;"sync"->R.drawable.ic_sync;"clock"->R.drawable.ic_clock;else->R.drawable.ic_alert}
+internal fun stateIcon(name:String)=when(name){"check"->R.drawable.ic_check;"link"->R.drawable.ic_link;"unlinked"->R.drawable.ic_unlinked;"history"->R.drawable.ic_history;"sync"->R.drawable.ic_sync;"clock"->R.drawable.ic_clock;else->R.drawable.ic_alert}
 @Composable internal fun stateTone(name:String)=when(name){"good"->BuriTheme.Good;"bad"->BuriTheme.Bad;"warn"->BuriTheme.Warn;else->BuriTheme.Blue}
 @Composable internal fun MoneyText(value:Long?,modifier:Modifier=Modifier,size:Int=22,positiveSign:Boolean=false,showHint:Boolean=false){
     val t=LocalUiText.current

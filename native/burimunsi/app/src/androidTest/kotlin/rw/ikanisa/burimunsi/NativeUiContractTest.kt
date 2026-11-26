@@ -300,14 +300,18 @@ class NativeUiContractTest {
         ui.onNodeWithContentDescription("MoMo balance · last SMS · Unavailable").assertIsDisplayed()
         ui.onNodeWithContentDescription("Recorded outgoing payments · 2,500 RWF").assertIsDisplayed()
         ui.onNodeWithContentDescription("Total outgoing payments · 2,500 RWF").assertDoesNotExist()
-        ui.onNodeWithText("Outgoing shows recorded payments only. Reconciliation is unavailable.").assertExists()
+        ui.onNodeWithText("Wallet reconciliation needs a verified opening balance and a complete record of payments and fees.").assertExists()
         ui.runOnIdle{useSavings(null)}
         ui.onNodeWithContentDescription("Lifetime member contributions · Unavailable").assertIsDisplayed()
         ui.onNodeWithContentDescription("Total outgoing payments · Unavailable").assertIsDisplayed()
         ui.onNodeWithContentDescription("MoMo balance · last SMS · Unavailable").assertIsDisplayed()
+        ui.runOnIdle { c.state=c.state.copy(homeSavingsLoading=true) }
+        ui.onNodeWithText("Loading savings").assertExists()
+        ui.onNodeWithText("Savings figures unavailable.").assertDoesNotExist()
+        ui.runOnIdle { c.state=c.state.copy(homeSavingsLoading=false) }
         val list=ui.onNode(hasScrollToIndexAction())
-        list.performScrollToNode(hasText("1 unallocated"))
-        ui.onNodeWithText("1 unallocated").assertExists()
+        list.performScrollToNode(hasContentDescription("1 unallocated"))
+        ui.onNodeWithContentDescription("1 unallocated").assertHasClickAction()
         list.performScrollToNode(hasContentDescription("All payments"))
         val allPayments=ui.onNodeWithContentDescription("All payments").performScrollTo().assertIsDisplayed()
         val actionBounds=allPayments.fetchSemanticsNode().boundsInRoot
@@ -330,10 +334,10 @@ class NativeUiContractTest {
         ui.runOnIdle{c.state=c.state.copy(home=home.copy(paymentCount=2,unallocatedCount=1,recent=listOf(pending,outgoing)))}
         list.performScrollToNode(hasContentDescription("EXAMPLE PENDING"))
         val pendingRow=ui.onNode(hasContentDescription("EXAMPLE PENDING") and hasClickAction())
-        pendingRow.assert(hasText("Unallocated"))
+        pendingRow.assert(hasContentDescription("Unallocated"))
         list.performScrollToNode(hasContentDescription("EXAMPLE OUTGOING"))
         val outgoingRow=ui.onNode(hasContentDescription("EXAMPLE OUTGOING") and hasClickAction())
-        outgoingRow.assert(hasText("Outgoing") and hasText("Allocated")).performClick()
+        outgoingRow.assert(hasContentDescription("Outgoing") and hasContentDescription("Allocated")).performClick()
         ui.runOnIdle{check(c.state.route==Route.PAYMENT&&c.lastNavigationId==outgoing.id)}
     }
     @Test fun searchIsLiveAndHasNoAddedSubmitControl(){

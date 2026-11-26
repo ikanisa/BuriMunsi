@@ -575,7 +575,7 @@
     <string name="ui_home_wallet_last_sms">MoMo balance · last SMS</string>
     <string name="ui_home_savings_unavailable">Savings figures unavailable.</string>
     <string name="ui_home_savings_mismatch">Contributions less outgoing payments differ from the last MoMo balance.</string>
-    <string name="ui_home_wallet_check_unavailable">Reconciliation unavailable from the verified records.</string>
+    <string name="ui_home_wallet_check_unavailable">Wallet reconciliation needs a verified opening balance and a complete record of payments and fees.</string>
     <string name="ui_home_recorded_outgoing">Recorded outgoing payments</string>
-    <string name="ui_home_recorded_outgoing_only">Outgoing shows recorded payments only. Reconciliation is unavailable.</string>
+    <string name="ui_home_loading_savings">Loading savings</string>
 </resources>
