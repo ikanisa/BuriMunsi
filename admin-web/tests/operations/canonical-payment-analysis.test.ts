@@ -1,5 +1,6 @@
 import {describe, expect, it, vi} from 'vitest';
-import {buriMunsiPayment, paymentInstant, paymentTime, readAllCanonicalPayments} from '../../src/features/operations/canonicalPaymentAnalysis';
+import {buriMunsiPayment, paymentCounterpartyEvidence, paymentInstant, paymentMemberName, paymentMemberNumber,
+  paymentTime, readAllCanonicalPayments} from '../../src/features/operations/canonicalPaymentAnalysis';
 
 const at = '2026-11-24T20:15:34.000Z';
 const row = (i: number) => ({
@@ -38,6 +39,20 @@ describe('canonical payment analysis source', () => {
       ['burimunsi/payments?limit=100&offset=' + offset + '&q=FT+reference',{signal}]));
   });
 
+  it.each([
+    [true, true, true], [true, false, false], [false, true, false], [true, undefined, false],
+    [undefined, true, false], [undefined, undefined, false],
+  ] as const)('attaches only an allocation grant confirmed on every page (%s, %s)', async (first, last, expected) => {
+    const request = async (path: string) => {
+      const offset = offsetOf(path), data = page(offset, 101);
+      return {...data, canAllocate: offset === 0 ? first : last,
+        items: data.items.map(item => ({...item, canAllocate: !expected}))};
+    };
+    const rows = await readAllCanonicalPayments(request, new AbortController().signal);
+    expect(rows).toHaveLength(101);
+    expect(rows.every(item => item.canAllocate === expected)).toBe(true);
+  });
+
   it('starts again from the first page on a changed total and never combines separate reads', async () => {
     let call = 0;
     const request = vi.fn(async (path: string) => page(offsetOf(path), ++call === 1 ? 102 : 101));
@@ -70,6 +85,43 @@ describe('canonical payment analysis source', () => {
     });
     await expect(readAllCanonicalPayments(request, controller.signal)).rejects.toMatchObject({name:'AbortError'});
     expect(request).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('member and counterparty presentation', () => {
+  const assigned = buriMunsiPayment.parse({...row(1), state: 'allocated', memberId: 'member-a',
+    memberName: 'Élise  A.', memberPhone: '+250781234567', payerNameRaw: 'E\u0301LISE A.', payerPhoneRaw: '(078) 123-4567'});
+
+  it('shows the assigned values once when the recorded name and Rwanda number differ only in formatting', () => {
+    expect(paymentMemberName(assigned)).toBe('Élise  A.');
+    expect(paymentMemberNumber(assigned)).toBe('+250781234567');
+    for (const format of ['(078) 123-4567', '250781234567', '00250 781 234 567']) {
+      expect(paymentCounterpartyEvidence({...assigned, payerPhoneRaw: format})).toEqual({name: null, number: null});
+    }
+    expect(assigned.payerPhoneRaw).toBe('(078) 123-4567');
+  });
+
+  it('keeps a distinct recorded name or number as supplied, including masks and identifiers', () => {
+    const distinct = {...assigned, payerNameRaw: 'Elise A.', payerPhoneRaw: '078***4567'};
+    expect(paymentCounterpartyEvidence(distinct)).toEqual({name: 'Elise A.', number: '078***4567'});
+    expect(paymentCounterpartyEvidence({...assigned, memberPhone: '000007', payerPhoneRaw: '007'}))
+      .toEqual({name: null, number: '007'});
+    expect(paymentCounterpartyEvidence({...assigned, memberPhone: '078***4567', payerPhoneRaw: '078***4567'}))
+      .toEqual({name: null, number: null});
+  });
+
+  it('falls back independently to recorded values and preserves absent or unassigned contacts', () => {
+    const unassigned = buriMunsiPayment.parse({...row(1), memberPhone: '+250781234567',
+      payerNameRaw: 'Recorded Name', payerPhoneRaw: '000007'});
+    expect(paymentMemberName(unassigned)).toBe('Recorded Name');
+    expect(paymentMemberNumber(unassigned)).toBe('000007');
+    expect(paymentCounterpartyEvidence(unassigned)).toEqual({name: null, number: null});
+    const partial = {...assigned, memberName: '  ', payerNameRaw: 'Original Name', memberPhone: null, payerPhoneRaw: '07***89'};
+    expect(paymentMemberName(partial)).toBe('Original Name');
+    expect(paymentMemberNumber(partial)).toBe('07***89');
+    expect(paymentCounterpartyEvidence(partial)).toEqual({name: null, number: null});
+    expect(paymentMemberName({...unassigned, payerNameRaw: null})).toBeNull();
+    expect(paymentMemberNumber({...unassigned, payerPhoneRaw: '  '})).toBeNull();
   });
 });
 

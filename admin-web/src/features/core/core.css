@@ -6,3 +6,13 @@
 .member-directory-views{display:flex;flex-wrap:wrap;gap:.55rem;margin-bottom:1rem}
 
 .group-workspace-links{display:flex;justify-content:flex-end;margin-bottom:.85rem}
+
+.member-statement-table th:nth-child(n+3), .member-statement-table td:nth-child(n+3) {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+.statement-source-time {
+  display: block;
+  margin-top: .2rem;
+  color: var(--admin-muted);
+}

@@ -1,3 +1,4 @@
+import {webcrypto} from 'node:crypto';
 import {act, cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
 import {Suspense} from 'react';
 import {MemoryRouter, useLocation, useNavigate, useRoutes} from 'react-router';
@@ -18,6 +19,7 @@ const momoId = '11111111-1111-4111-8111-111111111111';
 const accountId = '22222222-2222-4222-8222-222222222222';
 const momoRef = 'MOMO-FIXTURE-01';
 const time = '2026-10-18T08:00:00.000Z';
+const isCurrentAuthority = () => true;
 const buriPayment = {id:momoId,groupId:'fixture-group',version:1,direction:'incoming',amountRwf:5000,atRaw:time,ftId:momoRef,
   payerNameRaw:'Fixture payer',payerPhoneRaw:'000071',memberId:null,memberName:null,memberPhone:null,state:'unallocated',sourceId:null};
 const outgoing = {...buriPayment,id:accountId,direction:'outgoing',ftId:'MOMO-OUT-FIXTURE',
@@ -39,7 +41,7 @@ const sessionUser = () => ({id:currentActor,sessionId:'fixture-session',email:'f
     collectionId:'fixture-group'}} : {})} satisfies AdminUser);
 vi.mock('../../src/session/SessionProvider',async original => ({
   ...await original<typeof import('../../src/session/SessionProvider')>(),
-  useSession:() => ({status:mock.status,epoch:1,user:sessionUser(),request:mock.request,isCurrentAuthority:() => true}),
+  useSession:() => ({status:mock.status,epoch:1,user:sessionUser(),request:mock.request,isCurrentAuthority}),
 }));
 
 function RouteHarness() {
@@ -271,7 +273,13 @@ describe('BuriMunsi phone Payments', () => {
     expect(called('momo/observations')).toHaveLength(0);
     fireEvent.click(screen.getByRole('link',{name:'View all payments'}));
     expect(await screen.findByRole('button',{name:'MOMO-OUT-FIXTURE'})).toBeVisible();
-    expect(screen.getByRole('columnheader',{name:'Counterparty number / code'})).toBeVisible();
+    expect(screen.getAllByRole('columnheader')).toHaveLength(7);
+    expect(screen.getByRole('columnheader',{name:'Member number'})).toBeVisible();
+    expect(screen.getByRole('columnheader',{name:'Member'})).toBeVisible();
+    const outgoingRow = within(screen.getByRole('row',{name:/MOMO-OUT-FIXTURE/}));
+    expect(outgoingRow.getByText('Fixture member')).toBeVisible();
+    expect(outgoingRow.getByText('000071')).toBeVisible();
+    expect(screen.queryByRole('columnheader',{name:/Counterparty|Member phone/})).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader',{name:'SMS evidence'})).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button',{name:'Filter Allocation'}));
     const filters = within(screen.getByRole('dialog',{name:'Filter Allocation'}));
@@ -368,6 +376,8 @@ describe('BuriMunsi phone Payments', () => {
 
   it('keeps the allocation intent after an uncertain response and updates the same payment', async () => {
     mock.authMethod = 'phone_passcode';
+    Object.defineProperty(globalThis,'crypto',{value:webcrypto,configurable:true});
+    sessionStorage.clear();
     const changed = {...buriPayment,version:2,memberId:accountId,memberName:'Group member',state:'allocated'};
     let applied = false, attempts = 0;
     mock.request.mockImplementation(async (path: string) => {
@@ -378,15 +388,23 @@ describe('BuriMunsi phone Payments', () => {
         applied = true;
         return {paymentId:momoId,memberId:accountId,state:'allocated',version:2};
       }
-      return path.endsWith(momoId) ? {...(applied ? changed : buriPayment),canAllocate:true} : buriPage([applied ? changed : buriPayment]);
+      return path.endsWith(momoId) ? {...(applied ? changed : buriPayment),canAllocate:true}
+        : {...buriPage([applied ? changed : buriPayment]),canAllocate:true};
     });
     visit('/admin/payments',['payments.read'],'staff');
-    fireEvent.click(await screen.findByRole('button',{name:momoRef}));
-    const dialog = within(await screen.findByRole('region',{name:'Payment details'}));
+    fireEvent.click(await screen.findByRole('link',{name:'Unallocated – allocate payment ' + momoRef}));
+    expect(location()).toHaveTextContent('allocate=' + momoId);
+    const dialog = within(await screen.findByRole('dialog',{name:'Allocate payment'}));
     fireEvent.change(await dialog.findByLabelText('Member'),{target:{value:accountId}});
-    fireEvent.click(dialog.getByRole('button',{name:'Allocate'}));
+    fireEvent.click(dialog.getByRole('button',{name:'Review allocation'}));
+    expect(dialog.getByRole('heading',{name:'Review allocation'})).toBeVisible();
+    expect(attempts).toBe(0);
+    fireEvent.click(dialog.getByRole('button',{name:'Confirm allocation'}));
     fireEvent.click(await dialog.findByRole('button',{name:'Retry allocation'}));
-    await waitFor(() => expect(within(screen.getByRole('region',{name:'Payment details'})).getByText('Allocated')).toBeVisible());
+    await waitFor(() => expect(screen.queryByRole('dialog',{name:'Allocate payment'})).not.toBeInTheDocument());
+    const row = within(await screen.findByRole('row',{name:/MOMO-FIXTURE-01.*Group member/}));
+    expect(row.getByText('Allocated')).toBeVisible();
+    expect(location()).not.toHaveTextContent('allocate=');
     const writes = mock.request.mock.calls.filter(([path]) => path.endsWith('/allocate'));
     expect(writes).toHaveLength(2);
     expect(writes[0]).toEqual(writes[1]);

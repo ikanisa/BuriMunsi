@@ -7,6 +7,7 @@ import { OperatorNotes } from '../notes/OperatorNotes';
 import { containsControl, formatField, isId, isObject, memberMobileNumber, parseCoreRow, paymentReference, validateMemberStatus } from './contracts';
 import { coreRecordActions } from './coreRecordActions';
 import { CoreRelatedSection, MembershipRecoveries } from './CoreRelatedRecords';
+import {MemberMemberships} from './MemberMemberships';
 import type { PendingIdentity } from './pendingAttempt';
 import { relatedPage, validateRelated } from './relatedRecordContract';
 import type { CoreArea, FeatureAccess } from './types';
@@ -14,12 +15,12 @@ import { AREA_TITLES, CORE_PERMISSIONS } from './types';
 import './core.css';
 
 type RecordProps = FeatureAccess & { area: CoreArea; id: string; returnTo?: string | null; allowMutations?: boolean; identity?: PendingIdentity;
-  isCurrent?: () => boolean; simplePayments?: boolean; scopedMember?: boolean };
+  isCurrent?: () => boolean; simplePayments?: boolean; scopedMember?: boolean; expectedGroup?: string };
 
 const fields: Record<CoreArea, readonly [string, string][]> = {
   groups: [['title', 'Group'], ['slug', 'Slug'], ['collection_type', 'Type'], ['purpose_label', 'Purpose'], ['visibility', 'Visibility'], ['active_members', 'Members'], ['status', 'Status'], ['created_at', 'Created']],
   users: [['public_id', 'Collect ID'], ['display_name', 'Name on MoMo'], ['member_type', 'Type'], ['whatsapp_number', 'Mobile number'], ['momo_provider', 'MoMo provider'], ['momo_number', 'MoMo number'], ['momo_pay_code', 'MoMo code'], ['total_contributed_rwf', 'Recorded contributions'], ['status', 'Status']],
-  members: [['public_id', 'Collect ID'], ['display_name', 'Name on MoMo'], ['member_type', 'Type'], ['mobile_number', 'Mobile number'], ['momo_provider', 'MoMo provider'], ['momo_pay_code', 'MoMo code'], ['total_contributed_rwf', 'Recorded contributions'], ['status', 'Status']],
+  members: [['public_id', 'Collect ID'], ['display_name', 'Name on MoMo'], ['member_type', 'Type'], ['mobile_number', 'Mobile number'], ['momo_provider', 'MoMo provider'], ['total_contributed_rwf', 'Recorded contributions'], ['status', 'Status']],
   payees: [['title', 'Payee'], ['group_name', 'Group'], ['network', 'Provider'], ['momo_number_or_code', 'MoMo number / code'], ['status', 'Status']],
   transactions: [['title', 'Reference'], ['group_name', 'Group'], ['payee_label', 'Receiver'], ['amount_rwf', 'Recorded amount'], ['allocated_amount_rwf', 'Allocated amount'], ['status', 'Evidence status'], ['settlement_status', 'Settlement'], ['observed_at', 'Observed']],
   ledgers: [['title', 'Record'], ['group_name', 'Group'], ['signed_amount_rwf', 'Signed amount'], ['debit_rwf', 'Debit'], ['credit_rwf', 'Credit'], ['status', 'Status'], ['created_at', 'Created']],
@@ -40,14 +41,15 @@ function safeReturn(area: CoreArea, financialModel: FeatureAccess['financialMode
 }
 
 export function CoreRecordPage({ area, id, request, permissions, actorId, principalId, role, authorityKey, financialModel, navigate,
-  returnTo, allowMutations = false, identity, isCurrent, simplePayments = false, scopedMember = false }: RecordProps) {
+  returnTo, allowMutations = false, identity, isCurrent, simplePayments = false, scopedMember = false, expectedGroup }: RecordProps) {
   const allowed = permissions.includes(CORE_PERMISSIONS[area]);
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
   const [detailScope, setDetailScope] = useState('');
-  const currentScope = JSON.stringify([authorityKey, area, financialModel, id, scopedMember]);
+  const currentScope = JSON.stringify([authorityKey, area, financialModel, id, scopedMember, expectedGroup]);
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [retry, setRetry] = useState(0);
-  const resource = area === 'members' && (!scopedMember || financialModel !== 'canonical_evidence_ledger') ? 'users' : area === 'ledgers' && financialModel === 'transaction_journals' ? 'journals' : area;
+  const scopedProfile = scopedMember && financialModel === 'canonical_evidence_ledger' && (area === 'members' || area === 'users');
+  const resource = scopedProfile ? 'members' : area === 'members' ? 'users' : area === 'ledgers' && financialModel === 'transaction_journals' ? 'journals' : area;
   useEffect(() => {
     if (!allowed || !isId(id)) return;
     const controller = new AbortController(); let active = true;
@@ -97,7 +99,10 @@ export function CoreRecordPage({ area, id, request, permissions, actorId, princi
           <OperatorNotes key={`${currentScope}:notes`} request={request} permissions={permissions} authorityKey={authorityKey} area={resource}
             id={id} identity={identity} actorId={actorId} principalId={principalId} allowMutations={allowMutations} />}
         {Object.entries(detail.related as Record<string, unknown>).filter(([name]) => !simplePayments || name === 'memberships')
-          .map(([name, values]) => <CoreRelatedSection key={`${currentScope}:${name}`} name={name} initial={values as Record<string, unknown>[]} page={relatedPage(detail, name, values as unknown[])} resource={resource} id={id} actorId={actorId} financialModel={financialModel} request={request} version={(detail.resource as Record<string, unknown>).version} membershipRecovery={membershipRecovery} membershipWrite={membershipWrite} accountRead={!simplePayments && permissions.includes('ledger.read')} journalRecovery={journalRecovery} journalWrite={journalWrite} navigate={navigate} />)}
+          .map(([name, values]) => scopedProfile && name === 'memberships'
+            ? permissions.includes('collections.read') && <MemberMemberships key={currentScope} detail={detail} memberId={id} expectedGroup={expectedGroup}
+                request={request} authorityKey={authorityKey} permissions={permissions} returnTo={back} />
+            : <CoreRelatedSection key={`${currentScope}:${name}`} name={name} initial={values as Record<string, unknown>[]} page={relatedPage(detail, name, values as unknown[])} resource={resource} id={id} actorId={actorId} financialModel={financialModel} request={request} version={(detail.resource as Record<string, unknown>).version} membershipRecovery={membershipRecovery} membershipWrite={membershipWrite} accountRead={!simplePayments && permissions.includes('ledger.read')} journalRecovery={journalRecovery} journalWrite={journalWrite} navigate={navigate} />)}
       </>}
   </>;
 }

@@ -4,6 +4,7 @@ import {canOpenPaymentView, paymentViews, paymentsPath} from '../../features/ope
 import {isValidId} from '../../features/operations/contracts';
 import {CORE_PERMISSIONS, type CoreArea} from '../../features/core/types';
 import {canAddMember} from '../../features/core/addMemberAccess';
+import {canReadMemberStatement} from '../../features/core/memberStatement';
 import {listLocation, readFilters} from '../../features/core/coreListFilters';
 import {MemberDirectoryActions} from '../../features/core/MemberDirectory';
 import {useSession} from '../../session/SessionProvider';
@@ -15,6 +16,7 @@ import {collectWorkspaceOnly, requiresAdminRole, requiresPermissions, workspaceR
 
 const CoreListPage = lazy(() => import('../../features/core/CoreListPage').then(m => ({default: m.CoreListPage})));
 const CoreRecordPage = lazy(() => import('../../features/core/CoreRecordPage').then(m => ({default: m.CoreRecordPage})));
+const MemberStatementPage = lazy(() => import('../../features/core/MemberStatementPage').then(m => ({default: m.MemberStatementPage})));
 const GroupCreatePage = lazy(() => import('../../features/core/GroupCreatePage').then(m => ({default: m.GroupCreatePage})));
 const GroupEditPage = lazy(() => import('../../features/core/GroupEditPage').then(m => ({default: m.GroupEditPage})));
 const UserCreatePage = lazy(() => import('../../features/core/UserCreatePage').then(m => ({default: m.UserCreatePage})));
@@ -58,8 +60,18 @@ function CoreDetailRoute({area}: {area: CoreArea}) {
   const access = useAccess(), sensitive = useSensitiveAccess(), isCurrent = useCurrentAuthority(), {id = ''} = useParams(), location = useLocation(), session = useSession();
   const scopedMember = usesPhoneCanonicalRecords(session) && (area === 'members' || area === 'users');
   return <CoreRecordPage key={`${access.authorityKey}:${area}:${id}`} {...access} identity={sensitive.identity} area={area} id={id}
-    scopedMember={scopedMember} isCurrent={isCurrent} returnTo={new URLSearchParams(location.search).get('returnTo')}
+    scopedMember={scopedMember} expectedGroup={session.user?.adminIdentity?.collectionId} isCurrent={isCurrent} returnTo={new URLSearchParams(location.search).get('returnTo')}
     simplePayments={session.user?.authMethod === 'phone_passcode'} />;
+}
+
+function MemberStatementRoute() {
+  const access = useAccess(), session = useSession(), {id = ''} = useParams(), {search} = useLocation();
+  if (!usesPhoneCanonicalRecords(session)) return <UnavailablePage title="Member statement" />;
+  const raw = new URLSearchParams(search).get('returnTo');
+  const returnTo = raw?.startsWith('/admin/members?') ? listLocation('members',
+    readFilters(raw.slice('/admin/members'.length), 'members', 'canonical_evidence_ledger', true)) : undefined;
+  return <MemberStatementPage key={JSON.stringify([access.authorityKey, id])} {...access} id={id}
+    returnTo={returnTo} expectedGroup={session.user?.adminIdentity?.collectionId} />;
 }
 
 function GroupEditRoute() {
@@ -214,6 +226,8 @@ const records: Record<CoreArea, RecordRoutes> = {
 
 export const recordRoutes = [
   workspaceRoute('payments', <PaymentsRoute />, user => paymentViews.some(({id}) => canOpenPaymentView(id, user))),
+  workspaceRoute('members/:id/statement', <MemberStatementRoute />, user =>
+    user.financialModel === 'canonical_evidence_ledger' && canReadMemberStatement(user.permissions)),
   ...(Object.keys(CORE_PERMISSIONS) as CoreArea[]).flatMap(area => {
     const {list, create, edit} = records[area];
     const canRead = area === 'payees' ? canReadReceivingAccounts :

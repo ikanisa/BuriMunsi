@@ -130,7 +130,8 @@ describe('core list access and authority', () => {
     const mobile = await screen.findByText('Mobile number',{selector:'dt'});
     expect(mobile.nextElementSibling).toHaveTextContent(expected);
     expect(screen.queryByText('MoMo number',{selector:'dt'})).not.toBeInTheDocument();
-    expect(screen.getByText('MoMo code',{selector:'dt'}).nextElementSibling).toHaveTextContent('000021');
+    expect(screen.queryByText('MoMo code',{selector:'dt'})).not.toBeInTheDocument();
+    expect(screen.queryByText('000021')).not.toBeInTheDocument();
   });
 
   it('offers one Add member action and a separate recovery link only when a person request exists', async () => {
