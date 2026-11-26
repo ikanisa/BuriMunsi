@@ -21,6 +21,8 @@ References to a paired gateway apply only to legacy receipt lineage or
 separately managed outbound OpenSMS delivery. See the
 [observation contract](../../../contracts/burimunsi-api/OBSERVATIONS.md).
 
+The recovery endpoint retains an eligible first-scan receipt under its recorded consent. A fresh authenticated phone page then checks its original source and encrypted contents. An exact match to an existing payment reuses that payment. A verified standalone source with no prior processing goes to the regular parser. Conflicting prior evidence or uncertain original consent stays on hold. Admin receives the latest check, including any missing or unparsed receipts and the result of the newest-message comparison.
+
 Before live use, complete and verify the following for each installation:
 
 1. Reconcile the cloud database, authentication, functions, Admin access and

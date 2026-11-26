@@ -46,7 +46,14 @@ registration, manual pairing, or phone handoff is part of the product workflow.
 The login number identifies the user, not the phone or SIM.
 
 Admin Sync stores each eligible raw SMS in Supabase and preserves it separately
-from the parsed payment. The parser records supported incoming and outgoing
+from the parsed payment. Each processing pass checks the eligible phone inbox
+against retained sources and parser outcomes. A missing message is uploaded
+under its original identity. For messages already on the phone at enrollment,
+an exact match to an earlier payment reuses that payment. A newly verified
+source goes to the regular parser. The check reports complete once every
+eligible row is accounted for and the latest phone and parsed messages match.
+
+The parser records supported incoming and outgoing
 payments in `burimunsi.payments`. The Payments area shows both directions in
 one list. Each payment starts **Unallocated** and becomes **Allocated** when
 assigned to a member of the same group. Allocation uses the current payment

@@ -48,6 +48,7 @@ WITH scope AS (
 SELECT f.project_ref AS project, statement_timestamp() AS observed_at, f.epoch,
   to_regclass('burimunsi.payments') IS NOT NULL AS canonical_installed,
   to_regclass('private.burimunsi_allocation_receipts') IS NOT NULL AS allocation_sms_installed,
+  to_regclass('private.burimunsi_verified_inbox_recoveries') IS NOT NULL AS verified_inbox_installed,
   f.mode AS release_state, c.enabled AND j.active AS scheduler_active, j.schedule,
   (SELECT max(d.observed_at) FROM collect_ops.jobs_dispatches d
    JOIN private.collect_managed_job_tickets t ON t.dispatch_id = d.id
@@ -130,6 +131,41 @@ if(summary.canonical_installed) {
       ${delivery}) AS payments FROM private.collect_fence_control f CROSS JOIN scope s WHERE f.singleton`);
   if(canonical.epoch!==summary.epoch)throw Error('release_changed_during_readback');
   summary.canonical=canonical.payments;
+}
+if (summary.verified_inbox_installed) {
+  const check = await inspect(`WITH latest AS MATERIALIZED (
+    SELECT c.* FROM private.burimunsi_inbox_checks c JOIN private.burimunsi_scopes s USING (collection_id)
+    ORDER BY c.checked_at DESC, c.installation_id LIMIT 1
+  ), page AS MATERIALIZED (
+    SELECT i.source_id, h.source_id AS held, w.source_id AS witnessed, w.prior_source_id,
+      w.prior_payment_id, j.state AS job_state, j.phase AS job_phase, p.id AS canonical_payment
+    FROM latest c JOIN private.burimunsi_inbox_check_items i USING (collection_id,installation_id)
+    LEFT JOIN private.burimunsi_held_observation_sources h ON h.source_id=i.source_id
+    LEFT JOIN private.burimunsi_verified_inbox_recoveries w ON w.source_id=i.source_id
+    LEFT JOIN private.burimunsi_auto_sms_jobs j ON j.source_id=i.source_id AND j.collection_id=c.collection_id
+    LEFT JOIN burimunsi.payments p ON p.collection_id=c.collection_id
+      AND p.id=coalesce(w.prior_payment_id,j.payment_id,j.transaction_id)
+  )
+  SELECT f.project_ref AS project, f.epoch, statement_timestamp() AS observed_at,
+    (SELECT jsonb_build_object('state',c.state,'checkedAt',to_timestamp(c.checked_at/1000.0),
+      'pageItems',c.page_items,'candidateCount',CASE WHEN c.state<>'checking' THEN c.report->'candidateCount' END,
+      'missingCount',CASE WHEN c.state<>'checking' THEN c.report->'missingCount' END,
+      'pendingCount',CASE WHEN c.state<>'checking' THEN c.report->'pendingCount' END,
+      'headsMatch',CASE WHEN c.state='verified' AND (c.report->>'candidateCount')::int=0 THEN true
+        WHEN c.state<>'checking' AND c.report->>'phoneLatestKey' IS NOT NULL THEN
+          (c.report->>'phoneLatestKey') IS NOT DISTINCT FROM (c.report->>'parsedLatestKey') END) FROM latest c) AS phone,
+    count(p.source_id)::int AS matched_sources, count(p.held)::int AS original_holds,
+    count(*) FILTER(WHERE p.held IS NOT NULL AND p.witnessed IS NULL)::int AS holds_awaiting_witness,
+    count(p.prior_source_id)::int AS prior_sources_reused,
+    count(*) FILTER(WHERE p.witnessed IS NOT NULL AND p.prior_source_id IS NULL)::int AS new_sources_verified,
+    count(*) FILTER(WHERE p.witnessed IS NOT NULL AND p.prior_source_id IS NULL AND p.job_phase='finished')::int AS new_jobs_finished,
+    count(*) FILTER(WHERE p.witnessed IS NOT NULL AND p.prior_source_id IS NULL AND p.canonical_payment IS NOT NULL)::int AS new_sources_with_payment,
+    (SELECT coalesce(jsonb_object_agg(job_state,n),'{}'::jsonb) FROM
+      (SELECT job_state,count(*)::int AS n FROM page WHERE job_state IS NOT NULL GROUP BY job_state) states) AS page_job_states
+  FROM private.collect_fence_control f LEFT JOIN page p ON true WHERE f.singleton GROUP BY f.project_ref,f.epoch`);
+  if (check.epoch !== summary.epoch) throw Error('release_changed_during_inbox_readback');
+  const {project, epoch, ...coverage} = check;
+  summary.inboxRecovery = coverage;
 }
 record('sms-chain-' + Date.now() + '.json', summary);
 console.log(JSON.stringify(summary, null, 2));
