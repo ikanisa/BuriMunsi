@@ -46,7 +46,7 @@ function AllocationStatus({row, search, text = false}: {row: BuriMunsiPayment; s
   next.set('allocate', row.id); next.delete('view'); next.delete('source');
   return <Link className="payment-allocation-link" to={buriMunsiPaymentsPath + '?' + next}
     state={{allocationReturn: row.id}} preventScrollReset aria-haspopup="dialog"
-    aria-label={'Unallocated – allocate payment ' + (recordedText(row.ftId) ?? row.id)}>{badge}</Link>;
+    aria-label={text ? 'Allocate to member' : 'Unallocated – allocate payment ' + (recordedText(row.ftId) ?? row.id)}>{badge}</Link>;
 }
 
 export function BuriMunsiPaymentRows({rows, onSelect}: {rows: BuriMunsiPayment[]; onSelect?: (paymentId: string) => void}) {
