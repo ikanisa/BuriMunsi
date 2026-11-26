@@ -23,6 +23,8 @@ const time = '2026-11-16T10:00:00.000Z';
 const transactionId = '90909090-9090-4090-8090-909090909090';
 const attemptId = '92929292-9292-4292-8292-929292929292';
 export const fixtureSmsEvidenceId = '91919191-9191-4191-8191-919191919191';
+export const fixtureOriginalSms = 'You received RWF 5,000. Fixture reference MOMO-SYNTHETIC-9001.';
+export const fixtureOriginalDigest = createHash('sha256').update(fixtureOriginalSms).digest('hex');
 const providerFacts = {
   provider_transaction_id: 'MOMO-SYNTHETIC-9001', event_kind: 'incoming_receipt', amount_minor: 5000,
   currency: 'RWF', currency_scale: 0, transaction_at: time, payer_name: fixtureMember.display_name, payer_last3: null,

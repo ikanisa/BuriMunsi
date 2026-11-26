@@ -12,6 +12,7 @@ import { CoreListPage } from '../../src/features/core/CoreListPage';
 import { CoreRecordPage } from '../../src/features/core/CoreRecordPage';
 import type { FeatureAccess } from '../../src/features/core/types';
 import { retainPending } from '../../src/features/core/pendingAttempt';
+import {InteractionSuspendedContext} from '../../src/ui/useFocusScope';
 
 const base: Omit<FeatureAccess, 'request'> = {
   permissions: ['collections.read'], actorId: '11111111-1111-4111-8111-111111111111',
@@ -31,6 +32,36 @@ describe('Members refresh', () => {
     return {promise, resolve, reject};
   }
   const refreshButton = () => screen.getByRole('button', {name:'Refresh Members'});
+
+  it.each(['initial read', 'manual refresh'])('resumes an interrupted %s exactly once after the same account is rechecked', async kind => {
+    const interrupted = pending(), resumed = pending();
+    const request = vi.fn();
+    if (kind === 'manual refresh') request.mockResolvedValueOnce(roster('Verified member'));
+    request.mockReturnValueOnce(interrupted.promise).mockReturnValueOnce(resumed.promise);
+    const page = (suspended: boolean) => <InteractionSuspendedContext.Provider value={suspended}>
+      <CoreListPage {...props} request={request} /></InteractionSuspendedContext.Provider>;
+    const {rerender} = render(page(false));
+    if (kind === 'manual refresh') {
+      await screen.findByText('Verified member');
+      fireEvent.click(refreshButton());
+    }
+    const beforePause = request.mock.calls.length;
+    const [target, {signal}] = request.mock.calls[beforePause - 1];
+    rerender(page(true));
+    expect(signal.aborted).toBe(true);
+    await act(async () => interrupted.resolve(roster('Discarded member')));
+    expect(request).toHaveBeenCalledTimes(beforePause);
+    rerender(page(false));
+    expect(request).toHaveBeenCalledTimes(beforePause + 1);
+    expect(request.mock.calls[beforePause][0]).toBe(target);
+    expect(refreshButton()).toHaveAttribute('aria-busy','true');
+    expect(screen.queryByText('Discarded member')).not.toBeInTheDocument();
+    if (kind === 'manual refresh') expect(screen.getByText('Verified member')).toBeVisible();
+    await act(async () => resumed.resolve(roster('Current member')));
+    expect(screen.getByText('Current member')).toBeVisible();
+    expect(refreshButton()).toBeEnabled();
+    expect(request).toHaveBeenCalledTimes(beforePause + 1);
+  });
 
   it('rereads the exact filtered page, retaining verified rows, controls and the URL until the fresh result arrives', async () => {
     const fresh = pending(), navigate = vi.fn();

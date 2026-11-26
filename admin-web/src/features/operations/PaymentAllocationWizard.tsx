@@ -25,6 +25,19 @@ const allocationReceipt = z.discriminatedUnion('state', [
 ]);
 const money = new Intl.NumberFormat('en-RW');
 
+function smsPhoneEnding(identifier: string | null | undefined) {
+  const raw = identifier?.trim();
+  if (!raw || raw.length > 40 || !/^[+0-9*xX•#() .-]+$/.test(raw)) return null;
+  const number = raw.replace(/[ ().-]/g,'');
+  const mobile = /^(?:0|\+?250|00250)7[2389]\d{7}$/;
+  const masked = /^(?:(?:0|\+?250|00250)7(?:[2389]\d{0,3})?)?[*xX•#]{2,12}\d{3,4}$/;
+  return mobile.test(number) || masked.test(number) ? number.slice(-3) : null;
+}
+
+function nameKey(name: string) {
+  return name.normalize('NFKC').trim().replace(/\s+/gu,' ').toLocaleLowerCase('en');
+}
+
 export function PaymentAllocationWizard(props: WizardProps) {
   const session = useSession(), user = session.user;
   const boundGroup = user?.adminIdentity?.collectionId;
@@ -84,7 +97,29 @@ function AllocationFlow({id,group,payment,onClose,onAllocated,onStale,session,us
     'burimunsi/payments/members?' + new URLSearchParams({q:query,limit:'25'}),{signal})).items,[query,request]);
   const members = useOperationRead(JSON.stringify([epoch,group,id,query]),canChoose && !review,membersQuery);
   const candidates = members.result?.status === 'success' ? members.result.value : [];
-  const chosen = candidates.find(member => member.id === selected);
+  const party = payment.direction === 'incoming' ? 'Payer' : 'Recipient';
+  const rawName = payment.payerNameRaw?.trim();
+  const smsName = rawName && !smsPhoneEnding(rawName) ? rawName : null;
+  const smsKey = nameKey(smsName ?? '');
+  // The scoped directory searches a literal substring. One full word admits
+  // different spacing; the complete normalized names must still match below.
+  const nameQuery = (smsKey.match(/[\p{L}\p{M}]+/gu) ?? []).reduce((longest,word) =>
+    word.length > longest.length ? word : longest,'').slice(0,80);
+  const targeted = !!nameQuery && query === '' && candidates.length === 25;
+  const loadMatches = useCallback(async (signal: AbortSignal) => membersPage.parse(await request(
+    'burimunsi/payments/members?' + new URLSearchParams({q:nameQuery,limit:'25'}),{signal})).items,[nameQuery,request]);
+  const matchesRead = useOperationRead(JSON.stringify([epoch,group,id,'name-match',nameQuery]),canChoose && !review && targeted,loadMatches);
+  const namePage = matchesRead.result?.status === 'success' ? matchesRead.result.value : null;
+  const matches = new Map<string,Member>();
+  if (query === '' && nameQuery) {
+    for (const member of [...candidates,...(namePage ?? [])]) {
+      if (nameKey(member.name) === smsKey) matches.set(member.id,member);
+    }
+  }
+  const suggestion = matches.size === 1 && (!targeted || namePage && namePage.length < 25)
+    ? matches.values().next().value : undefined;
+  const choices = [...new Map([...candidates,...matches.values()].map(member => [member.id,member])).values()];
+  const chosen = choices.find(member => member.id === selected);
   const reviewedId = original ? String(original.intent.memberId) : review?.id;
   const inputId = useId();
   useEffect(() => {
@@ -170,19 +205,24 @@ function AllocationFlow({id,group,payment,onClose,onAllocated,onStale,session,us
         {reviewedId ? <h3 tabIndex={-1} ref={reviewHeading}>{original ? 'Original allocation request' : 'Review allocation'}</h3> : <h3>Choose a member</h3>}
         <Facts items={[[payment.ftId ? 'FT reference' : 'Payment ID',payment.ftId || payment.id],
           ['Amount',payment.amountRwf === null ? 'Not recorded' : 'RWF ' + money.format(payment.amountRwf)],
-          ['Direction',payment.direction === 'incoming' ? 'Incoming' : 'Outgoing'],['Time (Kigali)',paymentTime(payment.atRaw)]]} />
+          ['Time',paymentTime(payment.atRaw)],[party + ' name',smsName],
+          [party + ' MoMo ending',smsPhoneEnding(payment.payerPhoneRaw)]]} />
         {reviewedId ? <><Facts items={[...(!original && review ? [['Member',review.name] as [string,string]] : []),['Member ID',reviewedId]]} />
           {original && <p>Request <code>{original.request_key}</code></p>}</> : <>
+          {suggestion && <div className="operations-search"><span>{party} name match</span>
+            <Button variant="soft" aria-label={'Select suggested member ' + suggestion.name}
+              onClick={() => {if (current()) setSelected(suggestion.id);}}>{suggestion.name}</Button></div>}
+          {matches.size > 1 && <p>Several group members match the SMS name. Choose the intended member.</p>}
           <form className="operations-search" onSubmit={event => {
             event.preventDefault(); setSelected(''); setQuery(String(new FormData(event.currentTarget).get('member') ?? '').trim().slice(0,80));
           }}><Field htmlFor={inputId+'-search'} label="Search group members"><input ref={memberSearch} id={inputId+'-search'} name="member" className="admin-input" maxLength={80} /></Field>
             <Button type="submit">Search</Button></form>
           {!members.result ? <LoadingState label="Loading group members" /> : members.result.status === 'error' ?
-            <ErrorState title="Members unavailable" message={members.result.message} onRetry={members.retry} /> : candidates.length ?
+            <ErrorState title="Members unavailable" message={members.result.message} onRetry={members.retry} /> : choices.length ?
             <Field htmlFor={inputId+'-member'} label="Member"><select id={inputId+'-member'} className="admin-input" value={selected} onChange={event => setSelected(event.target.value)}>
               <option value="">Choose a member</option>
-              {candidates.map(member => <option key={member.id} value={member.id}>
-                {candidates.some(other => other.id !== member.id && other.name === member.name) ? member.name + ' · ' + member.id : member.name}
+              {choices.map(member => <option key={member.id} value={member.id}>
+                {choices.some(other => other.id !== member.id && nameKey(other.name) === nameKey(member.name)) ? member.name + ' · ' + member.id : member.name}
               </option>)}
             </select></Field> : <p>No group members found.</p>}
         </>}

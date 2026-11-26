@@ -78,13 +78,14 @@ describe('collection-pinned payment detail reads',()=>{
       await waitFor(()=>expect(detailReads).toBe(1));
       expect(fetchImpl.mock.calls.map(([path])=>path)).toEqual([sessionPath,api+'/analysis',detailPath]);
       await act(async()=>initialDetail.release(Response.json(oldPayment)));
-      expect(screen.queryByRole('heading',{name:oldPayment.ftId})).not.toBeInTheDocument();
+      expect(screen.queryByRole('region',{name:'Payment details',description:oldPayment.ftId})).not.toBeInTheDocument();
       await act(async()=>analysis.release(page(oldPayment)));
-      expect(await screen.findByRole('heading',{name:oldPayment.ftId})).toBeVisible();
+      expect(await screen.findByRole('region',{name:'Payment details',description:oldPayment.ftId})).toBeVisible();
       expect(detailReads).toBe(1);
       fireEvent.click(screen.getByRole('button',{name:'Close'}));
       fireEvent.click(screen.getByRole('button',{name:oldPayment.ftId}));
-      expect(await screen.findByRole('heading',{name:updated.ftId})).toBeVisible();
+      expect(await screen.findByRole('region',{name:'Payment details',description:updated.ftId})).toBeVisible();
+      expect(screen.getByText(updated.ftId)).toBeVisible();
       expect(fetchImpl.mock.calls.map(([path])=>path)).toEqual([sessionPath,api+'/analysis',detailPath,detailPath]);
     } finally {close();}
   });
@@ -104,9 +105,9 @@ describe('collection-pinned payment detail reads',()=>{
       await waitFor(()=>expect(detailReads).toBe(1));
       await act(async()=>analysis.release(page(updated)));
       await waitFor(()=>expect(detailReads).toBe(2));
-      expect(screen.queryByRole('heading',{name:oldPayment.ftId})).not.toBeInTheDocument();
+      expect(screen.queryByRole('region',{name:'Payment details',description:oldPayment.ftId})).not.toBeInTheDocument();
       await act(async()=>recovery.release(Response.json(updated)));
-      expect(await screen.findByRole('heading',{name:updated.ftId})).toBeVisible();
+      expect(await screen.findByRole('region',{name:'Payment details',description:updated.ftId})).toBeVisible();
       expect(detailReads).toBe(2);
     } finally {close();}
   });

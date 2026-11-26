@@ -23,25 +23,30 @@
 .payment-direction, .payment-flow-amount { color: var(--payment-flow-ink); }
 [data-payment-flow="incoming"] { --payment-flow-ink: var(--admin-success); --payment-flow-surface: var(--admin-success-surface); }
 [data-payment-flow="outgoing"] { --payment-flow-ink: var(--admin-accent-ink); --payment-flow-surface: var(--admin-accent-surface); }
-.payment-detail { display: grid; gap: .9rem; padding: .35rem; }
-.payment-detail-heading, .payment-detail-heading > div {
+.payment-detail { display: grid; gap: .35rem; min-inline-size: 0; }
+.payment-detail-heading, .payment-detail-summary, .payment-detail-options {
   display: flex;
   align-items: center;
-  gap: .65rem;
+  gap: .35rem .75rem;
   flex-wrap: wrap;
 }
-.payment-detail-heading { justify-content: space-between; }
-.payment-detail-heading h2, .payment-detail-evidence h3 { margin: 0; font-size: 1rem; }
+.payment-detail-heading { justify-content: space-between; flex-wrap: nowrap; }
+.payment-detail-heading > :first-child { min-inline-size: 0; overflow-wrap: anywhere; }
+.payment-detail-heading > button { flex: none; }
+.payment-detail p, .payment-detail-heading h2, .payment-detail-evidence h3 { margin: 0; }
+.payment-detail-heading h2, .payment-detail-evidence h3 { font-size: 1rem; }
+.payment-detail-summary > strong { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.payment-detail-summary .admin-compact-text { max-inline-size: 24ch; }
 .payment-detail .operations-facts {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
   gap: .65rem 1rem;
 }
 .payment-detail-evidence {
   display: grid;
-  gap: .65rem;
-  padding-block-start: .75rem;
-  border-block-start: 1px solid var(--admin-line);
+  gap: .3rem;
+  min-inline-size: 0;
 }
+.payment-sms-body { white-space: pre-wrap; overflow-wrap: anywhere; }
 .payment-detail-disclosure summary {
   padding-block: .3rem;
   color: var(--admin-accent-ink);

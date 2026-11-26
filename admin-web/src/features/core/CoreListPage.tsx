@@ -86,7 +86,7 @@ export function CoreListPage({ area, request, permissions, actorId, role, author
       : parseCorePage(data, area, financialModel, PAGE_SIZE, offset, filter.status);
   }, [request, path, roster, area, financialModel, offset, filter.status]);
   const {result, retry, refreshing} = useOperationRead(JSON.stringify([authorityKey, actorId, financialModel, path]), allowed, load,
-    {retainDuringRefresh: roster, invalidResponse: recordsUnavailable});
+    {retainDuringRefresh: roster, reuseSettledOnResume: roster, invalidResponse: recordsUnavailable});
   const page = result?.status === 'success' ? result.value : null;
 
   const update = (changes: Partial<Filters>) => navigate(listLocation(area, { ...filter, ...changes }, paymentsWorkspace));

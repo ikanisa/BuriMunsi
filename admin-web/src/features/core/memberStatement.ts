@@ -14,10 +14,6 @@ export interface ProfileMembership {
   recordNumber: string | null;
   groupId: string | null;
   groupTitle: string | null;
-  collectId: string | null;
-  memberName: string | null;
-  role: string | null;
-  status: string | null;
 }
 
 const present = (value: unknown) => typeof value === 'string' && value.trim() ? value : null;
@@ -35,15 +31,13 @@ export function profileMembership(data: Record<string, unknown>, memberId: strin
   const recordNumber = typeof row.membership_record_number === 'string' && /^\d{12}$/.test(row.membership_record_number)
     ? row.membership_record_number : null;
   return {id: isId(row.id) ? row.id : null, recordNumber, groupId: row.user_id === memberId ? present(row.group_id) : null,
-    groupTitle: present(row.group_title), collectId: present(row.public_id), memberName: present(row.display_name),
-    role: present(row.role), status: present(row.status)};
+    groupTitle: present(row.group_title)};
 }
 
 export const memberStatementPageSize = 25;
 export type MemberStatementPosition = {offset: number; revision?: string};
 const revisionPattern = /^[0-9a-f]{64}$/;
 const signedRwf = z.string().regex(/^(0|-?[1-9]\d{0,30})$/).transform(value => BigInt(value));
-const balanceSummary = z.object({groupId: paymentId, memberId: paymentId, membershipId: paymentId, closingRwf: signedRwf}).strict();
 const statementPage = z.object({
   groupId: paymentId, memberId: paymentId, membershipId: paymentId,
   totalCount: z.number().int().nonnegative().max(100_100), offset: z.number().int().nonnegative(),
@@ -54,31 +48,30 @@ const statementPage = z.object({
   }).strict()).max(memberStatementPageSize),
 }).strict();
 
-export async function readMemberDetails(request: AdminRequest, signal: AbortSignal, memberId: string, include?: 'balance' | 'statement') {
+async function loadMemberDetails(request: AdminRequest, signal: AbortSignal, memberId: string, includeStatement: boolean,
+  keepProfile = false) {
   if (!isId(memberId)) throw new Error('Invalid member.');
   signal.throwIfAborted();
   const path = 'operations/members/' + memberId;
-  if (!include) return request(path, {signal});
+  if (!includeStatement) return {data: await request(path, {signal}), statementUnavailable: false};
   try {
-    const response = await request(path + '?include=' + include, {signal});
-    if (!Object.hasOwn(response, 'member_' + include)) throw new Error('Missing member projection.');
-    return response;
+    const data = await request(path + '?include=statement', {signal});
+    const missing = !Object.hasOwn(data, 'member_statement');
+    if (missing && !keepProfile) throw new Error('Missing member projection.');
+    return {data, statementUnavailable: missing};
   } catch (error) {
-    // Older servers explicitly reject the optional filter. Other failures retain their original meaning.
-    if (!(error instanceof AdminRequestError) || error.statusCode !== 400 || error.code !== 'invalid_filter') throw error;
+    const unsupported = error instanceof AdminRequestError && error.statusCode === 400 && error.code === 'invalid_filter';
+    const profileDenied = error instanceof AdminRequestError && (error.statusCode === 401 || error.code === 'not_found');
+    if (!unsupported && (!keepProfile || profileDenied)) throw error;
     signal.throwIfAborted();
-    return request(path, {signal});
+    // A plain member read has its own authority check. A failed financial read
+    // stays unavailable until requested again; older servers use the separate reader.
+    return {data: await request(path, {signal}), statementUnavailable: !unsupported};
   }
 }
 
-export function readMemberBalanceProjection(raw: unknown, memberId: string, membership: ProfileMembership) {
-  if (raw === null) return null;
-  const result = balanceSummary.parse(raw);
-  if (result.memberId !== memberId || result.groupId !== membership.groupId || result.membershipId !== membership.id) {
-    throw new Error('The balance scope changed.');
-  }
-  return result.closingRwf;
-}
+export const readProfileWithStatement = (request: AdminRequest, signal: AbortSignal, memberId: string) =>
+  loadMemberDetails(request, signal, memberId, true, true);
 
 export async function readMemberStatementPage(request: AdminRequest, signal: AbortSignal, memberId: string,
   membership: Pick<ProfileMembership, 'id' | 'groupId'>, {offset, revision}: MemberStatementPosition = {offset: 0}) {
@@ -105,7 +98,7 @@ export async function readMemberStatementPage(request: AdminRequest, signal: Abo
   return parseStatementPage(raw, memberId, membership, {offset, revision});
 }
 
-function parseStatementPage(raw: unknown, memberId: string, membership: Pick<ProfileMembership, 'id' | 'groupId'>,
+export function parseStatementPage(raw: unknown, memberId: string, membership: Pick<ProfileMembership, 'id' | 'groupId'>,
   {offset, revision}: MemberStatementPosition) {
   const result = statementPage.parse(raw);
   const {items, totalCount, closingRwf} = result;
@@ -129,7 +122,7 @@ function parseStatementPage(raw: unknown, memberId: string, membership: Pick<Pro
 export async function readMemberStatement(request: AdminRequest, signal: AbortSignal, memberId: string, actorId: string,
   expectedGroup: string | undefined, position: MemberStatementPosition) {
   const initial = position.offset === 0 && position.revision === undefined;
-  const data = await readMemberDetails(request, signal, memberId, initial ? 'statement' : undefined);
+  const {data} = await loadMemberDetails(request, signal, memberId, initial);
   signal.throwIfAborted();
   if (data.current_actor_id !== actorId || data.resource_type !== 'members' || data.contract_version !== 2 ||
       data.model !== 'canonical_evidence_ledger' || typeof data.can_manage !== 'boolean') throw new Error('Invalid member response.');
