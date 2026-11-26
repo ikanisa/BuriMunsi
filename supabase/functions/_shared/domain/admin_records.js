@@ -1,7 +1,7 @@
 import {first,uuid,integer,now} from './core.js';
 import {coreStatuses,coreOrdering,coreSearch} from './admin_search.js';
 import {marker,contributionBasis,collectedBasis,fail,unavailable,iso,exact,amountString} from './admin_record_values.js';
-import {lists,rosterSource,membershipSql,membershipRow,payeeSql,payeeRow,ledgerSql,ledgerRow,evidenceMetadataSql,evidenceMetadata} from './admin_record_sources.js';
+import {lists,rosterSource,membershipSql,membershipRow,scopedMembershipRow,payeeSql,payeeRow,ledgerSql,ledgerRow,evidenceMetadataSql,evidenceMetadata} from './admin_record_sources.js';
 
 // These read adapters receive an already authorized D1 binding from the route.
 export {marker,permission,lists,list,filters,overview,operatingDetail,relatedPage,ledgerSql,ledgerRow,evidenceMetadataSql,evidenceMetadata,exact,iso,fail,unavailable};
@@ -97,12 +97,12 @@ async function operatingDetail(env,account,type,resourceId,url,{rosterGroupId=nu
  if(type==='groups'){
   const source=await first(env,'SELECT description,creator_user_id FROM collections WHERE id=?',resourceId);
   resource={...resource,description:source.description,owner_user_id:source.creator_user_id};
-  if(account.permissions.includes('users.read'))relations.memberships=[`${membershipSql} WHERE m.collection_id=?`,[resourceId],membershipRow];
+  if(account.permissions.includes('users.read'))relations.memberships=[`${membershipSql()} WHERE m.collection_id=?`,[resourceId],membershipRow];
   if(account.permissions.includes('receivers.read'))relations.payees=[`SELECT * FROM (${payeeSql}) WHERE group_id=?`,[resourceId],payeeRow];
  }else if(type==='members'&&rosterGroupId){
-  if(account.permissions.includes('collections.read'))relations.memberships=[`${membershipSql} WHERE m.user_id=? AND m.collection_id=?`,[resourceId,rosterGroupId],membershipRow];
+  if(account.permissions.includes('collections.read'))relations.memberships=[`${membershipSql({recordNumber:true})} WHERE m.user_id=? AND m.collection_id=?`,[resourceId,rosterGroupId],scopedMembershipRow];
  }else if(type==='users'){
-  if(account.permissions.includes('collections.read'))relations.memberships=[`${membershipSql} WHERE m.user_id=?`,[resourceId],membershipRow];
+  if(account.permissions.includes('collections.read'))relations.memberships=[`${membershipSql()} WHERE m.user_id=?`,[resourceId],membershipRow];
  }else if(type==='payees')resource={...resource,label:resource.title,group_title:resource.group_name};
  else if(type==='transactions'){
   relations.evidence=[evidenceMetadataSql,[resourceId],evidenceMetadata];

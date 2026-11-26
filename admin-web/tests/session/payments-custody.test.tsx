@@ -84,14 +84,16 @@ describe('Payments authority changes with a slow privileged response',()=>{
     ],{initialEntries:[paymentRoute]});
     const view=render(<SessionProvider config={{...config,fetchImpl}}><RouterProvider router={router} /></SessionProvider>);
     try {
-      fireEvent.click(await screen.findByRole('button',{name:oldPayment.ftId}));
+      fireEvent.click(await screen.findByRole('link',{name:'Unallocated – allocate payment '+oldPayment.ftId}));
       fireEvent.change(await screen.findByRole('combobox',{name:'Member'}),{target:{value:memberId}});
-      fireEvent.click(screen.getByRole('button',{name:'Allocate'}));
+      fireEvent.click(screen.getByRole('button',{name:'Review allocation'}));
+      fireEvent.click(screen.getByRole('button',{name:'Confirm allocation'}));
       await screen.findByText(/Allocation was not confirmed/);
       expect(allocationKey).toMatch(/^[0-9a-f-]{36}$/);
       expect(sessionStorage.getItem(PENDING_KEY)).toContain(allocationKey);
-      fireEvent.click(screen.getByRole('button',{name:'Close'}));
-      await waitFor(()=>expect(screen.queryByRole('region',{name:'Payment details'})).not.toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button',{name:'Cancel'}));
+      await waitFor(()=>expect(screen.queryByRole('dialog',{name:'Allocate payment'})).not.toBeInTheDocument());
+      expect(screen.queryByRole('region',{name:'Payment details'})).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole('button',{name:'Refresh'}));
       await waitFor(()=>expect(previousRoleReads).toBe(2));
 

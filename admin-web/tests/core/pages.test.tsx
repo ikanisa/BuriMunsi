@@ -130,7 +130,17 @@ describe('core list access and authority', () => {
     const mobile = await screen.findByText('Mobile number',{selector:'dt'});
     expect(mobile.nextElementSibling).toHaveTextContent(expected);
     expect(screen.queryByText('MoMo number',{selector:'dt'})).not.toBeInTheDocument();
-    expect(screen.getByText('MoMo code',{selector:'dt'}).nextElementSibling).toHaveTextContent('000021');
+    expect(screen.queryByText('MoMo code',{selector:'dt'})).not.toBeInTheDocument();
+    expect(screen.queryByText('000021')).not.toBeInTheDocument();
+  });
+
+  it('retains the recorded MoMo code on shared unscoped member profiles', async () => {
+    const member = {...fixture.members.rows[0], momo_pay_code:'000021'};
+    const request = vi.fn().mockResolvedValue({contract_version:2, model:base.financialModel, resource_type:'users',
+      resource:member, current_actor_id:base.actorId, can_manage:false, related:{}, related_truncated:false});
+    render(<CoreRecordPage {...base} area="members" id={member.id} request={request} permissions={['users.read']} />);
+    const code = await screen.findByText('MoMo code', {selector:'dt'});
+    expect(code.nextElementSibling).toHaveTextContent('000021');
   });
 
   it('offers one Add member action and a separate recovery link only when a person request exists', async () => {

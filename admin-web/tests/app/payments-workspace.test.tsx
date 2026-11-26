@@ -579,11 +579,14 @@ describe('BuriMunsi phone Payments', () => {
       }
       return path.endsWith(momoId) ? {...(applied ? changed : buriPayment),canAllocate:true} : buriPage([applied ? changed : buriPayment]);
     });
-    visit('/admin/payments',['payments.read'],'staff');
-    fireEvent.click(await screen.findByRole('button',{name:momoRef}));
-    const dialog = within(await screen.findByRole('region',{name:'Payment details'}));
-    fireEvent.change(await dialog.findByLabelText('Member'),{target:{value:accountId}});
-    fireEvent.click(dialog.getByRole('button',{name:'Allocate'}));
+    visit('/admin/payments?payment='+momoId,['payments.read'],'staff');
+    // The analysis record omits a write capability; the dialog verifies it with the scoped detail read.
+    fireEvent.click(await screen.findByRole('link',{name:'Unallocated – allocate payment '+momoRef}));
+    const member = await screen.findByRole('combobox',{name:'Member'});
+    const dialog = within(screen.getByRole('dialog',{name:'Allocate payment'}));
+    fireEvent.change(member,{target:{value:accountId}});
+    fireEvent.click(dialog.getByRole('button',{name:'Review allocation'}));
+    fireEvent.click(dialog.getByRole('button',{name:'Confirm allocation'}));
     expect(await dialog.findByText(/Allocation was not confirmed/)).toBeVisible();
     expect(dialog.queryByRole('button',{name:'Retry allocation'})).not.toBeInTheDocument();
     fireEvent.click(dialog.getByRole('button',{name:'Check request'}));
@@ -608,10 +611,11 @@ describe('BuriMunsi phone Payments', () => {
       }
       return path === detailPath ? {...(applied ? changed : buriPayment),canAllocate:true} : buriPage([applied ? changed : buriPayment]);
     });
-    const path = '/admin/payments?payment='+momoId;
+    const path = '/admin/payments?payment='+momoId+'&allocate='+momoId;
     const initial = visit(path,['payments.read'],'staff');
     fireEvent.change(await screen.findByRole('combobox',{name:'Member'}),{target:{value:accountId}});
-    fireEvent.click(screen.getByRole('button',{name:'Allocate'}));
+    fireEvent.click(screen.getByRole('button',{name:'Review allocation'}));
+    fireEvent.click(screen.getByRole('button',{name:'Confirm allocation'}));
     expect(await screen.findByText(/Allocation was not confirmed/)).toBeVisible();
     const ref = mock.request.mock.calls.find(([target]) => target === detailPath+'/allocate')![1].idempotencyKey;
     initial.unmount();

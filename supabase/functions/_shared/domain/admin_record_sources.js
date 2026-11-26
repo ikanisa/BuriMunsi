@@ -101,14 +101,24 @@ const lists={groups:{query:groupSql,row:groupRow,search:['title','slug','descrip
  payees:{query:payeeSql,row:payeeRow,search:['label','group_title','network','momo_number_or_code']},transactions:{query:paymentSql,row:transactionRow,search:['id','external_reference','payer_display_name','group_title','receiver_display_label']},
  ledgers:{query:ledgerSql,row:ledgerRow,search:['id','kind','group_title','payment_id']}};
 
-const membershipSql=`SELECT m.id,m.collection_id AS group_id,m.user_id,m.role,m.active,m.revision,
+function membershipSql({recordNumber=false}={}){
+ return `SELECT m.id,m.collection_id AS group_id,m.user_id,m.role,m.active,m.revision,
+ ${recordNumber?"to_jsonb(m)->>'membership_record_number' AS membership_record_number,":''}
  m.joined_at,g.title AS group_title,u.public_id,u.full_name AS display_name,u.member_type,
  u.phone AS whatsapp_number,u.momo_provider,u.momo_number,u.momo_pay_code,u.access_status
  FROM memberships m JOIN collections g ON g.id=m.collection_id JOIN users u ON u.id=m.user_id`;
+}
 function membershipRow(r){return {id:r.id,group_id:r.group_id,user_id:r.user_id,role:r.role,
  status:r.active===1?'active':'removed',version:exact(r.revision),joined_at:iso(r.joined_at),
  group_title:r.group_title,public_id:r.public_id,display_name:r.display_name||null,member_type:r.member_type,
  whatsapp_number:r.member_type==='app'?r.whatsapp_number:null,momo_provider:r.momo_provider||null,
  momo_number:r.momo_number||null,momo_pay_code:r.momo_pay_code||null,account_status:r.access_status};}
 
-export {lists,rosterSource,membershipSql,membershipRow,payeeSql,payeeRow,ledgerSql,ledgerRow,evidenceMetadataSql,evidenceMetadata};
+function scopedMembershipRow(row){
+ const result=membershipRow(row),number=row.membership_record_number;
+ if(number==null)return result;
+ if(typeof number!=='string'||!/^[1-9]\d{11}$/.test(number))fail(503,'invalid_source_data','A membership reference is unavailable.');
+ return {...result,membership_record_number:number};
+}
+
+export {lists,rosterSource,membershipSql,membershipRow,scopedMembershipRow,payeeSql,payeeRow,ledgerSql,ledgerRow,evidenceMetadataSql,evidenceMetadata};

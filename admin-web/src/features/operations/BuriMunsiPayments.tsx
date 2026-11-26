@@ -1,17 +1,14 @@
-import {useCallback, useEffect, useRef, useState, type FormEvent} from 'react';
-import {Link, useSearchParams} from 'react-router';
-import {z} from 'zod';
+import {useCallback, useState} from 'react';
+import {Link, useLocation, useNavigate, useSearchParams} from 'react-router';
 import {AdminRequestError} from '../../api/client';
-import {useSession, type AdminUser} from '../../session/SessionProvider';
-import {clearOriginalAttempt} from '../core/canonicalMutation';
-import {readPending, retainPending, sha256Text, type PendingAttempt} from '../core/pendingAttempt';
-import {usePendingIdentity} from '../core/usePendingIdentity';
+import {useSession} from '../../session/SessionProvider';
 import {canDisplaySessionRecords, canReadSmsEvidence} from '../../session/sessionContext';
-import {Button, Card, EmptyState, ErrorState, Field, LoadingState, PageHeader, StatusBadge} from '../../ui';
+import {Button, Card, ErrorState, LoadingState, PageHeader, StatusBadge} from '../../ui';
 import {MomoCell, MomoTable} from './MomoRecordViews';
 import {Facts} from './OperationsRecords';
 import {ReceiverSmsPanel} from './ReceiverSmsPanel';
 import {CanonicalPaymentEvidence} from './CanonicalPaymentEvidence';
+import {PaymentAllocationWizard} from './PaymentAllocationWizard';
 import {FinancialAnalysisTable, type FinancialColumn} from './FinancialAnalysisTable';
 import {PaymentTotalsSummary} from './PaymentFlowTotals';
 import {initialColumnFilters, type ColumnFilter, type FinancialSort} from './financialAnalysisModel';
@@ -23,16 +20,6 @@ import './paymentsWorkspace.css';
 
 export {buriMunsiPayment};
 export type {BuriMunsiPayment};
-const membersPage = z.object({items: z.array(z.object({id: paymentId, name: z.string().min(1)})).max(25)});
-const allocated = z.object({paymentId, memberId: paymentId, state: z.literal('allocated'), version: z.number().int().positive()});
-const allocationReceipt = z.discriminatedUnion('state', [
-  z.object({state: z.literal('committed'), requestId: z.uuid(),
-    receipt: z.object({paymentId, memberId: paymentId, version: z.number().int().positive()}).strict()}).strict(),
-  z.object({state: z.literal('unconfirmed'), requestId: z.uuid()}).strict(),
-]);
-const allocationFamily = 'burimunsi.payment-allocation';
-const allocationPermission = 'payments.read';
-const retainedAllocation = z.object({memberId: paymentId, expectedVersion: z.number().int().positive().max(Number.MAX_SAFE_INTEGER)}).strict();
 const maxSearchLength = 80;
 const amountFormat = new Intl.NumberFormat('en-RW');
 const amount = (value: number | null) => value === null ? '—' : 'RWF ' + amountFormat.format(value);
@@ -43,13 +30,23 @@ export const buriMunsiPaymentsPath = '/admin/payments';
 export const buriMunsiSmsPath = buriMunsiPaymentsPath + '?view=sms';
 export const buriMunsiPaymentPath = (id: string) => buriMunsiPaymentsPath + '?' + new URLSearchParams({payment: id});
 
+function AllocationStatus({row, search}: {row: BuriMunsiPayment; search?: URLSearchParams}) {
+  const badge = <StatusBadge tone={row.state === 'allocated' ? 'success' : 'warning'}>{allocationLabel(row.state)}</StatusBadge>;
+  if (row.state !== 'unallocated' || row.canAllocate === false) return badge;
+  const next = new URLSearchParams(search);
+  next.set('allocate', row.id); next.delete('view'); next.delete('source');
+  return <Link className="payment-allocation-link" to={buriMunsiPaymentsPath + '?' + next}
+    state={{allocationReturn: row.id}} preventScrollReset aria-haspopup="dialog"
+    aria-label={'Unallocated – allocate payment ' + (recordedText(row.ftId) ?? row.id)}>{badge}</Link>;
+}
+
 export function BuriMunsiPaymentRows({rows, onSelect}: {rows: BuriMunsiPayment[]; onSelect?: (paymentId: string) => void}) {
   return <MomoTable name="Payments" headings={['Reference', 'Direction', 'Amount', 'Member', 'Status', 'Payment time']} compact>
     {rows.map(row => <tr key={row.id}><MomoCell label="Reference">{onSelect
       ? <button type="button" className="operations-link" onClick={() => onSelect(row.id)}>{row.ftId ?? 'View payment'}</button>
       : <Link className="operations-link" to={buriMunsiPaymentPath(row.id)}>{row.ftId ?? 'View payment'}</Link>}</MomoCell>
       <MomoCell label="Direction">{directionLabel(row.direction)}</MomoCell><MomoCell label="Amount">{amount(row.amountRwf)}</MomoCell>
-      <MomoCell label="Member">{row.memberName ?? '—'}</MomoCell><MomoCell label="Status"><StatusBadge>{allocationLabel(row.state)}</StatusBadge></MomoCell>
+      <MomoCell label="Member">{row.memberName ?? '—'}</MomoCell><MomoCell label="Status"><AllocationStatus row={row} /></MomoCell>
       <MomoCell label="Payment time">{paymentTime(row.atRaw)}</MomoCell></tr>)}
   </MomoTable>;
 }
@@ -66,7 +63,7 @@ export function BuriMunsiPayments() {
   function toggleInbox() {
     const next = new URLSearchParams(params);
     if (smsOpen) { next.delete('view'); next.delete('source'); }
-    else { next.set('view', 'sms'); next.delete('payment'); }
+    else { next.set('view', 'sms'); next.delete('payment'); next.delete('allocate'); }
     setParams(next);
   }
   return <section className="payments-workspace"><PageHeader title="Payments" />
@@ -92,7 +89,10 @@ const categoryBookmarks = [{key:'allocation',kind:'category'},{key:'direction',k
 
 function ScopedPaymentRecords() {
   const {epoch, request, user} = useSession(), [params, setParams] = useSearchParams();
+  const location = useLocation(), navigate = useNavigate();
+  const [confirmation, setConfirmation] = useState(''), [allocationRevision, setAllocationRevision] = useState(0);
   const canReadSms = canReadSmsEvidence(user), group = user?.adminIdentity?.collectionId;
+  const allocating = params.getAll('allocate').length === 1 ? paymentId.safeParse(params.get('allocate')).data : undefined;
   const selected = params.get('view') === 'sms' ? undefined : paymentId.safeParse(params.get('payment')).data;
   const query = (params.get('q') ?? '').trim().slice(0, maxSearchLength);
   const allocation = paymentAllocation.safeParse(params.get('status')).data, direction = paymentDirection.safeParse(params.get('direction')).data;
@@ -122,6 +122,10 @@ function ScopedPaymentRecords() {
     setFilters(nextFilters); setSort(nextSort);
     if (page > 1) {setResettingOffset(true); changePage(1);}
   }
+  function closeAllocation() {
+    if (location.state?.allocationReturn === allocating) navigate(-1);
+    else {const next = new URLSearchParams(params); next.delete('allocate'); setParams(next, {replace:true, preventScrollReset:true});}
+  }
   function changePage(nextPage: number) {
     const next = new URLSearchParams(params);
     if (nextPage > 1) next.set('offset',String((nextPage - 1) * 25)); else next.delete('offset');
@@ -143,7 +147,7 @@ function ScopedPaymentRecords() {
     {key:'amount',label:'Amount (RWF)',kind:'number',align:'end',value:r=>r.amountRwf,render:r=>r.amountRwf === null ? '—' : amountFormat.format(r.amountRwf)},
     {key:'direction',label:'Direction',kind:'category',value:r=>r.direction,render:r=>directionLabel(r.direction),
       options:[{value:'incoming',label:'Incoming'},{value:'outgoing',label:'Outgoing'}]},
-    {key:'allocation',label:'Allocation',kind:'category',value:r=>r.state,render:r=><StatusBadge>{allocationLabel(r.state)}</StatusBadge>,
+    {key:'allocation',label:'Allocation',kind:'category',value:r=>r.state,render:r=><AllocationStatus row={r} search={params} />,
       options:[{value:'allocated',label:'Allocated'},{value:'unallocated',label:'Unallocated'}]},
     {key:'counterparty',label:'Counterparty',kind:'text',value:r=>recordedText(r.payerNameRaw)},
     {key:'member',label:'Member',kind:'text',value:r=>recordedText(r.memberName)},
@@ -152,7 +156,9 @@ function ScopedPaymentRecords() {
   ];
   if (canReadSms) columns.push({key:'sms',label:'SMS evidence',kind:'category',value:r=>r.sourceId ? 'linked' : 'none',
     options:[{value:'linked',label:'Linked'},{value:'none',label:'None linked'}],render:r=>r.sourceId ? rowButton(r,'Review linked SMS') : 'None linked'});
-  const detail = selected ? <PaymentDetail key={selected} id={selected} group={group ?? rows?.[0]?.groupId} onClose={() => show()} onUpdated={retry} /> : null;
+  const scopedGroup = group ?? rows[0]?.groupId;
+  const detail = selected ? <PaymentDetail key={JSON.stringify([selected,rows.find(row=>row.id===selected)?.version,allocationRevision])}
+    id={selected} group={scopedGroup} search={params} onClose={() => show()} /> : null;
   const actions = <>{query && <Button onClick={() => {
     const next = new URLSearchParams(params);
     next.delete('q'); next.delete('offset');
@@ -160,6 +166,7 @@ function ScopedPaymentRecords() {
   }}>Clear search “{query}”</Button>}
     <Button icon="refresh" onClick={retry}>Refresh</Button></>;
   return <Card className="operations-records">
+    {confirmation && !allocating && <p className="operations-note" role="status">{confirmation}</p>}
     {result?.status === 'error' && <ErrorState message={result.message} onRetry={retry} />}
     <FinancialAnalysisTable label="Payments" rows={rows} columns={columns} rowKey={r=>r.id}
       remote={{filters,sort,total:data?.totalCount ?? 0,matching:data?.matchingCount ?? 0,busy:!result || result.status==='error',onCriteria:changeCriteria}}
@@ -167,10 +174,14 @@ function ScopedPaymentRecords() {
         <p>Payment totals as of <time dateTime={data.asOf}>{paymentTime(data.asOf)} (Kigali)</time>.</p></> : undefined}
       pageSize={25} page={page} onPageChange={changePage} expanded={selected && detail ? {key:selected,content:detail} : null} />
     {selected && result && !rows.some(r=>r.id===selected) && detail}
+    {allocating && <PaymentAllocationWizard key={JSON.stringify([epoch,scopedGroup,allocating])} id={allocating} group={scopedGroup}
+      onClose={closeAllocation} onStale={retry} onAllocated={() => {
+        setConfirmation('Payment allocated.'); setAllocationRevision(value=>value+1); closeAllocation(); retry();
+      }} />}
   </Card>;
 }
 
-function PaymentDetail({id: paymentKey, group, onClose, onUpdated}: {id: string; group?: string; onClose: () => void; onUpdated: () => void}) {
+function PaymentDetail({id: paymentKey, group, search, onClose}: {id: string; group?: string; search: URLSearchParams; onClose: () => void}) {
   const {epoch, request, user} = useSession();
   const load = useCallback(async (signal: AbortSignal) => {
     const payment = buriMunsiPayment.parse(await request('burimunsi/payments/'+paymentKey, {signal}));
@@ -188,132 +199,10 @@ function PaymentDetail({id: paymentKey, group, onClose, onUpdated}: {id: string;
         {payment.sourceId && canReadSmsEvidence(user) && (evidenceGroup
           ? <CanonicalPaymentEvidence key={payment.sourceId} paymentId={payment.id} group={evidenceGroup} sourceId={payment.sourceId} />
           : <Link className="operations-link" to={buriMunsiSmsPath}>Open M-Money SMS</Link>)}
-        {user && payment.groupId && payment.canAllocate === true &&
-          <AllocatePayment key={JSON.stringify([epoch, user.id, user.sessionId, user.role, [...user.permissions].sort(), payment.groupId, payment.id, payment.version])}
-            user={user} group={payment.groupId} payment={payment} onUpdated={() => {retry(); onUpdated();}} />}
+        {user && payment.groupId && payment.canAllocate === true && <Link className="operations-link"
+          to={buriMunsiPaymentsPath + '?' + new URLSearchParams({...Object.fromEntries(search),allocate:payment.id})}
+          state={{allocationReturn:payment.id}} preventScrollReset aria-haspopup="dialog">
+          {payment.state === 'unallocated' ? 'Allocate to member' : 'Review allocation request'}</Link>}
       </>}
-  </section>;
-}
-
-function AllocatePayment({payment, group, user, onUpdated}: {payment: BuriMunsiPayment; group: string; user: AdminUser; onUpdated: () => void}) {
-  const session = useSession(), {epoch, request} = session;
-  const identity = usePendingIdentity(user);
-  const [query, setQuery] = useState(''), [selected, setSelected] = useState(''), [message, setMessage] = useState('');
-  const [busy, setBusy] = useState(false), [canRetry, setCanRetry] = useState(false);
-  const [pending, setPending] = useState<PendingAttempt | null | undefined>(undefined);
-  const sending = useRef(false), mounted = useRef(false);
-  useEffect(() => {mounted.current = true; return () => {mounted.current = false;};}, []);
-  const current = () => mounted.current && session.isCurrentAuthority(epoch, user.id, user.sessionId);
-  const loadOriginal = useCallback(async () => {
-    const resource = await sha256Text(JSON.stringify([group, payment.id]));
-    const attempt = await readPending(identity, allocationFamily, resource);
-    if (attempt) {
-      retainedAllocation.parse(attempt.intent);
-      if (attempt.permission !== allocationPermission || !z.uuid().safeParse(attempt.request_key).success) throw new Error('Invalid original request.');
-    }
-    return {resource, attempt};
-  }, [group, identity, payment.id]);
-  const recovery = useOperationRead(JSON.stringify([epoch, group, payment.id, identity]), true, loadOriginal,
-    {invalidResponse:'The original allocation reference could not be checked. No allocation was sent.'});
-  const original = pending === undefined && recovery.result?.status === 'success' ? recovery.result.value.attempt : pending;
-  const canChoose = recovery.result?.status === 'success' && original === null && payment.state === 'unallocated';
-  const load = useCallback(async (signal: AbortSignal) => membersPage.parse(await request(
-    `burimunsi/payments/members?${new URLSearchParams({q: query, limit: '25'})}`, {signal})), [query, request]);
-  const {result, retry} = useOperationRead(JSON.stringify([epoch, group, query]), canChoose, load);
-
-  async function checkRequest() {
-    if (!original || sending.current || !current()) return;
-    const intent = retainedAllocation.parse(original.intent);
-    sending.current = true; setBusy(true); setCanRetry(false); setMessage('');
-    try {
-      const response = allocationReceipt.parse(await request(`burimunsi/payments/${payment.id}/allocation-receipt`, {idempotencyKey:original.request_key}));
-      if (!current()) return;
-      if (response.requestId !== original.request_key) throw new Error('Request reference changed.');
-      if (response.state === 'committed') {
-        const receipt = response.receipt;
-        if (receipt.paymentId !== payment.id || receipt.memberId !== intent.memberId || receipt.version !== intent.expectedVersion + 1) {
-          throw new Error('Allocation receipt changed.');
-        }
-        await clearOriginalAttempt(identity, original, current);
-        if (current()) {setPending(null); onUpdated();}
-        return;
-      }
-      const latest = buriMunsiPayment.parse(await request(`burimunsi/payments/${payment.id}`));
-      if (!current()) return;
-      if (latest.id !== payment.id || latest.groupId !== group || latest.canAllocate !== true) throw new Error('Payment scope changed.');
-      if (latest.state === 'unallocated' && latest.version === intent.expectedVersion && payment.version === latest.version) {
-        setCanRetry(true);
-        setMessage('No completed request was found and the payment is still unallocated. You can retry the original request.');
-      } else {
-        setMessage('The payment has changed. This does not confirm the original request. Keep its reference and do not submit another allocation.');
-      }
-    } catch {
-      if (current()) setMessage('The original request could not be checked. Keep its reference and check again.');
-    } finally {sending.current = false; if (current()) setBusy(false);}
-  }
-
-  async function allocate(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (sending.current || !current() || recovery.result?.status !== 'success' || (!original && !selected) || (original && !canRetry)) return;
-    const intent = original ? retainedAllocation.parse(original.intent) : {memberId:selected, expectedVersion:payment.version};
-    if (payment.state !== 'unallocated' || payment.version !== intent.expectedVersion) return;
-    sending.current = true; setBusy(true); setCanRetry(false); setMessage('');
-    let attempt = original, sent = false;
-    try {
-      attempt = await retainPending(identity, allocationFamily, recovery.result.value.resource, original?.request_key ?? crypto.randomUUID(), allocationPermission, intent, undefined, undefined, current);
-      if (!current()) return;
-      setPending(attempt); sent = true;
-      const receipt = allocated.parse(await request(`burimunsi/payments/${payment.id}/allocate`, {
-        method: 'POST', body: intent, idempotencyKey: attempt.request_key,
-      }));
-      if (receipt.paymentId !== payment.id || receipt.memberId !== intent.memberId || receipt.version !== intent.expectedVersion + 1) {
-        throw new Error('The allocation response changed.');
-      }
-      if (!current()) return;
-      await clearOriginalAttempt(identity, attempt, current);
-      if (current()) {setPending(null); onUpdated();}
-    } catch (error) {
-      if (current()) {
-        const rejected = error instanceof AdminRequestError && !error.outcomeUnknown && error.statusCode === 409 &&
-          (error.code === 'member_unavailable' || error.code === 'payment_changed');
-        if (!original && attempt && sent && rejected) {
-          try {
-            await clearOriginalAttempt(identity, attempt, current);
-            if (current()) {
-              setPending(null); if (error.code === 'payment_changed') onUpdated();
-              setMessage(error instanceof Error ? error.message : 'Allocation was rejected.');
-            }
-          } catch {if (current()) setMessage('The original reference remains. Check the payment before continuing.');}
-        } else if (sent) setMessage('Allocation was not confirmed. Check the original request before trying again.');
-        else setMessage('The original request reference could not be saved. No allocation was sent.');
-      }
-    } finally {sending.current = false; if (current()) setBusy(false);}
-  }
-  if (!recovery.result) return <LoadingState label="Checking allocation reference" />;
-  if (recovery.result.status === 'error') return <ErrorState message={recovery.result.message} onRetry={recovery.retry} />;
-  if (original) return <section className="momo-assignment" aria-label="Original allocation request">
-    <h3>Original allocation request</h3><p>Request <code>{original.request_key}</code></p>
-    <Button onClick={() => void checkRequest()} disabled={busy}>Check request</Button>
-    {canRetry && <form onSubmit={allocate}><Button type="submit" variant="primary" disabled={busy}>Retry allocation</Button></form>}
-    {message && <p role="status">{message}</p>}
-  </section>;
-  if (!canChoose) return null;
-  const members = result?.status === 'success' ? result.value.items : [];
-  return <section className="momo-assignment" aria-label="Allocate to member"><h3>Allocate to member</h3>
-    <form className="operations-search" onSubmit={event => {
-      event.preventDefault();
-      const next = String(new FormData(event.currentTarget).get('member') ?? '').trim().slice(0, maxSearchLength);
-      setSelected(''); setQuery(next);
-    }}><Field label="Search group members" htmlFor="buri-allocation-search">
-      <input id="buri-allocation-search" name="member" className="admin-input" maxLength={maxSearchLength} disabled={busy} />
-    </Field><Button type="submit" disabled={busy}>Search</Button></form>
-    {!result ? <LoadingState label="Loading group members" /> : result.status === 'error' ? <ErrorState message={result.message} onRetry={retry} /> :
-      members.length ? <form className="operations-action-form" onSubmit={allocate}><Field label="Member" htmlFor="buri-allocation-member">
-        <select id="buri-allocation-member" className="admin-input" value={selected} onChange={event => setSelected(event.target.value)}
-          required disabled={busy}><option value="">Choose a member</option>
-          {members.map(member => <option key={member.id} value={member.id}>{member.name}</option>)}
-        </select></Field><Button type="submit" variant="primary" disabled={!selected || busy}>Allocate</Button></form> :
-        <EmptyState title="No group members found" />}
-    {message && <p role="status">{message}</p>}
   </section>;
 }

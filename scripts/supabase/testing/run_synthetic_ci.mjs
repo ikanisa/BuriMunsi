@@ -23,6 +23,7 @@ const groups = {
     'scripts/supabase/cloud-release/burimunsi-gateway-admission.test.mjs',
     'scripts/supabase/cloud-release/burimunsi-gateway-wake.test.mjs',
     'scripts/supabase/cloud-release/burimunsi-inbox-storage-page.test.mjs',
+    'scripts/supabase/cloud-release/burimunsi-membership-record-number.test.mjs',
     'scripts/supabase/cloud-release/burimunsi-payment-reference.test.mjs',
   ],
 };

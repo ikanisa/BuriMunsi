@@ -12,7 +12,8 @@ export function useOperationRead<T>(
   key: string,
   enabled: boolean,
   load: (signal: AbortSignal) => Promise<T>,
-  {pollMs, collectionId, live = false, invalidResponse = 'The workspace response could not be verified.'}: {pollMs?: number; collectionId?: string; live?: boolean; invalidResponse?: string} = {},
+  {pollMs, collectionId, live = false, retainDuringRefresh = false, invalidResponse = 'The workspace response could not be verified.'}:
+    {pollMs?: number; collectionId?: string; live?: boolean; retainDuringRefresh?: boolean; invalidResponse?: string} = {},
 ) {
   const suspended = useContext(InteractionSuspendedContext);
   const [read, setRead] = useState<{scope: string; result: OperationReadState<T>} | null>(null);
@@ -80,6 +81,6 @@ export function useOperationRead<T>(
   useVisibleOperationsRefresh(enabled && !suspended, pollMs, refresh, collectionId, live);
 
   const result = enabled && (read?.result.key === attemptKey ||
-    (pollMs !== undefined || live) && read?.scope === key && read.result.status === 'success') ? read?.result ?? null : null;
+    (pollMs !== undefined || live || retainDuringRefresh) && read?.scope === key && read.result.status === 'success') ? read?.result ?? null : null;
   return {result, retry};
 }
