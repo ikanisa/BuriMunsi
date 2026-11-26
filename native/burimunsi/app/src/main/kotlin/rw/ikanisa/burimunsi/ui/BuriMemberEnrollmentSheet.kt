@@ -33,7 +33,7 @@ import rw.ikanisa.burimunsi.core.*
         Row(Modifier.padding(18.dp),verticalAlignment=Alignment.CenterVertically){
             Text("+",Modifier.clearAndSetSemantics{},color=Color(0xFFFF733E),fontSize=26.sp,lineHeight=30.sp)
             Spacer(Modifier.width(14.dp))
-            Column{Text(t(title),fontSize=17.sp,fontWeight=FontWeight.Bold);Text(t(detail),fontSize=14.sp,lineHeight=21.sp,color=BuriTheme.Muted)}
+            Column(Modifier.weight(1f)){CompactLabel(t(title),fontSize=17.sp,fontWeight=FontWeight.Bold);Text(t(detail),fontSize=14.sp,lineHeight=21.sp,color=BuriTheme.Muted)}
         }
     }
 }
@@ -58,45 +58,45 @@ import rw.ikanisa.burimunsi.core.*
             item{SmartOption("Import member list","Upload or scan, review, then register",enabled){m.onboardingImport();onPickFile()}}
         }
         SmartOnboardingStep.SUGGESTIONS->Panel{
-            item{Text(t("Suggested members"),fontSize=23.sp,fontWeight=FontWeight.SemiBold)}
+            item{CompactLabel(t("Suggested members"),fontSize=23.sp,fontWeight=FontWeight.SemiBold)}
             item{Text(t("Search eligible MoMo payer names or the last three digits."),color=BuriTheme.Muted,fontSize=15.sp,lineHeight=22.sp)}
             item{Entry(t("Name or last three digits"),o.query,m::onboardingSearchQuery,enabled=!s.busy,imeAction=ImeAction.Search,onDone={m.onboardingSuggestions(o.query)})}
             item{Primary(t("Search"),{m.onboardingSuggestions(o.query)},enabled,secondary=true)}
             if(o.suggestionsLoaded&&o.suggestions.isEmpty())item{Empty(t("No eligible suggestions found."))}
             items(o.suggestions,key={it.candidateId}){candidate->
                 Row(Modifier.fillMaxWidth().heightIn(min=64.dp).clickable(enabled=enabled){m.onboardingChoose(candidate.candidateId)}.padding(vertical=10.dp),verticalAlignment=Alignment.CenterVertically){
-                    Column(Modifier.weight(1f)){Text(candidate.momoName,fontSize=17.sp,fontWeight=FontWeight.Medium);Text(t("MoMo number")+" ···"+candidate.last3+" · "+t("%1\$d message(s)",candidate.sourceCount),color=BuriTheme.Muted,fontSize=14.sp)}
-                    Text(t("Select"),color=BuriTheme.Blue,fontSize=15.sp)
+                    Column(Modifier.weight(1f)){CompactLabel(candidate.momoName,fontSize=17.sp,fontWeight=FontWeight.Medium);CompactLabel(t("MoMo number")+" ···"+candidate.last3+" · "+t("%1\$d message(s)",candidate.sourceCount),color=BuriTheme.Muted,fontSize=14.sp)}
+                    CompactLabel(t("Select"),color=BuriTheme.Blue,fontSize=15.sp)
                 }
             }
             if(o.nextCursor!=null)item{Primary(t("Load more"),{m.onboardingSuggestions(o.query,o.nextCursor)},enabled,secondary=true)}
-            item{TextButton(m::onboardingOptions,enabled=!s.busy){Text(t("Back"),color=BuriTheme.Blue)}}
+            item{TextButton(m::onboardingOptions,enabled=!s.busy){CompactLabel(t("Back"),color=BuriTheme.Blue)}}
         }
         SmartOnboardingStep.MEMBER,SmartOnboardingStep.IMPORT_MEMBER->Panel(footer={
             Primary(t(if(o.step==SmartOnboardingStep.MEMBER)"Save member" else "Add verified row to batch"),
                 {if(o.step==SmartOnboardingStep.MEMBER)m.onboardingSubmit(name,phone)else m.onboardingSaveRow(name,phone)},ready&&enabled,working=s.busy&&m.operation==UiOperation.COMMAND)
         }){
-            if(candidate!=null)item{Text(t("Suggested from MoMo")+" ···"+candidate.last3,color=BuriTheme.Muted,fontSize=15.sp)}
+            if(candidate!=null)item{CompactLabel(t("Suggested from MoMo")+" ···"+candidate.last3,color=BuriTheme.Muted,fontSize=15.sp)}
             item{Entry(t("MoMo name"),name,{m.editDraft("name",it)},enabled=!s.busy,nextFocus=phoneFocus,placeholder="Registered full name")}
             item{Entry(t("MoMo number"),phone,{m.editDraft("phone",it)},phone=true,enabled=!s.busy,imeAction=ImeAction.Done,fieldFocus=phoneFocus,
                 errorText=if(phone.isNotBlank()&&normalized!=null&&candidate!=null&&!normalized.endsWith(candidate.last3))"The number does not match the suggestion." else null)}
             item{SmartConsent("Full number and phone ownership verified",o.verifiedOwnership,enabled){m.onboardingConsent("ownership",it,s.draft)}}
             item{SmartConsent("Member accepted the savings terms",o.acceptedTerms,enabled){m.onboardingConsent("terms",it,s.draft)}}
             item{SmartConsent("Privacy notice and consent recorded",o.consentRecorded,enabled){m.onboardingConsent("consent",it,s.draft)}}
-            item{TextButton(if(o.step==SmartOnboardingStep.IMPORT_MEMBER)m::onboardingImport else m::onboardingOptions,enabled=!s.busy){Text(t("Back"),color=BuriTheme.Blue)}}
+            item{TextButton(if(o.step==SmartOnboardingStep.IMPORT_MEMBER)m::onboardingImport else m::onboardingOptions,enabled=!s.busy){CompactLabel(t("Back"),color=BuriTheme.Blue)}}
         }
         SmartOnboardingStep.IMPORT->Panel(footer=if(verified.isNotEmpty()){{
             Primary(t("Register verified members")+" (${verified.size})",m::onboardingSubmitBatch,enabled,working=s.busy&&m.operation==UiOperation.COMMAND)
         }}else null){
             if(!o.photoCaptureFlow&&o.sourceKind==null&&o.rows.isEmpty()){
-                item{Text(t("Import member list"),fontSize=23.sp,fontWeight=FontWeight.SemiBold)}
+                item{CompactLabel(t("Import member list"),fontSize=23.sp,fontWeight=FontWeight.SemiBold)}
                 item{SmartOption("Suggested from payments","Search unmatched payer names and last 3 digits",enabled){m.onboardingSuggestions()}}
                 item{SmartOption("Add manually","Enter a verified MoMo name and number",enabled,m::onboardingManual)}
                 item{SmartOption("Take a photo of the list","Taking a photo sends it to OpenAI for extraction. Review members before saving.",enabled){m.onboardingPhoto();onTakePhoto()}}
                 item{Primary(t("Choose a photo"),onPickPhoto,enabled,secondary=true)}
                 item{Primary(t(if(o.documentSelected)"Choose another file" else "Choose a file"),onPickFile,enabled,secondary=true)}
                 if(o.documentSelected){
-                    item{Text(t("File selected"),color=BuriTheme.Muted,fontSize=14.sp)}
+                    item{CompactLabel(t("File selected"),color=BuriTheme.Muted,fontSize=14.sp)}
                     if(previewNeedsConsent)item{SmartConsent("I agree to send this document to OpenAI for text extraction",o.ocrConsent,enabled){value->o.documentRequestId?.let{m.onboardingDocumentConsent(it,value)}}}
                     item{Primary(t("Preview members"),{o.documentRequestId?.let(onPreviewFile)},enabled&&(!previewNeedsConsent||o.ocrConsent),secondary=true)}
                 }
@@ -110,18 +110,18 @@ import rw.ikanisa.burimunsi.core.*
             }else if(o.sourceKind!=null&&o.rows.isEmpty()){
                 item{Empty(t("No members"))}
             }
-            if(o.rows.isNotEmpty())item{Text(t("%1\$d rows · %2\$d verified",o.rows.size,verified.size),fontSize=16.sp,fontWeight=FontWeight.Medium)}
+            if(o.rows.isNotEmpty())item{CompactLabel(t("%1\$d rows · %2\$d verified",o.rows.size,verified.size),fontSize=16.sp,fontWeight=FontWeight.Medium)}
             items(o.rows,key={it.row}){row->
                 Row(Modifier.fillMaxWidth().heightIn(min=64.dp).clickable(enabled=enabled){m.onboardingEditRow(row.row)}.padding(vertical=8.dp),verticalAlignment=Alignment.CenterVertically){
-                    Column(Modifier.weight(1f)){Text(row.name.ifBlank{t("Unreadable name")},fontSize=17.sp);Text(row.phone?:t("Number missing"),color=BuriTheme.Muted,fontSize=14.sp)}
-                    Text(t(if(row.verified)"Verified" else "Review"),color=if(row.verified)BuriTheme.Good else BuriTheme.Blue,fontSize=15.sp)
+                    Column(Modifier.weight(1f)){CompactLabel(row.name.ifBlank{t("Unreadable name")},fontSize=17.sp);CompactLabel(row.phone?:t("Number missing"),color=BuriTheme.Muted,fontSize=14.sp)}
+                    CompactLabel(t(if(row.verified)"Verified" else "Review"),color=if(row.verified)BuriTheme.Good else BuriTheme.Blue,fontSize=15.sp)
                 }
             }
-            item{TextButton(m::onboardingOptions,enabled=!s.busy){Text(t("Back"),color=BuriTheme.Blue)}}
+            item{TextButton(m::onboardingOptions,enabled=!s.busy){CompactLabel(t("Back"),color=BuriTheme.Blue)}}
         }
         SmartOnboardingStep.RESULTS->Panel(footer={Primary(t("Done"),m::closeSheet,!s.busy)}){
-            item{Text(t("%1\$d members registered",o.created),fontSize=22.sp,fontWeight=FontWeight.SemiBold)}
-            items(o.results,key={it.row}){result->Text(t("Row %1\$d: %2\$s",result.row,t(result.status.replace('_',' '))),fontSize=15.sp,lineHeight=22.sp)}
+            item{CompactLabel(t("%1\$d members registered",o.created),fontSize=22.sp,fontWeight=FontWeight.SemiBold)}
+            items(o.results,key={it.row}){result->CompactLabel(t("Row %1\$d: %2\$s",result.row,t(result.status.replace('_',' '))),fontSize=15.sp,lineHeight=22.sp)}
         }
     }
 }

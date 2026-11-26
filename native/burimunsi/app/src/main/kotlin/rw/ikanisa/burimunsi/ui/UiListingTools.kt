@@ -1,7 +1,6 @@
 package rw.ikanisa.burimunsi.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -70,18 +69,18 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
             OutlinedButton({model.openSheet(Sheet.FILTERS)},modifier.heightIn(min=48.dp),enabled=enabled,shape=RoundedCornerShape(24.dp),
                 colors=ButtonDefaults.outlinedButtonColors(contentColor=BuriTheme.Text)){
                 Icon(painterResource(R.drawable.ic_filter),null,Modifier.size(21.dp));Spacer(Modifier.width(8.dp))
-                Text(t("Filters"),fontSize=15.sp,lineHeight=22.sp)
-                if(chips.isNotEmpty()){Spacer(Modifier.width(6.dp));Text(chips.size.toString(),fontSize=13.sp,fontWeight=FontWeight.SemiBold)}
+                CompactLabel(t("Filters"),Modifier.weight(1f,fill=false),fontSize=15.sp,lineHeight=22.sp)
+                if(chips.isNotEmpty()){Spacer(Modifier.width(6.dp));CompactLabel(chips.size.toString(),fontSize=13.sp,fontWeight=FontWeight.SemiBold)}
             }
         }
         val sortControl:@Composable (Modifier)->Unit={modifier->
             Box(modifier){
                 OutlinedButton({sortOpen=true},Modifier.fillMaxWidth().heightIn(min=48.dp).testTag("listing-sort-menu"),enabled=enabled,shape=RoundedCornerShape(24.dp),colors=ButtonDefaults.outlinedButtonColors(contentColor=BuriTheme.Text)){
-                    Icon(painterResource(R.drawable.ic_arrow),null,Modifier.size(19.dp).rotate(90f));Spacer(Modifier.width(8.dp));Text(t("Sort"),fontSize=15.sp,lineHeight=22.sp)
+                    Icon(painterResource(R.drawable.ic_arrow),null,Modifier.size(19.dp).rotate(90f));Spacer(Modifier.width(8.dp));CompactLabel(t("Sort"),fontSize=15.sp,lineHeight=22.sp)
                 }
                 DropdownMenu(sortOpen,{sortOpen=false},containerColor=BuriTheme.Raised){
                     ListingQuery.allowedSorts(target).forEach{sort->DropdownMenuItem(
-                        text={Text(t(listingSortLabel(sort)))},trailingIcon={if(sort==query.sort)Icon(painterResource(R.drawable.ic_check),null,Modifier.size(20.dp))},
+                        text={CompactLabel(t(listingSortLabel(sort)))},trailingIcon={if(sort==query.sort)Icon(painterResource(R.drawable.ic_check),null,Modifier.size(20.dp))},
                         onClick={sortOpen=false;model.applyListingQuery(query.copy(sort=sort))})}
                 }
             }
@@ -102,11 +101,11 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
                 if(showFilter)filterControl(Modifier.weight(1f));sortControl(Modifier.weight(1f));exportControl()
             }
         }
-        Text(t("Sorted by %1\$s",t(listingSortLabel(query.sort))),Modifier.padding(top=8.dp),fontSize=13.sp,lineHeight=21.sp,color=BuriTheme.Muted)
+        CompactLabel(t("Sorted by %1\$s",t(listingSortLabel(query.sort))),Modifier.padding(top=8.dp),fontSize=13.sp,lineHeight=21.sp,color=BuriTheme.Muted)
         if(chips.isNotEmpty()){
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically){
-                chips.forEach{(label,clear)->FilterChip(selected=true,onClick=clear,enabled=enabled,label={Text(label)},trailingIcon={Icon(painterResource(R.drawable.ic_close),t("Remove filter"),Modifier.size(16.dp))},modifier=Modifier.heightIn(min=48.dp),shape=RoundedCornerShape(24.dp),colors=FilterChipDefaults.filterChipColors(selectedContainerColor=BuriTheme.Text,selectedLabelColor=Color(0xFF151517),selectedTrailingIconColor=Color(0xFF151517)))}
-                TextButton(model::resetListingQuery,enabled=enabled){Text(t("Reset all"))}
+            ScrollingChips{chip ->
+                chips.forEach{(label,clear)->FilterChip(selected=true,onClick=clear,enabled=enabled,label={CompactLabel(label)},trailingIcon={Icon(painterResource(R.drawable.ic_close),t("Remove filter"),Modifier.size(16.dp))},modifier=chip.heightIn(min=48.dp),shape=RoundedCornerShape(24.dp),colors=FilterChipDefaults.filterChipColors(selectedContainerColor=BuriTheme.Text,selectedLabelColor=Color(0xFF151517),selectedTrailingIconColor=Color(0xFF151517)))}
+                TextButton(model::resetListingQuery,modifier=chip,enabled=enabled){CompactLabel(t("Reset all"))}
             }
         }
     }
@@ -115,13 +114,13 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
 @Composable private fun QueryChoice(label:String,value:String,choices:List<Pair<String,String>>,enabled:Boolean,tag:String,onChange:(String)->Unit){
     val t=LocalUiText.current;var expanded by remember{mutableStateOf(false)}
     Column(Modifier.fillMaxWidth()){
-        Text(t(label),fontSize=15.sp,color=BuriTheme.Muted);Spacer(Modifier.height(8.dp))
+        CompactLabel(t(label),fontSize=15.sp,color=BuriTheme.Muted);Spacer(Modifier.height(8.dp))
         Box{
             OutlinedButton({expanded=true},Modifier.fillMaxWidth().heightIn(min=56.dp).testTag(tag).semantics{contentDescription=t(label)},enabled=enabled,shape=RoundedCornerShape(17.dp),colors=ButtonDefaults.outlinedButtonColors(contentColor=BuriTheme.Text)){
-                Text(t(choices.firstOrNull{it.first==value}?.second?:"All"),Modifier.weight(1f),fontSize=17.sp,lineHeight=25.sp)
+                CompactLabel(t(choices.firstOrNull{it.first==value}?.second?:"All"),Modifier.weight(1f),fontSize=17.sp,lineHeight=25.sp)
                 Icon(painterResource(R.drawable.ic_arrow),null,Modifier.size(18.dp).rotate(90f))
             }
-            DropdownMenu(expanded,{expanded=false},containerColor=BuriTheme.Raised){choices.forEach{(key,text)->DropdownMenuItem(text={Text(t(text))},onClick={expanded=false;onChange(key)})}}
+            DropdownMenu(expanded,{expanded=false},containerColor=BuriTheme.Raised){choices.forEach{(key,text)->DropdownMenuItem(text={CompactLabel(t(text))},onClick={expanded=false;onChange(key)})}}
         }
     }
 }
@@ -129,7 +128,7 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
 @Composable private fun QueryNumber(label:String,value:String,enabled:Boolean,onChange:(String)->Unit){
     val t=LocalUiText.current
     OutlinedTextField(value,onChange,Modifier.fillMaxWidth().semantics{contentDescription=t(label)},enabled=enabled,singleLine=true,
-        label={Text(t(label))},keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Ascii),
+        label={CompactLabel(t(label))},keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Ascii),
         shape=RoundedCornerShape(17.dp),colors=OutlinedTextFieldDefaults.colors(focusedBorderColor=BuriTheme.Blue,unfocusedBorderColor=BuriTheme.Muted.copy(alpha=.35f)))
 }
 
@@ -137,15 +136,15 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
 @Composable private fun QueryDate(label:String,value:String,enabled:Boolean,onChange:(String)->Unit){
     val t=LocalUiText.current;var open by remember{mutableStateOf(false)}
     Column{
-        Text(t(label),fontSize=15.sp,color=BuriTheme.Muted);Spacer(Modifier.height(8.dp))
+        CompactLabel(t(label),fontSize=15.sp,color=BuriTheme.Muted);Spacer(Modifier.height(8.dp))
         OutlinedButton({open=true},Modifier.fillMaxWidth().heightIn(min=56.dp).semantics{contentDescription=t(label)},enabled=enabled,shape=RoundedCornerShape(17.dp),colors=ButtonDefaults.outlinedButtonColors(contentColor=BuriTheme.Text)){
-            Icon(painterResource(R.drawable.ic_clock),null,Modifier.size(20.dp));Spacer(Modifier.width(10.dp));Text(value.ifBlank{t("Any date")},Modifier.weight(1f),fontSize=16.sp)
+            Icon(painterResource(R.drawable.ic_clock),null,Modifier.size(20.dp));Spacer(Modifier.width(10.dp));CompactLabel(value.ifBlank{t("Any date")},Modifier.weight(1f),fontSize=16.sp)
         }
     }
     if(open){
         val initial=runCatching{LocalDate.parse(value).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()}.getOrNull()
         val picker=rememberDatePickerState(initialSelectedDateMillis=initial)
-        DatePickerDialog(onDismissRequest={open=false},confirmButton={TextButton({picker.selectedDateMillis?.let{onChange(Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate().toString())};open=false}){Text(t("Apply"))}},dismissButton={TextButton({open=false}){Text(t("Cancel"))}}){DatePicker(picker)}
+        DatePickerDialog(onDismissRequest={open=false},confirmButton={TextButton({picker.selectedDateMillis?.let{onChange(Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate().toString())};open=false}){CompactLabel(t("Apply"))}},dismissButton={TextButton({open=false}){CompactLabel(t("Cancel"))}}){DatePicker(picker)}
     }
 }
 
@@ -168,7 +167,7 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
     Panel(footer={
         Column(verticalArrangement=Arrangement.spacedBy(6.dp)){
             Primary(t("Apply"),::apply,enabled)
-            TextButton({draft=ListingQuery.defaultsFor(target);from="";until="";minimum="";maximum="";error=null;model.resetListingQuery()},enabled=enabled,modifier=Modifier.fillMaxWidth().heightIn(min=48.dp)){Text(t("Reset all"))}
+            TextButton({draft=ListingQuery.defaultsFor(target);from="";until="";minimum="";maximum="";error=null;model.resetListingQuery()},enabled=enabled,modifier=Modifier.fillMaxWidth().heightIn(min=48.dp)){CompactLabel(t("Reset all"))}
         }
     }){
         if(target !in setOf(ListingTarget.SMS,ListingTarget.OBSERVATIONS))item{Entry(t("Search"),draft.q,{draft=draft.copy(q=it.take(80))},enabled=enabled)}
@@ -177,15 +176,15 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
         if(ListingQuery.supportsActive(target))item{QueryChoice(if(target==ListingTarget.STAFF)"Access status"else "Membership status",draft.active,listOf("all","active","inactive").map{it to listingValueLabel(it)},enabled,"listing-active-select"){draft=draft.copy(active=it)}}
         if(ListingQuery.supportsDirection(target))item{QueryChoice("Direction",draft.direction,listOf("all","incoming","outgoing").map{it to listingValueLabel(it)},enabled,"listing-direction-select"){draft=draft.copy(direction=it)}}
         if(ListingQuery.supportsDates(target)){
-            item{Text(t("Date range"),fontSize=20.sp,fontWeight=FontWeight.Medium);Text(t("Dates use Kigali time. End date is included."),fontSize=14.sp,lineHeight=22.sp,color=BuriTheme.Muted)}
-            item{Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)){
-                for((days,label)in listOf(1L to "Today",7L to "Last 7 days",30L to "Last 30 days"))AssistChip(onClick={val today=LocalDate.now(ListingZone);from=today.minusDays(days-1).toString();until=today.toString()},label={Text(t(label))},enabled=enabled,modifier=Modifier.heightIn(min=48.dp))
+            item{CompactLabel(t("Date range"),fontSize=20.sp,fontWeight=FontWeight.Medium);Text(t("Dates use Kigali time. End date is included."),fontSize=14.sp,lineHeight=22.sp,color=BuriTheme.Muted)}
+            item{ScrollingChips{chip ->
+                for((days,label)in listOf(1L to "Today",7L to "Last 7 days",30L to "Last 30 days"))AssistChip(onClick={val today=LocalDate.now(ListingZone);from=today.minusDays(days-1).toString();until=today.toString()},label={CompactLabel(t(label))},enabled=enabled,modifier=chip.heightIn(min=48.dp))
             }}
             item{QueryDate("From date",from,enabled){from=it}}
             item{QueryDate("Through date",until,enabled){until=it}}
         }
         if(ListingQuery.supportsAmount(target)){
-            item{Text(t("Amount range"),fontSize=20.sp,fontWeight=FontWeight.Medium);Text(t("Whole RWF values. Leave empty for no limit."),fontSize=14.sp,lineHeight=22.sp,color=BuriTheme.Muted)}
+            item{CompactLabel(t("Amount range"),fontSize=20.sp,fontWeight=FontWeight.Medium);Text(t("Whole RWF values. Leave empty for no limit."),fontSize=14.sp,lineHeight=22.sp,color=BuriTheme.Muted)}
             item{QueryNumber("Minimum RWF",minimum,enabled){minimum=it.take(18)}}
             item{QueryNumber("Maximum RWF",maximum,enabled){maximum=it.take(18)}}
         }
@@ -202,14 +201,14 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
         shape=RoundedCornerShape(topStart=32.dp,topEnd=32.dp),scrimColor=Color.Black.copy(alpha=.62f)){
         Column(Modifier.fillMaxWidth().heightIn(max=LocalConfiguration.current.screenHeightDp.dp*.9f).verticalScroll(rememberScrollState()).padding(horizontal=24.dp).navigationBarsPadding().padding(bottom=24.dp).testTag("export-format-sheet").semantics{paneTitle=t("Export results")}){
             Row(verticalAlignment=Alignment.CenterVertically){
-                Text(t("Export results"),Modifier.weight(1f).semantics{heading()},fontSize=28.sp,lineHeight=36.sp,fontWeight=FontWeight.SemiBold)
+                CompactLabel(t("Export results"),Modifier.weight(1f).semantics{heading()},fontSize=28.sp,lineHeight=36.sp,fontWeight=FontWeight.SemiBold)
                 IconButton(onDismiss,Modifier.size(48.dp)){Icon(painterResource(R.drawable.ic_close),t("Close"))}
             }
             Text(t("Current filters and sort are included."),Modifier.padding(vertical=12.dp),fontSize=15.sp,lineHeight=23.sp,color=BuriTheme.Muted)
             if(target in setOf(ListingTarget.SMS,ListingTarget.OBSERVATIONS))Text(t("SMS exports contain authorized metadata only. Message content is excluded."),Modifier.padding(bottom=12.dp),fontSize=15.sp,lineHeight=23.sp,color=BuriTheme.Warn)
             formats.forEach{(format,label)->
                 OutlinedButton({onPick(format)},Modifier.fillMaxWidth().padding(vertical=5.dp).heightIn(min=60.dp).testTag("export-format:${format.name}"),enabled=model.canExportListing&&!model.state.busy&&!model.state.offline,shape=RoundedCornerShape(20.dp),colors=ButtonDefaults.outlinedButtonColors(contentColor=BuriTheme.Text)){
-                    Icon(painterResource(R.drawable.ic_export),null,Modifier.size(24.dp));Spacer(Modifier.width(14.dp));Text(t(label),Modifier.weight(1f),fontSize=18.sp,lineHeight=26.sp)
+                    Icon(painterResource(R.drawable.ic_export),null,Modifier.size(24.dp));Spacer(Modifier.width(14.dp));CompactLabel(t(label),Modifier.weight(1f),fontSize=18.sp,lineHeight=26.sp)
                 }
             }
         }

@@ -1,9 +1,22 @@
 package rw.ikanisa.burimunsi
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.test.platform.app.InstrumentationRegistry
 import android.graphics.Bitmap
@@ -798,6 +811,77 @@ class NativeUiContractTest {
         ui.onNodeWithText("Privacy notice and consent recorded").assertIsDisplayed()
         panelButton("Add member","Save member").assertIsDisplayed().assertIsNotEnabled()
     }
+
+    private fun assertTextLayout(text:String, ellipsized:Boolean) {
+        ui.onNodeWithText(text, useUnmergedTree=true)
+            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { getLayout ->
+                val layouts=mutableListOf<TextLayoutResult>()
+                check(getLayout(layouts))
+                val layout=layouts.single()
+                check(layout.layoutInput.text.text==text)
+                if(ellipsized) check(layout.lineCount==1 && layout.isLineEllipsized(0))
+                else check(layout.lineCount>1 && (0 until layout.lineCount).none(layout::isLineEllipsized))
+            }
+    }
+
+    @Test fun narrowStaffAndActionLabelsKeepTheirFullAccessibleNamesAndWarningsWrap(){
+        val name="Example cooperative operator with an especially long personal name"
+        val action="Register verified members from the reviewed list"
+        val warning="Check the saved details before confirming this change."
+        var opened=0
+        ui.setContent {
+            val density=LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density,2f)) {
+                BuriContent(languageTag="en",reduceMotion=true) {
+                    Box(Modifier.fillMaxSize()) {
+                        Column(Modifier.width(216.dp).verticalScroll(rememberScrollState())) {
+                            SettingRow(app.cool.mobile.R.drawable.ic_members,name,click={opened++})
+                            Primary(action,{},icon=app.cool.mobile.R.drawable.ic_arrow,iconTrailing=true)
+                            BuriStatusMessage(warning,error=true)
+                        }
+                    }
+                }
+            }
+        }
+        assertTextLayout(name,ellipsized=true)
+        assertTextLayout(action,ellipsized=true)
+        assertTextLayout(warning,ellipsized=false)
+        button(name).performClick()
+        ui.runOnIdle{check(opened==1)}
+    }
+
+    @Test fun longSearchChipFitsItsScrollingToolbarAndKeepsTheCompleteRemovalAction(){
+        val search="Example member from the demonstration cooperative in Kigali"
+        val label="Search: $search"
+        val c=FakeController(Route.MEMBERS)
+        c.seedQuery(c.listingQuery.copy(q=search))
+        ui.setContent {
+            BuriContent(languageTag="en",reduceMotion=true) {
+                Box(Modifier.fillMaxSize()) {
+                    Column(Modifier.width(216.dp)) {
+                        ListingToolbar(c,onExport={},showFilter=false,showExport=false)
+                    }
+                }
+            }
+        }
+        assertTextLayout(label,ellipsized=true)
+        button(label).performClick()
+        ui.runOnIdle{check(c.lastAppliedQuery?.q=="")}
+        ui.onNodeWithText(label).assertDoesNotExist()
+    }
+
+    @Test fun importedMemberNamesUseOneLineAndKeepReviewAccessible(){
+        val name="Example cooperative member with a very long full name ".repeat(3).trimEnd()
+        val c=FakeController(Route.MEMBERS)
+        c.state=c.state.copy(sheet=Sheet.ENROLL,onboarding=SmartOnboardingState(
+            step=SmartOnboardingStep.IMPORT,sourceKind="csv",
+            rows=listOf(SmartImportRow(1,name,"+250780000001","ready"))
+        ))
+        show(c)
+        panelList("Add member").performScrollToNode(hasText(name))
+        assertTextLayout(name,ellipsized=true)
+        ui.onNode(hasText(name) and hasText("Review") and hasClickAction()).assertIsDisplayed()
+    }
     @Test fun exportFormatsDispatchOnlyAfterAnExplicitContextualChoice(){
         val c=FakeController(Route.PAYMENTS);val chosen=mutableListOf<ExportFormat>();show(c,onExport={chosen+=it})
         ui.onNodeWithContentDescription("Export results").performScrollTo().performClick()
@@ -826,11 +910,90 @@ class NativeUiContractTest {
         ui.runOnIdle{c.operation=UiOperation.NONE;c.state=c.state.copy(busy=false,payments=Page(emptyList(),null,0,"empty","now"))}
         ui.onNodeWithTag("loading-skeleton").assertDoesNotExist();ui.onNodeWithText("No payments").assertExists()
     }
+
+    private fun indeterminateWork()=ui.onAllNodes(SemanticsMatcher.expectValue(
+        androidx.compose.ui.semantics.SemanticsProperties.ProgressBarRangeInfo,
+        androidx.compose.ui.semantics.ProgressBarRangeInfo.Indeterminate))
+
+    @Test fun loadingUsesTheRequestedScreenAndRemovesPrivateGeometryOnAnAccessCheck(){
+        val c=FakeController(Route.PAYMENTS)
+        c.state=c.state.copy(home=null,payments=null,members=null,payment=null,member=null,messages=null,busy=true)
+        c.operation=UiOperation.INITIAL_READ
+        show(c)
+        for(route in listOf(Route.PAYMENTS,Route.MEMBERS,Route.PAYMENT,Route.MEMBER,Route.SMS,Route.HOME)){
+            ui.runOnIdle{c.state=c.state.copy(route=route)}
+            if(route==Route.SMS && !BuildConfig.IS_GATEWAY){
+                ui.onNodeWithTag("loading-skeleton").assertDoesNotExist()
+                ui.onNodeWithText("Loading records").assertIsDisplayed()
+            }else ui.onNodeWithTag("loading-layout:${route.name}").assertIsDisplayed()
+            indeterminateWork().assertCountEquals(1)
+            ui.onNodeWithContentDescription("10,000 RWF").assertDoesNotExist()
+        }
+        ui.runOnIdle{c.screenGate=ScreenGate.CHECKING}
+        ui.onNodeWithTag("loading-skeleton").assertDoesNotExist()
+        ui.onNodeWithText("Checking access").assertIsDisplayed()
+        indeterminateWork().assertCountEquals(1)
+    }
+
+    @Test fun sheetCommandAndVisibleRefreshEachHaveOneProgressAnnouncement(){
+        val c=FakeController(Route.PAYMENTS)
+        c.state=c.state.copy(busy=true)
+        c.operation=UiOperation.REFRESH
+        show(c)
+        ui.onNodeWithTag("active-operation:REFRESH").assertIsDisplayed()
+        indeterminateWork().assertCountEquals(1)
+        ui.onNodeWithTag("loading-skeleton").assertDoesNotExist()
+        ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasContentDescription("10,000 RWF"))
+        ui.onNodeWithContentDescription("10,000 RWF").assertIsDisplayed()
+        ui.runOnIdle{c.openSheet(Sheet.PIN);c.operation=UiOperation.COMMAND}
+        ui.onNodeWithTag("active-operation:COMMAND").assertIsDisplayed()
+        panelButton("Change passcode","Save").assertIsNotEnabled()
+        indeterminateWork().assertCountEquals(1)
+    }
+
     @Test fun reducedMotionKeepsLoadingMeaningWithStaticRendering(){
         val c=FakeController(Route.PAYMENTS);c.state=c.state.copy(payments=null,busy=true);c.operation=UiOperation.INITIAL_READ;show(c)
         ui.onAllNodes(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.ProgressBarRangeInfo,androidx.compose.ui.semantics.ProgressBarRangeInfo.Indeterminate)).onFirst().assertExists()
         val before=ui.onRoot().captureToImage().asAndroidBitmap();ui.mainClock.advanceTimeBy(2000);ui.waitForIdle()
         check(before.sameAs(ui.onRoot().captureToImage().asAndroidBitmap()))
+    }
+
+    @Test fun defaultMotionPulsesThePaymentSkeletonAndDisposesItWhenRecordsArrive(){
+        val c=FakeController(Route.PAYMENTS)
+        val payments=checkNotNull(c.state.payments)
+        c.state=c.state.copy(payments=null,busy=true)
+        c.operation=UiOperation.INITIAL_READ
+        var enabled=false
+        var searchBarCentreY=0
+        ui.mainClock.autoAdvance=false
+        try {
+            ui.setContent {
+                BuriContent(languageTag="en") {
+                    val motion=LocalBuriMotionAllowed.current
+                    val centre=with(LocalDensity.current){24.dp.roundToPx()}
+                    androidx.compose.runtime.SideEffect{enabled=motion;searchBarCentreY=centre}
+                    BuriApp(c,{},{},{},{})
+                }
+            }
+            ui.mainClock.advanceTimeBy(96)
+            ui.runOnIdle{check(enabled){"This test requires the default motion preference and a positive Android animator duration scale."}}
+            val skeleton=ui.onNodeWithTag("loading-layout:PAYMENTS").assertIsDisplayed()
+            val first=skeleton.captureToImage().asAndroidBitmap()
+            ui.mainClock.advanceTimeBy(560)
+            val second=skeleton.captureToImage().asAndroidBitmap()
+            check(first.width==second.width && first.height==second.height && searchBarCentreY in 0 until first.height)
+            val x=first.width/2
+            check(first.getPixel(x,searchBarCentreY)!=second.getPixel(x,searchBarCentreY)){"The search placeholder did not pulse between frames."}
+            indeterminateWork().assertCountEquals(1)
+            ui.runOnIdle{c.operation=UiOperation.NONE;c.state=c.state.copy(payments=payments,busy=false)}
+            ui.mainClock.advanceTimeByFrame()
+            ui.onNodeWithTag("loading-skeleton").assertDoesNotExist()
+            indeterminateWork().assertCountEquals(0)
+        } finally {
+            ui.mainClock.autoAdvance=true
+        }
+        ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasContentDescription("10,000 RWF"))
+        ui.onNodeWithContentDescription("10,000 RWF").assertIsDisplayed()
     }
     @Test fun typedFiltersValidateAmountsAndPreserveInclusiveKigaliDates(){
         val c=FakeController(Route.PAYMENTS)

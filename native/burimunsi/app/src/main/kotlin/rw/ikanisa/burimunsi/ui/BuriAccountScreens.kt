@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.platform.LocalFocusManager
@@ -32,11 +33,18 @@ import rw.ikanisa.burimunsi.AdminReceiverEntry
 import rw.ikanisa.burimunsi.core.*
 import rw.ikanisa.burimunsi.core.Role
 
-@Composable internal fun SettingRow(icon:Int,title:String,subtitle:String?=null,enabled:Boolean=true,click:()->Unit){
+@Composable internal fun SettingRow(icon:Int,title:String,subtitle:String?=null,enabled:Boolean=true,wrapSubtitle:Boolean=false,click:()->Unit){
     val action=focusAction("setting:$title",click)
     Row(action.modifier.fillMaxWidth().heightIn(min=58.dp).clickable(enabled=enabled,role=SemanticRole.Button,onClick=action.click).semantics(mergeDescendants=true){}.padding(vertical=12.dp),verticalAlignment=Alignment.CenterVertically){
         Box(Modifier.size(38.dp).background(BuriTheme.Tone,CircleShape),contentAlignment=Alignment.Center){Glyph(icon,null,if(enabled)BuriTheme.Text else BuriTheme.Muted,22)};Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)){Text(title,style=MaterialTheme.typography.titleSmall);if(subtitle!=null){Spacer(Modifier.height(2.dp));Text(subtitle,style=MaterialTheme.typography.bodySmall,color=BuriTheme.Muted)}}
+        Column(Modifier.weight(1f)){
+            CompactLabel(title,style=MaterialTheme.typography.titleSmall)
+            if(subtitle!=null){
+                Spacer(Modifier.height(2.dp))
+                if(wrapSubtitle)Text(subtitle,style=MaterialTheme.typography.bodySmall,color=BuriTheme.Muted)
+                else CompactLabel(subtitle,style=MaterialTheme.typography.bodySmall,color=BuriTheme.Muted)
+            }
+        }
         Glyph(R.drawable.ic_arrow,null,BuriTheme.Muted,18)
     }
 }
@@ -51,7 +59,7 @@ import rw.ikanisa.burimunsi.core.Role
     val canHandoffToReceiver=!BuildConfig.IS_GATEWAY&&admin
     LazyColumn(Modifier.fillMaxSize(),state=routeList(s,m),contentPadding=PaddingValues(20.dp,4.dp,20.dp,22.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
         item{Row(Modifier.fillMaxWidth().clickable(enabled=!s.busy,role=SemanticRole.Button){m.openSheet(Sheet.PROFILE)}.padding(vertical=10.dp),verticalAlignment=Alignment.CenterVertically){
-            Avatar(s.operator?.name.orEmpty(),52,initialsSize=18);Spacer(Modifier.width(12.dp));Column(Modifier.weight(1f)){SingleLineName(s.operator?.name.orEmpty(),size=22);Text(t(if(admin)"Admin" else "Staff"),style=MaterialTheme.typography.bodySmall,color=BuriTheme.Muted)};Glyph(R.drawable.ic_arrow,null,BuriTheme.Muted,18)
+            Avatar(s.operator?.name.orEmpty(),52,initialsSize=18);Spacer(Modifier.width(12.dp));Column(Modifier.weight(1f)){SingleLineName(s.operator?.name.orEmpty(),size=22);CompactLabel(t(if(admin)"Admin" else "Staff"),style=MaterialTheme.typography.bodySmall,color=BuriTheme.Muted)};Glyph(R.drawable.ic_arrow,null,BuriTheme.Muted,18)
         }}
         item{AccountGroup{
             SettingRow(R.drawable.ic_lock,t("Change passcode"),enabled=!s.busy,click={m.openSheet(Sheet.PIN)})
@@ -59,7 +67,7 @@ import rw.ikanisa.burimunsi.core.Role
             SettingRow(R.drawable.ic_help,t("Help"),enabled=!s.busy,click={m.openSheet(Sheet.HELP)})
         }}
         if(canManageStaff||canManageSms||canHandoffToReceiver)item{
-            Text(t("Operations"),Modifier.padding(top=4.dp,bottom=6.dp).semantics{heading()},style=MaterialTheme.typography.titleMedium)
+            CompactLabel(t("Operations"),Modifier.padding(top=4.dp,bottom=6.dp).semantics{heading()},style=MaterialTheme.typography.titleMedium)
             AccountGroup{
                 if(canManageStaff){
                     SettingRow(R.drawable.ic_members,t("Staff access"),s.staff?.totalCount?.let{t("%1\$d accounts",it)},enabled=!s.busy,click={m.openSheet(Sheet.STAFF)})
@@ -74,7 +82,7 @@ import rw.ikanisa.burimunsi.core.Role
                             enabled = !s.busy, click = { AdminReceiverEntry.open(context,s.operator?.role) })
                     } else {
                         Column(Modifier.fillMaxWidth().padding(vertical=16.dp)) {
-                            Text(t("Receive payment SMS"), fontSize=19.sp, lineHeight=27.sp)
+                            CompactLabel(t("Receive payment SMS"), fontSize=19.sp, lineHeight=27.sp)
                             Spacer(Modifier.height(5.dp))
                             Text(t("Install the signed BuriMunsi Admin app provided by your organization, then sign in with your mobile number and passcode."),
                                 fontSize=14.sp, color=BuriTheme.Muted, lineHeight=22.sp)
@@ -95,7 +103,7 @@ import rw.ikanisa.burimunsi.core.Role
                         "receiver_retired"->"Receiver retired";"sync_unconfirmed"->"Sync unconfirmed"
                         else->if(m.continuousSyncRunning==true)"Sync is running" else "Starting sync"
                     }
-                    SettingRow(R.drawable.ic_sync,t("Background sync"),t(syncLabel),enabled=!s.busy,click={m.openSheet(Sheet.GATEWAY)})
+                    SettingRow(R.drawable.ic_sync,t("Background sync"),t(syncLabel),enabled=!s.busy,wrapSubtitle=m.continuousSyncProblem=="start_not_allowed",click={m.openSheet(Sheet.GATEWAY)})
                 }
             }
         }
@@ -108,12 +116,12 @@ import rw.ikanisa.burimunsi.core.Role
     val keyboard=LocalSoftwareKeyboardController.current;val focus=LocalFocusManager.current
     val action:()->Unit={if(enabled){if(imeAction==ImeAction.Next){if(nextFocus!=null)nextFocus.requestFocus()else focus.moveFocus(FocusDirection.Next)}else{keyboard?.hide();focus.clearFocus();onDone?.invoke()}}}
     Column(Modifier.fillMaxWidth()){
-        Text(label,fontSize=15.sp,lineHeight=21.sp,color=BuriTheme.Muted);Spacer(Modifier.height(9.dp))
+        CompactLabel(label,fontSize=15.sp,lineHeight=21.sp,color=BuriTheme.Muted);Spacer(Modifier.height(9.dp))
         OutlinedTextField(value,change,Modifier.fillMaxWidth().heightIn(min=60.dp).semantics{contentDescription=label}.then(fieldFocus?.let{Modifier.focusRequester(it)}?:Modifier).onPreviewKeyEvent{
             if(it.key==Key.Enter||it.key==Key.NumPadEnter){if(it.type==KeyEventType.KeyUp)action();true}else false
         },singleLine=true,enabled=enabled,isError=errorText!=null,
             textStyle=LocalTextStyle.current.copy(fontSize=19.sp,lineHeight=27.sp),
-            placeholder={Text(placeholder?.let{t(it)}?:if(pin)t("4 digits")else if(phone)t("07… or +250…")else "",color=BuriTheme.Muted)},
+            placeholder={CompactLabel(placeholder?.let{t(it)}?:if(pin)t("4 digits")else if(phone)t("07… or +250…")else "",color=BuriTheme.Muted)},
             supportingText=if(errorText!=null){{Text(t(errorText))}}else null,
             shape=RoundedCornerShape(17.dp),visualTransformation=if(pin&&!visible)PasswordVisualTransformation()else VisualTransformation.None,
             keyboardOptions=KeyboardOptions(keyboardType=if(pin)KeyboardType.NumberPassword else if(phone)KeyboardType.Phone else KeyboardType.Text,autoCorrectEnabled=false,imeAction=imeAction),
@@ -136,8 +144,9 @@ import rw.ikanisa.burimunsi.core.Role
                 errorText=if(phone.isNotEmpty()&&runCatching{Values.phone(phone)}.isFailure)"Enter a valid phone number." else null);Spacer(Modifier.height(20.dp))
             Entry(t("Passcode"),pin,{pin=it.filter{ch->ch in '0'..'9'}.take(4)},pin=true,revealPin=true,enabled=!busy,imeAction=ImeAction.Done,fieldFocus=pinFocus,onDone={if(ready&&!busy){login(phone,pin);pin=""}});Spacer(Modifier.height(29.dp))
         }
-        item{Primary(t(if(signingIn)"Signing in…" else "Sign in"),{login(phone,pin);pin=""},ready&&!busy,icon=R.drawable.ic_arrow,iconTrailing=true,working=signingIn)}
-        item{TextButton(support,Modifier.fillMaxWidth().heightIn(min=48.dp).padding(top=12.dp),enabled=supportAvailable){Text(t("Contact admin on WhatsApp"),color=if(supportAvailable)BuriTheme.Blue else BuriTheme.Muted,fontSize=15.sp)}}
+        item{Primary(t(if(signingIn)"Signing in…" else "Sign in"),{login(phone,pin);pin=""},ready&&!busy,icon=R.drawable.ic_arrow,iconTrailing=true,working=signingIn,
+            modifier=if(signingIn)Modifier.testTag("active-operation:SIGN_IN") else Modifier)}
+        item{TextButton(support,Modifier.fillMaxWidth().heightIn(min=48.dp).padding(top=12.dp),enabled=supportAvailable){CompactLabel(t("Contact admin on WhatsApp"),color=if(supportAvailable)BuriTheme.Blue else BuriTheme.Muted,fontSize=15.sp)}}
     }
 }
 

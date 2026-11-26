@@ -21,7 +21,6 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.cool.mobile.R
@@ -52,25 +51,32 @@ import rw.ikanisa.burimunsi.core.Role
             if(it.key==Key.Escape){if(it.type==KeyEventType.KeyUp){if(imeVisible)keyboard?.hide()else m.closeSheet()};true}else false
         }){
             Row(Modifier.fillMaxWidth().heightIn(min=65.dp).padding(start=22.dp,end=12.dp,top=7.dp,bottom=10.dp),verticalAlignment=Alignment.CenterVertically){
-                Text(title,Modifier.weight(1f).semantics{heading()},fontSize=30.sp,fontWeight=FontWeight.SemiBold,maxLines=2,overflow=TextOverflow.Ellipsis,lineHeight=38.sp)
+                CompactLabel(title,Modifier.weight(1f).semantics{heading()},fontSize=30.sp,fontWeight=FontWeight.SemiBold,lineHeight=38.sp)
                 IconButton(m::closeSheet,enabled=!s.busy,modifier=Modifier.testTag("panel-close")){Glyph(R.drawable.ic_close,t("Close"))}
             }
             if(s.discardRequested)DiscardPrompt(s,m)
-            if(m.operation!=UiOperation.NONE&&!(m.operation==UiOperation.EXPORT&&m.exportFeedback!=null))BuriWorkingStrip(m.operation,m.operationLabel)else if(m.operation==UiOperation.NONE&&s.busy)BuriInlineLoading("Working")
+            val showPanelProgress=hasOperationProgress(m.operation,s.busy,m.exportFeedback)
+            if(showPanelProgress){
+                val label=if(sheet==Sheet.RAW && s.rawDisclosure==RawDisclosureState.LOADING)"Loading original SMS" else m.operationLabel
+                BuriOperationFeedback(m.operation,label)
+            }
+            s.commandNotice?.takeIf{s.operator!=null && m.screenGate==ScreenGate.OPEN && m.presentation.showRecords}
+                ?.let{BuriStatusMessage(it,warning=true)}
             m.exportFeedback?.takeIf{m.screenGate==ScreenGate.OPEN&&m.presentation.showRecords}?.let{BuriExportFeedback(it,m::cancelExport,m::dismissExportFeedback)}
             s.error?.let{message->
-                Text(t(message),Modifier.padding(horizontal=24.dp,vertical=8.dp).semantics{liveRegion=LiveRegionMode.Polite},color=BuriTheme.Bad)
+                BuriStatusMessage(message,error=true)
                 if(sheet in setOf(Sheet.STAFF,Sheet.AUDIT,Sheet.ALLOCATE,Sheet.GATEWAY,Sheet.MEMBER_DETAILS))
-                    TextButton(m::refresh,enabled=!s.busy,modifier=Modifier.padding(horizontal=16.dp)){Text(t("Retry loading"))}
+                    TextButton(m::refresh,enabled=!s.busy,modifier=Modifier.padding(horizontal=16.dp)){CompactLabel(t("Retry loading"))}
             }
             // Bounded list avoids unbounded nested-scroll measurement on compact phones and IME.
             val blockedContent=if(s.discardRequested)Modifier.clearAndSetSemantics{}.pointerInput(Unit){
                 awaitPointerEventScope{while(true)awaitPointerEvent(PointerEventPass.Initial).changes.forEach{it.consume()}}
             }else Modifier
             Box(Modifier.fillMaxWidth().weight(1f,fill=false).then(blockedContent)){
+                CompositionLocalProvider(LocalProgressPresented provides showPanelProgress) {
                 key(sheet,s.sheetId){when(sheet){
                     Sheet.PROFILE->Panel(footer={Primary(t("Change passcode"),{m.openSheet(Sheet.PIN)},!s.busy)}){
-                        item{FactGroup(listOf(t("Name") to s.operator?.name.orEmpty(),t("Phone number") to s.operator?.phone.orEmpty()),BuriTheme.Group)}
+                        item{FactGroup(listOf(t("Name") to s.operator?.name.orEmpty(),t("Phone number") to s.operator?.phone.orEmpty()),BuriTheme.Group,compactValueLabels=setOf(t("Name")))}
                     }
                     Sheet.PIN->PinPanel(s.busy,s.pending,m::changePin)
                     Sheet.HELP->Panel(footer={Primary(t("WhatsApp"),onSupport,!s.busy)}){item{Text(BuriMunsiSupport.phone,fontSize=26.sp,lineHeight=34.sp)}}
@@ -78,7 +84,7 @@ import rw.ikanisa.burimunsi.core.Role
                     Sheet.ENROLL->SmartEnrollPanel(s,m,onPickMemberFile,onPreviewMemberFile,onTakeMemberPhoto,onPickMemberPhoto)
                     Sheet.STAFF->Panel{
                         item{ListingToolbar(m,onExport)}
-                        item{Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Text(s.staff?.totalCount?.let{t("%1\$d staff",it)}?:t("Unavailable"),Modifier.weight(1f),color=BuriTheme.Muted,fontSize=14.sp);RoundAction(R.drawable.ic_plus,t("Add staff"),{m.openSheet(Sheet.STAFF_EDIT)},!s.busy&&!s.offline&&!s.pending,48)}}
+                        item{Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){CompactLabel(s.staff?.totalCount?.let{t("%1\$d staff",it)}?:t("Unavailable"),Modifier.weight(1f),color=BuriTheme.Muted,fontSize=14.sp);RoundAction(R.drawable.ic_plus,t("Add staff"),{m.openSheet(Sheet.STAFF_EDIT)},!s.busy&&!s.offline&&!s.pending,48)}}
                         val staff=s.staff?.items.orEmpty()
                         if(staff.isNotEmpty())item{Column(Modifier.fillMaxWidth().background(BuriTheme.Group,RoundedCornerShape(24.dp)).padding(horizontal=16.dp,vertical=2.dp)){
                             staff.forEachIndexed{index,person->
@@ -87,8 +93,8 @@ import rw.ikanisa.burimunsi.core.Role
                             }
                         }}
                         if(s.staff?.items?.isEmpty()==true)item{Empty(t("No staff"))}
-                        if(s.staff==null&&s.busy)item{BuriSkeletonRows(3)}
-                        moreButton(s.staff?.nextCursor,s.busy,m::more,autoEnabled=!s.offline&&s.error==null)
+                        if(s.staff==null&&s.busy)item{BuriSkeletonRows(3,LoadingRows.MEMBERS)}
+                        moreButton(s.staff?.nextCursor,s.busy,m::more,autoEnabled=!s.offline&&s.error==null,paging=m.operation==UiOperation.LOAD_MORE)
                     }
                     Sheet.STAFF_EDIT->StaffPanel(s,m)
                     Sheet.REMOVE_STAFF->Panel(footer={Primary(t("Remove access"),{m.staffAction("remove")},!s.busy&&!s.offline&&!s.pending,danger=true,working=s.busy&&m.operation==UiOperation.COMMAND)}){
@@ -101,18 +107,19 @@ import rw.ikanisa.burimunsi.core.Role
                     Sheet.MEMBER_DETAILS->{
                         val member=s.member
                         Panel(footer=if(member!=null&&s.operator?.role==Role.ADMIN&&m.allows(Capability.ENROLL)){{Primary(if(member.active)t("Deactivate membership") else t("Reactivate membership"),{m.setMemberActive(!member.active)},!s.busy&&!s.offline&&!s.pending,secondary=true,working=s.busy&&m.operation==UiOperation.COMMAND)}}else null){
-                            member?.let{item{FactGroup(listOf(t("Name") to it.name,t("MoMo number") to it.phone,t("Membership") to if(it.active)t("Active") else t("Inactive")),BuriTheme.Group)}}
+                            member?.let{item{FactGroup(listOf(t("Name") to it.name,t("MoMo number") to it.phone,t("Membership") to if(it.active)t("Active") else t("Inactive")),BuriTheme.Group,compactValueLabels=setOf(t("Name"),t("Membership")))}}
                         }
                     }
                     Sheet.AUDIT->Panel{
                         item{ListingToolbar(m,onExport)}
-                        items(s.audit?.items.orEmpty(),key={it.id}){a->Column(Modifier.fillMaxWidth().padding(vertical=10.dp)){SingleLineName(a.action);Spacer(Modifier.height(5.dp));Text(a.at,color=BuriTheme.Muted,fontSize=14.sp,lineHeight=22.sp)}}
+                        items(s.audit?.items.orEmpty(),key={it.id}){a->Column(Modifier.fillMaxWidth().padding(vertical=10.dp)){SingleLineName(a.action);Spacer(Modifier.height(5.dp));CompactLabel(a.at,color=BuriTheme.Muted,fontSize=14.sp,lineHeight=22.sp)}}
                         if(s.audit?.items?.isEmpty()==true)item{Empty()}
-                        if(s.audit==null&&s.busy)item{BuriSkeletonRows(3)}
-                        moreButton(s.audit?.nextCursor,s.busy,m::more,autoEnabled=!s.offline&&s.error==null)
+                        if(s.audit==null&&s.busy)item{BuriSkeletonRows(3,LoadingRows.ACTIVITY)}
+                        moreButton(s.audit?.nextCursor,s.busy,m::more,autoEnabled=!s.offline&&s.error==null,paging=m.operation==UiOperation.LOAD_MORE)
                     }
                     Sheet.FILTERS->if(m.listingTarget!=null)ListingFiltersPanel(m)else FiltersPanel(s,m)
                 }}
+                }
             }
         }
     }

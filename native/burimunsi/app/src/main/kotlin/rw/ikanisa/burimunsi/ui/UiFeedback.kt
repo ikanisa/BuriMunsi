@@ -14,7 +14,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -33,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.cool.mobile.R
+import rw.ikanisa.burimunsi.core.Route
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -54,17 +54,19 @@ internal val LocalBuriMotionAllowed=staticCompositionLocalOf{false}
     CompositionLocalProvider(LocalBuriMotionAllowed provides (!preferredReduction&&!systemReduced),content=content)
 }
 
-@Composable private fun workPhase(reverse:Boolean=false):Float {
-    if(!LocalBuriMotionAllowed.current)return .35f
+@Composable internal fun workPhase(reverse:Boolean=false):State<Float> {
+    if(!LocalBuriMotionAllowed.current)return remember { mutableFloatStateOf(.35f) }
     val transition=rememberInfiniteTransition(label="buri-active-work")
-    val phase by transition.animateFloat(0f,1f,infiniteRepeatable(tween(if(reverse)1100 else 1250,easing=LinearEasing),if(reverse)RepeatMode.Reverse else RepeatMode.Restart),label="work-phase")
-    return phase
+    return transition.animateFloat(0f,1f,infiniteRepeatable(tween(if(reverse)1100 else 1250,easing=LinearEasing),if(reverse)RepeatMode.Reverse else RepeatMode.Restart),label="work-phase")
 }
+
+internal val LocalProgressPresented=compositionLocalOf { false }
 
 /** A quiet orbit is indeterminate. It never represents percentage or success. */
 @Composable internal fun BuriOrbit(modifier:Modifier=Modifier,size:Int=28,tint:Color=BuriTheme.Blue){
-    val phase=workPhase()
+    val animation=workPhase()
     Canvas(modifier.size(size.dp).clearAndSetSemantics{}){
+        val phase=animation.value
         val stroke=2.4.dp.toPx();val radius=(this.size.minDimension-stroke)/2f
         drawCircle(tint.copy(alpha=.14f),radius,style=Stroke(stroke))
         drawArc(tint,startAngle=phase*360f-90f,sweepAngle=108f,useCenter=false,
@@ -75,12 +77,18 @@ internal val LocalBuriMotionAllowed=staticCompositionLocalOf{false}
 }
 
 @Composable internal fun BuriInlineLoading(label:String,modifier:Modifier=Modifier){
+    if(LocalProgressPresented.current)return
     val t=LocalUiText.current
     Row(modifier.fillMaxWidth().heightIn(min=52.dp).padding(vertical=12.dp)
         .semantics(mergeDescendants=true){progressBarRangeInfo=ProgressBarRangeInfo.Indeterminate;liveRegion=LiveRegionMode.Polite},
         horizontalArrangement=Arrangement.Center,verticalAlignment=Alignment.CenterVertically){
-        BuriOrbit(size=24);Spacer(Modifier.width(12.dp));Text(t(label),color=BuriTheme.Muted,fontSize=15.sp,lineHeight=23.sp)
+        BuriOrbit(size=24);Spacer(Modifier.width(12.dp));CompactLabel(t(label),color=BuriTheme.Muted,fontSize=15.sp,lineHeight=23.sp)
     }
+}
+
+@Composable internal fun BuriOperationFeedback(operation:UiOperation,label:String?) {
+    if(operation==UiOperation.NONE) BuriInlineLoading(label?:"Working",Modifier.padding(horizontal=20.dp))
+    else BuriWorkingStrip(operation,label)
 }
 
 @Composable internal fun BuriWorkingStrip(operation:UiOperation,label:String?=null){
@@ -90,42 +98,27 @@ internal val LocalBuriMotionAllowed=staticCompositionLocalOf{false}
         UiOperation.SIGN_IN->"Signing in…";UiOperation.COMMAND->"Applying changes";UiOperation.EXPORT->"Preparing export";else->"Working"
     }
     val t=LocalUiText.current
-    Row(Modifier.fillMaxWidth().padding(horizontal=20.dp,vertical=6.dp)
+    Row(Modifier.fillMaxWidth().feedbackEntrance(operation).padding(horizontal=20.dp,vertical=6.dp)
         .background(BuriTheme.Tone,RoundedCornerShape(18.dp)).padding(horizontal=14.dp,vertical=10.dp)
         .testTag("active-operation:${operation.name}").semantics(mergeDescendants=true){progressBarRangeInfo=ProgressBarRangeInfo.Indeterminate;liveRegion=LiveRegionMode.Polite},
         verticalAlignment=Alignment.CenterVertically){
-        BuriOrbit(size=25);Spacer(Modifier.width(12.dp));Text(t(text),Modifier.weight(1f),fontSize=15.sp,lineHeight=23.sp,color=BuriTheme.Text)
+        BuriOrbit(size=25);Spacer(Modifier.width(12.dp));CompactLabel(t(text),Modifier.weight(1f),fontSize=15.sp,lineHeight=23.sp,color=BuriTheme.Text)
     }
 }
 
-/** Placeholder geometry contains no amount, identity, count or empty-state claim. */
-@Composable internal fun BuriSkeletonRows(rows:Int=4){
-    val pulse=workPhase(reverse=true)
-    val fill=BuriTheme.Text.copy(alpha=.055f+pulse*.045f)
-    Column(Modifier.fillMaxWidth().clearAndSetSemantics{this[SemanticsProperties.TestTag]="loading-skeleton"},verticalArrangement=Arrangement.spacedBy(2.dp)){
-        repeat(rows.coerceIn(1,6)){index->
-            Row(Modifier.fillMaxWidth().height(86.dp).background(BuriTheme.Group,RoundedCornerShape(18.dp)).padding(16.dp),verticalAlignment=Alignment.CenterVertically){
-                Box(Modifier.size(43.dp).background(fill,CircleShape));Spacer(Modifier.width(14.dp))
-                Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(11.dp)){
-                    Box(Modifier.fillMaxWidth(if(index%2==0).69f else .55f).height(13.dp).background(fill,RoundedCornerShape(8.dp)))
-                    Box(Modifier.fillMaxWidth(.84f).height(9.dp).background(fill.copy(alpha=fill.alpha*.7f),RoundedCornerShape(6.dp)))
-                }
-                Spacer(Modifier.width(16.dp));Box(Modifier.width(42.dp).height(12.dp).background(fill,RoundedCornerShape(8.dp)))
-            }
+@Composable internal fun BuriLoadingPanel(label:String,route:Route?=null){
+    BoxWithConstraints(Modifier.fillMaxSize()){
+        val rows=when { maxHeight<460.dp -> 2; maxHeight<720.dp -> 3; else -> 5 }
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal=20.dp,vertical=8.dp)){
+            BuriInlineLoading(label)
+            if(route!=null && route!=Route.LOGIN) BuriRouteSkeleton(route,rows)
         }
-    }
-}
-
-@Composable internal fun BuriLoadingPanel(label:String,modifier:Modifier=Modifier,skeleton:Boolean=true){
-    Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp)){
-        BuriInlineLoading(label);Spacer(Modifier.height(16.dp))
-        if(skeleton)BuriSkeletonRows()
     }
 }
 
 @Composable internal fun BuriStatusMessage(label:String,error:Boolean=false,warning:Boolean=false){
     val t=LocalUiText.current;val tint=if(error)BuriTheme.Bad else if(warning)BuriTheme.Warn else BuriTheme.Blue
-    Row(Modifier.fillMaxWidth().padding(horizontal=20.dp,vertical=6.dp).background(tint.copy(alpha=.08f),RoundedCornerShape(18.dp))
+    Row(Modifier.fillMaxWidth().feedbackEntrance(label).padding(horizontal=20.dp,vertical=6.dp).background(tint.copy(alpha=.08f),RoundedCornerShape(18.dp))
         .padding(horizontal=14.dp,vertical=12.dp).semantics(mergeDescendants=true){liveRegion=LiveRegionMode.Polite},verticalAlignment=Alignment.Top){
         Icon(painterResource(if(error||warning)R.drawable.ic_alert else R.drawable.ic_info),null,Modifier.size(22.dp),tint)
         Spacer(Modifier.width(12.dp));Text(t(label),Modifier.weight(1f),fontSize=15.sp,lineHeight=23.sp,color=tint)
@@ -135,26 +128,38 @@ internal val LocalBuriMotionAllowed=staticCompositionLocalOf{false}
 @Composable internal fun BuriExportFeedback(value:UiExportFeedback,cancel:()->Unit,dismiss:()->Unit){
     val t=LocalUiText.current
     val terminal=value.phase in setOf(UiExportPhase.COMPLETE,UiExportPhase.CANCELLED,UiExportPhase.FAILED)
+    val working=value.phase==UiExportPhase.PREPARING || value.phase==UiExportPhase.WRITING
+    val completed=value.completedRows
+    val total=value.totalRows
+    val fraction=if(value.phase==UiExportPhase.PREPARING && completed!=null && total!=null && total>0 && completed in 0..total)
+        completed.toFloat()/total else null
     val title=when(value.phase){
         UiExportPhase.PREPARING->"Preparing export";UiExportPhase.CHOOSING_DESTINATION->"Choose where to save"
         UiExportPhase.WRITING->"Saving file";UiExportPhase.COMPLETE->"File saved";UiExportPhase.CANCELLED->"Export cancelled";UiExportPhase.FAILED->"Export failed"
     }
-    Column(Modifier.fillMaxWidth().padding(horizontal=20.dp,vertical=6.dp).background(BuriTheme.Raised,RoundedCornerShape(20.dp)).padding(16.dp)
-        .testTag("export-feedback:${value.phase.name}").semantics(mergeDescendants=true){liveRegion=LiveRegionMode.Polite}){
+    Column(Modifier.fillMaxWidth().feedbackEntrance(value.phase).padding(horizontal=20.dp,vertical=6.dp).background(BuriTheme.Raised,RoundedCornerShape(20.dp)).padding(16.dp)
+        .testTag("export-feedback:${value.phase.name}").semantics(mergeDescendants=true){
+            liveRegion=LiveRegionMode.Polite
+            if(working)progressBarRangeInfo=fraction?.let{ProgressBarRangeInfo(it,0f..1f)}?:ProgressBarRangeInfo.Indeterminate
+        }){
         Row(verticalAlignment=Alignment.CenterVertically){
-            if(!terminal)BuriOrbit(size=26) else Icon(painterResource(if(value.phase==UiExportPhase.COMPLETE)R.drawable.ic_check else R.drawable.ic_alert),null,Modifier.size(26.dp),if(value.phase==UiExportPhase.FAILED)BuriTheme.Bad else BuriTheme.Muted)
-            Spacer(Modifier.width(12.dp));Text(t(title),Modifier.weight(1f),fontSize=17.sp,fontWeight=FontWeight.Medium,lineHeight=25.sp)
+            if(working)BuriOrbit(size=26)
+            else Icon(painterResource(when(value.phase){
+                UiExportPhase.COMPLETE->R.drawable.ic_check
+                UiExportPhase.CHOOSING_DESTINATION->R.drawable.ic_export
+                else->R.drawable.ic_alert
+            }),null,Modifier.size(26.dp),if(value.phase==UiExportPhase.FAILED)BuriTheme.Bad else BuriTheme.Muted)
+            Spacer(Modifier.width(12.dp));CompactLabel(t(title),Modifier.weight(1f),fontSize=17.sp,fontWeight=FontWeight.Medium,lineHeight=25.sp)
             if(terminal)IconButton(dismiss,Modifier.size(48.dp)){Icon(painterResource(R.drawable.ic_close),t("Dismiss export status"))}
         }
-        value.fileName?.let{Spacer(Modifier.height(6.dp));Text(it,fontSize=14.sp,lineHeight=22.sp,color=BuriTheme.Muted)}
+        value.fileName?.let{Spacer(Modifier.height(6.dp));CompactLabel(it,fontSize=14.sp,lineHeight=22.sp,color=BuriTheme.Muted)}
         if(value.phase==UiExportPhase.PREPARING){
-            val done=value.completedRows;val total=value.totalRows
-            if(done!=null&&total!=null&&done>=0&&total>=done){
-                Spacer(Modifier.height(10.dp));Text(t("%1\$d of %2\$d rows",done,total),fontSize=14.sp,color=BuriTheme.Muted)
-                if(total>0){Spacer(Modifier.height(8.dp));LinearProgressIndicator(progress={done.toFloat()/total},modifier=Modifier.fillMaxWidth(),color=BuriTheme.Blue,trackColor=BuriTheme.Tone)}
+            if(completed!=null && total!=null && completed in 0..total){
+                Spacer(Modifier.height(10.dp));CompactLabel(t("%1\$d of %2\$d rows",completed,total),fontSize=14.sp,color=BuriTheme.Muted)
+                if(fraction!=null){Spacer(Modifier.height(8.dp));LinearProgressIndicator(progress={fraction},modifier=Modifier.fillMaxWidth().clearAndSetSemantics{},color=BuriTheme.Blue,trackColor=BuriTheme.Tone)}
             }
         }
         value.error?.let{Spacer(Modifier.height(8.dp));Text(t(it),fontSize=15.sp,lineHeight=23.sp,color=BuriTheme.Bad)}
-        if(value.canCancel&&!terminal)TextButton(cancel){Text(t("Cancel export"))}
+        if(value.canCancel&&!terminal)TextButton(cancel){CompactLabel(t("Cancel export"))}
     }
 }

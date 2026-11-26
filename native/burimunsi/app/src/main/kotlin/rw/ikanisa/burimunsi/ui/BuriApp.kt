@@ -21,7 +21,6 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -65,6 +64,11 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
     val read=s.operator!=null
     val requestedRoute=model.requestedRoute?.takeIf{read&&gate==ScreenGate.OPEN}
     val displayedRoute=requestedRoute?:s.route
+    val sheetOpen=s.sheet!=null && ((gate==ScreenGate.OPEN && presentation.showRecords) ||
+        (s.sheet==Sheet.REPLACE_DEVICE && s.receiverRetirementPending && gate!=ScreenGate.BACKGROUND))
+    val waitingForRoute=requestedRoute!=null && requestedRoute!=s.route
+    val loadingRoute=displayedRoute.takeUnless{it==Route.SMS && !model.allows(Capability.SMS)}
+    val showRouteProgress=s.showsRouteProgress(model.operation,gate,presentation,sheetOpen,waitingForRoute,model.exportFeedback)
     val keyboard=LocalSoftwareKeyboardController.current
     var exportVisible by remember(s.operator?.id,s.route,s.routeId,s.sheet,s.sheetId){mutableStateOf(false)}
     val openExport:()->Unit={if(model.canExportListing&&!s.busy&&!s.offline&&gate==ScreenGate.OPEN){keyboard?.hide();exportVisible=true}}
@@ -82,12 +86,11 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
         Box(Modifier.matchParentSize().background(Color.Black.copy(alpha=BuriTheme.WashScrimAlpha)))
         Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()){
             Header(if(gate==ScreenGate.OPEN)s.copy(route=displayedRoute) else s.copy(operator=null),model,onSupport)
-                if(model.operation!=UiOperation.NONE&&!(model.operation==UiOperation.EXPORT&&model.exportFeedback!=null))BuriWorkingStrip(model.operation,model.operationLabel)
-                else if(model.operation==UiOperation.NONE&&s.busy)BuriInlineLoading("Working",Modifier.padding(horizontal=20.dp))
-                s.commandNotice?.takeIf{read}?.let{notice->
+                if(showRouteProgress) BuriOperationFeedback(model.operation,model.operationLabel)
+                s.commandNotice?.takeIf{read && !sheetOpen}?.let{notice->
                     BuriStatusMessage(notice,warning=true)
                 }
-                s.error?.let{error->
+                s.error?.takeUnless{sheetOpen}?.let{error->
                     BuriStatusMessage(error,error=true)
                 }
                 model.exportFeedback?.takeIf{s.sheet==null&&read&&gate==ScreenGate.OPEN&&presentation.showRecords}?.let{BuriExportFeedback(it,model::cancelExport,model::dismissExportFeedback)}
@@ -115,6 +118,7 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
                 Box(Modifier.weight(1f).fillMaxWidth().padding(bottom=if(read)navClearance else 0.dp).semantics{
                     stateDescription=t(if(requestedRoute!=null&&requestedRoute!=s.route)"Loading records"else PresentationState.label(presentation.state))
                 }){
+                    CompositionLocalProvider(LocalProgressPresented provides (showRouteProgress || sheetOpen)) {
                     if(gate!=ScreenGate.OPEN){
                         // Preserve the existing route shell while disposing all private records/forms.
                         if(gate in setOf(ScreenGate.CHECKING,ScreenGate.STALE)&&(s.busy||model.operation!=UiOperation.NONE))BuriLoadingPanel(if(gate==ScreenGate.CHECKING)"Checking access"else "Updating records")
@@ -122,10 +126,10 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
                             Text(t(when(gate){ScreenGate.BACKGROUND->"App paused";ScreenGate.CHECKING->"Checking access";ScreenGate.STALE->"Updating records";else->"Check your connection"}),fontSize=17.sp,lineHeight=25.sp)
                             if(gate!=ScreenGate.BACKGROUND&&!s.busy)Primary(t("Refresh"),model::refresh)
                         }
-                    }else if(requestedRoute!=null&&requestedRoute!=s.route){
-                        BuriLoadingPanel("Loading records")
+                    }else if(waitingForRoute){
+                        BuriLoadingPanel("Loading records",loadingRoute)
                     }else if(read&&!presentation.showRecords){
-                        if(s.busy||model.operation in setOf(UiOperation.INITIAL_READ,UiOperation.REFRESH))BuriLoadingPanel("Loading records")
+                        if(s.busy||model.operation in setOf(UiOperation.INITIAL_READ,UiOperation.REFRESH))BuriLoadingPanel("Loading records",loadingRoute)
                         else Column(Modifier.fillMaxWidth().padding(24.dp)){
                             Text(t(PresentationState.label(presentation.state)),fontSize=17.sp,lineHeight=25.sp)
                             if(presentation.mayRetryRead){Spacer(Modifier.height(16.dp));Primary(t("Refresh"),model::refresh)}
@@ -155,13 +159,13 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
                         Route.SMS->SmsScreen(s,model,openExport)
                         Route.SETTINGS->SettingsScreen(s,model,onPermissions,onPhoneSettings,onNotifications,onBatteryOptimization)
                     }}}
+                    }
                 }
         }
         if(read)BottomNav(displayedRoute,model::navigate,model.navigationBlocked||gate!=ScreenGate.OPEN,navItemHeight,
             Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom=BottomNavBottomGap))
     }
-    if(s.sheet!=null&&((gate==ScreenGate.OPEN&&presentation.showRecords)||
-        (s.sheet==Sheet.REPLACE_DEVICE&&s.receiverRetirementPending&&gate!=ScreenGate.BACKGROUND)))Sheets(s,model,onSupport,onPermissions,onPickMemberFile,onPreviewMemberFile,onTakeMemberPhoto,onPickMemberPhoto,onExport=openExport)
+    if(sheetOpen)Sheets(s,model,onSupport,onPermissions,onPickMemberFile,onPreviewMemberFile,onTakeMemberPhoto,onPickMemberPhoto,onExport=openExport)
     if(exportVisible&&read&&gate==ScreenGate.OPEN&&presentation.showRecords&&model.canExportListing){
         ListingExportSheet(model,onPick={format->exportVisible=false;onExport(format)},onDismiss={exportVisible=false})
     }
@@ -176,8 +180,8 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
             Image(painterResource(R.drawable.burimunsi_brand_logo),"BuriMunsi",Modifier.widthIn(max=280.dp).fillMaxWidth().aspectRatio(3f))
             if(loading){Spacer(Modifier.height(24.dp));BuriInlineLoading(loadingLabel,Modifier.widthIn(max=280.dp))}
             if(error!=null){Spacer(Modifier.height(28.dp));Text(t(error),color=BuriTheme.Muted,fontSize=16.sp,textAlign=TextAlign.Center)}
-            if(retry!=null){Spacer(Modifier.height(18.dp));TextButton(retry){Text(t("Retry"))}}
-            if(signOut!=null)TextButton(signOut){Text(t("Sign out"))}
+            if(retry!=null){Spacer(Modifier.height(18.dp));TextButton(retry){CompactLabel(t("Retry"))}}
+            if(signOut!=null)TextButton(signOut){CompactLabel(t("Sign out"))}
         }
     }
 }
@@ -190,14 +194,14 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
             Route.LOGIN->{Spacer(Modifier.weight(1f));RoundAction(R.drawable.ic_help,t("Contact admin on WhatsApp"),onSupport,enabled,size=48,tonal=false)}
             Route.PAYMENT,Route.MEMBER->{
                 RoundAction(R.drawable.ic_back,t("Back"),m::back,enabled,size=48,tonal=false)
-                Text(t(titleFor(s.route)),Modifier.weight(1f),fontSize=16.sp,color=BuriTheme.Muted,textAlign=TextAlign.Center)
+                CompactLabel(t(titleFor(s.route)),Modifier.weight(1f),fontSize=16.sp,color=BuriTheme.Muted,textAlign=TextAlign.Center)
                 Spacer(Modifier.width(48.dp))
             }
             else->{
                 when(s.route){
                     Route.HOME->{Brand();Spacer(Modifier.weight(1f))}
                     Route.SMS->{RoundAction(R.drawable.ic_back,t("Back to Home"),{m.navigate(Route.HOME)},enabled,size=48,tonal=false);Spacer(Modifier.weight(1f))}
-                    else->Text(t(titleFor(s.route)),Modifier.weight(1f).semantics{heading()},style=MaterialTheme.typography.headlineMedium)
+                    else->CompactLabel(t(titleFor(s.route)),Modifier.weight(1f).semantics{heading()},style=MaterialTheme.typography.headlineMedium)
                 }
                 if(s.route==Route.HOME&&s.operator!=null)RoundAction(R.drawable.ic_sync,t("Refresh"),m::refresh,enabled,size=48,tonal=false)
                 if(s.route==Route.MEMBERS&&m.allows(Capability.ENROLL))RoundAction(R.drawable.ic_plus,t("Add member"),{m.openSheet(Sheet.ENROLL)},enabled&&!s.offline,size=48)
@@ -226,7 +230,7 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
                 .semantics{selected=chosen;role=SemanticRole.Tab;contentDescription=label}){
                 Column(horizontalAlignment=Alignment.CenterHorizontally){
                     Glyph(iconFor(route),null,color,24)
-                    Text(label,Modifier.clearAndSetSemantics{},fontSize=11.sp,lineHeight=14.sp,color=color,maxLines=1,overflow=TextOverflow.Ellipsis)
+                    CompactLabel(label,Modifier.clearAndSetSemantics{},fontSize=11.sp,lineHeight=14.sp,color=color)
                 }
             }
         }

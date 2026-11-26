@@ -64,20 +64,20 @@ internal val LocalUiPreferences=staticCompositionLocalOf<UiPreferences>{error("B
     val t=LocalUiText.current
     val preferences=LocalUiPreferences.current
     Column(Modifier.fillMaxWidth().padding(vertical=16.dp)){
-        Text(t("Language"),style=MaterialTheme.typography.titleLarge,modifier=Modifier.semantics{heading()})
+        CompactLabel(t("Language"),style=MaterialTheme.typography.titleLarge,modifier=Modifier.semantics{heading()})
         Column(Modifier.selectableGroup()){
             for((code,label) in listOf("system" to "Use phone language","en" to "English","rw" to "Ikinyarwanda")){
                 Row(Modifier.fillMaxWidth().heightIn(min=48.dp).selectable(
                     selected=preferences.language==code,role=Role.RadioButton,
                     onClick={preferences.setLanguage(code)}).padding(vertical=8.dp),verticalAlignment=Alignment.CenterVertically){
                     RadioButton(selected=preferences.language==code,onClick=null)
-                    Spacer(Modifier.width(12.dp));Text(t(label),Modifier.weight(1f))
+                    Spacer(Modifier.width(12.dp));CompactLabel(t(label),Modifier.weight(1f))
                 }
             }
         }
         Row(Modifier.fillMaxWidth().heightIn(min=56.dp).toggleable(value=preferences.reduceMotion,
             role=Role.Switch,onValueChange=preferences.setReduceMotion),verticalAlignment=Alignment.CenterVertically){
-            Text(t("Reduce screen motion"),Modifier.weight(1f));Spacer(Modifier.width(12.dp))
+            CompactLabel(t("Reduce screen motion"),Modifier.weight(1f));Spacer(Modifier.width(12.dp))
             Switch(preferences.reduceMotion,onCheckedChange=null)
         }
         Text(t("Reduce screen transitions and loading motion. Android controls keyboard and dialog animations."),

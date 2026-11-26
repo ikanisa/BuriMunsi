@@ -37,7 +37,7 @@ internal fun HomeWalletOverview(totals: HomeWalletTotals?, smsAllowed: Boolean) 
         horizontalAlignment=Alignment.CenterHorizontally, verticalArrangement=Arrangement.spacedBy(8.dp)) {
         Column(Modifier.clearAndSetSemantics { heading(); contentDescription=description },
             horizontalAlignment=Alignment.CenterHorizontally) {
-            Text(label, color=BuriTheme.Muted, fontSize=15.sp, textAlign=TextAlign.Center)
+            CompactLabel(label, color=BuriTheme.Muted, fontSize=15.sp, textAlign=TextAlign.Center)
             SavingsAmount(incoming,primary=true,ink=BuriTheme.Text,unitInk=BuriTheme.Muted)
         }
         val outgoing = totals?.let { format.format(it.outgoingRwf) }
@@ -74,7 +74,7 @@ private fun WalletCard(value: String?, wallet: Boolean, modifier: Modifier) {
         horizontalAlignment=Alignment.CenterHorizontally, verticalArrangement=Arrangement.spacedBy(4.dp,Alignment.CenterVertically)) {
         Row(horizontalArrangement=Arrangement.spacedBy(5.dp),verticalAlignment=Alignment.CenterVertically) {
             Glyph(if(wallet)R.drawable.ic_home_wallet else R.drawable.ic_home_outgoing,null,BuriTheme.Text,18)
-            Text(label,color=BuriTheme.Text,fontSize=13.sp,lineHeight=17.sp,fontWeight=FontWeight.Medium)
+            CompactLabel(label,color=BuriTheme.Text,fontSize=13.sp,lineHeight=17.sp,fontWeight=FontWeight.Medium)
         }
         SavingsAmount(value,primary=false,ink=BuriTheme.Text,unitInk=BuriTheme.Text)
     }

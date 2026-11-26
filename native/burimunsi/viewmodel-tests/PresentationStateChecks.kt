@@ -152,6 +152,26 @@ fun main()=runBlocking {
     Fixture.homeBarrier!!.countDown();idle(loading);loading.viewModelScope.cancel()
     reset()
     val who=Fixture.operator();val page=Fixture.page(listOf(Fixture.payment()))
+    val loaded=UiState(operator=who,route=Route.PAYMENTS,payments=page,savedAt=now,busy=true)
+    fun toolbar(state:UiState,operation:UiOperation=UiOperation.REFRESH,gate:ScreenGate=ScreenGate.OPEN,
+        sheetOpen:Boolean=false,queued:Boolean=false,export:UiExportFeedback?=null)=
+        state.showsRouteProgress(operation,gate,state.presentation(gate,now),sheetOpen,queued,export)
+    ck("same-scope refresh leaves readable rows underneath its progress",toolbar(loaded) && loaded.presentation(ScreenGate.OPEN,now).showRecords)
+    ck("first read uses its destination skeleton",!toolbar(loaded.copy(payments=null),UiOperation.INITIAL_READ))
+    ck("queued navigation owns its destination progress",!toolbar(loaded,queued=true))
+    ck("modal has the only command announcement",!toolbar(loaded,UiOperation.COMMAND,sheetOpen=true))
+    ck("pagination owns its footer",!toolbar(loaded,UiOperation.LOAD_MORE))
+    ck("idle screen makes no progress claim",!toolbar(loaded.copy(busy=false),UiOperation.NONE))
+    ck("sign in reports progress at the real form",!toolbar(UiState(busy=true),UiOperation.SIGN_IN))
+    ck("partial Home wallet uses its own pending section",!toolbar(loaded.copy(route=Route.HOME,
+        home=Home(0,1,0,emptyList(),"at"),homeSavingsLoading=true),UiOperation.INITIAL_READ))
+    ck("scoped export progress replaces the generic operation",!toolbar(loaded,UiOperation.EXPORT,
+        export=UiExportFeedback(UiExportPhase.PREPARING,rw.ikanisa.burimunsi.core.export.ExportFormat.PDF)))
+    ck("a closed screen never exposes refresh beneath private rows",ScreenGate.entries.filter{it!=ScreenGate.OPEN}.all{
+        !toolbar(loaded,gate=it) && !loaded.presentation(it,now).showRecords})
+    ck("conflicting or expired records never stay visible behind refresh",listOf(
+        loaded.copy(failure=DisplayFailure.CONFLICT),loaded.copy(readbackRequired=true),loaded.copy(savedAt=0L)
+    ).none{toolbar(it) || it.presentation(ScreenGate.OPEN,now).showRecords})
     fun project(route:Route,requested:DisplayState):ScreenPresentation {
         val base=UiState(operator=if(route==Route.LOGIN)null else who,route=route,savedAt=now,
             home=Home(0,1,0,emptyList(),"at"),payments=page,payment=Fixture.payment(),members=Fixture.page(listOf(Fixture.member)),

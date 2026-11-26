@@ -2,8 +2,6 @@ package rw.ikanisa.burimunsi.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.semantics.Role as SemanticRole
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -40,13 +38,13 @@ import rw.ikanisa.burimunsi.core.*
                 Column(Modifier.weight(1f)){
                     SingleLineName(p.payerNameRaw.ifBlank{t("Unavailable")},size=17)
                     p.atRaw.takeIf{it.isNotBlank()}?.let{
-                        Text(historyTime(it,t.locale),style=MaterialTheme.typography.bodySmall,color=BuriTheme.Muted)
+                        CompactLabel(historyTime(it,t.locale),style=MaterialTheme.typography.bodySmall,color=BuriTheme.Muted)
                     }
-                    if(!preview)p.ftId?.let{Text(t("FT Id: %1\$s",it),style=MaterialTheme.typography.bodySmall,color=BuriTheme.Muted)}
+                    if(!preview)p.ftId?.let{CompactLabel(t("FT Id: %1\$s",it),style=MaterialTheme.typography.bodySmall,color=BuriTheme.Muted)}
                     when(p.direction) {
                         "incoming" -> Glyph(R.drawable.ic_payment_incoming,t("Incoming"),BuriTheme.Muted,22)
                         "outgoing" -> Glyph(R.drawable.ic_payment_outgoing,t("Outgoing"),BuriTheme.Muted,22)
-                        else -> Text(t(PaymentPresentation.directionLabel(p.direction)),style=MaterialTheme.typography.bodySmall,color=BuriTheme.Muted)
+                        else -> CompactLabel(t(PaymentPresentation.directionLabel(p.direction)),style=MaterialTheme.typography.bodySmall,color=BuriTheme.Muted)
                     }
                 }
                 if(!stacked){
@@ -79,7 +77,7 @@ import rw.ikanisa.burimunsi.core.*
             Avatar(member.name,size=40);Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)){
                 SingleLineName(member.name,size=17)
-                Text(if(member.active)member.phone else t("%1\$s · %2\$s",member.phone,t("Inactive")),fontSize=14.sp,color=BuriTheme.Muted,lineHeight=22.sp)
+                CompactLabel(if(member.active)member.phone else t("%1\$s · %2\$s",member.phone,t("Inactive")),fontSize=14.sp,color=BuriTheme.Muted,lineHeight=22.sp)
             }
         }
         if(!last)HorizontalDivider(Modifier.align(Alignment.BottomCenter),color=Color.White.copy(alpha=.08f))
@@ -89,13 +87,13 @@ import rw.ikanisa.burimunsi.core.*
 @Composable internal fun HomeScreen(s:UiState,m:BuriController){
     val t=LocalUiText.current;val home=s.home
     LazyColumn(Modifier.fillMaxSize(),state=routeList(s,m),contentPadding=PaddingValues(20.dp,12.dp,20.dp,22.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
-        if(home==null){item{if(s.busy){BuriInlineLoading("Loading records");BuriSkeletonRows()}else Empty(t("No records available"))};return@LazyColumn}
+        if(home==null){item{if(s.busy){BuriInlineLoading("Loading records");BuriRouteSkeleton(Route.HOME,3)}else Empty(t("No records available"))};return@LazyColumn}
         item{
             val totals=home.paymentTotals
             when {
                 totals != null -> HomeWalletOverview(totals,
                     smsAllowed = s.operator?.let { it.role == Role.ADMIN && Capability.SMS.key in it.capabilities } == true)
-                s.homeSavingsLoading -> BuriInlineLoading("Loading payment totals")
+                s.homeSavingsLoading -> Column { BuriInlineLoading("Loading payment totals"); BuriWalletSkeleton() }
                 s.homeWalletUnavailable -> HomeWalletOverview(null,smsAllowed=false)
                 else -> HomeSavingsOverview(home.savings)
             }
@@ -112,17 +110,17 @@ import rw.ikanisa.burimunsi.core.*
                 .clickable(enabled=!s.busy,role=SemanticRole.Button,onClickLabel=t("Open unallocated")){m.openUnallocated()}
                 .semantics { contentDescription=label }.padding(horizontal=16.dp,vertical=13.dp),verticalAlignment=Alignment.CenterVertically){
             Glyph(R.drawable.ic_unlinked,null,BuriTheme.Warn,26);Spacer(Modifier.width(12.dp))
-            Text(money(home.unallocatedCount.toLong(),t.locale),Modifier.weight(1f).clearAndSetSemantics{},fontSize=18.sp,color=BuriTheme.Warn)
+            CompactLabel(money(home.unallocatedCount.toLong(),t.locale),Modifier.weight(1f).clearAndSetSemantics{},fontSize=18.sp,color=BuriTheme.Warn)
             Glyph(R.drawable.ic_arrow,null,BuriTheme.Warn,20)
         }}
         item{Row(Modifier.fillMaxWidth().heightIn(min=48.dp),verticalAlignment=Alignment.CenterVertically){
-            Text(t("Recent payments"),Modifier.weight(1f).semantics{heading()},style=MaterialTheme.typography.headlineSmall)
+            CompactLabel(t("Recent payments"),Modifier.weight(1f).semantics{heading()},style=MaterialTheme.typography.headlineSmall)
             RoundAction(R.drawable.ic_arrow,t("All payments"),{m.navigate(Route.PAYMENTS)},!s.busy,48)
         }}
         val recent=home.recent.take(3)
         item(key="home-recent-payments"){
             if(recent.isEmpty()){
-                if(s.busy)BuriInlineLoading("Loading records") else Empty(t("No recent payments"))
+                Empty(t("No recent payments"))
             }else Column{recent.forEachIndexed{index,p->key(p.id){
                 PaymentRow(p,index==0,index==recent.lastIndex,preview=true){m.navigate(Route.PAYMENT,p.id)}
             }}}
@@ -140,7 +138,7 @@ import rw.ikanisa.burimunsi.core.*
         .padding(horizontal=16.dp,vertical=8.dp),
         verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)){
         Glyph(R.drawable.ic_members,null,BuriTheme.Muted)
-        Text(count,style=MaterialTheme.typography.titleMedium)
+        CompactLabel(count,style=MaterialTheme.typography.titleMedium)
     }
 }
 @Composable internal fun PaymentsScreen(s:UiState,m:BuriController,onExport:()->Unit){
@@ -148,26 +146,26 @@ import rw.ikanisa.burimunsi.core.*
     LazyColumn(Modifier.fillMaxSize(),state=routeList(s,m),contentPadding=PaddingValues(20.dp,4.dp,20.dp,26.dp)){
         item{Search(s.search,m::search,m::searchSubmit,t("Search"),s.busy)}
         item{Column{
-            if(s.routeId!=null)TextButton({m.navigate(Route.PAYMENTS)},enabled=!s.busy){Text(t("Clear member filter"))}
+            if(s.routeId!=null)TextButton({m.navigate(Route.PAYMENTS)},enabled=!s.busy){CompactLabel(t("Clear member filter"))}
             ListingToolbar(m,onExport,showFilter=false)
         }}
-        item{Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical=12.dp),horizontalArrangement=Arrangement.spacedBy(10.dp)){
-            FilterChipIcon(t("All"),R.drawable.ic_activity,s.filter=="all"){m.setFilter("all")}
-            FilterChipIcon(t("Allocated"),R.drawable.ic_link,s.filter=="allocated"){m.setFilter("allocated")}
+        item{ScrollingChips(Modifier.padding(vertical=12.dp),spacing=10.dp){chip ->
+            FilterChipIcon(t("All"),R.drawable.ic_activity,s.filter=="all",modifier=chip){m.setFilter("all")}
+            FilterChipIcon(t("Allocated"),R.drawable.ic_link,s.filter=="allocated",modifier=chip){m.setFilter("allocated")}
             val count=s.home?.unallocatedCount?:if(s.filter=="unallocated"&&s.search.isBlank())s.payments?.totalCount else null
-            FilterChipIcon(t("Unallocated"),R.drawable.ic_unlinked,s.filter=="unallocated",count){m.setFilter("unallocated")}
+            FilterChipIcon(t("Unallocated"),R.drawable.ic_unlinked,s.filter=="unallocated",count,modifier=chip){m.setFilter("unallocated")}
         }}
         item{CountLine(s.payments?.totalCount?.toString().orEmpty(),"RWF")}
         val payments=s.payments?.items.orEmpty()
         itemsIndexed(payments,key={_,p->p.id}){index,p->PaymentRow(p,index==0,index==payments.lastIndex){m.navigate(Route.PAYMENT,p.id)}}
         if(s.payments?.items?.isEmpty()==true)item{Empty(t("No payments"));Text(t("Try another search."),color=BuriTheme.Muted)}
-        moreButton(s.payments?.nextCursor,s.busy,m::more,autoEnabled=!s.offline&&s.error==null)
+        moreButton(s.payments?.nextCursor,s.busy,m::more,autoEnabled=!s.offline&&s.error==null,paging=m.operation==UiOperation.LOAD_MORE)
     }
 }
 @Composable internal fun PaymentScreen(s:UiState,m:BuriController){
     val t=LocalUiText.current
     val p=s.payment
-    if(p==null){if(s.busy)BuriLoadingPanel("Loading payment")else Empty(t("Payment unavailable. Go back or refresh."));return}
+    if(p==null){if(s.busy)BuriLoadingPanel("Loading payment",Route.PAYMENT)else Empty(t("Payment unavailable. Go back or refresh."));return}
     val status=PaymentPresentation.payment(p)
     val canAllocate=PaymentPresentation.canAllocate(p)&&m.allows(Capability.ALLOCATE)
     Box(Modifier.fillMaxSize()){
@@ -177,7 +175,7 @@ import rw.ikanisa.burimunsi.core.*
             }}
             item{SingleLineName(p.payerNameRaw.ifBlank{t("Unavailable")},Modifier.fillMaxWidth(),26,TextAlign.Center)}
             item{BigValue(p.amountRwf)}
-            item{Text(t(status.label),Modifier.fillMaxWidth(),color=stateTone(status.tone),fontSize=14.sp,lineHeight=21.sp,textAlign=TextAlign.Center)}
+            item{CompactLabel(t(status.label),Modifier.fillMaxWidth(),color=stateTone(status.tone),fontSize=14.sp,lineHeight=21.sp,textAlign=TextAlign.Center)}
             item{FactGroup(buildList{
                 add(t("Direction") to t(PaymentPresentation.directionLabel(p.direction)))
                 p.paymentReference?.let{add(t("Payment reference") to it)}
@@ -186,7 +184,7 @@ import rw.ikanisa.burimunsi.core.*
                 add((if(p.memberPhone!=null&&p.memberPhone!=p.payerPhoneRaw)t("Member MoMo")else t("MoMo")) to (p.memberPhone?:p.payerPhoneRaw.ifBlank{t("Unavailable")}))
                 if(p.memberPhone!=null&&p.memberPhone!=p.payerPhoneRaw)add(t(if(p.direction=="outgoing")"Recipient" else "from") to "${p.payerNameRaw} (${p.payerPhoneRaw})")
                 p.feeRwf?.let{add(t("Fee") to t("RWF %1\$s",money(it,t.locale)))}
-            })}
+            },compactValueLabels=setOf(t("Recipient"),t("from")))}
             p.sourceId?.takeIf{m.allows(Capability.SMS)}?.let{sourceId->
                 item{Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.Center){RoundAction(R.drawable.ic_sms,t("Original SMS"),{
                     m.openSms(if(p.sourceKind=="observation")SmsSourceRef.Observation(sourceId) else SmsSourceRef.Canonical(sourceId))
@@ -203,20 +201,20 @@ import rw.ikanisa.burimunsi.core.*
     LazyColumn(Modifier.fillMaxSize(),state=routeList(s,m),contentPadding=PaddingValues(20.dp,4.dp,20.dp,26.dp)){
         item{Search(s.search,m::search,m::searchSubmit,t("Search"),s.busy)}
         item{ListingToolbar(m,onExport)}
-        item{Text(s.members?.totalCount?.let{t("%1\$d members",it)}?:t("Unavailable"),color=BuriTheme.Muted)}
+        item{CompactLabel(s.members?.totalCount?.let{t("%1\$d members",it)}?:t("Unavailable"),color=BuriTheme.Muted)}
         val members=s.members?.items.orEmpty()
         itemsIndexed(members,key={_,member->member.id}){index,member->MemberRow(member,index==0,index==members.lastIndex){m.openMember(member)}}
         if(s.members?.items?.isEmpty()==true)item{Empty(t("No members"));Text(t("Try a name or MoMo number."),color=BuriTheme.Muted)}
-        moreButton(s.members?.nextCursor,s.busy,m::more,autoEnabled=!s.offline&&s.error==null)
+        moreButton(s.members?.nextCursor,s.busy,m::more,autoEnabled=!s.offline&&s.error==null,paging=m.operation==UiOperation.LOAD_MORE)
     }
 }
 @Composable internal fun MemberScreen(s:UiState,m:BuriController){
     val t=LocalUiText.current
     val member=s.member
-    if(member==null){if(s.busy)BuriLoadingPanel("Loading member")else Empty(t("Member unavailable. Go back or refresh."));return}
+    if(member==null){if(s.busy)BuriLoadingPanel("Loading member",Route.MEMBER)else Empty(t("Member unavailable. Go back or refresh."));return}
     LazyColumn(Modifier.fillMaxSize(),state=routeList(s,m),contentPadding=PaddingValues(20.dp,20.dp,20.dp,26.dp),verticalArrangement=Arrangement.spacedBy(14.dp)){
         item{Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.Center){Avatar(member.name,66,initialsSize=24)}}
-        item{SingleLineName(member.name,Modifier.fillMaxWidth(),32,TextAlign.Center);Spacer(Modifier.height(8.dp));Text(if(member.active)member.phone else t("%1\$s · %2\$s",member.phone,t("Inactive")),Modifier.fillMaxWidth(),fontSize=14.sp,color=BuriTheme.Muted,lineHeight=21.sp,textAlign=TextAlign.Center)}
+        item{SingleLineName(member.name,Modifier.fillMaxWidth(),32,TextAlign.Center);Spacer(Modifier.height(8.dp));CompactLabel(if(member.active)member.phone else t("%1\$s · %2\$s",member.phone,t("Inactive")),Modifier.fillMaxWidth(),fontSize=14.sp,color=BuriTheme.Muted,lineHeight=21.sp,textAlign=TextAlign.Center)}
         item{Primary(t("View payments"),{m.navigate(Route.PAYMENTS,member.id)},!s.busy,icon=R.drawable.ic_activity)}
         item{Primary(t("Member details"),{m.openSheet(Sheet.MEMBER_DETAILS)},!s.busy,secondary=true,icon=R.drawable.ic_info)}
     }

@@ -51,6 +51,18 @@ data class FocusAction(val modifier:Modifier,val click:()->Unit)
         }
     }
 }
+/** Show new feedback immediately and settle it without retaining the previous message. */
+@Composable internal fun Modifier.feedbackEntrance(key:Any):Modifier {
+    if(!LocalBuriMotionAllowed.current)return this
+    val progress=remember(key){Animatable(0f)}
+    val distance=with(LocalDensity.current){3.dp.toPx()}
+    LaunchedEffect(progress){progress.animateTo(1f,tween(140))}
+    return graphicsLayer{
+        alpha=.82f+progress.value*.18f
+        translationY=(1f-progress.value)*distance
+    }
+}
+
 /** Entry-only motion: outgoing financial records are disposed, never cross-faded underneath. */
 @Composable fun RouteEntrance(title:String,onFullyDrawn:(()->Unit)?=null,content:@Composable ()->Unit){
     val reduced=!LocalBuriMotionAllowed.current

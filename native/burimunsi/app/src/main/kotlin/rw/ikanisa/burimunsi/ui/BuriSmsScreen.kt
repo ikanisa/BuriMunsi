@@ -2,8 +2,6 @@ package rw.ikanisa.burimunsi.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.semantics.Role as SemanticRole
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -24,15 +22,26 @@ import androidx.compose.ui.unit.sp
 import app.cool.mobile.R
 import rw.ikanisa.burimunsi.core.*
 
+@Composable private fun SmsRowHeader(sender:String,timestamp:String){
+    BoxWithConstraints(Modifier.fillMaxWidth()){
+        val dateWidth=maxWidth*.52f
+        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){
+            SingleLineName(sender,Modifier.weight(1f))
+            Spacer(Modifier.width(8.dp))
+            CompactLabel(timestamp,Modifier.widthIn(max=dateWidth),fontSize=12.sp,color=BuriTheme.Muted)
+        }
+    }
+}
+
 @Composable private fun QueuedSmsRow(row:QueuedObservationRow,index:Int,last:Int){
     val t=LocalUiText.current
     Row(Modifier.testTag("queued-observation:"+row.id).fillMaxWidth().background(BuriTheme.Group,rowShape(index==0,index==last))
         .padding(horizontal=16.dp,vertical=16.dp),verticalAlignment=Alignment.Top){
         Box(Modifier.size(42.dp).background(BuriTheme.Tone,CircleShape),contentAlignment=Alignment.Center){Glyph(R.drawable.ic_sms,null,BuriTheme.Text,23)};Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)){
-            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){SingleLineName(row.sender,Modifier.weight(1f));Spacer(Modifier.width(8.dp));Text(historyTime(row.at,t.locale),fontSize=12.sp,color=BuriTheme.Muted)}
+            SmsRowHeader(row.sender,historyTime(row.at,t.locale))
             if(row.preview.isNotEmpty()){Spacer(Modifier.height(6.dp));Text(row.preview,fontSize=16.sp,color=BuriTheme.Muted,maxLines=2,overflow=TextOverflow.Ellipsis,lineHeight=24.sp)}
-            Text(t("Queued"),Modifier.padding(top=6.dp),fontSize=13.sp,color=BuriTheme.Warn)
+            CompactLabel(t("Queued"),Modifier.padding(top=6.dp),fontSize=13.sp,color=BuriTheme.Warn)
         }
     }
 }
@@ -61,10 +70,10 @@ import rw.ikanisa.burimunsi.core.*
         item{OverviewTitle(t("SMS"));key(s.filter){Search(if(s.filter=="queued")s.queuedSearch else s.smsListSearch,m::search,m::searchSubmit,t("Search M-Money"),s.busy)}}
         item{ListingToolbar(m,onExport)}
         if(s.showSmsSearchNotice)item{Text(t("Clear SMS search to download source metadata. Message text is not included."),Modifier.padding(bottom=8.dp),fontSize=14.sp,lineHeight=22.sp,color=BuriTheme.Muted)}
-        item{Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical=12.dp),horizontalArrangement=Arrangement.spacedBy(10.dp)){
-            FilterChipIcon(t("All"),R.drawable.ic_sms,s.filter=="all"){m.setFilter("all")}
-            FilterChipIcon(t("Queued"),R.drawable.ic_clock,s.filter=="queued"){m.setFilter("queued")}
-            FilterChipIcon(t("Duplicates"),R.drawable.ic_history,s.filter=="duplicate"){m.setFilter("duplicate")}
+        item{ScrollingChips(Modifier.padding(vertical=12.dp),spacing=10.dp){chip ->
+            FilterChipIcon(t("All"),R.drawable.ic_sms,s.filter=="all",modifier=chip){m.setFilter("all")}
+            FilterChipIcon(t("Queued"),R.drawable.ic_clock,s.filter=="queued",modifier=chip){m.setFilter("queued")}
+            FilterChipIcon(t("Duplicates"),R.drawable.ic_history,s.filter=="duplicate",modifier=chip){m.setFilter("duplicate")}
         }}
         item{CountLine(t("%1\$s · %2\$s",sender,(if(s.filter=="queued")null else messages.firstOrNull()?.simLabel)?:t("Unavailable")),
             if(s.filter=="queued")if(queueVisible&&!s.queuedUnavailable&&s.queuedObservations!=null)queued.size.toString()else t("Unavailable")
@@ -82,10 +91,10 @@ import rw.ikanisa.burimunsi.core.*
                 Row(Modifier.fillMaxWidth().heightIn(min=52.dp),verticalAlignment=Alignment.Top){
                     Box(Modifier.size(42.dp).background(BuriTheme.Tone,CircleShape),contentAlignment=Alignment.Center){Glyph(R.drawable.ic_sms,null,BuriTheme.Text,23)};Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)){
-                        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){SingleLineName(content?.sender?.ifBlank{t("SMS receipt")}?:t("SMS receipt"),Modifier.weight(1f));Spacer(Modifier.width(8.dp));Text(sms.at,fontSize=12.sp,color=BuriTheme.Muted)}
+                        SmsRowHeader(content?.sender?.ifBlank{t("SMS receipt")}?:t("SMS receipt"),sms.at)
                         content?.body?.takeIf{it.isNotEmpty()}?.let{Spacer(Modifier.height(6.dp));Text(QueuedObservationPreview.from(it),fontSize=16.sp,color=BuriTheme.Muted,maxLines=2,overflow=TextOverflow.Ellipsis,lineHeight=24.sp)}
                         val delivery=Presentation.receipt(sms.state)
-                        Row(Modifier.padding(top=6.dp),verticalAlignment=Alignment.CenterVertically){Glyph(stateIcon(delivery.icon),null,stateTone(delivery.tone),15);Spacer(Modifier.width(6.dp));Text(t(delivery.label),fontSize=13.sp,color=stateTone(delivery.tone))}
+                        Row(Modifier.padding(top=6.dp),verticalAlignment=Alignment.CenterVertically){Glyph(stateIcon(delivery.icon),null,stateTone(delivery.tone),15);Spacer(Modifier.width(6.dp));CompactLabel(t(delivery.label),fontSize=13.sp,color=stateTone(delivery.tone))}
                     }
                 }
                 if(index<messages.lastIndex)HorizontalDivider(Modifier.align(Alignment.BottomCenter),color=Color.White.copy(alpha=.08f))
@@ -98,10 +107,10 @@ import rw.ikanisa.burimunsi.core.*
                 Row(Modifier.fillMaxWidth().heightIn(min=52.dp),verticalAlignment=Alignment.Top){
                     Box(Modifier.size(42.dp).background(BuriTheme.Tone,CircleShape),contentAlignment=Alignment.Center){Glyph(R.drawable.ic_sms,null,BuriTheme.Text,23)};Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)){
-                        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){SingleLineName(content?.sender?.ifBlank{t("SMS receipt")}?:t("SMS receipt"),Modifier.weight(1f));Spacer(Modifier.width(8.dp));Text(row.retainedAt,fontSize=12.sp,color=BuriTheme.Muted)}
+                        SmsRowHeader(content?.sender?.ifBlank{t("SMS receipt")}?:t("SMS receipt"),row.retainedAt)
                         content?.body?.takeIf{it.isNotEmpty()}?.let{Spacer(Modifier.height(6.dp));Text(QueuedObservationPreview.from(it),fontSize=16.sp,color=BuriTheme.Muted,maxLines=2,overflow=TextOverflow.Ellipsis,lineHeight=24.sp)}
                         val processing=s.observationProcessing[row.source]
-                        Text(t(observationProcessingLabel(processing)),Modifier.padding(top=6.dp),fontSize=13.sp,
+                        CompactLabel(t(observationProcessingLabel(processing)),Modifier.padding(top=6.dp),fontSize=13.sp,
                             color=if(processing?.status in setOf("needs_review","conflict"))BuriTheme.Warn else BuriTheme.Muted)
                     }
                 }
@@ -109,9 +118,10 @@ import rw.ikanisa.burimunsi.core.*
         }
         moreButton((s.observations?.nextCursor?:"preview-pending".takeIf{observationMissing}).takeIf{query.isBlank()&&!s.smsScanError&&s.smsListContent.size<100},s.busy||s.smsScanRunning,m::moreObservations,"sms-observation-pagination",autoEnabled=!s.offline&&s.error==null)
         if(s.observationUnavailable||(s.filter=="all"&&(!queueVisible||s.queuedUnavailable)))item{Text(t("SMS sync unavailable."),color=BuriTheme.Warn)}
-        else if(queueUnknown&&!(query.isNotBlank()&&s.smsScanRunning))item{if(s.busy)BuriInlineLoading("Loading records")else Text(t("Queue state unavailable"),color=BuriTheme.Warn)}
+        else if(queueUnknown&&!(query.isNotBlank()&&s.smsScanRunning))item{if(s.busy){if(m.operation!=UiOperation.LOAD_MORE)BuriInlineLoading("Loading records")}else Text(t("Queue state unavailable"),color=BuriTheme.Warn)}
         if(s.smsScanError)item{Text(t("Original SMS unavailable."),color=BuriTheme.Warn)}
         if(query.isBlank()&&s.smsListContent.size>=100&&partial)item{Text(t("Messages incomplete for this account and phone."),color=BuriTheme.Warn)}
+        if(query.isBlank() && s.busy && m.operation==UiOperation.LOAD_MORE)item(key="sms-page-progress"){BuriInlineLoading("Loading more")}
         if(query.isNotBlank()&&s.smsScanRunning)item{BuriInlineLoading("Searching messages")}
         else if(query.isNotBlank()&&partial)item{Text(t("Search incomplete for this account and phone."),color=BuriTheme.Warn)}
         if(messages.isEmpty()&&observations.isEmpty()&&queued.isEmpty()&&!partial&&!s.smsScanRunning)item{
@@ -134,7 +144,7 @@ private fun observationProcessingLabel(value:ObservationProcessing?):String=when
     Panel(footer=if(raw?.transactionId!=null&&s.rawDisclosure==RawDisclosureState.REVEALED){{Primary(t("Open payment"),{m.navigate(Route.PAYMENT,raw.transactionId)},!s.busy)}}else null){
         if(source!=null){
             item{Column(verticalArrangement=Arrangement.spacedBy(8.dp)){
-                Text(t(observationProcessingLabel(processing)),fontSize=16.sp,color=if(processing?.status in setOf("needs_review","conflict"))BuriTheme.Warn else BuriTheme.Text)
+                CompactLabel(t(observationProcessingLabel(processing)),fontSize=16.sp,color=if(processing?.status in setOf("needs_review","conflict"))BuriTheme.Warn else BuriTheme.Text)
                 Text(t("This status does not confirm a payment."),fontSize=13.sp,color=BuriTheme.Muted)
                 s.observationRetryNotice?.let{Text(t(it),fontSize=14.sp,color=BuriTheme.Muted)}
                 if(processing?.canRetry==true)Primary(t("Retry"),m::retryObservation,!s.busy)
