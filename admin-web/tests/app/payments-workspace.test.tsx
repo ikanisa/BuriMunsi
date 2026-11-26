@@ -273,17 +273,20 @@ describe('BuriMunsi phone Payments', () => {
   it('shows cumulative incoming and outgoing plus the latest authorized SMS balance, including real zero', async () => {
     mock.authMethod = 'phone_passcode';
     mock.request.mockResolvedValue({paymentCount:2,memberCount:5,unallocatedCount:1,recentPayments:[buriPayment,outgoing],asOf:time,
-      paymentTotals:{incomingRwf:'9007199254740993',outgoingRwf:'5000',latestSmsBalanceRwf:0}});
+      paymentTotals:{incomingRwf:'9007199254740993',outgoingRwf:'5000',latestSmsBalanceRwf:0,
+        walletGapRwf:'9007199254735993'}});
     const admin = visit('/admin', ['overview.read','payments.read','sms.read']);
     expect(await screen.findByRole('link',{name:/Cumulative incoming payments.*RWF 9,007,199,254,740,993/}))
       .toHaveAttribute('href','/admin/payments?direction=incoming');
     expect(screen.getByRole('link',{name:/Cumulative outgoing payments.*RWF 5,000/}))
       .toHaveAttribute('href','/admin/payments?direction=outgoing');
     expect(screen.getByText('Latest MoMo SMS balance',{selector:'dt span'}).closest('dl')).toHaveTextContent('RWF 0');
+    expect(screen.getByText('Wallet difference · RWF 9,007,199,254,735,993')).toBeVisible();
     admin.unmount();
     visit('/admin', ['overview.read','payments.read','sms.read'], 'staff');
     expect(await screen.findByRole('link',{name:/Cumulative incoming payments/})).toBeVisible();
     expect(screen.queryByText('Latest MoMo SMS balance')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Wallet difference/)).not.toBeInTheDocument();
   });
 
   it('keeps unknown SMS balance distinct from zero cumulative movements', async () => {
@@ -293,6 +296,20 @@ describe('BuriMunsi phone Payments', () => {
     visit('/admin', ['overview.read','payments.read','sms.read']);
     expect(await screen.findByRole('link',{name:/Cumulative incoming payments.*RWF 0/})).toBeVisible();
     expect(await screen.findByText('Unavailable',{selector:'dd'})).toBeVisible();
+    expect(screen.queryByText(/Wallet difference/)).not.toBeInTheDocument();
+  });
+
+  it('updates the wallet difference when Home refreshes', async () => {
+    mock.authMethod = 'phone_passcode';
+    const home = {paymentCount:0,memberCount:0,unallocatedCount:0,recentPayments:[],asOf:time};
+    const totals = {incomingRwf:'9007199254740992',outgoingRwf:'9007199254740993',latestSmsBalanceRwf:0};
+    mock.request.mockResolvedValue({...home,paymentTotals:{...totals,walletGapRwf:'-1'}});
+    visit('/admin', ['overview.read','payments.read','sms.read']);
+    expect(await screen.findByText('Wallet difference · RWF -1')).toBeVisible();
+    mock.request.mockResolvedValue({...home,paymentTotals:{...totals,outgoingRwf:totals.incomingRwf,walletGapRwf:'0'}});
+    fireEvent.click(screen.getByRole('button',{name:'Refresh Home'}));
+    expect(await screen.findByRole('link',{name:/Cumulative outgoing payments.*RWF 9,007,199,254,740,992/})).toBeVisible();
+    expect(screen.queryByText(/Wallet difference/)).not.toBeInTheDocument();
   });
 
   it('shows both directions together and links recent Home payments to the same workspace', async () => {

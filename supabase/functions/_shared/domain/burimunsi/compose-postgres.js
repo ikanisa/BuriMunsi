@@ -160,7 +160,7 @@ export function createPostgresNativePorts({admission,config,db,bridges,clock=()=
     workerAuthority=new PostgresWorkerAuthority({authority:auth,jobs:automaticJobs,applicationWorkTuple:bridges.canonical.applicationWorkTuple});
     scheduler=new PostgresSchedulerStore({authority:auth,admission:bridges.receiptAdmission,applicationWorkTuple:bridges.canonical.applicationWorkTuple});
   }
-  const canonical=new PostgresCanonicalStore({authority:auth,commands,identities:bridges.identities,jobs:automaticJobs,clock});
+  const canonical=new PostgresCanonicalStore({authority:auth,commands,identities:bridges.identities,jobs:automaticJobs,clock,paymentsOnly});
   const records=new PostgresRecordsStore({authority:auth,sourceReader,clock,
     nativeAutoRecordsEnabled:integrated&&bridges.canonical.env.BURIMUNSI_NATIVE_AUTO_RECORDS_ENABLED==='true',paymentsOnly});
   const gateway=integrated?new PostgresCollectGateway({authority:auth,env:bridges.canonical.env,clock}):bridges.gateway(auth);

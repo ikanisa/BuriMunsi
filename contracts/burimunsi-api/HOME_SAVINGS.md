@@ -3,8 +3,16 @@
 `GET /v1/burimunsi/home?include=savings` opts in to the existing `homeSavings`
 response schema through `collect-api`. `GET /v1/burimunsi/home` and the Home
 snapshot included in native login or session keep their existing response shapes.
-Hosted Admin's `GET /api/admin/burimunsi/home` continues to return its Home counts
-and recent payments.
+
+Android's `GET /v1/burimunsi/home?include=wallet` and the browser Admin Home
+use the same payment totals projection. It sums all recorded incoming and
+outgoing principal in the collection's `burimunsi.payments` table. Totals are
+decimal strings, including `"0"` for a direction with no records. An Admin
+with SMS access also receives the latest verified wallet balance and the
+signed difference between recorded incoming and recorded outgoing plus that
+balance. Both fields are null when the qualifying balance is unavailable.
+This difference compares the displayed amounts. A reviewed wallet statement
+establishes reconciliation.
 
 `GET /v1/burimunsi/session?include=home_savings` opts in to a session response
 that includes the standalone Home and, when available within the database

@@ -2,10 +2,75 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {loadBuriPostgresFixture} from './postgres-fixture.mjs';
-import {SMART_SUGGESTIONS_CTE} from '../../domain/burimunsi/smart-onboarding-suggestions.js';
+import {SMART_SUGGESTIONS_CTE,PAYMENT_SUGGESTIONS_CTE,findOnboardingCandidate,listOnboardingSuggestions,
+ paymentSuggestionsRevision} from '../../domain/burimunsi/smart-onboarding-suggestions.js';
 
 const fixture=loadBuriPostgresFixture();
-test('Postgres suggestions preserve managed phones and native name/masked-suffix identity', {skip:!fixture},()=>{
+async function qualifyPaymentSuggestions() {
+ const groupId='group-1',created='2026-11-22T07:00:00.123456Z',mode={paymentsOnly:true};
+ const payments=[];
+ const add=(name,number,extra={})=>{
+  const i=payments.length+1;
+  const row={id:`10000000-0000-4000-8000-${String(i).padStart(12,'0')}`,collection_id:groupId,receiving_account_id:'wallet',
+   direction:'incoming',allocation_state:'unallocated',sms_source_id:'receipt-'+i,counterparty_name:name,
+   counterparty_identifier:number,occurred_at:null,created_at:created,...extra};
+  payments.push(row);return row;
+ };
+ const full=add('Aline Example','+250 (780) 000-123');
+ const recent=add('Aline Example','*****123',{id:'non-uuid-source-private',occurred_at:'2026-11-23T08:09:10.000012Z'});
+ const hint=add('Independent Payer','*****123');
+ add('Ambiguous','0780000456');add('Ambiguous','0781000456');add('Ambiguous','*****456');
+ add('Already Known','0780000789');add('Already Known','*****789');
+ add('Same Member','*****555');add('Merchant Code','41258');add('Name 0780000333','*****333');
+ add('Outgoing','*****333',{direction:'outgoing'});add('Allocated','*****333',{allocation_state:'allocated'});
+ add('Missing Source','*****333',{sms_source_id:null});add('Missing Hint',null);
+ add('Other Wallet','*****333',{receiving_account_id:'other-wallet'});add('Foreign Group','*****333',{collection_id:'group-2'});
+ const tables={
+  'burimunsi.payments':{columns:'id text,collection_id text,receiving_account_id text,direction text,allocation_state text,sms_source_id text,counterparty_name text,counterparty_identifier text,occurred_at timestamptz,created_at timestamptz',rows:payments},
+  'private.burimunsi_scopes':{columns:'collection_id text,receiving_account_id text,enabled boolean,active_binding_id text',rows:[{collection_id:groupId,receiving_account_id:'wallet',enabled:false,active_binding_id:null}]},
+  'app.collections':{columns:'id text,status text,currency text',rows:[{id:groupId,status:'active',currency:'RWF'}]},
+  'app.momo_receiving_accounts':{columns:'id text,status text,currency text',rows:[{id:'wallet',status:'active',currency:'RWF'}]},
+  'app.memberships':{columns:'collection_id text,user_id text',rows:[{collection_id:groupId,user_id:'member'},{collection_id:groupId,user_id:'member-2'},{collection_id:'group-2',user_id:'other'}]},
+  'app.users':{columns:'id text,full_name text,momo_number text,phone text',rows:[{id:'member',full_name:'Different stored name',momo_number:null,phone:'0780000789'},{id:'member-2',full_name:'Same Member',momo_number:'0780000555',phone:null},{id:'other',full_name:'Independent Payer',phone:'0781000123'}]},
+ };
+ const quote=value=>"'"+String(value).replaceAll("'","''")+"'";
+ const sql={async unsafe(query,params){
+  assert.ok(query.startsWith(PAYMENT_SUGGESTIONS_CTE));
+  const definitions=Object.entries(tables).map(([name,{columns,rows}],i)=>{
+   query=query.replaceAll(name,'fixture_'+i);
+   return `fixture_${i} AS (SELECT * FROM jsonb_to_recordset(${quote(JSON.stringify(rows))}::jsonb) AS r(${columns}))`;
+  });
+  assert.doesNotMatch(query,/\b(?:app|private|burimunsi)\.(?:payments|burimunsi_|momo_)/);
+  query=query.replace('WITH sources AS (',`WITH ${definitions.join(',')}, sources AS (`);
+  const child=fixture.run('postgres',['-Atq'],`BEGIN READ ONLY;
+   PREPARE hints AS WITH result AS (${query}) SELECT coalesce(json_agg(result),'[]') FROM result;
+   EXECUTE hints(${params.map(quote).join(',')}); ROLLBACK;`);
+  assert.equal(child.status,0,child.stderr);
+  return JSON.parse(child.stdout);
+ }};
+ const list=(query={})=>listOnboardingSuggestions(sql,{groupId,...query},mode);
+ const match=(candidateId,phone,group=groupId)=>findOnboardingCandidate(sql,{groupId:group,candidateId,phone},mode);
+ const revision=()=>paymentSuggestionsRevision(sql,{groupId});
+ const first=await list({limit:1}),next=await list({limit:1,after:first.after});
+ assert.equal(first.totalCount,2);assert.deepEqual(first.after,{offset:1});assert.equal(next.after,null);
+ const chosen=first.items[0];
+ assert.deepEqual({...chosen,candidateId:'redacted'},{candidateId:'redacted',momoName:'Aline Example',last3:'123',sourceCount:2,latestSeenAt:'2026-11-23T08:09:10.000012Z'});
+ assert.match(chosen.candidateId,/^[a-f0-9-]{14}8[a-f0-9-]{21}$/);
+ assert.doesNotMatch(JSON.stringify(first),/0780000123|non-uuid-source-private|\+250/);
+ assert.equal(next.items[0].candidateId,hint.id);assert.equal(next.items[0].latestSeenAt,created);
+ assert.equal((await list({q:'ALI'})).totalCount,1);assert.equal((await list({q:'123'})).totalCount,2);
+ assert.deepEqual(await match(chosen.candidateId,'0780000123'),{last3:'123'});
+ assert.equal(await match(chosen.candidateId,'0781000123'),null);
+ assert.deepEqual(await match(hint.id,'0781000123'),{last3:'123'});assert.equal(await match(hint.id,'0781000124'),null);
+ assert.equal(await match(chosen.candidateId,'0780000123','group-2'),null);
+ const before=await revision();assert.equal(await revision(),before);
+ recent.allocation_state='allocated';assert.notEqual(await revision(),before);
+ assert.equal(await match(chosen.candidateId,'0780000123'),null);
+ assert.equal((await list({q:'Aline'})).items[0].candidateId,full.id);
+ tables['app.collections'].rows[0].status='inactive';assert.equal((await list()).totalCount,0);
+}
+
+test('Postgres suggestions preserve managed phones and native name/masked-suffix identity', {skip:!fixture},async()=>{
  const ids=Array.from({length:25},(_,i)=>`10000000-0000-4000-8000-${String(i+1).padStart(12,'0')}`);
  const native=i=>i===5||i>=8;
  const phones=['0780000816','+250 780 000 816','0781000816','0780000819','0780000820','*****821','0780000822','0780000823'];
@@ -82,4 +147,5 @@ test('Postgres suggestions preserve managed phones and native name/masked-suffix
  assert.equal(exactMatch,1);assert.equal(sameSuffix,0);assert.equal(nativeMatch,1);assert.equal(nativeWrong,0);assert.equal(knownMatch,1);assert.equal(knownWrong,0);
  assert.deepEqual(nativeOnlyItems,all.slice(2));assert.deepEqual(nativeOther,[]);assert.deepEqual(disabledItems,[]);
  assert.equal(nativeOnlyMatch,1);assert.equal(nativeOnlyWrong,0);
+ await qualifyPaymentSuggestions();
 });

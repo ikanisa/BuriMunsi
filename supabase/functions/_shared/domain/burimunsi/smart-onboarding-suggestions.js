@@ -26,6 +26,31 @@ const nameKey = value => `trim(regexp_replace(lower(normalize(${value},NFKC)),'[
 const suffix = value => `CASE WHEN length(${value})<=160 AND ${value} !~ '[[:cntrl:]]'
  AND ${value} ~ '[0-9]{3}[ ]*$' THEN right(regexp_replace(${value},'[^0-9]','','g'),3) ELSE NULL END`;
 
+const eligibleIdentities = (registeredPhone='a.payer_phone') => `identities AS (
+ SELECT ${nameKey('payer_name')} AS name_key,last3,count(DISTINCT payer_phone) AS known_count,max(payer_phone) AS known_phone
+ FROM admitted GROUP BY ${nameKey('payer_name')},last3
+), unregistered AS (
+ SELECT a.*,i.known_phone FROM admitted a
+ JOIN identities i ON i.name_key=${nameKey('a.payer_name')} AND i.last3=a.last3
+ WHERE (NOT a.native OR i.known_count<=1) AND NOT EXISTS (
+  SELECT 1 FROM app.memberships m JOIN app.users u ON u.id=m.user_id
+  WHERE m.collection_id=$1 AND (${phone('u.momo_number')}=${registeredPhone} OR ${phone('u.phone')}=${registeredPhone}
+   OR (a.native AND ${nameKey('u.full_name')}=${nameKey('a.payer_name')}
+    AND a.last3=right(coalesce(${phone('u.momo_number')},${phone('u.phone')}),3)))
+ )
+), grouped AS (
+ SELECT max(payer_phone) AS payer_phone,max(known_phone) AS known_phone,min(last3) AS last3,
+  (array_agg(transaction_id ORDER BY transaction_at DESC,transaction_id DESC))[1] AS candidate_id,
+  (array_agg(payer_name ORDER BY transaction_at DESC,transaction_id DESC))[1] AS momo_name,
+  max(transaction_at) AS latest_seen_at,count(*) AS source_count
+ FROM unregistered GROUP BY CASE WHEN native THEN 'native:'||${nameKey('payer_name')}||':'||last3
+  ELSE 'phone:'||payer_phone END
+), filtered AS (
+ SELECT candidate_id,momo_name,last3,latest_seen_at,source_count
+ FROM grouped WHERE $2='' OR strpos(${fold('momo_name')},${fold('$2::text')})>0
+  OR ($2 ~ '^[0-9]{3}$' AND last3=$2)
+)`;
+
 export const SMART_SUGGESTIONS_CTE=`WITH managed_admitted AS (
  SELECT t.id AS transaction_id,trim(t.payer_name) AS payer_name,
    ${phone('t.payer_identifier')} AS payer_phone,t.transaction_at
@@ -98,30 +123,35 @@ export const SMART_SUGGESTIONS_CTE=`WITH managed_admitted AS (
   AND ${nameKey('payer_name')}<>''
   AND transaction_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
   AND transaction_at ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,3})?Z$'
-), identities AS (
- SELECT ${nameKey('payer_name')} AS name_key,last3,count(DISTINCT payer_phone) AS known_count,max(payer_phone) AS known_phone
- FROM admitted GROUP BY ${nameKey('payer_name')},last3
-), unregistered AS (
- SELECT a.*,i.known_phone FROM admitted a
- JOIN identities i ON i.name_key=${nameKey('a.payer_name')} AND i.last3=a.last3
- WHERE (NOT a.native OR i.known_count<=1) AND NOT EXISTS (
-  SELECT 1 FROM app.memberships m JOIN app.users u ON u.id=m.user_id
-  WHERE m.collection_id=$1 AND (${phone('u.momo_number')}=a.payer_phone OR ${phone('u.phone')}=a.payer_phone
-   OR (a.native AND ${nameKey('u.full_name')}=${nameKey('a.payer_name')}
-    AND a.last3=right(coalesce(${phone('u.momo_number')},${phone('u.phone')}),3)))
- )
-), grouped AS (
- SELECT max(payer_phone) AS payer_phone,max(known_phone) AS known_phone,min(last3) AS last3,
-  (array_agg(transaction_id ORDER BY transaction_at DESC,transaction_id DESC))[1] AS candidate_id,
-  (array_agg(payer_name ORDER BY transaction_at DESC,transaction_id DESC))[1] AS momo_name,
-  max(transaction_at) AS latest_seen_at,count(*) AS source_count
- FROM unregistered GROUP BY CASE WHEN native THEN 'native:'||${nameKey('payer_name')}||':'||last3
-  ELSE 'phone:'||payer_phone END
-), filtered AS (
- SELECT candidate_id,momo_name,last3,latest_seen_at,source_count
- FROM grouped WHERE $2='' OR strpos(${fold('momo_name')},${fold('$2::text')})>0
-  OR ($2 ~ '^[0-9]{3}$' AND last3=$2)
-)`;
+), ${eligibleIdentities()}`;
+
+// The standalone payment writer admits successful incoming/outgoing payments and
+// retains their SMS foreign key. Read this projection without opening SMS or
+// requiring a managed receiver or an Android PIN in the browser transaction.
+export const PAYMENT_SUGGESTIONS_CTE=`WITH sources AS (
+ SELECT p.id,trim(p.counterparty_name) AS payer_name,p.counterparty_identifier AS identifier,
+   ${phone('p.counterparty_identifier')} AS payer_phone,
+   to_char(coalesce(p.occurred_at,p.created_at) AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS transaction_at,
+   encode(sha256(convert_to(jsonb_build_array('burimunsi.onboarding.payment.v1',p.collection_id,p.id)::text,'UTF8')),'hex') AS digest
+ FROM burimunsi.payments p
+ JOIN private.burimunsi_scopes s ON s.collection_id=p.collection_id AND s.receiving_account_id=p.receiving_account_id
+ JOIN app.collections c ON c.id=s.collection_id AND c.status='active' AND c.currency='RWF'
+ JOIN app.momo_receiving_accounts w ON w.id=s.receiving_account_id AND w.status='active' AND w.currency='RWF'
+ WHERE p.collection_id=$1 AND p.direction='incoming' AND p.allocation_state='unallocated'
+  AND p.sms_source_id IS NOT NULL AND (s.enabled OR s.active_binding_id IS NULL)
+  AND length(trim(p.counterparty_name)) BETWEEN 2 AND 100 AND p.counterparty_name !~ '[[:cntrl:]]'
+  AND ${nameKey('p.counterparty_name')}<>''
+  AND regexp_replace(p.counterparty_name,'[^0-9]','','g') !~ '7[2389][0-9]{7}'
+), admitted AS (
+ SELECT CASE WHEN lower(id) ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+   THEN lower(id)
+   ELSE format('%s-%s-8%s-8%s-%s',substr(digest,1,8),substr(digest,9,4),substr(digest,14,3),substr(digest,18,3),substr(digest,21,12))
+  END AS transaction_id,
+  payer_name,payer_phone,${suffix('identifier')} AS last3,transaction_at,true AS native
+ FROM sources
+ WHERE ${suffix('identifier')} IS NOT NULL
+  AND (payer_phone IS NOT NULL OR trim(identifier) ~ '^[0-9]{3}$' OR identifier ~ '[*xX•…]')
+), ${eligibleIdentities('coalesce(a.payer_phone,i.known_phone)')}`;
 
 function queryOptions({groupId,q='',limit=40,after=null}) {
  requireId(groupId);
@@ -140,9 +170,18 @@ function project(row){
   latestSeenAt:row.latest_seen_at,sourceCount:pgInteger(row.source_count,{minimum:1,code:'invalid_suggestion'})};
 }
 
-export async function listOnboardingSuggestions(sql,options){
+export async function paymentSuggestionsRevision(sql,{groupId,q=''}) {
+ requirePort(sql,['unsafe']);const options=queryOptions({groupId,q});
+ const [snapshot]=await sql.unsafe(`${PAYMENT_SUGGESTIONS_CTE}
+  SELECT encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(filtered) ORDER BY candidate_id)::text,'[]'),'UTF8')),'hex')
+    AS revision FROM filtered`,[groupId,options.q]);
+ requireThat(typeof snapshot?.revision==='string'&&/^[a-f0-9]{64}$/.test(snapshot.revision),'invalid_suggestion',503);
+ return snapshot.revision;
+}
+
+export async function listOnboardingSuggestions(sql,options,{paymentsOnly=false}={}){
  requirePort(sql,['unsafe']);const {groupId,q,limit,offset}=queryOptions(options);
- const rows=await sql.unsafe(`${SMART_SUGGESTIONS_CTE}
+ const rows=await sql.unsafe(`${paymentsOnly?PAYMENT_SUGGESTIONS_CTE:SMART_SUGGESTIONS_CTE}
   SELECT *,count(*) OVER() AS total_count FROM filtered
   ORDER BY ${fold('momo_name')},candidate_id LIMIT $3 OFFSET $4`,[groupId,q,limit+1,offset]);
  requireThat(Array.isArray(rows)&&rows.length<=limit+1,'invalid_suggestion',503);
@@ -151,13 +190,13 @@ export async function listOnboardingSuggestions(sql,options){
  return {items,totalCount,after:rows.length>limit?{offset:offset+limit}:null};
 }
 
-export async function findOnboardingCandidate(sql,{groupId,candidateId,phone}){
+export async function findOnboardingCandidate(sql,{groupId,candidateId,phone},{paymentsOnly=false}={}){
  requirePort(sql,['unsafe']);requireId(groupId);requireId(candidateId);
  // Managed candidates retain exact full-phone matching. A masked native
  // candidate binds its selected name/suffix key to the full supplied number;
  // any already-known full number for that key must agree as well.
  const canonical=normalizePhone(phone);
- const rows=await sql.unsafe(`${SMART_SUGGESTIONS_CTE} SELECT * FROM filtered WHERE candidate_id=$3
+ const rows=await sql.unsafe(`${paymentsOnly?PAYMENT_SUGGESTIONS_CTE:SMART_SUGGESTIONS_CTE} SELECT * FROM filtered WHERE candidate_id=$3
   AND EXISTS(SELECT 1 FROM grouped WHERE candidate_id=$3 AND (payer_phone=$4 OR
    (payer_phone IS NULL AND last3=right($4::text,3) AND (known_phone IS NULL OR known_phone=$4)))) LIMIT 2`,[groupId,'',candidateId,canonical]);
  requireThat(Array.isArray(rows)&&rows.length<=1,'invalid_suggestion',503);

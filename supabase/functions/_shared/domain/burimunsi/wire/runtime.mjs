@@ -113,11 +113,20 @@ export function semantics(product,operation,r,expected={}) {
   function rows(list){const ids=new Set();for(const row of list){if(row.groupId!==r.binding.groupId)fail('CONTRACT_IDENTITY');if(ids.has(row.id))fail('CONTRACT_DUPLICATE');ids.add(row.id);}}
   if(data.items&&operation!=='observationReconcileBatch'){rows(data.items);if(data.totalCount<data.items.length||(data.nextCursor!==null&&!data.items.length))fail('CONTRACT_PAGE');}
   if(data.recentPayments)rows(data.recentPayments);
-  const home=['home','homeSavings'].includes(operation)?data:data.home;
+  const home=['home','homeSavings','homeWallet'].includes(operation)?data:data.home;
   if(home&&(!Object.hasOwn(home,'paymentCount')&&(!Object.hasOwn(home,'groupBalanceRwf')||!Object.hasOwn(home,'todayRwf'))))fail('CONTRACT_STATE');
   if(home?.savings&&(home.recentPayments.length>home.paymentCount||home.unallocatedCount>home.paymentCount||
     (home.savings.reconciliationStatus!=='unavailable'&&['lifetimeContributionsRwf','outgoingPaymentsRwf','latestWalletBalanceRwf']
       .some(field=>home.savings[field]===null))))fail('CONTRACT_STATE');
+  if(operation==='homeWallet'){
+    if(data.recentPayments.length>data.paymentCount||data.unallocatedCount>data.paymentCount)fail('CONTRACT_STATE');
+    const totals=data.paymentTotals;
+    const {latestSmsBalanceRwf,walletGapRwf}=totals;
+    if(Object.hasOwn(totals,'latestSmsBalanceRwf')!==Object.hasOwn(totals,'walletGapRwf')||
+      (latestSmsBalanceRwf===null)!==(walletGapRwf===null)||
+      latestSmsBalanceRwf!=null&&
+        (BigInt(totals.incomingRwf)-BigInt(totals.outgoingRwf)-BigInt(latestSmsBalanceRwf)).toString()!==walletGapRwf)fail('CONTRACT_STATE');
+  }
   if(operation==='session'||operation==='login'){
    if(Object.hasOwn(data,'home')!==(expected.includeHome===true))fail('CONTRACT_CONTEXT');
    if(data.home){

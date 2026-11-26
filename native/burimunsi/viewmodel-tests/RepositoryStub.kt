@@ -160,7 +160,7 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDis
  fun pending():Any?{if(Fixture.journalFailure)throw ContractFailure("operation_store_unavailable");return if(Fixture.pendingFlag)"original-operation" else null}
  fun reconcilePending():JSONObject{Fixture.reconciles++;Fixture.recoveryFailure?.let{throw it};if(Fixture.resolveOnCheck&&Fixture.outcomeState in setOf("committed","cancelled"))Fixture.pendingFlag=false;return JSONObject().put("state",Fixture.outcomeState).put("financialState",Fixture.financialState)}
  fun home():Home{Fixture.readFailure?.let{throw it};provenance();Fixture.homeReads++;check(Fixture.homeBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false);return Home(10000,1,1,listOf(Fixture.payment(Fixture.homePaymentId)),"now")}
- internal fun readHomeEnhancement(owner:Operator):Home? = null
+ internal fun readHomeEnhancement(owner:Operator,allowLegacySavings:Boolean):Home? = null
  internal fun discardDisplayedRecordsFor(owner:Operator) = Unit
  internal fun homeSnapshot()=RecordSnapshot(home(),lastReadFromCache,lastReadSavedAt)
  internal class QuietHome(val payload:JSONObject)

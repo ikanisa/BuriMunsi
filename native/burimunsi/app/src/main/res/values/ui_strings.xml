@@ -578,4 +578,9 @@
     <string name="ui_home_wallet_check_unavailable">Wallet reconciliation needs a verified opening balance and a complete record of payments and fees.</string>
     <string name="ui_home_recorded_outgoing">Recorded outgoing payments</string>
     <string name="ui_home_loading_savings">Loading savings</string>
+    <string name="ui_home_wallet_incoming">Cumulative incoming payments</string>
+    <string name="ui_home_wallet_outgoing">Cumulative outgoing payments</string>
+    <string name="ui_home_wallet_sms_balance">Latest MoMo SMS balance</string>
+    <string name="ui_home_wallet_difference">Wallet difference</string>
+    <string name="ui_home_wallet_loading">Loading payment totals</string>
 </resources>

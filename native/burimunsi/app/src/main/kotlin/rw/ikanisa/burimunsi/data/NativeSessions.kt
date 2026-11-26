@@ -518,13 +518,21 @@ internal class NativeSessions(
         recoveryOrigin: String?,
     ): String = callOwned(witness, method, path, body, recoveryOrigin, publishProvenance = true)
 
-    internal fun requestHome(witness: SessionWitness, allowLegacy: Boolean = true): String = try {
-        callOwned(witness, "GET", HOME_SAVINGS_PATH, null, null, publishProvenance = false)
-    } catch (error: ApiFailure) {
-        // The old canonical server explicitly rejects the unknown selector.
-        // Never retry on access denial, malformed data, or transport failure.
-        if (!allowLegacy || !error.isLegacyHomeSelectorRejection()) throw error
-        callOwned(witness, "GET", "/home", null, null, publishProvenance = false)
+    internal enum class HomeFallback { NONE, SAVINGS, SAVINGS_AND_BASE }
+
+    internal fun requestHome(witness: SessionWitness, fallback: HomeFallback = HomeFallback.SAVINGS_AND_BASE): String {
+        fun read(path: String) = callOwned(witness, "GET", path, null, null, publishProvenance = false)
+        try {
+            return read(HOME_WALLET_PATH)
+        } catch (error: ApiFailure) {
+            if (fallback == HomeFallback.NONE || !error.isLegacyHomeSelectorRejection()) throw error
+        }
+        try {
+            return read(HOME_SAVINGS_PATH)
+        } catch (error: ApiFailure) {
+            if (fallback != HomeFallback.SAVINGS_AND_BASE || !error.isLegacyHomeSelectorRejection()) throw error
+        }
+        return read("/home")
     }
 
     private fun callOwned(

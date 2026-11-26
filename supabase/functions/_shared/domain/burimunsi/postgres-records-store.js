@@ -3,7 +3,7 @@ import {readCommandOutcome,readPaymentCommandOutcome} from './postgres-command-o
 import {requireThat,requirePort} from './errors.js';
 import {pgInteger} from './postgres-values.js';
 import {sha256,canonicalJson} from './values.js';
-import {listOnboardingSuggestions} from './smart-onboarding-suggestions.js';
+import {listOnboardingSuggestions,paymentSuggestionsRevision} from './smart-onboarding-suggestions.js';
 import {canonicalListingInstant,listingText} from './listing-query.js';
 import {readMemberListing} from './postgres-member-listing.js';
 import {nativePaymentListingScope,paymentAllocationFilterSql,paymentReferenceSql,paymentsSql,readCanonicalHome} from './postgres-payment-reads.js';
@@ -60,11 +60,17 @@ export class PostgresRecordsStore {
         PAYMENTS=paymentsSql(auto);
       let snapshotActor=null;
       const scope=g=>requireThat(g===group,'access_denied',403);
-      const projection=()=>({showSms:snapshotActor?.role==='admin'&&snapshotActor.capabilities?.includes('sms.read')});
+      const projection=()=>{
+        const showSms=snapshotActor?.role==='admin'&&snapshotActor.capabilities?.includes('sms.read')===true;
+        return {showSms,canAnalyzeSms:showSms};
+      };
       const ops={
         reloadActor:async id=>{snapshotActor=await this.authority.session(sql,{id});return snapshotActor;},
+        onboardingSuggestionsRevision:async query=>{
+          scope(query.groupId);return paymentSuggestionsRevision(sql,query);
+        },
         onboardingSuggestions:async query=>{
-          scope(query.groupId);return listOnboardingSuggestions(sql,query);
+          scope(query.groupId);return listOnboardingSuggestions(sql,query,{paymentsOnly:this.paymentsOnly});
         },
         loadBinding:async(g,installationId)=>{
           scope(g);const r=(await sql.unsafe(`SELECT b.id,b.version,b.status,c.installation_id,c.revoked_at,s.enabled,s.binding_version
@@ -73,11 +79,11 @@ export class PostgresRecordsStore {
             WHERE s.collection_id=$1 AND c.installation_id=$2`,[g,installationId]))[0];
           return r?{id:r.id,groupId:g,installationId:r.installation_id,active:r.enabled&&r.status==='active'&&!r.revoked_at&&pgInteger(r.version)===pgInteger(r.binding_version)}:null;
         },
-        canonicalHome:async(g,{includeSavings=false,optionalSavings=false}={})=>{
+        canonicalHome:async(g,{includeSavings=false,includeWallet=false,optionalSavings=false}={})=>{
           scope(g);
           if(!this.paymentsOnly)return readCanonicalHome(sql,g,at,auto);
           if(optionalSavings)return readOptionalPaymentsHome(sql,g,at,projection());
-          return readPaymentsHome(sql,g,at,projection(),{includeSavings});
+          return readPaymentsHome(sql,g,at,projection(),{includeSavings,includeWallet});
         },
         memberListingRevision:async g=>{
           scope(g);

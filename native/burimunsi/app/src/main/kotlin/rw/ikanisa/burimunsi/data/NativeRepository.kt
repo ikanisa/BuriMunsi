@@ -61,7 +61,7 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
     }
 
     private fun withHome(verified:NativeSessions.ProfileRead,revision:Long):Restoration {
-        val snapshot=verified.home?.let{records.acceptRestoredHome(verified.operator,it,revision)}
+        val snapshot=verified.home?.let{records.acceptRestoredHome(verified.operator,it,revision,fromSessionBundle=true)}
         return Restoration(verified.operator,snapshot?.first,snapshot?.second)
     }
 
@@ -97,7 +97,8 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
 
     fun home(): Home = homeSnapshot().value
     internal fun homeSnapshot(): RecordSnapshot<Home> = records.home()
-    internal fun readHomeEnhancement(owner: Operator): Home? = records.readHomeEnhancement(owner)
+    internal fun readHomeEnhancement(owner: Operator, allowLegacySavings: Boolean): Home? =
+        records.readHomeEnhancement(owner,allowLegacySavings)
     internal fun discardDisplayedRecordsFor(owner: Operator) = withCurrentProfile(owner){_,_->cacheStore.clear(verify=true)}
 
     /** A quiet Home read can finish after the screen has left. No cache or
@@ -110,7 +111,7 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
     }
 
     internal fun acceptQuietHome(owner:Operator, read:QuietHome):Pair<Home,Long>? =
-        records.acceptRestoredHome(owner,read.payload,read.revision)
+        records.acceptRestoredHome(owner,read.payload,read.revision,fromSessionBundle=false)
     internal fun recentPayments(listing:ListingQuery) = records.recentPayments(listing)
     internal fun recentMembers(listing:ListingQuery) = records.recentMembers(listing)
     fun recordReadScope(): RecordReadScope = records.recordReadScope()

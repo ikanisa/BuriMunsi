@@ -91,8 +91,14 @@ import rw.ikanisa.burimunsi.core.*
     LazyColumn(Modifier.fillMaxSize(),state=routeList(s,m),contentPadding=PaddingValues(20.dp,12.dp,20.dp,22.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
         if(home==null){item{if(s.busy){BuriInlineLoading("Loading records");BuriSkeletonRows()}else Empty(t("No records available"))};return@LazyColumn}
         item{
-            if(s.homeSavingsLoading && home.savings==null) BuriInlineLoading("Loading savings")
-            else HomeSavingsOverview(home.savings)
+            val totals=home.paymentTotals
+            when {
+                totals != null -> HomeWalletOverview(totals,
+                    smsAllowed = s.operator?.let { it.role == Role.ADMIN && Capability.SMS.key in it.capabilities } == true)
+                s.homeSavingsLoading -> BuriInlineLoading("Loading payment totals")
+                s.homeWalletUnavailable -> HomeWalletOverview(null,smsAllowed=false)
+                else -> HomeSavingsOverview(home.savings)
+            }
         }
         item{Row(Modifier.fillMaxWidth().padding(vertical=5.dp),horizontalArrangement=Arrangement.SpaceEvenly){
             RoundAction(R.drawable.ic_activity,t("Open payments"),{m.navigate(Route.PAYMENTS)},!s.busy,52)

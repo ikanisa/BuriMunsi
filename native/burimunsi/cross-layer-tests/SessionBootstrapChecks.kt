@@ -20,6 +20,7 @@ import rw.ikanisa.burimunsi.data.ApiClient
 import rw.ikanisa.burimunsi.data.ApiFailure
 import rw.ikanisa.burimunsi.data.NativeRepository
 import rw.ikanisa.burimunsi.data.NativeRecordCache
+import rw.ikanisa.burimunsi.data.Request
 import rw.ikanisa.burimunsi.data.Transport
 import rw.ikanisa.burimunsi.gateway.GatewayFixture
 import rw.ikanisa.burimunsi.storage.SecureStore
@@ -63,7 +64,7 @@ internal class SessionScenario {
                 request.path.endsWith("/session/login") || request.path.endsWith("/session") ->
                     JSONObject().put("profile", profile).put("token", token).put("groupId", group)
                         .put("expiresAt", sessionDeadline ?: (System.currentTimeMillis() + 3_600_000)).toString()
-                request.path.endsWith("/home?include=savings") -> throw ApiFailure("contract_query", 400)
+                request.path in HOME_SELECTORS -> throw ApiFailure("contract_query", 400)
                 request.path.endsWith("/home") -> JSONObject().put("paymentCount", 0)
                     .put("memberCount", 0).put("unallocatedCount", 0).put("recentPayments", JSONArray())
                     .put("asOf", "2026-11-20T00:00:00Z").toString()
@@ -80,6 +81,8 @@ internal class SessionScenario {
 }
 
 private const val SAVINGS_HOME_PATH="/v1/burimunsi/home?include=savings"
+private const val WALLET_HOME_PATH="/v1/burimunsi/home?include=wallet"
+private val HOME_SELECTORS = setOf(WALLET_HOME_PATH, SAVINGS_HOME_PATH)
 private const val SAVINGS_SESSION_PATH="/v1/burimunsi/session?include=home_savings"
 private const val LEGACY_HOME_SESSION_PATH="/v1/burimunsi/session?include=home"
 
@@ -340,22 +343,44 @@ private suspend fun bundledHomeRestores() {
     }
 }
 
-private suspend fun savingsBundleRestoresInOneRead() {
+private enum class WalletReply { AVAILABLE, UNSUPPORTED, TEMPORARILY_UNAVAILABLE }
+
+private suspend fun walletFollowsFastSession(includesSavings:Boolean, reply:WalletReply) {
     val scenario = SessionScenario()
+    val sms = scenario.role == "admin"
+    if (sms) scenario.capabilities = listOf(Capability.READ,Capability.SMS)
     scenario.signIn(scenario.repository())
     Transport.calls.clear()
     val normal = Transport.handler
     val entered = CountDownLatch(1)
     val release = CountDownLatch(1)
+    val walletEntered = CountDownLatch(1)
+    val releaseWallet = CountDownLatch(1)
     val savings = HomeSavings(8400L,0L,null,"unavailable")
+    val base = JSONObject(normal(Request("GET","/v1/burimunsi/home",null,null,null,emptyMap())))
+        .put("paymentCount",1L).put("recentPayments",JSONArray().put(paymentFixture("p-fast",scenario.group)))
     Transport.sessionHomeSavings = { request ->
         entered.countDown()
         check(release.await(5,TimeUnit.SECONDS))
-        val home = JSONObject(normal(request.copy(path="/v1/burimunsi/home")))
-        home.put("savings",JSONObject().put("lifetimeContributionsRwf",8400L)
+        val home = JSONObject(base.toString())
+        if(includesSavings)home.put("savings",JSONObject().put("lifetimeContributionsRwf",8400L)
             .put("outgoingPaymentsRwf",0L).put("latestWalletBalanceRwf",JSONObject.NULL)
             .put("reconciliationStatus","unavailable"))
         JSONObject(normal(request.copy(path="/v1/burimunsi/session"))).put("home",home).toString()
+    }
+    Transport.handler = { request ->
+        if(request.path != WALLET_HOME_PATH) normal(request)
+        else {
+            walletEntered.countDown()
+            check(releaseWallet.await(5,TimeUnit.SECONDS))
+            when(reply) {
+                WalletReply.UNSUPPORTED -> throw ApiFailure("contract_query",400)
+                WalletReply.TEMPORARILY_UNAVAILABLE -> throw ApiFailure("service_unavailable",503)
+                WalletReply.AVAILABLE -> JSONObject(base.toString()).put("paymentTotals",JSONObject()
+                    .put("incomingRwf","9007199254740993").put("outgoingRwf","9007199254740994")
+                    .apply { if(sms) put("latestSmsBalanceRwf",0L).put("walletGapRwf","-1") }).toString()
+            }
+        }
     }
     val model = BuriViewModel(scenario.app)
     try {
@@ -363,16 +388,43 @@ private suspend fun savingsBundleRestoresInOneRead() {
         model.onFixtureMain{onForeground()}
         check(model.state.operator==null&&!model.presentation.showRecords)
         release.countDown()
+        check(walletEntered.await(5,TimeUnit.SECONDS))
         idle(model)
-        check(model.state.home?.paymentCount==0&&model.state.home?.savings==savings)
-        check(model.presentation.showRecords&&!model.state.homeSavingsLoading)
-        check(Transport.calls.map{it.path}==listOf(SAVINGS_SESSION_PATH))
+        check(model.presentation.showRecords && model.state.operator?.id==scenario.owner && model.state.homeSavingsLoading)
+        val pending=checkNotNull(model.state.home)
+        check(pending.savings==null && pending.paymentTotals==null && pending.paymentCount==1 && pending.recent.single().id=="p-fast")
+        val snapshot=checkNotNull(NativeRecordCache(scenario.app).read("/home")).getJSONObject("entries").getJSONObject("/home")
+        val cached=JSONObject(snapshot.getString("payload"))
+        check(!cached.has("savings") && !cached.has("paymentTotals") && cached.getLong("paymentCount")==1L)
+        val originalSavedAt=model.state.savedAt
+        releaseWallet.countDown()
+        suspend fun checkSelected(){
+            withTimeout(4_000) { while (model.state.homeSavingsLoading) delay(2) }
+            val selected=checkNotNull(model.state.home)
+            check(selected.paymentCount==1 && selected.recent.single().id=="p-fast")
+            when(reply) {
+                WalletReply.AVAILABLE -> check(selected.savings==null && !model.state.homeWalletUnavailable &&
+                    selected.paymentTotals==HomeWalletTotals("9007199254740993".toBigInteger(),"9007199254740994".toBigInteger(),
+                        if(sms) 0L else null, if(sms) "-1".toBigInteger() else null,sms))
+                WalletReply.UNSUPPORTED -> check(selected.savings==savings.takeIf{includesSavings} &&
+                    selected.paymentTotals==null && !model.state.homeWalletUnavailable)
+                WalletReply.TEMPORARILY_UNAVAILABLE -> check(selected.savings==null && selected.paymentTotals==null && model.state.homeWalletUnavailable)
+            }
+        }
+        val expectedReads = listOf(SAVINGS_SESSION_PATH, WALLET_HOME_PATH) +
+            if (!includesSavings && reply == WalletReply.UNSUPPORTED) listOf(SAVINGS_HOME_PATH) else emptyList()
+        checkSelected()
+        check(model.state.savedAt==originalSavedAt)
+        check(Transport.calls.map{it.path}==expectedReads)
         val before=Transport.calls.size
         model.onFixtureMain{onBackground();onForeground()}
         idle(model)
-        check(Transport.calls.drop(before).map{it.path}==listOf(SAVINGS_SESSION_PATH))
+        withTimeout(4_000) { while(Transport.calls.size<before+expectedReads.size)delay(2) }
+        checkSelected()
+        check(Transport.calls.drop(before).map{it.path}==expectedReads)
     } finally {
         release.countDown()
+        releaseWallet.countDown()
         stop(model)
         Transport.sessionHomeSavings=null
     }
@@ -431,7 +483,7 @@ private suspend fun omittedSavingsUsesOneBackgroundRead(outcome:OmittedSavings) 
         check(fallbacks.isNotEmpty())
         check(model.presentation.showRecords&&!model.state.busy&&model.state.home?.paymentCount==0&&
             model.state.home?.savings==null&&model.state.homeSavingsLoading)
-        check(Transport.calls.map{it.path}==listOf(SAVINGS_SESSION_PATH,SAVINGS_HOME_PATH))
+        check(Transport.calls.map{it.path}==listOf(SAVINGS_SESSION_PATH,WALLET_HOME_PATH,SAVINGS_HOME_PATH))
         val savedAt=model.state.savedAt
         if(outcome!=OmittedSavings.RESTORE){
             androidx.compose.runtime.snapshots.Snapshot.onCommittedValue={ value ->
@@ -457,16 +509,19 @@ private suspend fun omittedSavingsUsesOneBackgroundRead(outcome:OmittedSavings) 
                 original.logout()
                 scenario.owner="operator-b";scenario.group="group-b";scenario.token="b".repeat(64)
                 scenario.signIn(scenario.repository())
-                replacement=BuriViewModel(scenario.app)
-                idle(replacement)
-                check(replacement.state.operator?.id==scenario.owner&&replacement.state.home?.savings?.lifetimeContributionsRwf==16L)
+                val replacementModel=BuriViewModel(scenario.app)
+                replacement=replacementModel
+                withTimeout(4_000) {
+                    while (replacementModel.state.home?.savings?.lifetimeContributionsRwf != 16L) delay(2)
+                }
+                check(replacementModel.state.operator?.id==scenario.owner)
             }
         }
         savingsRelease.countDown()
         withTimeout(5_000){fallbacks.joinAll()}
         if(outcome==OmittedSavings.RESTORE){
             check(model.state.home?.savings==savings&&!model.state.homeSavingsLoading&&model.state.savedAt==savedAt)
-            check(Transport.calls.map{it.path}==listOf(SAVINGS_SESSION_PATH,SAVINGS_HOME_PATH))
+            check(Transport.calls.map{it.path}==listOf(SAVINGS_SESSION_PATH,WALLET_HOME_PATH,SAVINGS_HOME_PATH))
         }else{
             check(!leaked.get()&&model.state.home?.savings!=savings)
             when(outcome){
@@ -582,7 +637,7 @@ private suspend fun freshRowsPublishWhileRecordCacheIsBlocked() {
     try {
         check(entered.await(5,TimeUnit.SECONDS))
         withTimeout(2_000){while(model.state.busy || model.state.home==null)delay(2)}
-        check(Transport.calls.filterNot { it.path==SAVINGS_HOME_PATH }.map { it.path }==
+        check(Transport.calls.filterNot { it.path in HOME_SELECTORS }.map { it.path }==
             listOf(SAVINGS_SESSION_PATH, LEGACY_HOME_SESSION_PATH))
         val lookup=java.util.concurrent.CompletableFuture.supplyAsync { NativeRecordCache(scenario.app).read("/home") }
         check(runCatching { lookup.get(250,TimeUnit.MILLISECONDS) }.exceptionOrNull() is java.util.concurrent.TimeoutException)
@@ -738,7 +793,7 @@ private suspend fun loginHomeRequests(include: Boolean, oldServer: Boolean = fal
             oldServer->listOf(bundled,"/v1/burimunsi/session/login","/v1/burimunsi/home")
             else->listOf(bundled,"/v1/burimunsi/home")
         }
-        check(Transport.calls.filterNot{it.path==SAVINGS_HOME_PATH}.map{it.path}==expected)
+        check(Transport.calls.filterNot{it.path in HOME_SELECTORS}.map{it.path}==expected)
         if(uncertain)check(model.state.operator==null&&model.state.home==null)
         else check(model.state.operator?.id==scenario.owner&&model.state.home?.paymentCount==(if(include)300 else 0))
     } finally {
@@ -747,7 +802,7 @@ private suspend fun loginHomeRequests(include: Boolean, oldServer: Boolean = fal
     }
 }
 
-private suspend fun bundledHomeEnhancementCannotBlockOrCrossSignOut(signOut:Boolean) {
+private suspend fun bundledHomeEnhancementCannotBlockOrCrossSignOut(signOut:Boolean, legacy:Boolean=false) {
     val scenario = SessionScenario()
     val normal = Transport.handler
     val entered = CountDownLatch(1)
@@ -758,14 +813,18 @@ private suspend fun bundledHomeEnhancementCannotBlockOrCrossSignOut(signOut:Bool
         JSONObject(login).put("home",JSONObject(base)).toString()
     }
     Transport.handler = { request ->
-        if(request.path != SAVINGS_HOME_PATH) normal(request)
+        if(request.path != (if(legacy) SAVINGS_HOME_PATH else WALLET_HOME_PATH)) normal(request)
         else {
             entered.countDown()
             check(release.await(5,TimeUnit.SECONDS))
             val base = normal(request.copy(path="/v1/burimunsi/home"))
-            JSONObject(base).put("savings",JSONObject().put("lifetimeContributionsRwf",8425L)
+            if (legacy) JSONObject(base).put("savings",JSONObject().put("lifetimeContributionsRwf",8425L)
                 .put("outgoingPaymentsRwf",JSONObject.NULL).put("latestWalletBalanceRwf",JSONObject.NULL)
                 .put("reconciliationStatus","unavailable")).toString()
+            else JSONObject(base).put("paymentTotals",JSONObject()
+                .put("incomingRwf","9007199254740993").put("outgoingRwf","9007199254740994").apply {
+                    if (scenario.role=="admin") put("latestSmsBalanceRwf",0L).put("walletGapRwf","-1")
+                }).toString()
         }
     }
     val model = BuriViewModel(scenario.app)
@@ -775,7 +834,7 @@ private suspend fun bundledHomeEnhancementCannotBlockOrCrossSignOut(signOut:Bool
         check(entered.await(4,TimeUnit.SECONDS))
         idle(model)
         check(model.state.operator?.id == scenario.owner && model.state.home?.paymentCount == 0 &&
-            model.state.home?.savings == null)
+            model.state.home?.savings == null && model.state.home?.paymentTotals == null)
         val originalSavedAt = model.state.savedAt
         if(signOut) {
             model.onFixtureMain { logout() }
@@ -787,11 +846,19 @@ private suspend fun bundledHomeEnhancementCannotBlockOrCrossSignOut(signOut:Bool
             stop(model)
             check(model.state.operator==null && model.state.home==null && "records" !in SecureStore.records)
         } else {
-            withTimeout(4_000) { while(model.state.home?.savings==null) delay(2) }
-            check(model.state.home?.savings==HomeSavings(8425L,null,null,"unavailable"))
+            if (legacy) {
+                withTimeout(4_000) { while(model.state.home?.savings==null) delay(2) }
+                check(model.state.home?.savings==HomeSavings(8425L,null,null,"unavailable") && model.state.home?.paymentTotals==null)
+            } else {
+                withTimeout(4_000) { while(model.state.home?.paymentTotals==null) delay(2) }
+                val sms=scenario.role=="admin"
+                check(model.state.home?.paymentTotals==HomeWalletTotals("9007199254740993".toBigInteger(),"9007199254740994".toBigInteger(),
+                    if(sms) 0L else null,if(sms) "-1".toBigInteger() else null,sms))
+            }
             check(model.state.savedAt==originalSavedAt)
         }
-        check(Transport.calls.count{it.path==SAVINGS_HOME_PATH}==1)
+        check(Transport.calls.filter {it.path in HOME_SELECTORS}.map {it.path}==
+            if (legacy) listOf(WALLET_HOME_PATH,SAVINGS_HOME_PATH) else listOf(WALLET_HOME_PATH))
         check(Transport.calls.none{it.path=="/v1/burimunsi/home"})
     } finally {
         release.countDown()
@@ -809,7 +876,7 @@ private suspend fun bundledHomeEnhancementOnlyRedactsConfirmedDenial(confirmed:B
         JSONObject(login).put("home",JSONObject(home)).toString()
     }
     Transport.handler={ request ->
-        if(request.path==SAVINGS_HOME_PATH) throw ApiFailure(
+        if(request.path==WALLET_HOME_PATH) throw ApiFailure(
             if(confirmed) "invalid_session" else "gateway_temporarily_unavailable",401)
         original(request)
     }
@@ -818,7 +885,7 @@ private suspend fun bundledHomeEnhancementOnlyRedactsConfirmedDenial(confirmed:B
         idle(model)
         model.onFixtureMain {login("0780000001","2468")}
         idle(model)
-        withTimeout(4_000){while(Transport.calls.none{it.path==SAVINGS_HOME_PATH})delay(2)}
+        withTimeout(4_000){while(Transport.calls.none{it.path==WALLET_HOME_PATH})delay(2)}
         if(confirmed){
             withTimeout(4_000){while(model.state.operator!=null)delay(2)}
             check(model.state.home==null && model.state.error=="Sign in again.")
@@ -840,7 +907,7 @@ private suspend fun bundledHomeDenialRevalidatesOnlyWhenConfirmed(confirmed:Bool
         JSONObject(login).put("home",JSONObject(home)).toString()
     }
     Transport.handler={ request ->
-        if(request.path==SAVINGS_HOME_PATH) throw ApiFailure(
+        if(request.path==WALLET_HOME_PATH) throw ApiFailure(
             if(confirmed) "access_denied" else "gateway_temporarily_unavailable",403)
         if(request.path=="/v1/burimunsi/session"){
             revalidationEntered.countDown()
@@ -853,13 +920,13 @@ private suspend fun bundledHomeDenialRevalidatesOnlyWhenConfirmed(confirmed:Bool
     try {
         idle(model)
         model.onFixtureMain {login("0780000001","2468")}
-        withTimeout(4_000){while(Transport.calls.none{it.path==SAVINGS_HOME_PATH})delay(2)}
+        withTimeout(4_000){while(Transport.calls.none{it.path==WALLET_HOME_PATH})delay(2)}
         if(confirmed){
             check(revalidationEntered.await(4,TimeUnit.SECONDS))
             check(model.state.operator?.id==scenario.owner && model.state.home==null && model.state.readbackRequired)
             check("records" !in SecureStore.records)
             check(Transport.calls.map{it.path}==
-                listOf("/v1/burimunsi/session/login?include=home",SAVINGS_HOME_PATH,"/v1/burimunsi/session"))
+                listOf("/v1/burimunsi/session/login?include=home",WALLET_HOME_PATH,"/v1/burimunsi/session"))
             revalidationRelease.countDown()
             idle(model)
             check(model.state.operator?.id==scenario.owner && model.state.home==null)
@@ -888,7 +955,7 @@ private suspend fun recentHomeStillReadsAuthorizedData() {
     try {
         idle(model)
         check(model.state.home?.paymentCount == 50 && !model.state.offline)
-        check(Transport.calls.filterNot { it.path==SAVINGS_HOME_PATH }.map { it.path } ==
+        check(Transport.calls.filterNot { it.path in HOME_SELECTORS }.map { it.path } ==
             listOf(SAVINGS_SESSION_PATH, LEGACY_HOME_SESSION_PATH))
         model.onFixtureMain { refresh() }
         idle(model)
@@ -905,7 +972,7 @@ private suspend fun recentHomeStillReadsAuthorizedData() {
     try {
         idle(changed)
         check(changed.state.home != null && changed.allows(flag))
-        check(Transport.calls.filterNot { it.path==SAVINGS_HOME_PATH }.map { it.path } ==
+        check(Transport.calls.filterNot { it.path in HOME_SELECTORS }.map { it.path } ==
             listOf(SAVINGS_SESSION_PATH, LEGACY_HOME_SESSION_PATH, "/v1/burimunsi/session", "/v1/burimunsi/home"))
     } finally { stop(changed) }
 }
@@ -1041,7 +1108,10 @@ fun main() = runBlocking {
         "a delayed Payments reply cannot cross a same-actor narrower grant" to suspend { delayedRecordReadCannotCrossBoundary(Route.PAYMENTS,Replacement.SAME_OWNER) },
         "Home, lists and details publish while encrypted display writes are blocked" to suspend { freshRowsPublishWhileRecordCacheIsBlocked() },
         "a paired session and Home response restores and caches the authorized snapshot" to suspend { bundledHomeRestores() },
-        "cold and resumed Home each use one request when the bundle has even partial savings" to suspend { savingsBundleRestoresInOneRead() },
+        "fast session presents current records then reads scoped canonical wallet exactly once on cold and foreground Home" to suspend { walletFollowsFastSession(true,WalletReply.AVAILABLE) },
+        "an explicit wallet rejection reveals the already bundled savings without re-reading them" to suspend { walletFollowsFastSession(true,WalletReply.UNSUPPORTED) },
+        "a failed wallet read leaves verified records visible and the legacy amount hidden" to suspend { walletFollowsFastSession(true,WalletReply.TEMPORARILY_UNAVAILABLE) },
+        "a server without either Home selector still leaves the verified base usable" to suspend { walletFollowsFastSession(false,WalletReply.UNSUPPORTED) },
         "omitted savings draws usable Home and fills all amounts from one background read" to suspend { omittedSavingsUsesOneBackgroundRead(OmittedSavings.RESTORE) },
         "omitted savings does not block another tab or publish late on it" to suspend { omittedSavingsUsesOneBackgroundRead(OmittedSavings.NAVIGATE) },
         "omitted savings cannot publish from a narrower grant's old authority" to suspend { omittedSavingsUsesOneBackgroundRead(OmittedSavings.NARROW_GRANT) },
@@ -1049,12 +1119,13 @@ fun main() = runBlocking {
         "warm Payments, Members and details need only one current-profile request after resume" to suspend { warmRoutesReuseVerifiedAuthority() },
         "a restored Settings destination never requests unused Home records" to suspend { settingsRestoreSkipsUnusedHome() },
         "bundled sign-in displays the confirmed base without repeating login or plain Home" to suspend { loginHomeRequests(include=true) },
-        "negotiated savings load without blocking bundled sign-in" to suspend { bundledHomeEnhancementCannotBlockOrCrossSignOut(false) },
+        "wallet totals load without blocking sign-in and obey the role-scoped SMS projection" to suspend { bundledHomeEnhancementCannotBlockOrCrossSignOut(false) },
+        "legacy savings remain available after explicit wallet selector rejection" to suspend { bundledHomeEnhancementCannotBlockOrCrossSignOut(false,legacy=true) },
         "confirmed enhanced Home revocation redacts the visible profile" to suspend { bundledHomeEnhancementOnlyRedactsConfirmedDenial(true) },
         "unconfirmed enhanced Home gateway response retains confirmed base" to suspend { bundledHomeEnhancementOnlyRedactsConfirmedDenial(false) },
         "confirmed records denial suppresses Home and revalidates the existing profile" to suspend { bundledHomeDenialRevalidatesOnlyWhenConfirmed(true) },
         "unrelated HTTP 403 does not suppress confirmed Home or revalidate" to suspend { bundledHomeDenialRevalidatesOnlyWhenConfirmed(false) },
-        "delayed negotiated savings cannot cross sign-out" to suspend { bundledHomeEnhancementCannotBlockOrCrossSignOut(true) },
+        "delayed wallet totals cannot cross sign-out" to suspend { bundledHomeEnhancementCannotBlockOrCrossSignOut(true) },
         "a committed sign-in without its optional Home fetches only Home" to suspend { loginHomeRequests(include=false) },
         "an older server can reject the optional sign-in query before authentication" to suspend { loginHomeRequests(include=false,oldServer=true) },
         "an uncertain bundled sign-in never repeats a credential request" to suspend { loginHomeRequests(include=false,uncertain=true) },
