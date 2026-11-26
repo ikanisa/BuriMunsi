@@ -286,11 +286,12 @@ class NativeUiContractTest {
         val c=FakeController(Route.PAYMENTS);show(c);ui.onNodeWithContentDescription("Payment filters").performClick()
         ui.onNodeWithText("Filters").assertExists();ui.onNodeWithText("Status").assertExists();ui.onNodeWithTag("payment-filter-select").performClick()
         ui.onNodeWithTag("listing-choice-dialog").assertIsDisplayed()
-        ui.onNode(hasText("All") and isSelectable() and isSelected()).assertExists()
+        val radioOption = SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.Role, androidx.compose.ui.semantics.Role.RadioButton)
+        ui.onNode(hasText("All") and radioOption and isSelected()).assertExists()
         button("Cancel").performClick()
         ui.onNodeWithTag("listing-choice-dialog").assertDoesNotExist()
         ui.onNodeWithTag("payment-filter-select").assert(hasText("All")).performClick()
-        ui.onNodeWithText("Processing").assertDoesNotExist();ui.onNodeWithText("Unallocated").performClick();ui.runOnIdle{check(c.filterCalls==0)}
+        ui.onNodeWithText("Processing").assertDoesNotExist();ui.onNode(hasText("Unallocated") and radioOption).performClick();ui.runOnIdle{check(c.filterCalls==0)}
         val applyBounds=button("Apply").fetchSemanticsNode().boundsInRoot
         val resetBounds=button("Reset all").fetchSemanticsNode().boundsInRoot
         check(applyBounds.bottom<=resetBounds.top){"Filter Apply and Reset must have separate hit areas"}
