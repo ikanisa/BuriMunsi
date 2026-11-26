@@ -11,6 +11,25 @@ import java.time.ZoneId
 /** Fetches complete, authorized online pages without reading message bodies. */
 internal class ListingExportData(private val repository:NativeRepository,private val gateway:GatewayPort) {
     data class Snapshot(val table:ExportTable,val validateLocal:()->Unit={})
+
+    companion object {
+        private fun text(value:String?)=value?.let{ExportCell.Text(it)}?:ExportCell.Blank
+        private fun money(value:Long?)=value?.let{ExportCell.Money(it,"RWF")}?:ExportCell.Blank
+        private fun date(value:String):ExportCell=runCatching{ExportCell.DateTime(Instant.parse(value))}.getOrElse{ExportCell.Text(value)}
+        private fun columns(vararg names:String)=names.mapIndexed{index,name->ExportColumn("c$index",name,if(name.contains("name",true))3 else 2)}
+
+        fun memberStatementTable(member:Member,values:List<Payment>,generatedAt:Instant,zone:ZoneId,details:List<ExportDetail>):ExportTable {
+            checkContract(values.all{it.memberId==member.id&&it.state!="unallocated"},"invalid_member_payment_scope")
+            val identity=listOf(ExportDetail("Member",member.name),ExportDetail("Member ID",member.id))
+            val rows=values.map{payment->listOf(
+                date(payment.atRaw),text(payment.payerNameRaw),text(payment.ftId),text(PaymentPresentation.directionLabel(payment.direction)),
+                money(payment.amountRwf),money(payment.feeRwf),text(payment.id),
+            )}
+            return ExportTable("BuriMunsi · Member statement",generatedAt,zone,identity+details,
+                columns("Date","Counterparty name","FT ID","Direction","Amount (RWF)","Fee (RWF)","Payment ID"),rows)
+        }
+    }
+
     fun collect(target:ListingTarget,query:ListingQuery,memberId:String?,scope:RecordReadScope,
         generatedAt:Instant,zone:ZoneId,check:()->Unit,progress:(Int,Int)->Unit):Snapshot {
         query.validated(target)
@@ -36,14 +55,30 @@ internal class ListingExportData(private val repository:NativeRepository,private
             check();repository.validateRecordReadScope(scope)
             return records.snapshot().items
         }
-        fun text(value:String?)=value?.let{ExportCell.Text(it)}?:ExportCell.Blank
-        fun money(value:Long?)=value?.let{ExportCell.Money(it,"RWF")}?:ExportCell.Blank
-        fun date(value:String):ExportCell=runCatching{ExportCell.DateTime(Instant.parse(value))}.getOrElse{ExportCell.Text(value)}
-        fun columns(vararg names:String)=names.mapIndexed{index,name->ExportColumn("c$index",name,if(name.contains("name",true))3 else 2)}
+        fun details(rowCount:Int):List<ExportDetail> {
+            val details=mutableListOf(ExportDetail("Collection",repository.boundCollectionId?:throw ContractFailure("session_changed")),
+                ExportDetail("Scope",if(target in setOf(ListingTarget.SMS,ListingTarget.OBSERVATIONS))"Authorized source metadata; message text and previews omitted" else "All matching authorized records"),
+                ExportDetail("Snapshot read",firstAsOf?:generatedAt.toString()),ExportDetail("Rows",rowCount.toString()),
+                ExportDetail("Sort",query.sort.wire))
+            query.queryValues(target).filterKeys{it!="sort"}.filterValues{it.isNotBlank()&&it!="all"}.forEach{(key,value)->details+=ExportDetail(key,value)}
+            return details
+        }
+        fun finish(table:ExportTable,localCheck:()->Unit={}):Snapshot {
+            check();repository.validateRecordReadScope(scope);localCheck()
+            table.validate(cancelled={try{check();false}catch(_:Exception){true}})
+            return Snapshot(table,localCheck)
+        }
+        if(memberId!=null){
+            checkContract(target==ListingTarget.PAYMENTS,"invalid_member_payment_scope")
+            check()
+            val member=repository.member(memberId,scope)
+            val values=pages<Payment>(Payment::id){cursor->repository.payments(query,cursor,memberId,scope)}
+            return finish(memberStatementTable(member,values,generatedAt,zone,details(values.size)))
+        }
         var localCheck:()->Unit={}
         val (title,cols,rows)=when(target){
             ListingTarget.PAYMENTS->{
-                val values=pages<Payment>({it.id}){repository.payments(query,it,memberId,scope)}
+                val values=pages<Payment>({it.id}){repository.payments(query,it,scope=scope)}
                 Triple("Payments",
                     columns("Date","Counterparty name","MoMo number","Amount (RWF)","Fee (RWF)","Direction","Allocation","FT ID","Member MoMo"),
                     values.map{p->listOf(date(p.atRaw),text(p.payerNameRaw),text(p.payerPhoneRaw),money(p.amountRwf),money(p.feeRwf),text(p.direction),text(PaymentPresentation.payment(p).label),text(p.ftId),text(p.memberPhone))})
@@ -90,15 +125,6 @@ internal class ListingExportData(private val repository:NativeRepository,private
                     sorted.map{v->listOf(date(v.at),text(v.kind),text(v.id),text(v.sender),text(v.status),text(v.transaction))})
             }
         }
-        check();repository.validateRecordReadScope(scope);localCheck()
-        val details=mutableListOf(ExportDetail("Collection",repository.boundCollectionId?:throw ContractFailure("session_changed")),
-            ExportDetail("Scope",if(target in setOf(ListingTarget.SMS,ListingTarget.OBSERVATIONS))"Authorized source metadata; message text and previews omitted" else "All matching authorized records"),
-            ExportDetail("Snapshot read",firstAsOf?:generatedAt.toString()),ExportDetail("Rows",rows.size.toString()),
-            ExportDetail("Sort",query.sort.wire))
-        query.queryValues(target).filterKeys{it !in setOf("sort")}.filterValues{it.isNotBlank()&&it!="all"}.forEach{(k,v)->details+=ExportDetail(k,v)}
-        memberId?.let{details+=ExportDetail("Member ID",it)}
-        val table=ExportTable("BuriMunsi · $title",generatedAt,zone,details,cols,rows)
-        table.validate(cancelled={try{check();false}catch(_:Exception){true}})
-        return Snapshot(table,localCheck)
+        return finish(ExportTable("BuriMunsi · $title",generatedAt,zone,details(rows.size),cols,rows),localCheck)
     }
 }

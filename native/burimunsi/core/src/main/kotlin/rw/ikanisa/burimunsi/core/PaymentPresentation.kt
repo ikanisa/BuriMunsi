@@ -3,7 +3,9 @@ package rw.ikanisa.burimunsi.core
 data class PaymentStatus(val label: String, val icon: String, val tone: String)
 
 object PaymentPresentation {
-    fun payment(value:Payment):PaymentStatus = if (value.state == "allocated" || value.state == "posted")
+    private fun isAllocated(value:Payment) = value.state == "allocated" || value.state == "posted"
+    fun linkedMemberId(value:Payment):String? = value.memberId?.takeIf { it.isNotBlank() && isAllocated(value) }
+    fun payment(value:Payment):PaymentStatus = if (isAllocated(value))
         PaymentStatus("Allocated", "link", "good") else PaymentStatus("Unallocated", "unlinked", "warn")
 
     fun canAllocate(value:Payment) = value.state == "unallocated" &&

@@ -67,6 +67,13 @@ fun main() {
         "2026-11-09T00:30:00+14:00" to "8 Nov 2026 12:30:00 UTC+02:00",
         "2026-11-09T23:30:00-12:00" to "10 Nov 2026 13:30:00 UTC+02:00")
     for((raw,expected) in dates)ck("exact timestamp $raw",ExactDisplay.timestamp(raw)==expected)
+    ck("Full local time without an offset retains seconds",ExactDisplay.timestamp("2026-11-09T23:30:57Z","en",includeOffset=false)=="10 Nov 2026 01:30:57")
+    ck("Recent shows Kigali time to the minute across midnight",
+        ExactDisplay.recentPaymentTimestamp("2026-11-09T23:30:59.987Z")=="10 Nov 2026 01:30")
+    ck("Recent keeps the clock and date from an unzoned SMS receipt",
+        ExactDisplay.recentPaymentTimestamp("2026-10-08 15:15:20")=="2026-10-08 15:15")
+    ck("Recent preserves unrecognized receipt times",
+        ExactDisplay.recentPaymentTimestamp("2026-02-30 15:15:20")=="2026-02-30 15:15:20")
     ck("rw date uses explicit day month year order",ExactDisplay.timestamp("2026-11-09T00:00:00Z","rw-RW")=="09/11/2026 02:00:00 UTC+02:00")
     for(raw in listOf(null,"","2026-11-09 12:00:00","2026-11-09T12:00:00","2026-11-09T12:00Z","2026-02-29T00:00:00Z",
         "2024-02-30T00:00:00Z","2026-11-09T24:00:00Z","2026-11-09T23:59:60Z","2026-11-09T00:00:00-00:00",

@@ -16,6 +16,8 @@ fun main(){
   r.path.endsWith("/session/login")->JSONObject().put("token",token).put("expiresAt",4102444800000L)
    .put("profile",JSONObject().put("id","operator-1").put("name","Synthetic operator").put("phone","+250780000001")
     .put("role","admin").put("capabilities",JSONArray().put("records.read").put("members.enroll"))).toString()
+  r.path.contains("/members/suggestions?")->JSONObject().put("items",JSONArray()).put("nextCursor",JSONObject.NULL)
+   .put("revision","current").toString()
   r.path.endsWith("/members/import")->{posts++;if(loseReply)throw ApiFailure("connection_unavailable",0,true)
    JSONObject().put("requestId",r.body!!.getString("requestId")).put("created",1)
     .put("results",JSONArray().put(JSONObject().put("row",1).put("status","created").put("memberId","member-1"))).toString()}
@@ -28,6 +30,18 @@ fun main(){
   else->error("Unexpected fixture route")
  }}
  val repo=NativeRepository(Context(),api,"group-1");repo.login("0780000001","2468")
+ val owner=checkNotNull(repo.current())
+ val scope=repo.withCurrentProfile(owner){group,revision->rw.ikanisa.burimunsi.core.MemberImportScope("synthetic-flow",owner.id,group,revision)}
+ repo.onboardingSuggestions("",null,scope);val all=api.calls.last()
+ repo.onboardingSuggestions("123","next-page",scope);val suffix=api.calls.last()
+ ck("suggestions load all or refine by suffix and cursor on the authenticated native route",
+  all.method=="GET"&&all.path.substringBefore('?')=="/v1/burimunsi/members/suggestions"&&all.path.contains("limit=40")&&
+   suffix.path.contains("q=123")&&suffix.path.contains("cursor=next-page")&&all.token==suffix.token&&all.token!=null&&
+   all.contractContext["groupId"]=="group-1"&&all.contractContext["actorId"]=="operator-1"&&all.contractContext==suffix.contractContext)
+ val attempts=api.calls.size
+ ck("changed collection or session cannot dispatch a suggestion request",
+  runCatching{repo.onboardingSuggestions("123",null,scope.copy(collectionId="other-group"))}.isFailure&&
+   runCatching{repo.onboardingSuggestions("123",null,scope.copy(sessionRevision=scope.sessionRevision+1))}.isFailure&&api.calls.size==attempts)
  fun row(name:String="Synthetic member")=JSONObject().put("row",1).put("name",name).put("phone","+250780000001")
   .put("verifiedOwnership",true).put("acceptedTerms",true).put("consentRecorded",true)
  val oversized=JSONArray();repeat(500){oversized.put(row("界".repeat(1000)))}

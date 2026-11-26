@@ -15,7 +15,8 @@ fun main(){
   .put("capabilities",JSONArray().put("records.read"))
  val session=JSONObject().put("token","a".repeat(64)).put("expiresAt",System.currentTimeMillis()+3_600_000).put("profile",profile).toString()
  var paymentState="processing"
- fun payment(id:String,member:String?)=JSONObject().put("id",id).put("groupId","group-1").put("memberId",member?:JSONObject.NULL)
+ var paymentGroup="group-1"
+ fun payment(id:String,member:String?)=JSONObject().put("id",id).put("groupId",paymentGroup).put("memberId",member?:JSONObject.NULL)
   .put("memberPhone",if(member==null)JSONObject.NULL else "+250780000816").put("sourceId",JSONObject.NULL)
   .put("payerNameRaw","Synthetic payer").put("payerPhoneRaw","*********123").put("amountRwf",1000)
   .put("atRaw","2026-11-08 12:00:00").put("ftId","10001").put("state",paymentState).put("version",1)
@@ -40,6 +41,11 @@ fun main(){
  check(wrong is ContractFailure&&wrong.code=="invalid_member_payment_scope")
  val wrongNext=runCatching{repo.payments(cursor="next",memberId="member-1")}.exceptionOrNull()
  check(wrongNext is ContractFailure&&wrongNext.code=="invalid_member_payment_scope")
+ bad=false;paymentGroup="other-group"
+ check(runCatching{repo.payments(cursor="next",memberId="member-1")}.exceptionOrNull() is ContractFailure)
+ paymentGroup="group-1";paymentState="unallocated"
+ check(runCatching{repo.payments(memberId="member-1")}.exceptionOrNull() is ContractFailure)
+ paymentState="corrected"
  val detail=payment("tx-1","member-1").put("sourceId","source-1")
  val negotiated=JSONObject().put("payment",detail).put("paymentReference","100000000017")
  api.handler={check(it.path.endsWith("/payments/tx-1"));negotiated.toString()}
@@ -56,6 +62,19 @@ fun main(){
      val denied=runCatching{api.validateCached(path,negotiated.toString(),scope+("groupId" to group))}.exceptionOrNull()
      check(denied is ApiFailure&&denied.code=="contract_identity")
  }
+ val directoryMember=JSONObject().put("id","member-1").put("groupId","group-1").put("name","Directory member")
+  .put("phone","+250780000816").put("active",true).put("version",1)
+ val statementScope=repo.recordReadScope()
+ api.handler={check(it.path.endsWith("/members/member-1"));directoryMember.toString()}
+ check(repo.member("member-1",statementScope).name=="Directory member")
+ directoryMember.put("id","other-member")
+ check(runCatching{repo.member("member-1",statementScope)}.isFailure)
+ directoryMember.put("id","member-1").put("groupId","other-group")
+ api.handler={directoryMember.toString()}
+ check(runCatching{repo.member("member-1",statementScope)}.isFailure)
+ api.handler={throw ApiFailure("connection_unavailable",0)}
+ check(runCatching{repo.member("member-1",statementScope)}.exceptionOrNull() is ApiFailure)
+ println("PASS online statement identity rejects mismatched member, group and offline fallback")
  println("PASS payment detail and the session-owned cache preserve upgraded and predecessor references")
  println("PASS member payment pages keep scope and state, and reject a mismatched member")
 }

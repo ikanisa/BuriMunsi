@@ -60,6 +60,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         val target=listingTarget?:return false
         return !downloads.pickerInFlight&&state.sheet!=Sheet.FILTERS&&screenGate==ScreenGate.OPEN&&!state.busy&&!state.offline&&!state.readbackRequired&&
             !state.pending&&hasAccess(if(target in setOf(ListingTarget.STAFF,ListingTarget.AUDIT))Capability.STAFF else if(target in setOf(ListingTarget.SMS,ListingTarget.OBSERVATIONS))Capability.SMS else Capability.READ)&&
+            (target!=ListingTarget.PAYMENTS||state.routeId==null||state.member?.id==state.routeId&&state.payments!=null)&&
             (target !in setOf(ListingTarget.SMS,ListingTarget.OBSERVATIONS)||smsAccessGranted&&state.smsListSearch.isBlank()&&state.queuedSearch.isBlank())
     }
     override fun applyListingQuery(query:ListingQuery){
@@ -171,6 +172,11 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     }
     private val memberInputs = MemberImportInputs()
     private val memberRegistration = NativeMemberRegistration(::repo)
+    private var suggestionScope:MemberImportScope?=null
+    private var suggestionJob:Job?=null
+    private var suggestionSequence=0L
+    private var suggestionRevision:String?=null
+    private var resumeSuggestions=false
     /** Consult the process authority before claiming a result, even while its change callback is queued. */
     private fun withMemberInputScope(scope: MemberImportScope, use: () -> Unit = {}): Boolean {
         val operator = state.operator ?: return false
@@ -270,6 +276,12 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     }
     /** Called by LifecycleResumeEffect. Does not cancel a dispatched operation. */
     fun onBackground(){
+        if(state.sheet==Sheet.ENROLL&&state.onboarding.step==SmartOnboardingStep.SUGGESTIONS){
+            cancelSuggestionRequest()
+            resumeSuggestions=true
+            state=state.copy(onboarding=state.onboarding.copy(suggestions=emptyList(),nextCursor=null,
+                suggestionsLoaded=false,suggestionsLoading=true,suggestionsFailed=false))
+        }
         changedReadRetry?.cancel();changedReadRetry=null
         resumeMayReuseRecords=!state.starting&&!state.busy&&state.operator!=null
         pendingFreshDraw=null
@@ -307,6 +319,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         startExposureChecks()
         drainResumeCheck()
         drainMemberDocument()
+        resumeSuggestionRead()
     }
     /** Called on the main thread when Android observes a usable network. A
      * saved session or covered screen is still revalidated by the server. */
@@ -440,6 +453,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         initialDraft = emptyMap()
         afterDiscard = null
         memberInputs.clear()
+        leaveSuggestionPicker()
     }
     private val smsDisclosure by lazy { NativeSmsDisclosure(::repo, io, clock) }
 
@@ -454,6 +468,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         Sheet.GATEWAY,Sheet.REPLACE_DEVICE->BuildConfig.IS_GATEWAY&&state.operator?.role==Role.ADMIN
         Sheet.ENROLL->hasAccess(Capability.ENROLL)
         Sheet.ALLOCATE->hasAccess(Capability.ALLOCATE)&&state.payment?.let(PaymentPresentation::canAllocate)==true
+        Sheet.MEMBER_DETAILS->state.route==Route.MEMBER&&state.member?.id==state.routeId&&state.routeId!=null
         else->state.operator!=null
     }
     private fun dismissPanel(){
@@ -485,7 +500,8 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     private fun rememberedContext(value:UiState)=UiState(operator=state.operator,route=value.route,routeId=value.routeId,
         search=value.search,filter=value.filter,listIndex=value.listIndex,listOffset=value.listOffset,
         pending=state.pending,busy=true,readbackRequired=value.readbackRequired,allocatedFromVersion=value.allocatedFromVersion,
-        memberAnchorId=value.memberAnchorId,memberWindowStartId=value.memberWindowStartId,memberListing=value.memberListing)
+        memberAnchorId=value.memberAnchorId,memberWindowStartId=value.memberWindowStartId,memberListing=value.memberListing,
+        statementListing=value.statementListing)
     private fun reusable(value:UiState):Boolean =
         value.route!=Route.SMS&&!value.readbackRequired&&
             (if(value.offline)SnapshotFreshness.reusable(value.savedAt,clock())else SnapshotFreshness.recent(value.savedAt,clock()))
@@ -839,6 +855,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                     if(requested!=null&&!state.busy&&screenGate==ScreenGate.OPEN&&state.operator!=null)navigate(requested.first,requested.second)
                     drainDownload()
                     drainMemberDocument()
+                    resumeSuggestionRead()
                     drainGatewayPermissionStatus()
                     drainChangedRecords()
                     checkpointNavigation()
@@ -1060,7 +1077,10 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             val old=state.copy(busy=false,error=null)
             val fresh=withRememberedViews{sameScope->
                 if(route!=state.route||id!=state.routeId)views.push(key(),smsDisclosure.redact(old).copy(gateway=null))
-                val remembered=views.remembered(key(route,id))
+                val enteringStatement=route==Route.PAYMENTS&&id!=null&&(old.route!=route||old.routeId!=id)
+                val destination=UiState(operator=old.operator,route=route,routeId=id)
+                // A newly opened statement starts with all its transactions. Back restores its previous query and position.
+                val remembered=if(enteringStatement)null else views.remembered(key(route,id))
                 val prior=remembered?.takeIf{!old.pending&&views.isCurrent(it)&&reusable(it.value)}?.value
                 // Use the exact selected row of the visible directory, never a
                 // caller-supplied version or another scope's remembered detail.
@@ -1076,7 +1096,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                     else->prior
                 }
                 resetPanelInputs()
-                state=(snapshot?:remembered?.value?.let{rememberedContext(it)}?:UiState(operator=state.operator,route=route,routeId=id))
+                state=(snapshot?:remembered?.value?.let{rememberedContext(it)}?:destination)
                     .copy(operator=state.operator,busy=true,pending=state.pending,failure=DisplayFailure.NONE,sheet=null,sheetId=null,
                         error=null,selectedMember=null,draft=emptyMap(),draftDirty=false,discardRequested=false,homeSavingsLoading=false)
                 snapshot
@@ -1098,11 +1118,10 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         if(previous==null){
             // Process restoration deliberately has no serialized back stack or record snapshots.
             val parent=when(state.route){Route.PAYMENT->Route.PAYMENTS;Route.MEMBER->Route.MEMBERS
-                Route.PAYMENTS->if(state.routeId!=null)Route.MEMBER else Route.HOME;else->Route.HOME}
-            val parentId=state.routeId.takeIf{parent==Route.MEMBER}
+                Route.PAYMENTS->if(state.routeId!=null)Route.PAYMENTS else Route.HOME;else->Route.HOME}
             work(kind=UiOperation.INITIAL_READ,quietRefresh=recordsRoute(parent)){
                 resetPanelInputs()
-                state=UiState(operator=state.operator,route=parent,routeId=parentId,busy=true,pending=state.pending)
+                state=UiState(operator=state.operator,route=parent,busy=true,pending=state.pending)
                 refreshNow()
             }
             return
@@ -1327,20 +1346,23 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                 val request = pagedRestoration.request()
                 val listing = queryFor(ListingTarget.PAYMENTS)
                 val memberId = state.routeId
+                val member = memberId?.let { id -> pagedRestoration.readRecord(request) { it.memberRecord(id) } }
                 val recent = if(memberId==null&&allowRecentCache&&request.index==0)io{
                     // On a cache miss the live request can start without a separate journal read.
                     repo().recentPayments(listing)?.takeIf{journalKnowledge()==JournalKnowledge.CLEAR}
                 }else null
                 val cachedPage = recent?.takeIf{SnapshotFreshness.recent(it.second,clock())}
                     ?.let{NativePagedRestoration.Read(it.first,false,it.second)}
-                val first = cachedPage ?: pagedRestoration.readRecord(request) { it.paymentPage(listing, memberId = memberId) }
+                val payments = cachedPage ?: pagedRestoration.readRecord(request) { it.paymentPage(listing, memberId = memberId) }
+                val first = if(member==null)payments else payments.copy(offline=payments.offline||member.offline,
+                    savedAt=SnapshotFreshness.oldest(clock(),payments.savedAt,member.savedAt))
                 val restored = pagedRestoration.restore(request, first, Payment::id) { cursor ->
                     pagedRestoration.readRecord(request) { it.paymentPage(listing, cursor, memberId) }
                 }
                 pagedRestoration.withCurrent(request) {
                     val (page, offline, savedAt) = restored.content
                     val position = restored.decision
-                    state = it.copy(payments = page, offline = offline, savedAt = savedAt,
+                    state = it.copy(member = member?.value, payments = page, offline = offline, savedAt = savedAt,
                         readbackRequired = it.readbackRequired && offline,
                         listIndex = position.index, listOffset = position.offset, listRestoration = position.stop)
                     if(cachedPage==null&&!offline&&savedAt!=null)pendingFreshDraw=Route.PAYMENTS to page
@@ -1618,47 +1640,144 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         refreshNow()
     }
     override fun onboardingOptions(){
-        if(state.busy||!allows(Capability.ENROLL))return
+        if(state.busy||state.sheet!=Sheet.ENROLL||!allows(Capability.ENROLL))return
+        leaveSuggestionPicker()
         memberInputs.clear()
         state=state.copy(onboarding=SmartOnboardingState(),draft=emptyMap(),draftDirty=false,error=null)
     }
     override fun onboardingManual(){
-        if(state.busy||!allows(Capability.ENROLL)||importReviewStarted())return
+        if(state.busy||state.sheet!=Sheet.ENROLL||!allows(Capability.ENROLL)||importReviewStarted())return
+        leaveSuggestionPicker()
         memberInputs.clear()
         state=state.copy(onboarding=SmartOnboardingState(step=SmartOnboardingStep.MEMBER),draft=emptyMap(),draftDirty=false,error=null)
     }
     override fun onboardingSearchQuery(value:String){
-        if(value.length<=80&&!state.busy)state=state.copy(onboarding=state.onboarding.copy(query=value))
+        if(state.busy||state.offline||!allows(Capability.ENROLL)||state.sheet!=Sheet.ENROLL||
+            state.onboarding.step!=SmartOnboardingStep.SUGGESTIONS||value==state.onboarding.query||
+            value.length>80||value.any(Char::isISOControl))return
+        readSuggestions(value,null,debounce=true)
     }
     override fun onboardingSuggestions(query:String,cursor:String?){
-        if(importReviewStarted())return
-        if(cursor==null&&state.onboarding.step!=SmartOnboardingStep.SUGGESTIONS){
-            if(state.busy||state.offline||!allows(Capability.ENROLL))return
+        if(state.busy||state.offline||state.sheet!=Sheet.ENROLL||!allows(Capability.ENROLL)||importReviewStarted())return
+        val onboarding=state.onboarding
+        if(onboarding.step!=SmartOnboardingStep.SUGGESTIONS){
+            if(cursor!=null)return
+            val fromCandidate=onboarding.step==SmartOnboardingStep.MEMBER&&onboarding.candidate!=null
+            val initialQuery=if(fromCandidate)onboarding.query else ""
+            if(!fromCandidate)leaveSuggestionPicker()
             memberInputs.clear()
-            state=state.copy(onboarding=SmartOnboardingState(step=SmartOnboardingStep.SUGGESTIONS),draft=emptyMap(),draftDirty=false,error=null)
+            state=state.copy(onboarding=SmartOnboardingState(step=SmartOnboardingStep.SUGGESTIONS,query=initialQuery),
+                draft=emptyMap(),draftDirty=false,error=null)
+            readSuggestions(initialQuery,null)
+            return
         }
-        work{
-        if(!allows(Capability.ENROLL)||state.offline)throw ApiFailure("access_denied",403)
-        val suggestions = io { memberRegistration.suggestions(query, cursor) }
-        state=state.copy(
-            onboarding=memberRegistration.showSuggestions(state.onboarding, suggestions, continuing=cursor!=null),
-            error=null,
-        )
+        if(query!=onboarding.query||cursor!=null&&(onboarding.suggestionsLoading||cursor!=onboarding.nextCursor))return
+        readSuggestions(query,cursor)
+    }
+
+    private fun cancelSuggestionRequest(){
+        suggestionSequence++
+        suggestionJob?.cancel()
+        suggestionJob=null
+    }
+    private fun leaveSuggestionPicker(){
+        cancelSuggestionRequest()
+        suggestionScope=null
+        suggestionRevision=null
+        resumeSuggestions=false
+    }
+    private fun resumeSuggestionRead(){
+        if(!resumeSuggestions||!foreground||state.busy||screenGate!=ScreenGate.OPEN)return
+        resumeSuggestions=false
+        if(state.sheet!=Sheet.ENROLL||state.onboarding.step!=SmartOnboardingStep.SUGGESTIONS)return
+        if(state.offline||!hasAccess(Capability.ENROLL)){
+            state=state.copy(onboarding=state.onboarding.copy(suggestionsLoading=false,suggestionsFailed=true))
+        }else readSuggestions(state.onboarding.query,null)
+    }
+    private fun <T> withSuggestionOwner(scope:MemberImportScope,use:()->T):T {
+        val operator=state.operator?:throw ContractFailure("session_changed")
+        return repo().withCurrentProfile(operator){group,session->
+            checkContract(operator.id==scope.operatorId&&group==scope.collectionId&&session==scope.sessionRevision,"session_changed")
+            checkContract(hasAccess(Capability.ENROLL),"access_denied")
+            use()
+        }
+    }
+    private fun readSuggestions(query:String,cursor:String?,debounce:Boolean=false){
+        val owner=state.operator?:return
+        val scope=try{
+            suggestionScope?.also{withSuggestionOwner(it){}}?:repo().withCurrentProfile(owner){group,session->
+                MemberImportScope(java.util.UUID.randomUUID().toString(),owner.id,group,session)
+            }
+        }catch(_:ContractFailure){
+            leaveSuggestionPicker()
+            state=state.copy(onboarding=SmartOnboardingState())
+            return
+        }
+        cancelSuggestionRequest()
+        val sequence=suggestionSequence
+        suggestionScope=scope
+        val onboarding=state.onboarding
+        if(cursor==null)suggestionRevision=null
+        state=state.copy(onboarding=onboarding.copy(query=query,suggestionsLoading=true,suggestionsFailed=false,
+            suggestionsLoaded=cursor!=null&&onboarding.suggestionsLoaded,
+            suggestions=if(cursor==null)emptyList()else onboarding.suggestions,nextCursor=cursor),error=null)
+        fun current()=sequence==suggestionSequence&&foreground&&state.sheet==Sheet.ENROLL&&
+            state.onboarding.step==SmartOnboardingStep.SUGGESTIONS&&state.onboarding.query==query
+        suggestionJob=viewModelScope.launch{
+            try{
+                if(debounce)delay(250)
+                val page=io{memberRegistration.suggestions(query,cursor,scope)}
+                if(!current())return@launch
+                withSuggestionOwner(scope){
+                    checkContract(cursor==null||page.revision==suggestionRevision,"cursor_stale")
+                    state=state.copy(onboarding=memberRegistration.showSuggestions(state.onboarding,page,cursor!=null))
+                    suggestionRevision=page.revision
+                }
+            }catch(cancel:CancellationException){throw cancel}
+            catch(error:Exception){
+                if(!current())return@launch
+                val sameOwner=try{withSuggestionOwner(scope){true}}catch(_:ContractFailure){false}
+                val accessChanged=!sameOwner||error is ApiFailure&&error.status in setOf(401,403)||
+                    error is ContractFailure&&error.code in setOf("session_changed","session_unavailable","access_denied")
+                if(accessChanged){
+                    leaveSuggestionPicker()
+                    state=state.copy(onboarding=SmartOnboardingState())
+                    refreshSession()
+                    return@launch
+                }
+                val retryPage=cursor!=null&&error is ApiFailure&&
+                    (error.status==0||error.status in setOf(408,429)||error.status>=500)
+                val latest=state.onboarding
+                state=state.copy(onboarding=latest.copy(suggestionsLoading=false,suggestionsFailed=true,
+                    suggestionsLoaded=retryPage&&latest.suggestionsLoaded,suggestions=if(retryPage)latest.suggestions else emptyList(),
+                    nextCursor=if(retryPage)cursor else null))
+            }finally{if(sequence==suggestionSequence)suggestionJob=null}
         }
     }
     override fun onboardingChoose(candidateId:String){
-        if(state.busy||!allows(Capability.ENROLL))return
+        if(state.busy||state.offline||!allows(Capability.ENROLL)||state.sheet!=Sheet.ENROLL||
+            state.onboarding.step!=SmartOnboardingStep.SUGGESTIONS)return
+        val scope=suggestionScope?:return
         val candidate=state.onboarding.suggestions.singleOrNull{it.candidateId==candidateId}?:return
-        state=state.copy(onboarding=state.onboarding.copy(step=SmartOnboardingStep.MEMBER,candidate=candidate,
-            verifiedOwnership=false,acceptedTerms=false,consentRecorded=false),draft=mapOf("name" to candidate.momoName),draftDirty=false,error=null)
+        try{
+            withSuggestionOwner(scope){
+                cancelSuggestionRequest()
+                suggestionRevision=null
+                resumeSuggestions=false
+                state=state.copy(onboarding=SmartOnboardingState(step=SmartOnboardingStep.MEMBER,candidate=candidate,query=state.onboarding.query),
+                    draft=mapOf("name" to candidate.momoName),draftDirty=false,error=null)
+            }
+        }catch(_:ContractFailure){leaveSuggestionPicker();state=state.copy(onboarding=SmartOnboardingState());refreshSession()}
     }
     override fun onboardingImport(){
         if(state.busy||!allows(Capability.ENROLL)||state.sheet!=Sheet.ENROLL)return
+        leaveSuggestionPicker()
         if(state.onboarding.step != SmartOnboardingStep.IMPORT) memberInputs.clear()
         state=state.copy(onboarding=state.onboarding.copy(step=SmartOnboardingStep.IMPORT,editingRow=null,photoPreviewPending=false),draft=emptyMap(),draftDirty=false,error=null)
     }
     override fun onboardingPhoto(){
         if(state.busy||!allows(Capability.ENROLL)||state.sheet!=Sheet.ENROLL||importReviewStarted())return
+        leaveSuggestionPicker()
         memberInputs.clear()
         state=state.copy(onboarding=SmartOnboardingState(step=SmartOnboardingStep.IMPORT,photoCaptureFlow=true),
             draft=emptyMap(),draftDirty=false,error=null)
@@ -1770,7 +1889,10 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     }
     override fun onboardingSubmit(name:String,phone:String){
         if(state.sheet!=Sheet.ENROLL||state.onboarding.step!=SmartOnboardingStep.MEMBER)return
-        work { submitOnboarding(memberRegistration.singleRow(state.onboarding, state.draft, name, phone)) }
+        work {
+            if(state.onboarding.candidate!=null)withSuggestionOwner(suggestionScope?:throw ContractFailure("session_changed")){}
+            submitOnboarding(memberRegistration.singleRow(state.onboarding,state.draft,name,phone))
+        }
     }
     override fun onboardingSubmitBatch(){
         if(state.sheet!=Sheet.ENROLL||state.onboarding.step!=SmartOnboardingStep.IMPORT)return
@@ -1813,7 +1935,14 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         command{repo().staffAction(body)};val staff=io{repo().staff()};state=state.copy(sheet=Sheet.STAFF,sheetId=null,staff=staff,panelSavedAt=clock(),selectedStaff=null,draft=emptyMap(),draftDirty=false)
     }
     override fun requestRemoveStaff(){if(state.selectedStaff!=null&&allows(Capability.STAFF))openSheet(Sheet.REMOVE_STAFF,state.selectedStaff?.id)}
-    override fun setMemberActive(active:Boolean)=work{requireNoUnresolvedCommand();if(state.operator?.role!=Role.ADMIN||!allows(Capability.ENROLL)||state.offline)throw ApiFailure("access_denied",403);val m=state.member?:throw ApiFailure("member_unavailable");command{repo().setMemberActive(m,active)};val v=io{repo().member(m.id)};state=state.copy(sheet=null,sheetId=null,member=v,offline=repo().lastReadFromCache,savedAt=repo().lastReadSavedAt)}
+    override fun setMemberActive(active:Boolean)=work{
+        requireNoUnresolvedCommand()
+        if(state.route!=Route.MEMBER||state.operator?.role!=Role.ADMIN||!allows(Capability.ENROLL)||state.offline)throw ApiFailure("access_denied",403)
+        val member=state.member?.takeIf{it.id==state.routeId}?:throw ApiFailure("member_unavailable")
+        command{repo().setMemberActive(member,active)}
+        val updated=io{repo().member(member.id)}
+        state=state.copy(sheet=null,sheetId=null,member=updated,offline=repo().lastReadFromCache,savedAt=repo().lastReadSavedAt)
+    }
     override fun pair(code:String)=work{
         receiverStatus.pair(code, ::showReceiverPanelStatus)
     }

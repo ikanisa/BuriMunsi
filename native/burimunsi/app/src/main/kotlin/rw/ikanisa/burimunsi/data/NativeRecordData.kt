@@ -333,9 +333,11 @@ internal class NativeRecordData(
         return snapshot(path,firstDisplay=cursor==null){payload,_->decodePaymentPage(payload,member)}
     }
     private fun decodePaymentPage(payload:String,member:String?):Page<Payment> {
-        val result=page(payload,::decodePayment)
-        if(member!=null)checkContract(result.items.all{it.memberId==member},"invalid_member_payment_scope")
-        return result
+        return page(payload){row->
+            val payment=decodePayment(row)
+            if(member!=null)checkContract(row.getString("groupId")==groupId&&payment.memberId==member&&payment.state!="unallocated","invalid_member_payment_scope")
+            payment
+        }
     }
     fun members(listing: ListingQuery, cursor: String? = null, scope: RecordReadScope? = null, anchorId: String? = null): Page<Member> {
         if(scope==null)return memberPage(listing,cursor,anchorId).value
@@ -357,9 +359,7 @@ internal class NativeRecordData(
         page(listingRead(listingPath("/audit",ListingTarget.AUDIT,listing,cursor),scope)){j->AuditRow(j.getString("id"),j.getString("action"),j.getString("at"))}
     fun payments(q:String="",filter:String="all",cursor:String?=null,memberId:String?=null):Page<Payment>{
         val member=memberId?.let(Values::id)
-        val result=page(records("/payments"+query(mapOf("q" to q,"filter" to filter,"cursor" to cursor,"memberId" to member))),::decodePayment)
-        if(member!=null)checkContract(result.items.all{it.memberId==member},"invalid_member_payment_scope")
-        return result
+        return decodePaymentPage(records("/payments"+query(mapOf("q" to q,"filter" to filter,"cursor" to cursor,"memberId" to member))),member)
     }
     fun members(q:String="",cursor:String?=null)=page(records("/members"+query(mapOf("q" to q,"cursor" to cursor))),::decodeMember)
     fun payment(id:String):Payment = paymentRecord(id).value
@@ -375,13 +375,21 @@ internal class NativeRecordData(
     }
     fun member(id:String):Member = memberRecord(id).value
 
+    fun member(id:String,scope:RecordReadScope):Member {
+        val memberId=Values.id(id)
+        return decodeMemberRecord(scope.read(recordReadOwner,"/members/$memberId"),memberId)
+    }
+
     fun memberRecord(id:String):RecordSnapshot<Member> {
         val memberId=Values.id(id)
-        return snapshot("/members/$memberId",firstDisplay=true){payload,_->
-            val member=decodeMember(JSONObject(payload))
-            checkContract(member.id==memberId,"invalid_api_response")
-            member
-        }
+        return snapshot("/members/$memberId",firstDisplay=true){payload,_->decodeMemberRecord(payload,memberId)}
+    }
+
+    private fun decodeMemberRecord(payload:String,id:String):Member {
+        val row=JSONObject(payload)
+        val member=decodeMember(row)
+        checkContract(member.id==id&&row.getString("groupId")==groupId,"invalid_api_response")
+        return member
     }
     fun sms(q:String="",cursor:String?=null,filter:String="all",limit:Int?=null)=page(sessions.request("GET","/sms"+query(mapOf("q" to q,"cursor" to cursor,"filter" to filter,"limit" to limit?.coerceIn(1,100)?.toString()))),::decodeSms)
     fun staff(cursor:String?=null)=page(sessions.request("GET","/staff"+query(mapOf("cursor" to cursor))),::decodeStaff)

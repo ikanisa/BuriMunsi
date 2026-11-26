@@ -1,5 +1,6 @@
 package rw.ikanisa.burimunsi.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.items
@@ -32,7 +33,8 @@ import rw.ikanisa.burimunsi.core.Role
     onPickMemberFile:()->Unit,onPreviewMemberFile:(requestId:String)->Unit,onTakeMemberPhoto:()->Unit,onPickMemberPhoto:()->Unit,onExport:()->Unit){
     val t=LocalUiText.current
     val sheet=s.sheet?:return
-    val title=when(sheet){Sheet.PROFILE->t("Profile");Sheet.PIN->t("Change passcode");Sheet.HELP->t("Help");Sheet.ALLOCATE->t("Allocate");Sheet.ENROLL->t("Add member");Sheet.STAFF->t("Staff access");Sheet.STAFF_EDIT->if(s.selectedStaff==null)t("Add staff")else t("Edit staff");Sheet.REMOVE_STAFF->t("Remove access?");Sheet.GATEWAY->t("Gateway");Sheet.REPLACE_DEVICE->t("Replace receiver");Sheet.RAW->s.raw?.sender?.takeIf{it.isNotBlank()}?:t("SMS receipt");Sheet.MEMBER_DETAILS->t("Member details");Sheet.AUDIT->t("Activity log");Sheet.FILTERS->t("Filters")}
+    val payerPicker=sheet==Sheet.ENROLL && s.onboarding.step==SmartOnboardingStep.SUGGESTIONS
+    val title=when(sheet){Sheet.PROFILE->t("Profile");Sheet.PIN->t("Change passcode");Sheet.HELP->t("Help");Sheet.ALLOCATE->t("Allocate");Sheet.ENROLL->t(if(payerPicker) "Add from MoMo" else "Add member");Sheet.STAFF->t("Staff access");Sheet.STAFF_EDIT->if(s.selectedStaff==null)t("Add staff")else t("Edit staff");Sheet.REMOVE_STAFF->t("Remove access?");Sheet.GATEWAY->t("Gateway");Sheet.REPLACE_DEVICE->t("Replace receiver");Sheet.RAW->s.raw?.sender?.takeIf{it.isNotBlank()}?:t("SMS receipt");Sheet.MEMBER_DETAILS->t("Member details");Sheet.AUDIT->t("Activity log");Sheet.FILTERS->t("Filters")}
     key(sheet,s.sheetId){
     val latest=rememberUpdatedState(s)
     val sheetState=rememberModalBottomSheetState(skipPartiallyExpanded=true,confirmValueChange={target->
@@ -47,10 +49,12 @@ import rw.ikanisa.burimunsi.core.Role
     ModalBottomSheet(onDismissRequest=m::closeSheet,sheetState=sheetState,containerColor=Color(0xFF1C1C1E),contentColor=BuriTheme.Text,shape=RoundedCornerShape(topStart=32.dp,topEnd=32.dp),scrimColor=Color.Black.copy(alpha=.62f),dragHandle={
         Box(Modifier.fillMaxWidth().padding(top=11.dp,bottom=3.dp),contentAlignment=Alignment.Center){Box(Modifier.size(width=34.dp,height=4.dp).background(Color(0xFF505054),RoundedCornerShape(4.dp)))}
     }){
+        BackHandler(enabled=payerPicker && !imeVisible && !s.busy) { m.onboardingOptions() }
         Column(Modifier.fillMaxWidth().heightIn(max=LocalConfiguration.current.screenHeightDp.dp*.94f).imePadding().semantics{paneTitle=title}.onPreviewKeyEvent{
-            if(it.key==Key.Escape){if(it.type==KeyEventType.KeyUp){if(imeVisible)keyboard?.hide()else m.closeSheet()};true}else false
+            if(it.key==Key.Escape){if(it.type==KeyEventType.KeyUp){if(imeVisible)keyboard?.hide()else if(payerPicker)m.onboardingOptions()else m.closeSheet()};true}else false
         }){
-            Row(Modifier.fillMaxWidth().heightIn(min=65.dp).padding(start=22.dp,end=12.dp,top=7.dp,bottom=10.dp),verticalAlignment=Alignment.CenterVertically){
+            Row(Modifier.fillMaxWidth().heightIn(min=65.dp).padding(start=if(payerPicker)8.dp else 22.dp,end=12.dp,top=7.dp,bottom=10.dp),verticalAlignment=Alignment.CenterVertically){
+                if(payerPicker)IconButton({keyboard?.hide();m.onboardingOptions()},enabled=!s.busy){Glyph(R.drawable.ic_back,t("Back"))}
                 CompactLabel(title,Modifier.weight(1f).semantics{heading()},fontSize=30.sp,fontWeight=FontWeight.SemiBold,lineHeight=38.sp)
                 IconButton(m::closeSheet,enabled=!s.busy,modifier=Modifier.testTag("panel-close")){Glyph(R.drawable.ic_close,t("Close"))}
             }
@@ -63,7 +67,7 @@ import rw.ikanisa.burimunsi.core.Role
             s.commandNotice?.takeIf{s.operator!=null && m.screenGate==ScreenGate.OPEN && m.presentation.showRecords}
                 ?.let{BuriStatusMessage(it,warning=true)}
             m.exportFeedback?.takeIf{m.screenGate==ScreenGate.OPEN&&m.presentation.showRecords}?.let{BuriExportFeedback(it,m::cancelExport,m::dismissExportFeedback)}
-            s.error?.let{message->
+            s.error?.takeUnless { payerPicker && s.onboarding.suggestionsFailed }?.let{message->
                 BuriStatusMessage(message,error=true)
                 if(sheet in setOf(Sheet.STAFF,Sheet.AUDIT,Sheet.ALLOCATE,Sheet.GATEWAY,Sheet.MEMBER_DETAILS))
                     TextButton(m::refresh,enabled=!s.busy,modifier=Modifier.padding(horizontal=16.dp)){CompactLabel(t("Retry loading"))}

@@ -19,9 +19,11 @@ async function qualifyPaymentSuggestions() {
  const full=add('Aline Example','+250 (780) 000-123');
  const recent=add('Aline Example','*****123',{id:'non-uuid-source-private',occurred_at:'2026-11-23T08:09:10.000012Z'});
  const hint=add('Independent Payer','*****123');
- add('Ambiguous','0780000456');add('Ambiguous','0781000456');add('Ambiguous','*****456');
+ const sameHintA=add('Ambiguous','0780000456'),sameHintB=add('Ambiguous','0781000456');
+ const ambiguousMask=add('Ambiguous','*****456');
  add('Already Known','0780000789');add('Already Known','*****789');
  add('Same Member','*****555');add('Merchant Code','41258');add('Name 0780000333','*****333');
+ add('Freeform Identifier','example reference 123');
  add('Outgoing','*****333',{direction:'outgoing'});add('Allocated','*****333',{allocation_state:'allocated'});
  add('Missing Source','*****333',{sms_source_id:null});add('Missing Hint',null);
  add('Other Wallet','*****333',{receiving_account_id:'other-wallet'});add('Foreign Group','*****333',{collection_id:'group-2'});
@@ -31,7 +33,8 @@ async function qualifyPaymentSuggestions() {
   'app.collections':{columns:'id text,status text,currency text',rows:[{id:groupId,status:'active',currency:'RWF'}]},
   'app.momo_receiving_accounts':{columns:'id text,status text,currency text',rows:[{id:'wallet',status:'active',currency:'RWF'}]},
   'app.memberships':{columns:'collection_id text,user_id text',rows:[{collection_id:groupId,user_id:'member'},{collection_id:groupId,user_id:'member-2'},{collection_id:'group-2',user_id:'other'}]},
-  'app.users':{columns:'id text,full_name text,momo_number text,phone text',rows:[{id:'member',full_name:'Different stored name',momo_number:null,phone:'0780000789'},{id:'member-2',full_name:'Same Member',momo_number:'0780000555',phone:null},{id:'other',full_name:'Independent Payer',phone:'0781000123'}]},
+  'app.users':{columns:'id text,full_name text,momo_number text,phone text',rows:[{id:'member',full_name:'Different stored name',momo_number:null,phone:'0780000789'},{id:'member-2',full_name:'Same Member',momo_number:'0780000555',phone:'0780000666'},{id:'other',full_name:'Independent Payer',phone:'0781000123'}]},
+  'app.roster_members':{columns:'collection_id text,linked_user_id text,member_name text,momo_name text,momo_number text',rows:[]},
  };
  const quote=value=>"'"+String(value).replaceAll("'","''")+"'";
  const sql={async unsafe(query,params){
@@ -51,13 +54,19 @@ async function qualifyPaymentSuggestions() {
  const list=(query={})=>listOnboardingSuggestions(sql,{groupId,...query},mode);
  const match=(candidateId,phone,group=groupId)=>findOnboardingCandidate(sql,{groupId:group,candidateId,phone},mode);
  const revision=()=>paymentSuggestionsRevision(sql,{groupId});
- const first=await list({limit:1}),next=await list({limit:1,after:first.after});
- assert.equal(first.totalCount,2);assert.deepEqual(first.after,{offset:1});assert.equal(next.after,null);
+ const first=await list({limit:2}),next=await list({limit:2,after:first.after});
+ assert.equal(first.totalCount,4);assert.deepEqual(first.after,{offset:2});assert.equal(next.after,null);
  const chosen=first.items[0];
  assert.deepEqual({...chosen,candidateId:'redacted'},{candidateId:'redacted',momoName:'Aline Example',last3:'123',sourceCount:2,latestSeenAt:'2026-11-23T08:09:10.000012Z'});
  assert.match(chosen.candidateId,/^[a-f0-9-]{14}8[a-f0-9-]{21}$/);
  assert.doesNotMatch(JSON.stringify(first),/0780000123|non-uuid-source-private|\+250/);
- assert.equal(next.items[0].candidateId,hint.id);assert.equal(next.items[0].latestSeenAt,created);
+ assert.deepEqual([...first.items,...next.items].map(x=>x.candidateId),[chosen.candidateId,sameHintA.id,sameHintB.id,hint.id]);
+ assert.equal(next.items[1].latestSeenAt,created);
+ assert.deepEqual((await list({q:'456'})).items.map(x=>[x.candidateId,x.sourceCount]),[[sameHintA.id,1],[sameHintB.id,1]]);
+ assert.deepEqual(await match(sameHintA.id,'0780000456'),{last3:'456'});
+ assert.deepEqual(await match(sameHintB.id,'0781000456'),{last3:'456'});
+ assert.equal(await match(sameHintA.id,'0781000456'),null);assert.equal(await match(sameHintB.id,'0780000456'),null);
+ assert.equal(await match(ambiguousMask.id,'0780000456'),null);
  assert.equal((await list({q:'ALI'})).totalCount,1);assert.equal((await list({q:'123'})).totalCount,2);
  assert.deepEqual(await match(chosen.candidateId,'0780000123'),{last3:'123'});
  assert.equal(await match(chosen.candidateId,'0781000123'),null);
@@ -67,6 +76,36 @@ async function qualifyPaymentSuggestions() {
  recent.allocation_state='allocated';assert.notEqual(await revision(),before);
  assert.equal(await match(chosen.candidateId,'0780000123'),null);
  assert.equal((await list({q:'Aline'})).items[0].candidateId,full.id);
+
+ add('Former Name','0780000123',{occurred_at:'2026-11-18T07:30:00Z'});
+ const former=await list({q:'former'});
+ assert.deepEqual(former.items.map(x=>[x.candidateId,x.momoName,x.sourceCount]),[[full.id,'Aline Example',2]]);
+ const secondNumber=add('Same Member','0789000555');
+ add('Same Member','0780000555');add('Same Member','*****666');
+ const sameName=await list({q:'Same Member'});
+ assert.deepEqual(sameName.items.map(x=>[x.candidateId,x.sourceCount]),[[secondNumber.id,1]]);
+ assert.deepEqual(await match(secondNumber.id,'0789000555'),{last3:'555'});
+ assert.equal(await match(secondNumber.id,'0780000555'),null);
+
+ const aliases=tables['app.roster_members'].rows;
+ const alias=add('Trading Name','*****001'),signup=add('Roster Name','*****001');
+ const exact=add('Different Payer Name','0781900001');
+ const unrelated=add('Other Person','*****001');
+ const beforeLink=await revision();
+ aliases.push({collection_id:groupId,linked_user_id:'member-2',member_name:'Roster Name',momo_name:'Trading Name',momo_number:'0781900001'});
+ assert.notEqual(await revision(),beforeLink);
+ for(const id of [alias.id,signup.id,exact.id])assert.equal(await match(id,'0781900001'),null);
+ assert.deepEqual((await list({q:'001'})).items.map(x=>x.candidateId),[unrelated.id]);
+ aliases.push({collection_id:'group-2',linked_user_id:'other',member_name:'Independent Payer',momo_name:'Other Person',momo_number:'0781900001'},
+  {collection_id:groupId,linked_user_id:null,member_name:'Independent Payer',momo_name:'Other Person',momo_number:'0781900001'});
+ assert.deepEqual((await list({q:'001'})).items.map(x=>x.candidateId),[unrelated.id]);
+
+ const tied={occurred_at:'2026-11-24T09:02:00Z'};
+ const recentZ=add('Zulu Example','***900',tied);
+ const recentA=add('Amber Example','***902',tied),recentA2=add('Amber Example','***901',tied);
+ const newest=add('Zed Example','***903',{occurred_at:'2026-11-24T09:02:00.000001Z'});
+ const page1=await list({limit:2}),page2=await list({limit:2,after:page1.after});
+ assert.deepEqual([...page1.items,...page2.items].map(x=>x.candidateId),[newest.id,recentA.id,recentA2.id,recentZ.id]);
  tables['app.collections'].rows[0].status='inactive';assert.equal((await list()).totalCount,0);
 }
 

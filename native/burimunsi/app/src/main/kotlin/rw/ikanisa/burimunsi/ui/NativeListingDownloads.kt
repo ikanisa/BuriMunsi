@@ -133,9 +133,10 @@ internal class NativeListingDownloads(
                 }
                 check()
                 val date = Instant.ofEpochMilli(clock()).atZone(zone).toLocalDate()
-                val name = "BuriMunsi-${selection.target.name.lowercase()}-$date.${format.extension}"
+                val report = if (selection.memberId != null) "member-statement" else selection.target.name.lowercase()
+                val name = "BuriMunsi-$report-$date.${format.extension}"
                 val download = DownloadRequest(id, name, format)
-                preparedDownload = PreparedDownload(download, file, readScope, contextCurrent, clock(), snapshot.validateLocal)
+                preparedDownload = PreparedDownload(download, file, readScope, { contextCurrent() && queryCurrent() }, clock(), snapshot.validateLocal)
                 val rows = snapshot.table.rowCount
                 feedback = UiExportFeedback(UiExportPhase.CHOOSING_DESTINATION, format, name, rows, rows, true)
                 request = download

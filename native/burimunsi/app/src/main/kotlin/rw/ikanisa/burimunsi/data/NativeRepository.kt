@@ -143,6 +143,7 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
     fun payment(id: String): Payment = records.payment(id)
     internal fun paymentRecord(id: String) = records.paymentRecord(id)
     fun member(id: String): Member = records.member(id)
+    internal fun member(id: String, scope: RecordReadScope): Member = records.member(id, scope)
     internal fun memberRecord(id: String) = records.memberRecord(id)
 
     fun sms(q: String = "", cursor: String? = null, filter: String = "all", limit: Int? = null): Page<SmsRow> =
@@ -201,8 +202,19 @@ class NativeRepository(context: Context, api: ApiClient, groupId: String? = null
             JSONObject().put("memberId",Values.id(member.id)).put("expectedVersion",p.version),allocation=p)
     }
     fun enroll(name:String,phone:String)=mutate("POST","/members",JSONObject().put("name",name.trim()).put("phone",Values.phone(phone)))
-    fun onboardingSuggestions(q:String,cursor:String?):JSONObject = JSONObject(sessions.request("GET","/members/suggestions"+
-        query(mapOf("q" to q,"cursor" to cursor,"limit" to "40"))))
+    fun onboardingSuggestions(q:String,cursor:String?):JSONObject {
+        val operator=current()?:throw ApiFailure("session_unavailable",401)
+        val scope=withCurrentProfile(operator){group,revision->
+            MemberImportScope(java.util.UUID.randomUUID().toString(),operator.id,group,revision)
+        }
+        return onboardingSuggestions(q,cursor,scope)
+    }
+    internal fun onboardingSuggestions(q:String,cursor:String?,scope:MemberImportScope):JSONObject {
+        val witness=memberImportWitness(scope)
+        val payload=sessions.requestOwned(witness,"GET","/members/suggestions"+query(mapOf("q" to q,"cursor" to cursor,"limit" to "40")))
+        memberImportWitness(scope)
+        return JSONObject(payload)
+    }
     // Android can deliver a picker result while an unchanged grant is being renewed. The
     // original actor, collection and process generation survive an updated expiry timestamp.
     private fun <T> memberImportBinding(scope: MemberImportScope, action: (Operator, SessionWitness) -> T): T {

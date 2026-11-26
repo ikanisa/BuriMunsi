@@ -85,7 +85,7 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
     }){
         Box(Modifier.matchParentSize().background(Color.Black.copy(alpha=BuriTheme.WashScrimAlpha)))
         Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()){
-            Header(if(gate==ScreenGate.OPEN)s.copy(route=displayedRoute) else s.copy(operator=null),model,onSupport)
+            Header(if(gate==ScreenGate.OPEN)s.copy(route=displayedRoute) else s.copy(operator=null),model,onSupport,openExport)
                 if(showRouteProgress) BuriOperationFeedback(model.operation,model.operationLabel)
                 s.commandNotice?.takeIf{read && !sheetOpen}?.let{notice->
                     BuriStatusMessage(notice,warning=true)
@@ -148,7 +148,7 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
                                 }
                             }
                         }
-                        RouteEntrance(t(titleFor(s.route)),onFullyDrawn){when(s.route){
+                        RouteEntrance(t(if(s.isMemberStatement)"Member statement" else titleFor(s.route)),onFullyDrawn){when(s.route){
                         Route.LOGIN->Login(s.busy||s.configurationRequired||s.passcodeChangePending||s.savedSessionPending,
                             s.busy&&model.operation==UiOperation.SIGN_IN,model::login,onSupport,!s.busy)
                         Route.HOME->HomeScreen(s,model)
@@ -186,7 +186,7 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
     }
 }
 
-@Composable private fun Header(s:UiState,m:BuriController,onSupport:()->Unit){
+@Composable private fun Header(s:UiState,m:BuriController,onSupport:()->Unit,onExport:()->Unit){
     val t=LocalUiText.current
     val enabled=!s.busy&&m.screenGate==ScreenGate.OPEN
     Row(Modifier.fillMaxWidth().heightIn(min=62.dp).padding(horizontal=16.dp,vertical=6.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)){
@@ -197,6 +197,16 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
                 CompactLabel(t(titleFor(s.route)),Modifier.weight(1f),fontSize=16.sp,color=BuriTheme.Muted,textAlign=TextAlign.Center)
                 Spacer(Modifier.width(48.dp))
             }
+            Route.PAYMENTS->{
+                if(s.isMemberStatement && s.operator!=null){
+                    RoundAction(R.drawable.ic_back,t("Back"),m::back,enabled,size=48,tonal=false)
+                    Text(t("Member statement"),Modifier.weight(1f).semantics{heading()},style=MaterialTheme.typography.titleLarge)
+                    if(m.canExportListing)RoundAction(R.drawable.ic_download,t("Download statement"),onExport,enabled&&!s.offline,size=48)
+                }else{
+                    Text(t("Payments"),Modifier.weight(1f).semantics{heading()},style=MaterialTheme.typography.headlineMedium)
+                    RoundAction(R.drawable.ic_filter,t("Payment filters"),{m.openSheet(Sheet.FILTERS)},enabled,size=48)
+                }
+            }
             else->{
                 when(s.route){
                     Route.HOME->{Brand();Spacer(Modifier.weight(1f))}
@@ -204,12 +214,14 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
                     else->CompactLabel(t(titleFor(s.route)),Modifier.weight(1f).semantics{heading()},style=MaterialTheme.typography.headlineMedium)
                 }
                 if(s.route==Route.HOME&&s.operator!=null)RoundAction(R.drawable.ic_sync,t("Refresh"),m::refresh,enabled,size=48,tonal=false)
-                if(s.route==Route.MEMBERS&&m.allows(Capability.ENROLL))RoundAction(R.drawable.ic_plus,t("Add member"),{m.openSheet(Sheet.ENROLL)},enabled&&!s.offline,size=48)
-                if(s.route==Route.PAYMENTS)RoundAction(R.drawable.ic_filter,t("Payment filters"),{m.openSheet(Sheet.FILTERS)},enabled,size=48)
+                val enrollmentRoute = s.route == Route.HOME || s.route == Route.MEMBERS
+                if (enrollmentRoute && s.operator != null && m.allows(Capability.ENROLL)) {
+                    RoundAction(R.drawable.ic_plus,t("Add member"),{m.openSheet(Sheet.ENROLL)},enabled&&!s.offline,size=48)
+                }
                 when(s.route){
                     Route.SETTINGS->RoundAction(R.drawable.ic_out,t("Sign out"),m::logout,enabled,size=48,tonal=false)
                     Route.SMS->RoundAction(R.drawable.ic_device,t("Gateway status"),{m.openSheet(Sheet.GATEWAY)},enabled,size=48)
-                    else->IconButton({m.openSheet(Sheet.PROFILE)},enabled=enabled,modifier=Modifier.size(48.dp).semantics{contentDescription=t("Your profile")}){Avatar(s.operator?.name.orEmpty(),42)}
+                    else->Unit
                 }
             }
         }

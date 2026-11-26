@@ -40,15 +40,19 @@ class UiUxContract(unittest.TestCase):
         cls.vm = (UI/'BuriViewModel.kt').read_text()
     def test_resources_regenerate_exactly(self):
         for path,text in generator.generated().items():self.assertEqual(path.read_text(),text,str(path))
-    def test_both_languages_have_identical_resource_keys(self):
-        keys=[]
-        for directory in ('values','values-rw'):
-            values=ET.parse(NATIVE/f'app/src/main/res/{directory}/ui_strings.xml').getroot()
-            keys.append([e.attrib['name'] for e in values]);self.assertTrue(all(e.text for e in values))
-        self.assertEqual(keys[0],keys[1]);self.assertEqual(len(keys[0]),len(CAT['entries']))
-    def test_catalog_has_unique_phrases_and_placeholder_parity(self):
+    def test_only_english_copy_is_packaged(self):
+        resources=NATIVE/'app/src/main/res'
+        english=resources/'values/ui_strings.xml'
+        self.assertEqual(CAT['languages'],['en'])
+        self.assertEqual(list(resources.glob('values*/ui_strings.xml')),[english])
+        values=ET.parse(english).getroot()
+        self.assertEqual([e.attrib['name'] for e in values],[e['key'] for e in CAT['entries']])
+        self.assertTrue(all(e.text for e in values))
+    def test_english_copy_uses_unique_phrases_and_positional_placeholders(self):
         self.assertEqual(len(COPY),len(CAT['entries']))
-        for e in CAT['entries']:self.assertEqual(sorted(re.findall(r'%\d+\$[sd]',e['en'])),sorted(re.findall(r'%\d+\$[sd]',e['rw'])),e['en'])
+        generator.validate_catalog([{'key':e['key'],'en':e['en']} for e in CAT['entries']])
+        with self.assertRaises(ValueError):
+            generator.validate_catalog([{'key':'ui_bad','en':'Row %d'}])
     def test_all_financial_presentation_copy_is_localized(self):
         source=(NATIVE/'core/src/main/kotlin/rw/ikanisa/burimunsi/core/Presentation.kt').read_text()
         for phrase in re.findall(r'"([A-Z][^"\n]+)"',source):self.assertIn(phrase,COPY)
@@ -90,9 +94,7 @@ class UiUxContract(unittest.TestCase):
             self.assertIn(phrase,COPY,phrase)
     def test_direct_text_literals_are_brand_or_decorative(self):
         brands={'BuriMunsi','BuriMunsi · Collect'}
-        # This icon is decorative and explicitly removed from accessibility semantics.
-        self.assertIn('Text("+",Modifier.clearAndSetSemantics{}',self.app)
-        self.assertLessEqual(set(re.findall(r'\bText\("([^"\n]+)"',self.app)),brands|{'+'})
+        self.assertLessEqual(set(re.findall(r'\bText\("([^"\n]+)"',self.app)),brands)
     def test_sanitized_prototype_reference_is_byte_exact(self):
         provenance=json.loads((PROTOTYPE/'provenance.json').read_text())
         self.assertEqual(provenance['prototype_name'],'BuriMunsi_Prototype_v1.1.0.html')
@@ -115,10 +117,13 @@ class UiUxContract(unittest.TestCase):
         self.assertIn('SelectionContainer{Text(raw.body',self.app)
     def test_supported_languages_are_explicit(self):
         root=ET.parse(NATIVE/'app/src/main/res/xml/locales_config.xml').getroot()
-        self.assertEqual({e.attrib['{http://schemas.android.com/apk/res/android}name'] for e in root},{'en','rw'})
+        self.assertEqual({e.attrib['{http://schemas.android.com/apk/res/android}name'] for e in root},{'en'})
+        gradle=(NATIVE/'app/build.gradle.kts').read_text()
+        packaged={tag for line in gradle.splitlines() if 'localeFilters' in line for tag in re.findall(r'"([^"]+)"',line)}
+        self.assertEqual(packaged,{'en'})
     def test_display_preferences_never_store_operator_data(self):
         source=(UI/'UiPreferences.kt').read_text()
-        self.assertEqual(set(re.findall(r'put(?:String|Boolean)\("([^"]+)"',source)),{'language','reduce-screen-motion'})
+        self.assertEqual(set(re.findall(r'put(?:String|Boolean)\("([^"]+)"',source)),{'reduce-screen-motion'})
     def test_navigation_store_uses_existing_encrypted_boundary(self):
         source=(NATIVE/'app/src/main/kotlin/rw/ikanisa/burimunsi/storage/AndroidNavigationCheckpointStore.kt').read_text()
         self.assertIn('SecureStore(context, "ui-navigation")',source);self.assertNotIn('getSharedPreferences(',source)
@@ -126,7 +131,7 @@ class UiUxContract(unittest.TestCase):
         self.assertNotIn('rememberSaveable',self.app);self.assertNotIn('SavedStateHandle',self.vm)
         self.assertIn('state.selectedMember',self.vm);self.assertIn('draft=emptyMap()',self.vm)
     def test_all_original_routes_are_rendered(self):
-        body=self.shell.split('RouteEntrance(t(titleFor(s.route)),onFullyDrawn){when(s.route){',1)[1].split('}}}',1)[0]
+        body=self.shell.split('RouteEntrance(',1)[1].split('when(s.route){',1)[1].split('}}}',1)[0]
         expected={screen['route'].upper() for screen in ORIGINAL_MAP['screens']}
         self.assertEqual(set(re.findall(r'Route\.(\w+)->',body)),expected)
     def test_all_original_panels_are_rendered(self):
@@ -137,7 +142,9 @@ class UiUxContract(unittest.TestCase):
         self.assertEqual(set(re.findall(r'Sheet\.(\w+)->',panel_body)),set(PANEL_BINDINGS.values()))
         self.assertEqual(PANEL_ROUTE_REPLACEMENTS['history-payment'],'PAYMENT')
         records=self.app_units['BuriRecordsScreens.kt']
-        self.assertRegex(records,r'itemsIndexed\(payments,key=\{_,p->p\.id\}\).*?m\.navigate\(Route\.PAYMENT,p\.id\)')
+        payment_rows=records.split('itemsIndexed(payments,key={_,p->p.id})',1)[1].split('if(s.payments?.items?.isEmpty()',1)[0]
+        self.assertIn('if(statement)null else PaymentPresentation.linkedMemberId(p)',payment_rows)
+        self.assertIn('if(memberId!=null)m.navigate(Route.PAYMENTS,memberId) else m.navigate(Route.PAYMENT,p.id)',payment_rows)
         self.assertIn('Route.PAYMENT->PaymentScreen(s,model)',self.shell)
         self.assertIn('Route.PAYMENT->Route.PAYMENTS',self.vm)
         self.assertRegex(self.vm,r'Route\.PAYMENT->\{\s*val id=state\.routeId\?:state\.payment\?\.id\?:return\s*refreshPayment\(id\)')
@@ -179,13 +186,13 @@ class UiUxContract(unittest.TestCase):
             r'(?:LocalDensity\.current\.)?fontScale\s*>=\s*[\d.]+f',
         )
         self.assertRegex(payment,r'if\(stacked\)\{\s*Spacer[^\n]+\s*MoneyText\(p\.amountRwf,Modifier\.fillMaxWidth\(\),20,showHint=true\)')
-        # Compact member rows no longer have a trailing amount; give the name
-        # and wrapping phone line the available width instead of clipping it.
+        # Both identity lines share the available width. Compact labels keep
+        # their full text in the accessibility tree when the display truncates.
         member = records.split('fun MemberRow(', 1)[1].split('@Composable', 1)[0]
         self.assertIn('Row(Modifier.fillMaxWidth()',member)
         self.assertIn('Column(Modifier.weight(1f))',member)
         self.assertIn('SingleLineName(member.name',member)
-        self.assertRegex(member,r'Text\(if\(member\.active\)member\.phone')
+        self.assertRegex(member,r'CompactLabel\(if\(member\.active\)member\.phone')
         self.assertNotRegex(member,r'maxLines\s*=|softWrap\s*=\s*false')
         self.assertIn('semantics(mergeDescendants=true)',member)
         # The replaced ledger sheet no longer has an inline financial row.

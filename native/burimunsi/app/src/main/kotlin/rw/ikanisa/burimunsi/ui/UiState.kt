@@ -26,6 +26,7 @@ data class UiState(
     val listRestoration:ListRestoreStop?=null,
     val memberAnchorId: String? = null, val memberWindowStartId: String? = null,
     val memberListing: ListingQuery? = null, val memberViewportRevision: Long = 0,
+    val statementListing: ListingQuery? = null,
     val sheetId:String?=null,
     val allocationQuery:String="",val draft:Map<String,String> = emptyMap(),val draftDirty:Boolean=false,val discardRequested:Boolean=false,
     val onboarding:SmartOnboardingState=SmartOnboardingState(),

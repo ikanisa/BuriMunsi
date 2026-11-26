@@ -45,9 +45,12 @@ internal class NativeListingQueries(private val collectionId: () -> String?) {
 
     fun queryFor(state: UiState, target: ListingTarget): ListingQuery {
         val restored = state.memberListing.takeIf { target == ListingTarget.MEMBERS && state.route == Route.MEMBERS }
-        val saved = context(state)?.let(queries::get) ?: restored ?: ListingQuery.defaultsFor(target)
+        val statement = target == ListingTarget.PAYMENTS && state.route == Route.PAYMENTS && state.routeId != null
+        val saved = (if (statement) state.statementListing else context(state)?.let(queries::get) ?: restored)
+            ?: ListingQuery.defaultsFor(target)
         return when {
             target == ListingTarget.SMS -> saved.copy(q = "", filter = state.filter)
+            statement && state.sheet == Sheet.FILTERS -> saved.copy(q = state.search, filter = state.filter)
             state.sheet == null && state.route in setOf(Route.PAYMENTS, Route.MEMBERS) ->
                 saved.copy(q = state.search, filter = if (target == ListingTarget.PAYMENTS) state.filter else "all")
             else -> saved
@@ -82,14 +85,17 @@ internal class NativeListingQueries(private val collectionId: () -> String?) {
     }
 
     fun apply(state: UiState, target: ListingTarget, query: ListingQuery): UiState {
-        context(state)?.let { queries = queries + (it to query) }
+        val context = context(state)
         val surface = restoreOrigin(state) ?: state
+        val statement = target == ListingTarget.PAYMENTS && surface.route == Route.PAYMENTS && surface.routeId != null
+        if (!statement && context != null) queries = queries + (context to query)
         return surface.copy(
             listIndex = 0,
             listOffset = 0,
             listRestoration = null,
             memberAnchorId = surface.memberAnchorId.takeUnless { target == ListingTarget.MEMBERS },
             memberWindowStartId = surface.memberWindowStartId.takeUnless { target == ListingTarget.MEMBERS },
+            statementListing = if (statement) query else surface.statementListing,
             search = if (surface.sheet == null && surface.route in setOf(Route.PAYMENTS, Route.MEMBERS)) query.q else surface.search,
             filter = if (surface.sheet == null && surface.route in setOf(Route.PAYMENTS, Route.SMS)) query.filter else surface.filter,
         )

@@ -3,6 +3,7 @@ package rw.ikanisa.burimunsi.ui
 import org.json.JSONArray
 import org.json.JSONObject
 import rw.ikanisa.burimunsi.core.SmartCandidate
+import rw.ikanisa.burimunsi.core.MemberImportScope
 import rw.ikanisa.burimunsi.core.SmartImportResult
 import rw.ikanisa.burimunsi.core.SmartImportRow
 import rw.ikanisa.burimunsi.core.SmartOnboardingPresentation
@@ -14,30 +15,36 @@ import rw.ikanisa.burimunsi.data.NativeRepository
 
 /** Translates the registration wire contract for both native product flavors. */
 internal class NativeMemberRegistration(private val repository: () -> NativeRepository) {
-    data class Suggestions(val query: String, val items: List<SmartCandidate>, val nextCursor: String?)
+    data class Suggestions(val query: String, val items: List<SmartCandidate>, val nextCursor: String?, val revision: String)
 
-    fun suggestions(query: String, cursor: String?): Suggestions {
+    fun suggestions(query: String, cursor: String?, scope: MemberImportScope): Suggestions {
         val normalized = query.trim()
         checkContract(normalized.length <= 80, "invalid_query")
-        val result = repository().onboardingSuggestions(normalized, cursor)
+        val result = repository().onboardingSuggestions(normalized, cursor, scope)
         val rows = result.getJSONArray("items")
+        checkContract(rows.length() <= 40, "invalid_page")
         val items = (0 until rows.length()).map { index ->
             val row = rows.getJSONObject(index)
+            checkContract(row.getString("groupId") == scope.collectionId && row.getString("id") == row.getString("candidateId"), "invalid_page")
             SmartCandidate(
                 row.getString("candidateId"), row.getString("momoName"), row.getString("last3"),
                 if (row.isNull("latestSeenAt")) null else row.getString("latestSeenAt"),
                 row.getInt("sourceCount"),
             )
         }
-        return Suggestions(normalized, items, if (result.isNull("nextCursor")) null else result.getString("nextCursor"))
+        val next = if(result.isNull("nextCursor")) null else result.getString("nextCursor")
+        val revision=result.getString("revision")
+        checkContract(revision.isNotBlank() && (next==null || next.isNotBlank() && next!=cursor && items.isNotEmpty()), "invalid_page")
+        return Suggestions(normalized,items,next,revision)
     }
 
     fun showSuggestions(state: SmartOnboardingState, page: Suggestions, continuing: Boolean): SmartOnboardingState {
+        checkContract(state.step == SmartOnboardingStep.SUGGESTIONS && state.query.trim() == page.query, "invalid_page")
         val items = (if (continuing) state.suggestions else emptyList()) + page.items
         checkContract(items.map { it.candidateId }.toSet().size == items.size, "invalid_page")
         return state.copy(
-            step = SmartOnboardingStep.SUGGESTIONS, query = page.query, suggestions = items,
-            nextCursor = page.nextCursor, suggestionsLoaded = true,
+            suggestions = items, nextCursor = page.nextCursor, suggestionsLoaded = true,
+            suggestionsLoading = false, suggestionsFailed = false,
         )
     }
 

@@ -32,6 +32,11 @@ test('a nonempty masked suggestion conforms to the installed native wire contrac
  const r=await handler(req('/members/suggestions?limit=20'));assert.equal(r.status,200);
  const result=await r.json();assert.deepEqual(result.data.items,[{id,groupId:'group-1',...state.suggestions[0]}]);
  assert.equal(result.data.totalCount,1);assert.equal(JSON.stringify(result).includes('+250'),false);
+ state.enroll=false;
+ const denied=await handler(req('/members/suggestions'));
+ assert.equal(denied.status,403);assert.doesNotMatch(await denied.text(),/Synthetic Person/);
+ state.enroll=true;state.authorized=false;
+ assert.equal((await handler(req('/members/suggestions'))).status,401);
 });
 test('CSV preview accepts a bounded upload larger than ordinary native commands',async()=>{
  const {handler,req}=fixture();const csv='name,phone\n'+Array.from({length:300},(_,i)=>`Synthetic Person ${i},0780000${String(i).padStart(3,'0')}`).join('\n');

@@ -29,6 +29,7 @@ data class SmartOnboardingState(
     val verifiedOwnership:Boolean=false,val acceptedTerms:Boolean=false,val consentRecorded:Boolean=false,
     val results:List<SmartImportResult> = emptyList(),val created:Int=0,
     val documentRequestId:String?=null,
+    val suggestionsLoading:Boolean=false,val suggestionsFailed:Boolean=false,
 ) {
     override fun toString()="SmartOnboardingState(redacted)"
 }

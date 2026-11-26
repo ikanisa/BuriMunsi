@@ -49,7 +49,6 @@
     <string name="ui_19874eb94ce0">Check replacement</string>
     <string name="ui_1a0cae1ddbf6">Contact admin on WhatsApp</string>
     <string name="ui_1bb201d18835">Allowed</string>
-    <string name="ui_1bca71ee64ce">Open members</string>
     <string name="ui_1c0f923cf419">Business SIM inserted</string>
     <string name="ui_1c4227260244">Minimum RWF</string>
     <string name="ui_1c5ea2f7ed52">Pairing code</string>
@@ -162,7 +161,6 @@
     <string name="ui_501890b4d3f2">The previous action was rejected. Review the records before starting a different action.</string>
     <string name="ui_50fd2d013178">How would you like to add members?</string>
     <string name="ui_51425840dd18">%1$d accounts</string>
-    <string name="ui_528d89ad72cb">Your profile</string>
     <string name="ui_52d26f44d33f">Allocated</string>
     <string name="ui_531c7e4f2533">Sync notifications</string>
     <string name="ui_5322896cdbcb">Copy installation ID</string>
@@ -225,7 +223,6 @@
     <string name="ui_70ca20006988">Pair receiver</string>
     <string name="ui_720516990ea1">Refresh the receiving-phone status.</string>
     <string name="ui_721d760fb78c">Requesting code…</string>
-    <string name="ui_7363bfa0b722">Use phone language</string>
     <string name="ui_737cc799a9ff">Checking session and records</string>
     <string name="ui_73c1e73fc0a4">Offline qualification</string>
     <string name="ui_746bc3055625">Show passcode</string>
@@ -328,7 +325,6 @@
     <string name="ui_a247212afa59">Phone setup is unavailable. Try again or contact admin.</string>
     <string name="ui_a3077040dcb8">Cancel export</string>
     <string name="ui_a4717b6543d6">Any date</string>
-    <string name="ui_a4fe65264ef7">Language</string>
     <string name="ui_a52ace420f21">All</string>
     <string name="ui_a5cf24c97076">%1$d unallocated</string>
     <string name="ui_a60a56c584b3">Hide password</string>
@@ -376,10 +372,8 @@
     <string name="ui_b7a341cc1e2a">Still awaiting an authoritative outcome. Do not repeat this action; contact the administrator if it remains unresolved.</string>
     <string name="ui_b7d7d4625570">Open the member before exporting.</string>
     <string name="ui_b7e3e4aa4257">Disable</string>
-    <string name="ui_b84f181f5d35">Open payments</string>
     <string name="ui_b8fe528f5786">Welcome\nback.</string>
     <string name="ui_b968f42334e1">Open the app to resume sync</string>
-    <string name="ui_ba118bf7fc9c">English</string>
     <string name="ui_bb349bfe6750">Remove access</string>
     <string name="ui_bba4eb05c238">Check the filters and try again.</string>
     <string name="ui_bc081c521052">The sign-in request was not confirmed. Check your connection or contact admin.</string>
@@ -440,7 +434,6 @@
     <string name="ui_d6af7656e7bb">Enter a verified MoMo name and number</string>
     <string name="ui_d742dbb324f0">Signed out on this phone. Server sign-out could not be confirmed.</string>
     <string name="ui_d79e3527848d">This PDF exceeds the page limit. Narrow the filters and try again.</string>
-    <string name="ui_d7d073abc6cd">Ikinyarwanda</string>
     <string name="ui_d8a2bdc0653a">Access status</string>
     <string name="ui_d8cd49e46835">Whole RWF values. Leave empty for no limit.</string>
     <string name="ui_da2cb4d3e314">Offline. Reconnect and refresh.</string>
@@ -574,7 +567,6 @@
     <string name="ui_home_outgoing_total">Total outgoing payments</string>
     <string name="ui_home_wallet_last_sms">MoMo balance · last SMS</string>
     <string name="ui_home_savings_unavailable">Savings figures unavailable.</string>
-    <string name="ui_home_savings_mismatch">Contributions less outgoing payments differ from the last MoMo balance.</string>
     <string name="ui_home_wallet_check_unavailable">Wallet reconciliation needs a verified opening balance and a complete record of payments and fees.</string>
     <string name="ui_home_recorded_outgoing">Recorded outgoing payments</string>
     <string name="ui_home_loading_savings">Loading savings</string>
@@ -583,4 +575,29 @@
     <string name="ui_home_wallet_sms_balance">Latest MoMo SMS balance</string>
     <string name="ui_home_wallet_difference">Wallet difference</string>
     <string name="ui_home_wallet_loading">Loading payment totals</string>
+    <string name="ui_enroll_momo_suggestions">MoMo suggestions</string>
+    <string name="ui_enroll_scan_list">Scan a list</string>
+    <string name="ui_member_statement">Member statement</string>
+    <string name="ui_open_member_statement">Open member statement</string>
+    <string name="ui_payment_details">Payment details</string>
+    <string name="ui_search_transactions">Search transactions</string>
+    <string name="ui_payment_search_hint">Name or payment reference</string>
+    <string name="ui_clear_search">Clear search</string>
+    <string name="ui_one_member">1 member</string>
+    <string name="ui_one_transaction">1 transaction</string>
+    <string name="ui_transaction_count">%1$d transactions</string>
+    <string name="ui_no_transactions">No transactions</string>
+    <string name="ui_filter_count">Filters (%1$d)</string>
+    <string name="ui_add_from_momo">Add from MoMo</string>
+    <string name="ui_payer_picker_scope">Payers who haven’t joined this group.</string>
+    <string name="ui_payer_picker_search">Name or last 3 digits</string>
+    <string name="ui_payer_payment_single">1 payment</string>
+    <string name="ui_payer_payment_count">%1$d payments</string>
+    <string name="ui_momo_number_ending">MoMo number ending in %1$s</string>
+    <string name="ui_payer_number_and_count">••• %1$s · %2$s</string>
+    <string name="ui_payer_review">Review payer</string>
+    <string name="ui_payer_loading">Finding payers</string>
+    <string name="ui_payer_load_error">Couldn’t load payers</string>
+    <string name="ui_payer_no_matches">No matching payers</string>
+    <string name="ui_payer_empty">No new payers yet</string>
 </resources>

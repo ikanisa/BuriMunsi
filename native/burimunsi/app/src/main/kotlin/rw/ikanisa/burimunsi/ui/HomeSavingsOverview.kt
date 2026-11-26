@@ -6,24 +6,27 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import app.cool.mobile.R
 import java.text.NumberFormat
 import rw.ikanisa.burimunsi.core.HomeSavings
 import rw.ikanisa.burimunsi.core.HomeWalletTotals
+import rw.ikanisa.burimunsi.core.Presentation
 
 @Composable
 internal fun HomeWalletOverview(totals: HomeWalletTotals?, smsAllowed: Boolean) {
@@ -42,41 +45,18 @@ internal fun HomeWalletOverview(totals: HomeWalletTotals?, smsAllowed: Boolean) 
         }
         val outgoing = totals?.let { format.format(it.outgoingRwf) }
         val balance = totals?.latestSmsBalanceRwf?.let { format.format(it) }
-        BoxWithConstraints(Modifier.fillMaxWidth()) {
-            if (!showSms) WalletCard(outgoing, wallet=false, modifier=Modifier.fillMaxWidth())
-            else if (maxWidth < 278.dp * LocalDensity.current.fontScale || maxOf(outgoing?.length ?: 0, balance?.length ?: 0) > 16) {
-                Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
-                    WalletCard(outgoing, wallet=false, modifier=Modifier.fillMaxWidth())
-                    WalletCard(balance, wallet=true, modifier=Modifier.fillMaxWidth())
-                }
-            } else Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                WalletCard(outgoing, wallet=false, modifier=Modifier.weight(1f))
-                WalletCard(balance, wallet=true, modifier=Modifier.weight(1f))
-            }
-        }
+        WalletAmounts(
+            outgoing = outgoing,
+            outgoingLabel = t("Cumulative outgoing payments"),
+            balance = balance,
+            balanceLabel = if (showSms) t("Latest MoMo SMS balance") else null,
+        )
         val gap = totals?.walletGapRwf
         if (showSms && gap != null && gap.signum() != 0) {
             val value = format.format(gap) + " " + t("RWF")
             Text(t("Wallet difference") + " · " + value, color=BuriTheme.Muted, fontSize=14.sp,
                 textAlign=TextAlign.Center, lineHeight=20.sp)
         }
-    }
-}
-
-@Composable
-private fun WalletCard(value: String?, wallet: Boolean, modifier: Modifier) {
-    val t = LocalUiText.current
-    val label = if (wallet) t("Latest MoMo SMS balance") else t("Cumulative outgoing payments")
-    val amount = value?.let { it + " " + t("RWF") } ?: t("Unavailable")
-    Column(modifier.heightIn(min=64.dp)
-        .background(BuriTheme.Tone,RoundedCornerShape(18.dp))
-        .clearAndSetSemantics { contentDescription = "$label · $amount" }.padding(12.dp),
-        horizontalAlignment=Alignment.CenterHorizontally, verticalArrangement=Arrangement.spacedBy(4.dp,Alignment.CenterVertically)) {
-        Row(horizontalArrangement=Arrangement.spacedBy(5.dp),verticalAlignment=Alignment.CenterVertically) {
-            Glyph(if(wallet)R.drawable.ic_home_wallet else R.drawable.ic_home_outgoing,null,BuriTheme.Text,18)
-            CompactLabel(label,color=BuriTheme.Text,fontSize=13.sp,lineHeight=17.sp,fontWeight=FontWeight.Medium)
-        }
-        SavingsAmount(value,primary=false,ink=BuriTheme.Text,unitInk=BuriTheme.Text)
     }
 }
 
@@ -89,31 +69,21 @@ internal fun HomeSavingsOverview(savings:HomeSavings?) {
     Column(Modifier.fillMaxWidth().padding(top=12.dp,bottom=4.dp),horizontalAlignment=Alignment.CenterHorizontally) {
         SavingsAmount(lifetime?.let { money(it,t.locale) },primary=true,ink=BuriTheme.Text,unitInk=BuriTheme.Muted,
             modifier=Modifier.clearAndSetSemantics { heading(); contentDescription=lifetimeDescription })
-        Spacer(Modifier.height(18.dp))
-        BoxWithConstraints(Modifier.fillMaxWidth()) {
-            val stacked=maxWidth < 256.dp * LocalDensity.current.fontScale + 8.dp
-            if(stacked) {
-                Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
-                    SavingsCard(savings,wallet=false,modifier=Modifier.fillMaxWidth())
-                    SavingsCard(savings,wallet=true,modifier=Modifier.fillMaxWidth())
-                }
-            } else {
-                Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                    SavingsCard(savings,wallet=false,modifier=Modifier.weight(1f))
-                    SavingsCard(savings,wallet=true,modifier=Modifier.weight(1f))
-                }
-            }
-        }
-        val message=when {
-            savings==null -> t("Savings figures unavailable.")
-            savings.reconciliationStatus=="mismatch" -> t("Contributions less outgoing payments differ from the last MoMo balance.")
-            savings.reconciliationStatus=="unavailable" -> t("Wallet reconciliation needs a verified opening balance and a complete record of payments and fees.")
+        Spacer(Modifier.height(12.dp))
+        WalletAmounts(
+            outgoing = savings?.outgoingPaymentsRwf?.let { money(it, t.locale) },
+            outgoingLabel = t(if (savings.showsRecordedOutgoing()) "Recorded outgoing payments" else "Total outgoing payments"),
+            balance = savings?.latestWalletBalanceRwf?.let { money(it, t.locale) },
+            balanceLabel = t("MoMo balance · last SMS"),
+        )
+        val availabilityMessage = when {
+            savings == null -> t("Savings figures unavailable.")
+            savings.reconciliationStatus == "unavailable" -> t("Wallet reconciliation needs a verified opening balance and a complete record of payments and fees.")
             else -> null
         }
-        if(message!=null) {
+        if (availabilityMessage != null) {
             Spacer(Modifier.height(8.dp))
-            Text(message,fontSize=14.sp,lineHeight=20.sp,textAlign=TextAlign.Center,
-                color=if(savings?.reconciliationStatus=="mismatch")BuriTheme.Warn else BuriTheme.Muted)
+            Text(availabilityMessage, fontSize=14.sp, lineHeight=20.sp, textAlign=TextAlign.Center, color=BuriTheme.Muted)
         }
     }
 }
@@ -122,44 +92,75 @@ private fun HomeSavings?.showsRecordedOutgoing():Boolean =
     this != null && reconciliationStatus=="unavailable" && outgoingPaymentsRwf!=null
 
 @Composable
-private fun SavingsCard(savings:HomeSavings?,wallet:Boolean,modifier:Modifier) {
-    val t=LocalUiText.current
-    val value=if(wallet)savings?.latestWalletBalanceRwf else savings?.outgoingPaymentsRwf
-    val label=when {
-        wallet -> t("MoMo balance · last SMS")
-        savings.showsRecordedOutgoing() -> t("Recorded outgoing payments")
-        else -> t("Total outgoing payments")
-    }
-    val formatted=value?.let { money(it,t.locale) }
-    val amount=formatted?.let { it+" "+t("RWF") } ?: t("Unavailable")
-    val description="$label · $amount"
-    Row(modifier.heightIn(min=60.dp)
-        .background(BuriTheme.Tone,RoundedCornerShape(18.dp))
-        .clearAndSetSemantics { contentDescription=description }.padding(horizontal=6.dp,vertical=12.dp),
-        verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(5.dp,Alignment.CenterHorizontally)) {
-        Glyph(if(wallet)R.drawable.ic_home_wallet else R.drawable.ic_home_outgoing,null,BuriTheme.Text,24)
-        SavingsAmount(formatted,primary=false,ink=BuriTheme.Text,unitInk=BuriTheme.Text,modifier=Modifier.weight(1f,fill=false))
+private fun WalletAmounts(outgoing: String?, outgoingLabel: String, balance: String?, balanceLabel: String?) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        SavingsCard(outgoing, outgoingLabel, R.drawable.ic_home_outgoing)
+        if (balanceLabel != null) SavingsCard(balance, balanceLabel, R.drawable.ic_home_wallet)
     }
 }
 
 @Composable
-private fun SavingsAmount(value:String?,primary:Boolean,ink:Color,unitInk:Color,modifier:Modifier = Modifier) {
-    val t=LocalUiText.current
-    val baseSize=when {
-        !primary -> 19
-        value == null || value.length > 24 -> 32
-        value.length > 14 -> 42
-        else -> 64
+private fun SavingsCard(formatted: String?, label: String, icon: Int) {
+    val t = LocalUiText.current
+    val amount=formatted?.let { it+" "+t("RWF") } ?: t("Unavailable")
+    val description="$label · $amount"
+    Row(Modifier.heightIn(min=36.dp)
+        .background(BuriTheme.Tone,RoundedCornerShape(14.dp))
+        .clearAndSetSemantics { contentDescription=description }
+        .padding(horizontal=12.dp,vertical=6.dp),
+        verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(4.dp)) {
+        Glyph(icon,null,BuriTheme.Text,20)
+        SavingsAmount(formatted,primary=false,ink=BuriTheme.Text,unitInk=BuriTheme.Text)
     }
-    val text=buildAnnotatedString {
-        if(value==null)append(t("Unavailable")) else {
+}
+
+@Composable
+private fun SavingsAmount(value: String?, primary: Boolean, ink: Color, unitInk: Color, modifier: Modifier = Modifier) {
+    val t = LocalUiText.current
+    val digits = value?.count(Char::isDigit) ?: 0
+    val extraDigits = (digits - if (primary) 5 else 4).coerceAtLeast(0)
+    val preferredSize = when {
+        primary && value == null -> 32
+        primary -> (64 - 3 * extraDigits).coerceAtLeast(32)
+        else -> (19 - (extraDigits + 1) / 2).coerceAtLeast(Presentation.MONEY_MIN_SP)
+    }
+    val weight = if (primary) 500 - 15 * extraDigits else 600 - 25 * extraDigits
+    val style = LocalTextStyle.current.copy(
+        color = ink, fontWeight = FontWeight(weight.coerceAtLeast(FontWeight.Normal.weight)),
+        fontFeatureSettings = "tnum", textAlign = TextAlign.Center,
+    )
+    val unitScale = if (primary) minOf(23f / preferredSize, .55f) else 13f / preferredSize
+    val text = buildAnnotatedString {
+        if (value == null) append(t("Unavailable")) else {
             append(value)
-            withStyle(SpanStyle(color=unitInk,fontSize=(if(primary)23 else 13).sp,fontWeight=FontWeight.Medium)) {
-                append(" "+t("RWF"))
+            withStyle(SpanStyle(color = unitInk, fontSize = unitScale.em, fontWeight = FontWeight.Medium)) {
+                append(" " + t("RWF"))
             }
         }
     }
-    Text(text,modifier=modifier,style=LocalTextStyle.current.copy(fontFeatureSettings="tnum"),
-        color=ink,fontSize=baseSize.sp,lineHeight=(if(primary)baseSize+12 else 24).sp,
-        fontWeight=if(primary)FontWeight.Medium else FontWeight.SemiBold,textAlign=TextAlign.Center)
+    val measurer = rememberTextMeasurer()
+    BoxWithConstraints(modifier, contentAlignment = Alignment.Center) {
+        val widthPx = constraints.maxWidth
+        val size = remember(text, style, preferredSize, widthPx, measurer) {
+            fun fits(size: Int) = measurer.measure(
+                text, style.copy(fontSize = size.sp), softWrap = false, maxLines = 1,
+            ).size.width <= widthPx
+
+            if (fits(preferredSize)) preferredSize else {
+                var lower = Presentation.MONEY_MIN_SP
+                var upper = preferredSize - 1
+                while (lower < upper) {
+                    val candidate = (lower + upper + 1) / 2
+                    if (fits(candidate)) lower = candidate else upper = candidate - 1
+                }
+                lower
+            }
+        }
+        // At the readable minimum, let the full amount and currency reflow on narrow screens.
+        Text(text, style = style.copy(fontSize = size.sp, lineHeight = (size + if (primary) 12 else 5).sp))
+    }
 }

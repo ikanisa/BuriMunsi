@@ -12,7 +12,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
@@ -52,11 +51,13 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
     val day=LocalDate.parse(it);(if(end)day.plusDays(1)else day).atStartOfDay(ListingZone).toInstant().toString()
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable internal fun ListingToolbar(model:BuriController,onExport:()->Unit,showFilter:Boolean=true,showExport:Boolean=true){
     val target=model.listingTarget?:return
     val t=LocalUiText.current;val query=model.listingQuery
-    val defaults=ListingQuery.defaultsFor(target);val enabled=!model.state.busy
-    var sortOpen by remember(target){mutableStateOf(false)}
+    val enabled=!model.state.busy
+    val currentSort=t(listingSortLabel(query.sort))
+    var sortOpen by remember(target,model.state.routeId){mutableStateOf(false)}
     val chips=buildList<Pair<String,()->Unit>>{
         if(query.q.isNotBlank())add(t("Search: %1\$s",query.q) to {model.applyListingQuery(query.copy(q=""))})
         if(query.filter!="all")add(t("Status: %1\$s",t(listingValueLabel(query.filter))) to {model.applyListingQuery(query.copy(filter="all"))})
@@ -64,39 +65,33 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
         if(query.minRwf!=null||query.maxRwf!=null)add(t("Amount range") to {model.applyListingQuery(query.copy(minRwf=null,maxRwf=null))})
         if(query.active!="all")add(t(listingValueLabel(query.active)) to {model.applyListingQuery(query.copy(active="all"))})
         if(query.direction!="all")add(t(listingValueLabel(query.direction)) to {model.applyListingQuery(query.copy(direction="all"))})
-        if(query.sort!=defaults.sort)add(t(listingSortLabel(query.sort)) to {model.applyListingQuery(query.copy(sort=defaults.sort))})
     }
     Column(Modifier.fillMaxWidth().padding(top=10.dp,bottom=10.dp).testTag("listing-tools:${target.name}")){
         val filterControl:@Composable (Modifier)->Unit={modifier->
-            OutlinedButton({model.openSheet(Sheet.FILTERS)},modifier.heightIn(min=48.dp),enabled=enabled,shape=RoundedCornerShape(24.dp),
-                colors=ButtonDefaults.outlinedButtonColors(contentColor=BuriTheme.Text)){
-                Icon(painterResource(R.drawable.ic_filter),null,Modifier.size(21.dp));Spacer(Modifier.width(8.dp))
-                CompactLabel(t("Filters"),Modifier.weight(1f,fill=false),fontSize=15.sp,lineHeight=22.sp)
-                if(chips.isNotEmpty()){Spacer(Modifier.width(6.dp));CompactLabel(chips.size.toString(),fontSize=13.sp,fontWeight=FontWeight.SemiBold)}
-            }
+            val label=if(chips.isEmpty())t("Filters") else t("Filters (%1\$d)",chips.size)
+            ListingAction(R.drawable.ic_filter,label,modifier,enabled){model.openSheet(Sheet.FILTERS)}
         }
         val sortControl:@Composable (Modifier)->Unit={modifier->
-            OutlinedButton({sortOpen=true},modifier.heightIn(min=48.dp).testTag("listing-sort-menu"),enabled=enabled,shape=RoundedCornerShape(24.dp),colors=ButtonDefaults.outlinedButtonColors(contentColor=BuriTheme.Text)){
-                Icon(painterResource(R.drawable.ic_arrow),null,Modifier.size(19.dp).rotate(90f));Spacer(Modifier.width(8.dp));CompactLabel(t("Sort"),fontSize=15.sp,lineHeight=22.sp)
-            }
+            ListingAction(R.drawable.ic_sort,currentSort,modifier.testTag("listing-sort-menu")
+                .semantics{contentDescription=t("Sort by");stateDescription=currentSort},enabled){sortOpen=true}
         }
         val exportControl:@Composable ()->Unit={
             if(showExport&&model.canExportListing)IconButton(onExport,enabled=enabled&&!model.state.offline,modifier=Modifier.size(48.dp).background(BuriTheme.Tone,RoundedCornerShape(24.dp))){
-                Icon(painterResource(R.drawable.ic_export),t("Export results"),Modifier.size(24.dp))
+                Icon(painterResource(R.drawable.ic_download),t("Export results"),Modifier.size(24.dp))
             }
         }
         BoxWithConstraints(Modifier.fillMaxWidth()){
-            if(maxWidth<340.dp||LocalDensity.current.fontScale>=1.4f){
-                Column(verticalArrangement=Arrangement.spacedBy(8.dp)){
-                    if(showFilter)Row(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically){filterControl(Modifier.weight(1f));exportControl()}
+            if(showFilter&&(maxWidth<340.dp||LocalDensity.current.fontScale>=1.4f)){
+                Column(Modifier.fillMaxWidth(),verticalArrangement=Arrangement.spacedBy(8.dp)){
+                    Row(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically){filterControl(Modifier.weight(1f));exportControl()}
                     sortControl(Modifier.fillMaxWidth())
-                    if(!showFilter)exportControl()
                 }
             }else Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically){
-                if(showFilter)filterControl(Modifier.weight(1f));sortControl(Modifier.weight(1f));exportControl()
+                if(showFilter)filterControl(Modifier.weight(1f))
+                sortControl(Modifier.weight(if(showFilter)1.3f else 1f))
+                exportControl()
             }
         }
-        CompactLabel(t("Sorted by %1\$s",t(listingSortLabel(query.sort))),Modifier.padding(top=8.dp),fontSize=13.sp,lineHeight=21.sp,color=BuriTheme.Muted)
         if(chips.isNotEmpty()){
             ScrollingChips{chip ->
                 chips.forEach{(label,clear)->FilterChip(selected=true,onClick=clear,enabled=enabled,label={CompactLabel(label)},trailingIcon={Icon(painterResource(R.drawable.ic_close),t("Remove filter"),Modifier.size(16.dp))},modifier=chip.heightIn(min=48.dp),shape=RoundedCornerShape(24.dp),colors=FilterChipDefaults.filterChipColors(selectedContainerColor=BuriTheme.Text,selectedLabelColor=Color(0xFF151517),selectedTrailingIconColor=Color(0xFF151517)))}
@@ -104,63 +99,84 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
             }
         }
     }
-    if(sortOpen) ListingChoiceDialog("Sort by", query.sort, ListingQuery.allowedSorts(target).map { it to listingSortLabel(it) },
-        enabled, onDismiss = {sortOpen=false}) {sort ->
-        sortOpen=false
-        model.applyListingQuery(query.copy(sort=sort))
+    if(sortOpen && enabled){
+        val title=t("Sort by")
+        ModalBottomSheet(onDismissRequest={sortOpen=false},sheetState=rememberModalBottomSheetState(skipPartiallyExpanded=true),
+            containerColor=BuriTheme.Surface,contentColor=BuriTheme.Text,shape=RoundedCornerShape(topStart=32.dp,topEnd=32.dp)){
+            Column(Modifier.fillMaxWidth().heightIn(max=LocalConfiguration.current.screenHeightDp.dp*.8f)
+                .verticalScroll(rememberScrollState()).padding(horizontal=20.dp).navigationBarsPadding().padding(bottom=16.dp)
+                .testTag("listing-sort-choices").semantics{paneTitle=title}){
+                Row(Modifier.fillMaxWidth().padding(bottom=10.dp),verticalAlignment=Alignment.CenterVertically){
+                    CompactLabel(title,Modifier.weight(1f).semantics{heading()},style=MaterialTheme.typography.headlineMedium)
+                    IconButton({sortOpen=false}){Glyph(R.drawable.ic_close,t("Close"))}
+                }
+                val sorts=ListingQuery.allowedSorts(target)
+                ChoiceRows(query.sort.wire,sorts.map{it.wire to listingSortLabel(it)}){wire->
+                    sortOpen=false
+                    if(wire!=query.sort.wire)model.applyListingQuery(query.copy(sort=sorts.first{it.wire==wire}))
+                }
+            }
+        }
     }
 }
 
-@Composable
-internal fun ListingChoice(label:String,value:String,choices:List<Pair<String,String>>,enabled:Boolean,tag:String,onChange:(String)->Unit){
+@Composable private fun ListingAction(icon:Int,label:String,modifier:Modifier,enabled:Boolean,open:()->Unit){
+    FilledTonalButton(open,modifier.heightIn(min=48.dp),enabled=enabled,shape=RoundedCornerShape(24.dp),
+        contentPadding=PaddingValues(horizontal=12.dp,vertical=8.dp),
+        colors=ButtonDefaults.filledTonalButtonColors(containerColor=BuriTheme.Tone,contentColor=BuriTheme.Text)){
+        Glyph(icon,null,BuriTheme.Text,20)
+        Spacer(Modifier.width(7.dp))
+        CompactLabel(label,Modifier.weight(1f,fill=false),style=MaterialTheme.typography.labelLarge)
+    }
+}
+
+@Composable private fun ChoiceRows(value:String,choices:List<Pair<String,String>>,onSelect:(String)->Unit){
     val t=LocalUiText.current
-    var open by remember(label) { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth()){
-        CompactLabel(t(label),fontSize=15.sp,color=BuriTheme.Muted);Spacer(Modifier.height(8.dp))
-        val selectedLabel = t(choices.firstOrNull { it.first == value }?.second ?: "All")
-        OutlinedButton({open=true},Modifier.fillMaxWidth().heightIn(min=56.dp).testTag(tag)
-            .semantics { contentDescription = t(label); stateDescription = selectedLabel },
-            enabled=enabled,shape=RoundedCornerShape(17.dp),colors=ButtonDefaults.outlinedButtonColors(contentColor=BuriTheme.Text)){
-            CompactLabel(selectedLabel,Modifier.weight(1f),fontSize=17.sp,lineHeight=25.sp)
-            Icon(painterResource(R.drawable.ic_arrow),null,Modifier.size(18.dp))
+    Column(Modifier.fillMaxWidth().selectableGroup().background(BuriTheme.Raised,RoundedCornerShape(20.dp))){
+        choices.forEachIndexed{index,(key,label)->
+            Row(Modifier.fillMaxWidth().heightIn(min=56.dp).selectable(selected=value==key,
+                role=androidx.compose.ui.semantics.Role.RadioButton,onClick={onSelect(key)})
+                .padding(horizontal=16.dp,vertical=10.dp),verticalAlignment=Alignment.CenterVertically){
+                CompactLabel(t(label),Modifier.weight(1f),style=MaterialTheme.typography.bodyLarge)
+                RadioButton(value==key,onClick=null,modifier=Modifier.padding(start=12.dp),
+                    colors=RadioButtonDefaults.colors(selectedColor=BuriTheme.Text,unselectedColor=BuriTheme.NavigationMuted))
+            }
+            if(index<choices.lastIndex)HorizontalDivider(Modifier.padding(horizontal=16.dp),color=Color.White.copy(alpha=.08f))
         }
     }
-    if(open) ListingChoiceDialog(label,value,choices,enabled,onDismiss={open=false}) {choice ->
+}
+
+@Composable internal fun ListingChoice(label:String,value:String,choices:List<Pair<String,String>>,enabled:Boolean,tag:String,onChange:(String)->Unit){
+    val t=LocalUiText.current
+    val title=t(label)
+    val current=t(choices.firstOrNull{it.first==value}?.second?:"All")
+    var open by remember(tag){mutableStateOf(false)}
+    FilledTonalButton({open=true},Modifier.fillMaxWidth().heightIn(min=62.dp).testTag(tag)
+        .semantics{contentDescription=title;stateDescription=current},enabled=enabled,shape=RoundedCornerShape(17.dp),
+        colors=ButtonDefaults.filledTonalButtonColors(containerColor=BuriTheme.Raised,contentColor=BuriTheme.Text)){
+        Column(Modifier.weight(1f)){
+            CompactLabel(title,style=MaterialTheme.typography.labelMedium,color=BuriTheme.Muted)
+            CompactLabel(current,style=MaterialTheme.typography.titleSmall)
+        }
+        Glyph(R.drawable.ic_arrow,null,BuriTheme.Muted,18)
+    }
+    if(open&&enabled)ListingChoiceDialog(title,value,choices,tag,onDismiss={open=false}){choice->
         open=false
         onChange(choice)
     }
 }
 
-@Composable
-private fun <T> ListingChoiceDialog(label:String,selected:T,choices:List<Pair<T,String>>,enabled:Boolean,onDismiss:()->Unit,onChoose:(T)->Unit){
+@Composable private fun ListingChoiceDialog(title:String,value:String,choices:List<Pair<String,String>>,tag:String,
+    onDismiss:()->Unit,onChoose:(String)->Unit){
     val t=LocalUiText.current
-    AlertDialog(
-        onDismissRequest=onDismiss,
-        modifier=Modifier.testTag("listing-choice-dialog"),
-        title={CompactLabel(t(label),Modifier.semantics { heading() })},
-        text={
-            Column(Modifier.fillMaxWidth().heightIn(max=LocalConfiguration.current.screenHeightDp.dp*.55f)
-                .verticalScroll(rememberScrollState()).selectableGroup()){
-                for((key,text) in choices){
-                    Row(
-                        Modifier.fillMaxWidth().heightIn(min=48.dp)
-                            .selectable(selected=key==selected,enabled=enabled,role=Role.RadioButton,onClick={onChoose(key)}),
-                        verticalAlignment=Alignment.CenterVertically
-                    ){
-                        RadioButton(selected=key==selected,onClick=null,enabled=enabled,
-                            colors=RadioButtonDefaults.colors(selectedColor=BuriTheme.Blue))
-                        Spacer(Modifier.width(12.dp))
-                        CompactLabel(t(text),Modifier.weight(1f),fontSize=16.sp)
-                    }
-                }
-            }
-        },
-        confirmButton={TextButton(onDismiss){CompactLabel(t("Cancel"))}},
-        shape=RoundedCornerShape(24.dp),
-        containerColor=BuriTheme.Raised,
-        titleContentColor=BuriTheme.Text,
-        textContentColor=BuriTheme.Text
-    )
+    AlertDialog(onDismissRequest=onDismiss,modifier=Modifier.testTag("listing-choice-dialog"),containerColor=BuriTheme.Surface,
+        titleContentColor=BuriTheme.Text,textContentColor=BuriTheme.Text,
+        title={CompactLabel(title,Modifier.semantics{heading()})},
+        text={Column(Modifier.heightIn(max=LocalConfiguration.current.screenHeightDp.dp*.52f)
+            .verticalScroll(rememberScrollState()).testTag("${tag}-choices").semantics{paneTitle=title}){
+            ChoiceRows(value,choices,onChoose)
+        }},
+        confirmButton={TextButton(onDismiss){CompactLabel(t("Cancel"))}})
 }
 
 @Composable private fun QueryNumber(label:String,value:String,enabled:Boolean,onChange:(String)->Unit){
@@ -209,7 +225,7 @@ private fun <T> ListingChoiceDialog(label:String,selected:T,choices:List<Pair<T,
         }
     }){
         if(target !in setOf(ListingTarget.SMS,ListingTarget.OBSERVATIONS))item{Entry(t("Search"),draft.q,{draft=draft.copy(q=it.take(80))},enabled=enabled)}
-        if(ListingQuery.filters(target).size>1)item{ListingChoice("Status",draft.filter,ListingQuery.filters(target).map{it to listingValueLabel(it)},enabled,if(target==ListingTarget.PAYMENTS)"payment-filter-select"else "listing-filter-select"){draft=draft.copy(filter=it)}}
+        if(!model.state.isMemberStatement&&ListingQuery.filters(target).size>1)item{ListingChoice("Status",draft.filter,ListingQuery.filters(target).map{it to listingValueLabel(it)},enabled,if(target==ListingTarget.PAYMENTS)"payment-filter-select"else "listing-filter-select"){draft=draft.copy(filter=it)}}
         item{ListingChoice("Sort by",draft.sort.wire,ListingQuery.allowedSorts(target).map{it.wire to listingSortLabel(it)},enabled,"listing-sort-select"){wire->draft=draft.copy(sort=ListingSort.entries.first{it.wire==wire})}}
         if(ListingQuery.supportsActive(target))item{ListingChoice(if(target==ListingTarget.STAFF)"Access status"else "Membership status",draft.active,listOf("all","active","inactive").map{it to listingValueLabel(it)},enabled,"listing-active-select"){draft=draft.copy(active=it)}}
         if(ListingQuery.supportsDirection(target))item{ListingChoice("Direction",draft.direction,listOf("all","incoming","outgoing").map{it to listingValueLabel(it)},enabled,"listing-direction-select"){draft=draft.copy(direction=it)}}
@@ -234,12 +250,13 @@ private fun <T> ListingChoiceDialog(label:String,selected:T,choices:List<Pair<T,
 @Composable internal fun ListingExportSheet(model:BuriController,onPick:(ExportFormat)->Unit,onDismiss:()->Unit){
     val t=LocalUiText.current
     val target=model.listingTarget?:return
+    val title=t(if(model.state.isMemberStatement)"Download statement" else "Export results")
     val formats=listOf(ExportFormat.XLSX to "Excel workbook (.xlsx)", ExportFormat.PDF to "PDF document (.pdf)")
     ModalBottomSheet(onDismissRequest=onDismiss,containerColor=BuriTheme.Surface,contentColor=BuriTheme.Text,
         shape=RoundedCornerShape(topStart=32.dp,topEnd=32.dp),scrimColor=Color.Black.copy(alpha=.62f)){
-        Column(Modifier.fillMaxWidth().heightIn(max=LocalConfiguration.current.screenHeightDp.dp*.9f).verticalScroll(rememberScrollState()).padding(horizontal=24.dp).navigationBarsPadding().padding(bottom=24.dp).testTag("export-format-sheet").semantics{paneTitle=t("Export results")}){
+        Column(Modifier.fillMaxWidth().heightIn(max=LocalConfiguration.current.screenHeightDp.dp*.9f).verticalScroll(rememberScrollState()).padding(horizontal=24.dp).navigationBarsPadding().padding(bottom=24.dp).testTag("export-format-sheet").semantics{paneTitle=title}){
             Row(verticalAlignment=Alignment.CenterVertically){
-                CompactLabel(t("Export results"),Modifier.weight(1f).semantics{heading()},fontSize=28.sp,lineHeight=36.sp,fontWeight=FontWeight.SemiBold)
+                CompactLabel(title,Modifier.weight(1f).semantics{heading()},fontSize=28.sp,lineHeight=36.sp,fontWeight=FontWeight.SemiBold)
                 IconButton(onDismiss,Modifier.size(48.dp)){Icon(painterResource(R.drawable.ic_close),t("Close"))}
             }
             Text(t("Current filters and sort are included."),Modifier.padding(vertical=12.dp),fontSize=15.sp,lineHeight=23.sp,color=BuriTheme.Muted)

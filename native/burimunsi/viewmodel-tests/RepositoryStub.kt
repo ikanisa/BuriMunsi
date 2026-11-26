@@ -34,6 +34,7 @@ object Fixture{
  @Volatile var sessionEntered:java.util.concurrent.CountDownLatch?=null
  @Volatile var sessionBarrier:java.util.concurrent.CountDownLatch?=null
  var onboardingPreviews=0;var onboardingImports=0;var lastOnboardingConsent:Boolean?=null;var lastOnboardingMimeType:String?=null
+ @Volatile var suggestionRead:((String,String?,MemberImportScope)->JSONObject)?=null
  var lastOnboardingRows:JSONArray?=null
  @Volatile var onboardingPreviewEntered:java.util.concurrent.CountDownLatch?=null
  @Volatile var onboardingPreviewRelease:java.util.concurrent.CountDownLatch?=null
@@ -103,6 +104,7 @@ object Fixture{
  fun operator()=Operator(ownerId, "Example Operator", "+250780000001",role,Capability.entries.map{it.key}.toSet(),System.currentTimeMillis()+3600000)
  val member=Member("member-1","Example Member","+250780000816",true,1)
  fun payment(id:String="tx-1")=Payment(id,"Example Payer","+250780000816",10000,"2026-11-07 12:00:00","90001","unallocated",1)
+ fun payment(id:String,memberId:String?)=payment(id).let{if(memberId==null)it else it.copy(memberId=memberId,state="allocated")}
  fun <T> page(items:List<T>,next:String?=null)=Page(items,next,2,"v1","2026-11-07T12:00:00Z")
 }
 class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDisplayCacheWrites:Boolean=false){
@@ -213,7 +215,7 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDis
   typedListing(ListingTarget.STAFF,listing,cursor,null,scope){staff(cursor)}
  fun audit(listing:ListingQuery,cursor:String?=null,scope:RecordReadScope?=null):Page<AuditRow> =
   typedListing(ListingTarget.AUDIT,listing,cursor,null,scope){audit(cursor)}
- fun payments(q:String="",filter:String="all",cursor:String?=null,memberId:String?=null):Page<Payment>{Fixture.paymentsEntered?.countDown();check(Fixture.paymentsBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false);Fixture.readFailure?.let{throw it};if(memberId!=null&&cursor!=null&&Fixture.memberPaymentScopeFailureOnCursor)throw ContractFailure("invalid_member_payment_scope");provenance();Fixture.lastFilter=filter;Fixture.paged?.let{handler->val p=handler(if(memberId==null)"PAYMENTS"else "MEMBER",cursor,memberId?:q,filter);provenance();return Page(p.items.map{Fixture.payment(it).copy(memberId=memberId)},p.nextCursor,p.totalCount,p.revision,p.asOf)};if(Fixture.readEmpty)return Page(emptyList(),null,0,"empty","2026-11-09T00:00:00Z");val item=Fixture.payment(if(cursor==null)"tx-1" else "tx-2").copy(memberId=memberId);return if(memberId!=null)Page(listOf(item.copy(state="allocated")),null,1,"v1","2026-11-07T12:00:00Z") else Fixture.page(listOf(item),if(cursor==null)"more" else null)}
+ fun payments(q:String="",filter:String="all",cursor:String?=null,memberId:String?=null):Page<Payment>{Fixture.paymentsEntered?.countDown();check(Fixture.paymentsBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false);Fixture.readFailure?.let{throw it};if(memberId!=null&&cursor!=null&&Fixture.memberPaymentScopeFailureOnCursor)throw ContractFailure("invalid_member_payment_scope");provenance();Fixture.lastFilter=filter;Fixture.paged?.let{handler->val p=handler(if(memberId==null)"PAYMENTS"else "MEMBER",cursor,memberId?:q,filter);provenance();return Page(p.items.map{Fixture.payment(it,memberId)},p.nextCursor,p.totalCount,p.revision,p.asOf)};if(Fixture.readEmpty)return Page(emptyList(),null,0,"empty","2026-11-09T00:00:00Z");val item=Fixture.payment(if(cursor==null)"tx-1" else "tx-2",memberId);return if(memberId!=null)Page(listOf(item),null,1,"v1","2026-11-07T12:00:00Z") else Fixture.page(listOf(item),if(cursor==null)"more" else null)}
  fun members(q:String="",cursor:String?=null):Page<Member>{
   Fixture.membersFailure?.let{if(it.status==401)operator=null;throw it}
   fun memberProvenance(){provenance(Fixture.membersCachedOverride?:Fixture.cached);Fixture.membersSavedAtOverride?.let{lastReadSavedAt=it}}
@@ -222,6 +224,11 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDis
  fun payment(id:String):Payment{Fixture.paymentReads++;if(Fixture.paymentFailure)throw ApiFailure("connection_unavailable",0);provenance();return allocatedPayments[id]?:Fixture.payment(id)}
  internal fun paymentRecord(id:String)=RecordSnapshot(payment(id),lastReadFromCache,lastReadSavedAt)
  fun member(id:String):Member{Fixture.memberReads++;Fixture.memberReadFailure?.let{throw it};provenance(Fixture.memberCached||Fixture.cached);return Fixture.member.copy(id=id)}
+ internal fun member(id:String,scope:RecordReadScope):Member{
+  validateRecordReadScope(scope)
+  if(Fixture.cached||Fixture.memberCached)throw ApiFailure("connection_unavailable",0)
+  return member(id).also{validateRecordReadScope(scope)}
+ }
  internal fun memberRecord(id:String):RecordSnapshot<Member>{
   val value=member(id)
   val cached=Fixture.memberCached||Fixture.cached
@@ -252,7 +259,12 @@ class NativeRepository(app:Application,api:ApiClient,group:String?=null,deferDis
   return JSONObject()
  }
  fun enroll(name:String,phone:String):JSONObject{Fixture.enrollMutations++;Fixture.enrollmentCollections.add(collectionId);Fixture.enrollEntered?.countDown();check(Fixture.enrollBarrier?.await(5,java.util.concurrent.TimeUnit.SECONDS)!=false);return JSONObject().put("groupId",Fixture.enrollResponseGroup?:collectionId).also{j->Fixture.enrollResponseId?.let{j.put("createdMemberId",it)}}}
- fun onboardingSuggestions(q:String,cursor:String?):JSONObject=JSONObject().put("items",JSONArray()).put("nextCursor",null)
+ internal fun onboardingSuggestions(q:String,cursor:String?,scope:MemberImportScope):JSONObject{
+  validateMemberImportScope(scope)
+  val result=Fixture.suggestionRead?.invoke(q,cursor,scope)?:JSONObject().put("items",JSONArray()).put("revision","sample").put("nextCursor",null)
+  validateMemberImportScope(scope)
+  return result
+ }
  internal fun <T> withMemberImportScope(scope:MemberImportScope,use:()->T):T {
   checkContract(sessionRevision==scope.sessionRevision&&current()?.id==scope.operatorId&&boundCollectionId==scope.collectionId,"session_changed")
   return use()

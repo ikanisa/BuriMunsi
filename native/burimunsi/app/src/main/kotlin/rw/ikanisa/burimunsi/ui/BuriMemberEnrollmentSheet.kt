@@ -1,22 +1,29 @@
 package rw.ikanisa.burimunsi.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.ui.semantics.Role as SemanticRole
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.*
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import app.cool.mobile.R
 import rw.ikanisa.burimunsi.core.*
 
 @Composable private fun SmartConsent(label:String,checked:Boolean,enabled:Boolean,onChange:(Boolean)->Unit){
@@ -27,13 +34,131 @@ import rw.ikanisa.burimunsi.core.*
         Text(t(label),Modifier.weight(1f),fontSize=15.sp,lineHeight=22.sp)
     }
 }
-@Composable private fun SmartOption(title:String,detail:String,enabled:Boolean,onClick:()->Unit){
-    val t=LocalUiText.current
-    Surface(onClick=onClick,enabled=enabled,shape=RoundedCornerShape(16.dp),color=BuriTheme.Group,modifier=Modifier.fillMaxWidth()){
-        Row(Modifier.padding(18.dp),verticalAlignment=Alignment.CenterVertically){
-            Text("+",Modifier.clearAndSetSemantics{},color=Color(0xFFFF733E),fontSize=26.sp,lineHeight=30.sp)
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)){CompactLabel(t(title),fontSize=17.sp,fontWeight=FontWeight.Bold);Text(t(detail),fontSize=14.sp,lineHeight=21.sp,color=BuriTheme.Muted)}
+@Composable
+private fun MemberMethodGroup(content:@Composable ColumnScope.()->Unit) {
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp))
+        .background(BuriTheme.Group).padding(horizontal=14.dp), content=content)
+}
+
+@Composable
+private fun MemberMethodDivider() {
+    HorizontalDivider(Modifier.padding(start=50.dp), color=Color.White.copy(alpha=.08f))
+}
+
+private fun LazyListScope.memberMethods(onboarding:SmartOnboardingState, m:BuriController, enabled:Boolean,
+    onTakePhoto:()->Unit, onPickPhoto:()->Unit, onPickFile:()->Unit) {
+    val importing = onboarding.step == SmartOnboardingStep.IMPORT
+    item(key="member-entry-methods") {
+        val t = LocalUiText.current
+        val suggestions = t(if(importing) "Suggested from payments" else "MoMo suggestions")
+        val manual = t("Add manually")
+        MemberMethodGroup {
+            SettingRow(R.drawable.ic_home_wallet, suggestions, enabled=enabled) { m.onboardingSuggestions() }
+            MemberMethodDivider()
+            SettingRow(R.drawable.ic_person_add, manual, enabled=enabled, click=m::onboardingManual)
+        }
+    }
+    item(key="member-import-methods") {
+        val t = LocalUiText.current
+        MemberMethodGroup {
+            SettingRow(R.drawable.ic_camera, t(if(importing) "Take a photo of the list" else "Scan a list"),
+                t("Taking a photo sends it to OpenAI for extraction. Review members before saving."), enabled) {
+                m.onboardingPhoto()
+                onTakePhoto()
+            }
+            MemberMethodDivider()
+            SettingRow(R.drawable.ic_photo_library, t("Choose a photo"), enabled=enabled) {
+                if(!importing) m.onboardingImport()
+                onPickPhoto()
+            }
+            MemberMethodDivider()
+            SettingRow(R.drawable.ic_file_import, t(if(importing && onboarding.documentSelected) "Choose another file" else "Choose a file"), enabled=enabled) {
+                if(!importing) m.onboardingImport()
+                onPickFile()
+            }
+        }
+    }
+}
+
+@Composable
+private fun PayerRow(payer: SmartCandidate, first: Boolean, last: Boolean, enabled: Boolean, onChoose: () -> Unit) {
+    val t = LocalUiText.current
+    val action = focusAction("payer:${payer.candidateId}", onChoose)
+    val payments = if (payer.sourceCount == 1) t("1 payment") else t("%1\$d payments", payer.sourceCount)
+    val ending = t("MoMo number ending in %1\$s", payer.last3.toCharArray().joinToString(" "))
+    val review = t("Review payer")
+    Box(Modifier.fillMaxWidth().clip(rowShape(first, last)).background(BuriTheme.Group)) {
+        Row(action.modifier.fillMaxWidth().heightIn(min = 74.dp)
+            .clickable(enabled = enabled, role = SemanticRole.Button, onClickLabel = review, onClick = action.click)
+            .padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Avatar(payer.momoName, size = 44)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                CompactLabel(payer.momoName, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, lineHeight = 22.sp)
+                Text(t("••• %1\$s · %2\$s", payer.last3, payments), Modifier.clearAndSetSemantics { contentDescription = "$ending, $payments" },
+                    style = MaterialTheme.typography.bodySmall, color = BuriTheme.Muted)
+            }
+            Spacer(Modifier.width(8.dp))
+            Glyph(R.drawable.ic_arrow, null, BuriTheme.Muted, 19)
+        }
+        if (!last) HorizontalDivider(Modifier.align(Alignment.BottomCenter).padding(start = 72.dp, end = 16.dp),
+            color = BuriTheme.Text.copy(alpha = .08f))
+    }
+}
+
+@Composable
+private fun PayerListMessage(icon: Int, message: String, action: String, enabled: Boolean, onClick: () -> Unit) {
+    val t = LocalUiText.current
+    Column(Modifier.fillMaxWidth().padding(vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(Modifier.size(46.dp).background(BuriTheme.Group, CircleShape), contentAlignment = Alignment.Center) {
+            Glyph(icon, null, BuriTheme.Muted, 23)
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(t(message), Modifier.semantics { liveRegion = LiveRegionMode.Polite }, style = MaterialTheme.typography.titleMedium)
+        TextButton(onClick, enabled = enabled) { CompactLabel(t(action), color = if (enabled) BuriTheme.Blue else BuriTheme.Muted) }
+    }
+}
+
+@Composable
+private fun MoMoPayerPicker(s: UiState, m: BuriController, enabled: Boolean) {
+    val t = LocalUiText.current
+    val o = s.onboarding
+    val keyboard = LocalSoftwareKeyboardController.current
+    Panel(itemSpacing = 0.dp) {
+        item(key = "payer-search") {
+            Column(Modifier.padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text(t("Payers who haven’t joined this group."), color = BuriTheme.Muted,
+                    style = MaterialTheme.typography.bodyMedium)
+                SearchField(o.query, m::onboardingSearchQuery, {
+                    keyboard?.hide()
+                    m.onboardingSuggestions(o.query)
+                }, hint = "Name or last 3 digits", busy = !enabled)
+            }
+        }
+        itemsIndexed(o.suggestions, key = { _, payer -> payer.candidateId }) { index, payer ->
+            PayerRow(payer, index == 0, index == o.suggestions.lastIndex, enabled) {
+                keyboard?.hide()
+                m.onboardingChoose(payer.candidateId)
+            }
+        }
+        when {
+            o.suggestionsFailed -> item(key = "payer-error") {
+                PayerListMessage(R.drawable.ic_alert, s.error ?: "Couldn’t load payers", "Retry", enabled) {
+                    m.onboardingSuggestions(o.query, o.nextCursor)
+                }
+            }
+            o.suggestionsLoading || !o.suggestionsLoaded -> item(key = "payer-loading") {
+                BuriInlineLoading(if (o.suggestions.isEmpty()) "Finding payers" else "Loading more")
+            }
+            o.suggestions.isEmpty() && o.query.isNotBlank() -> item(key = "payer-no-match") {
+                PayerListMessage(R.drawable.ic_search, "No matching payers", "Clear search", enabled) {
+                    m.onboardingSearchQuery("")
+                }
+            }
+            o.suggestions.isEmpty() -> item(key = "payer-empty") {
+                PayerListMessage(R.drawable.ic_members, "No new payers yet", "Add manually", enabled, m::onboardingManual)
+            }
+            enabled -> moreButton(o.nextCursor, false, { m.onboardingSuggestions(o.query, o.nextCursor) })
         }
     }
 }
@@ -50,28 +175,9 @@ import rw.ikanisa.burimunsi.core.*
     val verified=o.rows.filter{it.verified}
     when(o.step){
         SmartOnboardingStep.OPTIONS->Panel{
-            item{Text(t("How would you like to add members?"),fontSize=20.sp,fontWeight=FontWeight.SemiBold,lineHeight=27.sp)}
-            item{SmartOption("Suggested from MoMo","Search unmatched payer names and last 3 digits",enabled){m.onboardingSuggestions()}}
-            item{SmartOption("Add manually","Enter a verified MoMo name and number",enabled,m::onboardingManual)}
-            item{SmartOption("Take a photo of the list","Taking a photo sends it to OpenAI for extraction. Review members before saving.",enabled){m.onboardingPhoto();onTakePhoto()}}
-            item{SmartOption("Choose a photo","Review extracted members before saving",enabled){m.onboardingImport();onPickPhoto()}}
-            item{SmartOption("Import member list","Upload or scan, review, then register",enabled){m.onboardingImport();onPickFile()}}
+            memberMethods(o,m,enabled,onTakePhoto,onPickPhoto,onPickFile)
         }
-        SmartOnboardingStep.SUGGESTIONS->Panel{
-            item{CompactLabel(t("Suggested members"),fontSize=23.sp,fontWeight=FontWeight.SemiBold)}
-            item{Text(t("Search eligible MoMo payer names or the last three digits."),color=BuriTheme.Muted,fontSize=15.sp,lineHeight=22.sp)}
-            item{Entry(t("Name or last three digits"),o.query,m::onboardingSearchQuery,enabled=!s.busy,imeAction=ImeAction.Search,onDone={m.onboardingSuggestions(o.query)})}
-            item{Primary(t("Search"),{m.onboardingSuggestions(o.query)},enabled,secondary=true)}
-            if(o.suggestionsLoaded&&o.suggestions.isEmpty())item{Empty(t("No eligible suggestions found."))}
-            items(o.suggestions,key={it.candidateId}){candidate->
-                Row(Modifier.fillMaxWidth().heightIn(min=64.dp).clickable(enabled=enabled){m.onboardingChoose(candidate.candidateId)}.padding(vertical=10.dp),verticalAlignment=Alignment.CenterVertically){
-                    Column(Modifier.weight(1f)){CompactLabel(candidate.momoName,fontSize=17.sp,fontWeight=FontWeight.Medium);CompactLabel(t("MoMo number")+" ···"+candidate.last3+" · "+t("%1\$d message(s)",candidate.sourceCount),color=BuriTheme.Muted,fontSize=14.sp)}
-                    CompactLabel(t("Select"),color=BuriTheme.Blue,fontSize=15.sp)
-                }
-            }
-            if(o.nextCursor!=null)item{Primary(t("Load more"),{m.onboardingSuggestions(o.query,o.nextCursor)},enabled,secondary=true)}
-            item{TextButton(m::onboardingOptions,enabled=!s.busy){CompactLabel(t("Back"),color=BuriTheme.Blue)}}
-        }
+        SmartOnboardingStep.SUGGESTIONS->MoMoPayerPicker(s,m,enabled)
         SmartOnboardingStep.MEMBER,SmartOnboardingStep.IMPORT_MEMBER->Panel(footer={
             Primary(t(if(o.step==SmartOnboardingStep.MEMBER)"Save member" else "Add verified row to batch"),
                 {if(o.step==SmartOnboardingStep.MEMBER)m.onboardingSubmit(name,phone)else m.onboardingSaveRow(name,phone)},ready&&enabled,working=s.busy&&m.operation==UiOperation.COMMAND)
@@ -83,18 +189,18 @@ import rw.ikanisa.burimunsi.core.*
             item{SmartConsent("Full number and phone ownership verified",o.verifiedOwnership,enabled){m.onboardingConsent("ownership",it,s.draft)}}
             item{SmartConsent("Member accepted the savings terms",o.acceptedTerms,enabled){m.onboardingConsent("terms",it,s.draft)}}
             item{SmartConsent("Privacy notice and consent recorded",o.consentRecorded,enabled){m.onboardingConsent("consent",it,s.draft)}}
-            item{TextButton(if(o.step==SmartOnboardingStep.IMPORT_MEMBER)m::onboardingImport else m::onboardingOptions,enabled=!s.busy){CompactLabel(t("Back"),color=BuriTheme.Blue)}}
+            item{TextButton({when {
+                o.step==SmartOnboardingStep.IMPORT_MEMBER -> m.onboardingImport()
+                candidate!=null -> m.onboardingSuggestions(o.query)
+                else -> m.onboardingOptions()
+            }},enabled=!s.busy){CompactLabel(t("Back"),color=BuriTheme.Blue)}}
         }
         SmartOnboardingStep.IMPORT->Panel(footer=if(verified.isNotEmpty()){{
             Primary(t("Register verified members")+" (${verified.size})",m::onboardingSubmitBatch,enabled,working=s.busy&&m.operation==UiOperation.COMMAND)
         }}else null){
             if(!o.photoCaptureFlow&&o.sourceKind==null&&o.rows.isEmpty()){
                 item{CompactLabel(t("Import member list"),fontSize=23.sp,fontWeight=FontWeight.SemiBold)}
-                item{SmartOption("Suggested from payments","Search unmatched payer names and last 3 digits",enabled){m.onboardingSuggestions()}}
-                item{SmartOption("Add manually","Enter a verified MoMo name and number",enabled,m::onboardingManual)}
-                item{SmartOption("Take a photo of the list","Taking a photo sends it to OpenAI for extraction. Review members before saving.",enabled){m.onboardingPhoto();onTakePhoto()}}
-                item{Primary(t("Choose a photo"),onPickPhoto,enabled,secondary=true)}
-                item{Primary(t(if(o.documentSelected)"Choose another file" else "Choose a file"),onPickFile,enabled,secondary=true)}
+                memberMethods(o,m,enabled,onTakePhoto,onPickPhoto,onPickFile)
                 if(o.documentSelected){
                     item{CompactLabel(t("File selected"),color=BuriTheme.Muted,fontSize=14.sp)}
                     if(previewNeedsConsent)item{SmartConsent("I agree to send this document to OpenAI for text extraction",o.ocrConsent,enabled){value->o.documentRequestId?.let{m.onboardingDocumentConsent(it,value)}}}

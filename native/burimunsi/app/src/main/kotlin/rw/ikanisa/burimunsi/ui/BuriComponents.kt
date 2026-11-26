@@ -38,7 +38,8 @@ import java.util.Locale
 
 internal fun money(value:Long,locale:Locale):String=ExactDisplay.amount(value,locale.toLanguageTag()).orEmpty()
 private fun initials(value:String):String=value.trim().split(Regex("\\s+")).filter{it.isNotEmpty()}.take(2).joinToString(""){it.take(1).uppercase(Locale.ROOT)}
-internal fun historyTime(value:String,locale:Locale):String=ExactDisplay.timestamp(value,locale.toLanguageTag())?:value
+internal fun historyTime(value: String, locale: Locale, includeOffset: Boolean = true): String =
+    ExactDisplay.timestamp(value, locale.toLanguageTag(), includeOffset) ?: value
 
 @Composable internal fun Brand(){
     Image(painterResource(R.drawable.burimunsi_brand_logo),"BuriMunsi",Modifier.width(156.dp).height(52.dp))
@@ -181,12 +182,16 @@ internal fun stateIcon(name:String)=when(name){"check"->R.drawable.ic_check;"lin
     val t=LocalUiText.current
     CompactLabel(t(label),Modifier.padding(top=12.dp,bottom=2.dp).semantics{heading()},fontSize=24.sp,fontWeight=FontWeight.SemiBold,lineHeight=32.sp)}
 @Composable internal fun Search(value:String,change:(String)->Unit,submit:()->Unit,hint:String="Search",busy:Boolean=false){
-    val t=LocalUiText.current
     var submitted by remember{mutableStateOf(value)}
     LaunchedEffect(value){if(value!=submitted){kotlinx.coroutines.delay(250);submitted=value;submit()}}
+    SearchField(value,change,{submitted=value;submit()},hint,busy)
+}
+@Composable internal fun SearchField(value:String,change:(String)->Unit,submit:()->Unit,hint:String,busy:Boolean=false){
+    val t=LocalUiText.current
     OutlinedTextField(value,change,Modifier.fillMaxWidth().heightIn(min=56.dp).semantics{contentDescription=t(hint)},singleLine=true,enabled=!busy,
         textStyle=LocalTextStyle.current.copy(fontSize=18.sp),placeholder={CompactLabel(t(hint),color=BuriTheme.Muted,fontSize=18.sp)},leadingIcon={Glyph(R.drawable.ic_search,null,BuriTheme.Muted,22)},
-        keyboardOptions=KeyboardOptions(autoCorrectEnabled=false,imeAction=ImeAction.Search),keyboardActions=KeyboardActions(onSearch={submitted=value;submit()}),
+        trailingIcon=if(value.isEmpty())null else {{IconButton({change("")},enabled=!busy){Glyph(R.drawable.ic_close,t("Clear search"),BuriTheme.Muted,20)}}},
+        keyboardOptions=KeyboardOptions(autoCorrectEnabled=false,imeAction=ImeAction.Search),keyboardActions=KeyboardActions(onSearch={submit()}),
         shape=RoundedCornerShape(28.dp),colors=OutlinedTextFieldDefaults.colors(focusedContainerColor=BuriTheme.Tone,unfocusedContainerColor=BuriTheme.Tone,focusedBorderColor=BuriTheme.Blue,unfocusedBorderColor=Color.Transparent))
 }
 /** A scrolling rail can grow; every individual chip still fits its viewport. */
@@ -211,12 +216,12 @@ internal fun LazyListScope.moreButton(cursor:String?,busy:Boolean,more:()->Unit,
 }
 internal fun rowShape(first:Boolean,last:Boolean)=RoundedCornerShape(topStart=if(first)24.dp else 0.dp,topEnd=if(first)24.dp else 0.dp,bottomStart=if(last)24.dp else 0.dp,bottomEnd=if(last)24.dp else 0.dp)
 
-@Composable internal fun Panel(footer:(@Composable ()->Unit)?=null,content:LazyListScope.()->Unit){
+@Composable internal fun Panel(footer:(@Composable ()->Unit)?=null,itemSpacing:Dp=20.dp,content:LazyListScope.()->Unit){
     val memory=LocalUiFocusMemory.current;val scope=LocalUiFocusScope.current
     val position=memory.scrollPositions[scope]?:(0 to 0);val scroll=rememberLazyListState(position.first,position.second)
     LaunchedEffect(scope,scroll){snapshotFlow{scroll.firstVisibleItemIndex to scroll.firstVisibleItemScrollOffset}.distinctUntilChanged().collect{memory.scrollPositions[scope]=it}}
     Column(Modifier.fillMaxWidth()){
-        LazyColumn(Modifier.fillMaxWidth().weight(1f,fill=false),state=scroll,contentPadding=PaddingValues(22.dp,0.dp,22.dp,20.dp),verticalArrangement=Arrangement.spacedBy(20.dp),content=content)
+        LazyColumn(Modifier.fillMaxWidth().weight(1f,fill=false),state=scroll,contentPadding=PaddingValues(22.dp,0.dp,22.dp,20.dp),verticalArrangement=Arrangement.spacedBy(itemSpacing),content=content)
         if(footer!=null){HorizontalDivider(color=Color.White.copy(alpha=.08f));Box(Modifier.fillMaxWidth().padding(start=22.dp,end=22.dp,top=14.dp,bottom=25.dp)){footer()}}
     }
 }

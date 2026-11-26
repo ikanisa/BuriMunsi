@@ -26,28 +26,36 @@ const nameKey = value => `trim(regexp_replace(lower(normalize(${value},NFKC)),'[
 const suffix = value => `CASE WHEN length(${value})<=160 AND ${value} !~ '[[:cntrl:]]'
  AND ${value} ~ '[0-9]{3}[ ]*$' THEN right(regexp_replace(${value},'[^0-9]','','g'),3) ELSE NULL END`;
 
-const eligibleIdentities = (registeredPhone='a.payer_phone') => `identities AS (
+const managedMemberMatch = `SELECT 1 FROM app.memberships m JOIN app.users u ON u.id=m.user_id
+  WHERE m.collection_id=$1 AND (${phone('u.momo_number')}=a.payer_phone OR ${phone('u.phone')}=a.payer_phone
+   OR (a.native AND ${nameKey('u.full_name')}=${nameKey('a.payer_name')}
+    AND a.last3=right(coalesce(${phone('u.momo_number')},${phone('u.phone')}),3)))`;
+const paymentMemberMatch = `SELECT 1 FROM registered r
+  WHERE r.member_phone=coalesce(a.payer_phone,i.known_phone)
+   OR (a.payer_phone IS NULL AND r.name_key=i.name_key AND right(r.member_phone,3)=a.last3)`;
+
+// Two different full phone numbers can share the same public name and suffix.
+// Only a masked receipt needs an unambiguous name/suffix to join a known number.
+const eligibleIdentities = (paymentsOnly=false) => `identities AS (
  SELECT ${nameKey('payer_name')} AS name_key,last3,count(DISTINCT payer_phone) AS known_count,max(payer_phone) AS known_phone
  FROM admitted GROUP BY ${nameKey('payer_name')},last3
 ), unregistered AS (
  SELECT a.*,i.known_phone FROM admitted a
  JOIN identities i ON i.name_key=${nameKey('a.payer_name')} AND i.last3=a.last3
- WHERE (NOT a.native OR i.known_count<=1) AND NOT EXISTS (
-  SELECT 1 FROM app.memberships m JOIN app.users u ON u.id=m.user_id
-  WHERE m.collection_id=$1 AND (${phone('u.momo_number')}=${registeredPhone} OR ${phone('u.phone')}=${registeredPhone}
-   OR (a.native AND ${nameKey('u.full_name')}=${nameKey('a.payer_name')}
-    AND a.last3=right(coalesce(${phone('u.momo_number')},${phone('u.phone')}),3)))
- )
+ WHERE (${paymentsOnly?'a.payer_phone IS NOT NULL':'NOT a.native'} OR i.known_count<=1)
+  AND NOT EXISTS (${paymentsOnly?paymentMemberMatch:managedMemberMatch})
 ), grouped AS (
  SELECT max(payer_phone) AS payer_phone,max(known_phone) AS known_phone,min(last3) AS last3,
   (array_agg(transaction_id ORDER BY transaction_at DESC,transaction_id DESC))[1] AS candidate_id,
   (array_agg(payer_name ORDER BY transaction_at DESC,transaction_id DESC))[1] AS momo_name,
   max(transaction_at) AS latest_seen_at,count(*) AS source_count
- FROM unregistered GROUP BY CASE WHEN native THEN 'native:'||${nameKey('payer_name')}||':'||last3
-  ELSE 'phone:'||payer_phone END
+  ${paymentsOnly?`,bool_or($2<>'' AND strpos(${fold('payer_name')},${fold('$2::text')})>0) AS matches_name`:''}
+ FROM unregistered GROUP BY ${paymentsOnly
+   ? `coalesce('phone:'||coalesce(payer_phone,known_phone),'native:'||${nameKey('payer_name')}||':'||last3)`
+   : `CASE WHEN native THEN 'native:'||${nameKey('payer_name')}||':'||last3 ELSE 'phone:'||payer_phone END`}
 ), filtered AS (
  SELECT candidate_id,momo_name,last3,latest_seen_at,source_count
- FROM grouped WHERE $2='' OR strpos(${fold('momo_name')},${fold('$2::text')})>0
+ FROM grouped WHERE $2='' OR ${paymentsOnly?'matches_name':`strpos(${fold('momo_name')},${fold('$2::text')})>0`}
   OR ($2 ~ '^[0-9]{3}$' AND last3=$2)
 )`;
 
@@ -150,14 +158,25 @@ export const PAYMENT_SUGGESTIONS_CTE=`WITH sources AS (
   payer_name,payer_phone,${suffix('identifier')} AS last3,transaction_at,true AS native
  FROM sources
  WHERE ${suffix('identifier')} IS NOT NULL
-  AND (payer_phone IS NOT NULL OR trim(identifier) ~ '^[0-9]{3}$' OR identifier ~ '[*xX•…]')
-), ${eligibleIdentities('coalesce(a.payer_phone,i.known_phone)')}`;
+  AND (payer_phone IS NOT NULL OR trim(identifier) ~ '^[0-9]{3}$'
+    OR (identifier ~ '^[+0-9*#xX•… ().-]+$' AND identifier ~ '[*#xX•…]'))
+), registered AS (
+ SELECT ${nameKey('identity.name')} AS name_key,${phone('identity.number')} AS member_phone
+ FROM (
+  SELECT u.full_name AS name,unnest(ARRAY[u.momo_number,u.phone]) AS number
+  FROM app.memberships m JOIN app.users u ON u.id=m.user_id WHERE m.collection_id=$1
+  UNION ALL
+  SELECT unnest(ARRAY[r.member_name,r.momo_name]),r.momo_number
+  FROM app.roster_members r JOIN app.memberships m ON m.collection_id=r.collection_id AND m.user_id=r.linked_user_id
+  WHERE r.collection_id=$1
+ ) AS identity
+), ${eligibleIdentities(true)}`;
 
 function queryOptions({groupId,q='',limit=40,after=null}) {
  requireId(groupId);
  requireThat(typeof q==='string'&&q.length<=80&&!/[\u0000-\u001f\u007f]/.test(q),'invalid_query');
  requireThat(Number.isSafeInteger(limit)&&limit>=1&&limit<=100,'invalid_query');
- requireThat(after===null||(after&&Object.keys(after).length===1&&Number.isSafeInteger(after.offset)&&after.offset>=0&&after.offset<=10000),'invalid_cursor');
+ requireThat(after===null||(after&&Object.keys(after).length===1&&Number.isSafeInteger(after.offset)&&after.offset>=0&&after.offset<=2147483647),'invalid_cursor');
  return {groupId,q:q.trim(),limit,offset:after?.offset??0};
 }
 function project(row){
@@ -173,7 +192,7 @@ function project(row){
 export async function paymentSuggestionsRevision(sql,{groupId,q=''}) {
  requirePort(sql,['unsafe']);const options=queryOptions({groupId,q});
  const [snapshot]=await sql.unsafe(`${PAYMENT_SUGGESTIONS_CTE}
-  SELECT encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(filtered) ORDER BY candidate_id)::text,'[]'),'UTF8')),'hex')
+  SELECT encode(sha256(convert_to('payment-suggestions-recent-v2:'||coalesce(jsonb_agg(to_jsonb(filtered) ORDER BY candidate_id)::text,'[]'),'UTF8')),'hex')
     AS revision FROM filtered`,[groupId,options.q]);
  requireThat(typeof snapshot?.revision==='string'&&/^[a-f0-9]{64}$/.test(snapshot.revision),'invalid_suggestion',503);
  return snapshot.revision;
@@ -183,7 +202,7 @@ export async function listOnboardingSuggestions(sql,options,{paymentsOnly=false}
  requirePort(sql,['unsafe']);const {groupId,q,limit,offset}=queryOptions(options);
  const rows=await sql.unsafe(`${paymentsOnly?PAYMENT_SUGGESTIONS_CTE:SMART_SUGGESTIONS_CTE}
   SELECT *,count(*) OVER() AS total_count FROM filtered
-  ORDER BY ${fold('momo_name')},candidate_id LIMIT $3 OFFSET $4`,[groupId,q,limit+1,offset]);
+  ORDER BY ${paymentsOnly?'latest_seen_at DESC,':''}${fold('momo_name')},candidate_id LIMIT $3 OFFSET $4`,[groupId,q,limit+1,offset]);
  requireThat(Array.isArray(rows)&&rows.length<=limit+1,'invalid_suggestion',503);
  const items=rows.slice(0,limit).map(project);
  const totalCount=rows.length?pgInteger(rows[0].total_count,{minimum:items.length,code:'invalid_suggestion'}):0;

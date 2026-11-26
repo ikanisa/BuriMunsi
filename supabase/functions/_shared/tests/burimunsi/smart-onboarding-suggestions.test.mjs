@@ -15,6 +15,8 @@ test('the database query is bounded and carries the matching cursor',async()=>{
  let args;const rows=[row,{...row,candidate_id:'a4c5d6e7-f809-4123-8567-abcdef123457'}];
  const result=await listOnboardingSuggestions({unsafe:async(_q,a)=>{args=a;return rows;}},{groupId:'group-1',limit:1,after:{offset:4}});
  assert.deepEqual(args,['group-1','',2,4]);assert.equal(result.items.length,1);assert.deepEqual(result.after,{offset:5});
+ await listOnboardingSuggestions({unsafe:async(_q,a)=>{args=a;return [];}},{groupId:'group-1',limit:20,after:{offset:10020}});
+ assert.deepEqual(args,['group-1','',21,10020]);
 });
 test('candidate lookup reuses the same scoped, registered-member exclusion',async()=>{
  let statement;const sql={unsafe:async(q,args)=>{statement=q;assert.deepEqual(args,['group-1','',id,'+250780001123']);return [row];}};
@@ -28,5 +30,6 @@ test('invalid query, cursor and malformed database projection are rejected',asyn
  await assert.rejects(listOnboardingSuggestions(sql,{groupId:'group-1',limit:101}));
  await assert.rejects(listOnboardingSuggestions(sql,{groupId:'group-1',q:'bad\nquery'}));
  await assert.rejects(listOnboardingSuggestions(sql,{groupId:'group-1',after:{offset:-1}}));
+ await assert.rejects(listOnboardingSuggestions(sql,{groupId:'group-1',after:{offset:2147483648}}));
  await assert.rejects(listOnboardingSuggestions({unsafe:async()=>[{...row,last3:'1234'}]},{groupId:'group-1'}));
 });

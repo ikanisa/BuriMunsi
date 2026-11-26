@@ -91,13 +91,60 @@ fun main()=runBlocking {
         ck("role changes during the final live check prevent any provider write",writes==0&&m.exportFeedback?.phase!=UiExportPhase.COMPLETE&&aborted==2&&directory.listFiles().isNullOrEmpty())
         Fixture.refreshedRole=null;Fixture.refreshedCaps=null
         m.refreshSession();idle()
+        Fixture.paged={target,cursor,id,_->
+            if(target=="MEMBER"){
+                val range=if(cursor==null)1..100 else 101..103
+                Page(range.map{"$id-tx-$it"},if(cursor==null)"page-two" else null,103,"member-revision","2026-11-14T14:00:00Z")
+            }else Page(listOf("global-only-payment"),null,1,"global-revision","2026-11-14T14:00:00Z")
+        }
+        m.navigate(Route.PAYMENTS);idle();m.applyListingQuery(selected);idle()
         m.navigate(Route.PAYMENTS,"member-1");idle()
+        ck("a statement opens without global filters and binds its verified directory member",
+            m.listingQuery==ListingQuery()&&m.state.member==Fixture.member&&m.state.payments?.items?.all{it.memberId=="member-1"}==true)
+        val statementQuery=ListingQuery(sort=ListingSort.OLDEST,q="member reference",minRwf=500,direction="incoming")
+        m.search(statementQuery.q);m.searchSubmit();idle();m.openSheet(Sheet.FILTERS)
+        ck("statement filters inherit the search currently applied to its transactions",m.listingQuery.q==statementQuery.q)
+        m.applyListingQuery(statementQuery);idle()
+        m.listPosition(Route.PAYMENTS,"member-1",7,12)
+        m.navigate(Route.PAYMENT,"member-1-tx-1");idle();m.back();idle()
+        ck("returning from a transaction restores the member, filtered statement and position",
+            m.state.routeId=="member-1"&&m.state.member==Fixture.member&&m.listingQuery==statementQuery&&m.state.listIndex==7)
         m.prepareDownload(ExportFormat.CSV);prepared()
         ck("legacy ledger export cannot dispatch from any list",m.downloadRequest==null)
+        Fixture.listingQueries.clear()
         m.prepareDownload(ExportFormat.XLSX);prepared()
-        ck("member scope downloads use the central Payments target",rendered?.title?.contains("Payments")==true&&rendered?.rowCount==1&&
-            Fixture.listingQueries.last().target==ListingTarget.PAYMENTS&&Fixture.listingQueries.last().memberId=="member-1"&&m.exportFeedback?.phase==UiExportPhase.CHOOSING_DESTINATION)
-        m.cancelExport()
+        val statementRequest=take()
+        ck("the statement reads every page under the same member, filters and sort",
+            rendered?.let{it.title=="BuriMunsi · Member statement"&&it.rowCount==103}==true&&m.state.payments?.items?.size==100&&
+            statementRequest?.fileName?.contains("member-statement")==true&&Fixture.listingQueries.map{it.cursor}==listOf(null,"page-two")&&
+            Fixture.listingQueries.all{it.target==ListingTarget.PAYMENTS&&it.query==statementQuery&&it.memberId=="member-1"})
+        val statementFile=java.io.File(root,"member-statement.xlsx")
+        destination({file,revalidate->revalidate();file.copyTo(statementFile);revalidate()});idle()
+        val sheet=java.util.zip.ZipFile(statementFile).use{zip->zip.getInputStream(zip.getEntry("xl/worksheets/sheet1.xml")).bufferedReader().use{it.readText()}}
+        ck("the saved statement contains the directory identity and second-page transaction in order",
+            m.exportFeedback?.phase==UiExportPhase.COMPLETE&&sheet.contains(Fixture.member.name)&&
+            sheet.indexOf("member-1-tx-103")>sheet.indexOf("member-1-tx-100")&&sheet.contains("member-1-tx-100")&&
+            !sheet.contains("global-only-payment")&&!sheet.contains("member-2-tx-"))
+        Fixture.memberPaymentScopeFailureOnCursor=true
+        try{
+            m.prepareDownload(ExportFormat.PDF);prepared()
+            ck("a foreign later page cannot reach the document picker",m.exportFeedback?.phase==UiExportPhase.FAILED&&m.downloadRequest==null)
+        }finally{Fixture.memberPaymentScopeFailureOnCursor=false}
+        m.back();idle()
+        ck("back restores the global payment query",m.state.route==Route.PAYMENTS&&m.state.routeId==null&&m.listingQuery==selected)
+        m.navigate(Route.PAYMENTS,"member-1");idle()
+        ck("reopening a statement restores all transactions from the first page",m.listingQuery==ListingQuery()&&m.state.listIndex==0)
+        val readingMember=CountDownLatch(1);val allowMember=CountDownLatch(1)
+        Fixture.paymentsEntered=readingMember;Fixture.paymentsBarrier=allowMember
+        try{
+            m.navigate(Route.PAYMENTS,"member-2")
+            withContext(Dispatchers.IO){check(readingMember.await(5,TimeUnit.SECONDS))}
+            ck("changing members clears the previous identity and transactions while reading",
+                m.state.routeId=="member-2"&&m.state.member==null&&m.state.payments==null&&!m.canExportListing)
+        }finally{allowMember.countDown();Fixture.paymentsEntered=null;Fixture.paymentsBarrier=null}
+        idle()
+        ck("the new statement publishes only its exact member and transactions",
+            m.state.member?.id=="member-2"&&m.state.payments?.items?.all{it.memberId=="member-2"}==true)
         val entered=CountDownLatch(1);val release=CountDownLatch(1)
         m.configureDownloads(directory){_,_,_,cancelled->entered.countDown();check(release.await(5,TimeUnit.SECONDS));if(cancelled())throw ExportCancelledException()}
         m.prepareDownload(ExportFormat.XLSX)

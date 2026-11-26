@@ -1,10 +1,8 @@
 {
   "schema": 1,
   "languages": [
-    "en",
-    "rw"
+    "en"
   ],
-  "translationReview": "Kinyarwanda functional copy authored in this continuation; fluent operator review remains required.",
   "entries": [
     {
       "key": "ui_003c8ec19b8c",
@@ -250,11 +248,6 @@
       "key": "ui_1bb201d18835",
       "en": "Allowed",
       "rw": "Byemewe"
-    },
-    {
-      "key": "ui_1bca71ee64ce",
-      "en": "Open members",
-      "rw": "Fungura abanyamuryango"
     },
     {
       "key": "ui_1c0f923cf419",
@@ -817,11 +810,6 @@
       "rw": "Konti %1$d"
     },
     {
-      "key": "ui_528d89ad72cb",
-      "en": "Your profile",
-      "rw": "Umwirondoro wawe"
-    },
-    {
       "key": "ui_52d26f44d33f",
       "en": "Allocated",
       "rw": "Byagenewe umunyamuryango"
@@ -1130,11 +1118,6 @@
       "key": "ui_721d760fb78c",
       "en": "Requesting code…",
       "rw": "Gusaba kode…"
-    },
-    {
-      "key": "ui_7363bfa0b722",
-      "en": "Use phone language",
-      "rw": "Koresha ururimi rwa telefoni"
     },
     {
       "key": "ui_737cc799a9ff",
@@ -1647,11 +1630,6 @@
       "rw": "Itariki iyo ari yo yose"
     },
     {
-      "key": "ui_a4fe65264ef7",
-      "en": "Language",
-      "rw": "Ururimi"
-    },
-    {
       "key": "ui_a52ace420f21",
       "en": "All",
       "rw": "Byose"
@@ -1887,11 +1865,6 @@
       "rw": "Hagarika"
     },
     {
-      "key": "ui_b84f181f5d35",
-      "en": "Open payments",
-      "rw": "Fungura ubwishyu"
-    },
-    {
       "key": "ui_b8fe528f5786",
       "en": "Welcome\nback.",
       "rw": "Ikaze\nna none."
@@ -1900,11 +1873,6 @@
       "key": "ui_b968f42334e1",
       "en": "Open the app to resume sync",
       "rw": "Fungura porogaramu ukomeze guhuza"
-    },
-    {
-      "key": "ui_ba118bf7fc9c",
-      "en": "English",
-      "rw": "English"
     },
     {
       "key": "ui_bb349bfe6750",
@@ -2205,11 +2173,6 @@
       "key": "ui_d79e3527848d",
       "en": "This PDF exceeds the page limit. Narrow the filters and try again.",
       "rw": "PDF irengeje umubare w’impapuro wemewe. Gabanya amakuru wahisemo wongere ugerageze."
-    },
-    {
-      "key": "ui_d7d073abc6cd",
-      "en": "Ikinyarwanda",
-      "rw": "Ikinyarwanda"
     },
     {
       "key": "ui_d8a2bdc0653a",
@@ -2877,11 +2840,6 @@
       "rw": "Imibare y’ubwizigame ntiboneka."
     },
     {
-      "key": "ui_home_savings_mismatch",
-      "en": "Contributions less outgoing payments differ from the last MoMo balance.",
-      "rw": "Imisanzu ukuyemo amafaranga yishyuwe ntihwanye n’amafaranga asigaye kuri MoMo nk’uko SMS ya nyuma ibigaragaza."
-    },
-    {
       "key": "ui_home_wallet_check_unavailable",
       "en": "Wallet reconciliation needs a verified opening balance and a complete record of payments and fees.",
       "rw": "Kugenzura amafaranga ari kuri konti ya MoMo bisaba kumenya amafaranga yariho mu ntangiriro no kugira urutonde rwuzuye rw’amafaranga yinjiye, ayasohotse n’amafaranga ya serivisi."
@@ -2920,6 +2878,106 @@
       "key": "ui_home_wallet_loading",
       "en": "Loading payment totals",
       "rw": "Harimo gutegurwa ibiteranyo by’amafaranga yinjiye n’ayasohotse"
+    },
+    {
+      "key": "ui_enroll_momo_suggestions",
+      "en": "MoMo suggestions"
+    },
+    {
+      "key": "ui_enroll_scan_list",
+      "en": "Scan a list"
+    },
+    {
+      "key": "ui_member_statement",
+      "en": "Member statement"
+    },
+    {
+      "key": "ui_open_member_statement",
+      "en": "Open member statement"
+    },
+    {
+      "key": "ui_payment_details",
+      "en": "Payment details"
+    },
+    {
+      "key": "ui_search_transactions",
+      "en": "Search transactions"
+    },
+    {
+      "key": "ui_payment_search_hint",
+      "en": "Name or payment reference"
+    },
+    {
+      "key": "ui_clear_search",
+      "en": "Clear search"
+    },
+    {
+      "key": "ui_one_member",
+      "en": "1 member"
+    },
+    {
+      "key": "ui_one_transaction",
+      "en": "1 transaction"
+    },
+    {
+      "key": "ui_transaction_count",
+      "en": "%1$d transactions"
+    },
+    {
+      "key": "ui_no_transactions",
+      "en": "No transactions"
+    },
+    {
+      "key": "ui_filter_count",
+      "en": "Filters (%1$d)"
+    },
+    {
+      "key": "ui_add_from_momo",
+      "en": "Add from MoMo"
+    },
+    {
+      "key": "ui_payer_picker_scope",
+      "en": "Payers who haven’t joined this group."
+    },
+    {
+      "key": "ui_payer_picker_search",
+      "en": "Name or last 3 digits"
+    },
+    {
+      "key": "ui_payer_payment_single",
+      "en": "1 payment"
+    },
+    {
+      "key": "ui_payer_payment_count",
+      "en": "%1$d payments"
+    },
+    {
+      "key": "ui_momo_number_ending",
+      "en": "MoMo number ending in %1$s"
+    },
+    {
+      "key": "ui_payer_number_and_count",
+      "en": "••• %1$s · %2$s"
+    },
+    {
+      "key": "ui_payer_review",
+      "en": "Review payer"
+    },
+    {
+      "key": "ui_payer_loading",
+      "en": "Finding payers"
+    },
+    {
+      "key": "ui_payer_load_error",
+      "en": "Couldn’t load payers"
+    },
+    {
+      "key": "ui_payer_no_matches",
+      "en": "No matching payers"
+    },
+    {
+      "key": "ui_payer_empty",
+      "en": "No new payers yet"
     }
   ]
 }

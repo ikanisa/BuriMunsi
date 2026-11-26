@@ -5,7 +5,13 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.*
 import rw.ikanisa.burimunsi.core.*
 import rw.ikanisa.burimunsi.data.Fixture
+import rw.ikanisa.burimunsi.data.ApiFailure
 import rw.ikanisa.burimunsi.ui.*
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /** Real ViewModel with synthetic repository and lifecycle boundaries. */
 fun main() = runBlocking {
@@ -20,6 +26,85 @@ private suspend fun BuriViewModel.awaitIdle() = withTimeout(10_000) {
  while (state.starting || state.busy) delay(2)
 }
 
+private suspend fun verifySuggestions(model:BuriViewModel,ck:(String,Boolean)->Unit){
+ val a="7b5db134-bb63-4e7d-8cc0-6c62c7613ddd"
+ val b="d9e5abcf-8f53-4cd3-8ace-61d73831cf24"
+ fun page(group:String,ids:List<String>,next:String?=null):JSONObject {
+  val rows=JSONArray()
+  ids.forEach{rows.put(JSONObject().put("id",it).put("candidateId",it).put("groupId",group)
+   .put("momoName",if(it==a)"Alice" else "Beata").put("last3",if(it==a)"123" else "678")
+   .put("latestSeenAt","2026-11-01T12:00:00Z").put("sourceCount",1))}
+  return JSONObject().put("items",rows).put("nextCursor",next).put("revision","current")
+ }
+ suspend fun settled()=withTimeout(5_000){while(model.state.onboarding.suggestionsLoading)delay(3)}
+ suspend fun entered(latch:CountDownLatch)=withContext(Dispatchers.IO){check(latch.await(5,TimeUnit.SECONDS))}
+ val queries=CopyOnWriteArrayList<String>()
+ val initial=CountDownLatch(1);val releaseInitial=CountDownLatch(1)
+ val nextPage=CountDownLatch(1);val releasePage=CountDownLatch(1)
+ try {
+  Fixture.suggestionRead={q,cursor,scope->
+   queries.add(q)
+   if(q.isEmpty()){initial.countDown();check(releaseInitial.await(5,TimeUnit.SECONDS))}
+   if(cursor!=null){nextPage.countDown();check(releasePage.await(5,TimeUnit.SECONDS))}
+   page(scope.collectionId,if(q.isEmpty()||cursor!=null)listOf(b)else listOf(a),if(q.isNotEmpty()&&cursor==null)"more" else null)
+  }
+  model.onboardingSuggestions()
+  ck("opening suggested payers immediately loads all without reporting an empty list",model.state.onboarding.let{it.suggestionsLoading&&!it.suggestionsLoaded&&it.query.isEmpty()}&&!model.state.busy)
+  entered(initial)
+  model.onboardingSearchQuery("A");model.onboardingSearchQuery("Al");model.onboardingSearchQuery("Alice")
+  settled()
+  ck("rapid typing sends only its final query and publishes that payer",queries==listOf("","Alice")&&model.state.onboarding.suggestions.map{it.candidateId}==listOf(a))
+  releaseInitial.countDown();delay(20)
+  ck("an earlier unfiltered response cannot replace a newer search",model.state.onboarding.query=="Alice"&&model.state.onboarding.suggestions.single().candidateId==a)
+  model.onboardingSuggestions("Alice","more");entered(nextPage)
+  model.onboardingChoose(a)
+  releasePage.countDown();delay(20)
+  ck("choosing a payer cancels pagination and starts verification with only the suggested name",model.state.onboarding.let{
+   it.step==SmartOnboardingStep.MEMBER&&it.candidate?.candidateId==a&&!it.verifiedOwnership&&!it.acceptedTerms&&!it.consentRecorded}&&model.state.draft==mapOf("name" to "Alice"))
+  model.onboardingSuggestions(model.state.onboarding.query);settled()
+  ck("returning from verification freshly reads the same search and discards candidate consents",model.state.onboarding.let{
+   it.step==SmartOnboardingStep.SUGGESTIONS&&it.query=="Alice"&&it.candidate==null&&it.suggestions.single().candidateId==a}&&model.state.draft.isEmpty())
+  Fixture.suggestionRead={_,_,_->throw ApiFailure("connection_unavailable",0)}
+  model.onboardingSearchQuery("123");settled()
+  ck("failed search never reports a confirmed empty result",model.state.onboarding.let{it.suggestionsFailed&&!it.suggestionsLoaded&&!it.suggestionsLoading&&it.suggestions.isEmpty()})
+  Fixture.suggestionRead={q,_,scope->check(q=="123");page(scope.collectionId,emptyList())}
+  model.onboardingSuggestions("123");settled()
+  ck("retrying the current suffix can confirm a genuinely empty result",model.state.onboarding.let{it.suggestionsLoaded&&!it.suggestionsFailed&&it.suggestions.isEmpty()})
+  Fixture.suggestionRead={_,_,_->page("an-unrelated-group",listOf(b))}
+  model.onboardingSuggestions("123");settled()
+  ck("suggestions from an unrelated group are rejected",model.state.onboarding.suggestionsFailed&&model.state.onboarding.suggestions.isEmpty())
+  val closed=CountDownLatch(1);val finish=CountDownLatch(1)
+  try{
+   Fixture.suggestionRead={_,_,scope->closed.countDown();check(finish.await(5,TimeUnit.SECONDS));page(scope.collectionId,listOf(b))}
+   model.onboardingSearchQuery("");entered(closed);model.onboardingOptions()
+   finish.countDown();delay(20)
+   ck("a response after Back cannot reopen the picker",model.state.onboarding==SmartOnboardingState())
+  }finally{finish.countDown()}
+  var firstPageReads=0
+  Fixture.suggestionRead={q,cursor,scope->
+   check(q.isEmpty())
+   if(cursor==null){firstPageReads++;page(scope.collectionId,listOf(a),"more")}else page(scope.collectionId,listOf(b))
+  }
+  model.onboardingSuggestions();settled()
+  ck("an empty query automatically presents the first eligible payer before any input",
+   model.state.onboarding.let{it.suggestionsLoaded&&it.suggestions.single().candidateId==a&&it.nextCursor=="more"})
+  model.onboardingSuggestions("","more");settled()
+  ck("the continuation appends additional payers within the same query",model.state.onboarding.let{it.suggestions.map{c->c.candidateId}==listOf(a,b)&&it.nextCursor==null})
+  model.onBackground()
+  ck("backgrounding hides suggested payer identities",model.state.onboarding.suggestions.isEmpty())
+  model.onForeground();model.awaitIdle();settled()
+  ck("foreground revalidation reads the same collection from its first page",firstPageReads==2&&model.state.onboarding.suggestions.single().candidateId==a)
+  model.onboardingChoose(a)
+  try{
+   Fixture.receiverGroupOverride="another-collection"
+   model.onboardingSuggestions(model.state.onboarding.query)
+   ck("the selected payer's search cannot reopen against a different collection",model.state.onboarding==SmartOnboardingState()&&firstPageReads==2)
+  }finally{Fixture.receiverGroupOverride=null}
+ }finally{
+  releaseInitial.countDown();releasePage.countDown();Fixture.suggestionRead=null;model.onboardingOptions()
+ }
+}
+
 private suspend fun verifyOnboarding(model: BuriViewModel) {
  var checks=0
  fun ck(label:String,value:Boolean){check(value){label};println("PASS $label");checks++}
@@ -30,6 +115,7 @@ private suspend fun verifyOnboarding(model: BuriViewModel) {
  fun startInput(view:BuriViewModel,kind:MemberInputKind)=checkNotNull(view.beginMemberInput(kind))
  fun result(view:BuriViewModel,id:String,uri:String?,mime:String?=null)=view.receiveMemberInput(id,uri,detectMime={mime})
  model.awaitIdle();model.onForeground();model.awaitIdle();model.openSheet(Sheet.ENROLL);model.awaitIdle()
+ verifySuggestions(model,::ck)
  model.onboardingPhoto()
  val camera=startInput(model,MemberInputKind.CAMERA)
  model.onBackground();check(result(model,camera,"content://example/capture.jpg"))

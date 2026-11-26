@@ -57,9 +57,9 @@ object BuriTheme {
         else->Brush.verticalGradient(listOf(Canvas,Canvas))
     }
 }
-/** Optional overrides make instrumentation deterministic without changing installation preferences. */
-@Composable fun BuriContent(languageTag:String?=null,reduceMotion:Boolean?=null,content:@Composable ()->Unit) {
-    UiPreferencesProvider(languageTag,reduceMotion) {
+/** Tests can fix motion without changing the installation preference. */
+@Composable fun BuriContent(reduceMotion:Boolean?=null,content:@Composable ()->Unit) {
+    UiPreferencesProvider(reduceMotion) {
         BuriMotionProvider {
         MaterialTheme(colorScheme=darkColorScheme(
             primary=BuriTheme.Text,onPrimary=Color(0xFF151517),secondary=BuriTheme.Blue,
