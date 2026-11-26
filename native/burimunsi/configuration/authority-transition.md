@@ -9,7 +9,9 @@ Keystore UIDs prevent those apps from loading the previous apps' local sessions,
 device credentials or queued work. This is a fresh installation and does not
 move or resolve those records. A matching URL does not establish a working backend.
 
-The first authorized scan records the existing inbox identities and the scoped consent under which they were observed. A receiver cycle compares each approved sender and receiving SIM row against server custody and parsing, including the newest phone receipt ordered by received time and inbox row ID. It requeues a confirmed gap with its original source identity. Paired receipts use the paired gateway and observation-only receipts use the consented observation transport. The historical recovery endpoint retains an eligible first-scan receipt under its recorded consent and holds it for review. For a key-only baseline, the receiver can open a new current-consent historical review. A previous in-flight command with uncertain original consent stays on hold. Admin receives the most recent online check, including missing or unparsed receipts.
+The first authorized scan records the existing inbox identities and the consent under which they were observed. Each receiver cycle compares eligible phone rows with stored sources and parser outcomes. Received time and inbox row ID determine the newest phone receipt. A confirmed gap is requeued with its original source identity. Paired receipts use their original gateway. Observation-only receipts use the consented observation transport.
+
+The recovery endpoint retains an eligible first-scan receipt under its recorded consent. A fresh authenticated phone page then checks its original source and encrypted contents. An exact match to an existing payment reuses that payment. A verified standalone source with no prior processing goes to the regular parser. Conflicting prior evidence or uncertain original consent stays on hold. Admin receives the latest check, including any missing or unparsed receipts and the result of the newest-message comparison.
 
 Before live use, complete and verify the following for each installation:
 
