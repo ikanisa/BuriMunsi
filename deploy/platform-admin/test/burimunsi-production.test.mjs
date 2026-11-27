@@ -191,6 +191,9 @@ test('public BuriMunsi deletion support serves only its static document and styl
   assert.match(response.headers.get('Content-Security-Policy'), /default-src 'none'.*form-action 'none'/);
   const document = await response.text();
   assert.ok(document.includes('href="https://wa.me/250788767816" rel="noreferrer">Contact support on WhatsApp at +250 788 767 816</a>'));
+  assert.match(document, /Send a message asking for account deletion to start the review/);
+  assert.match(document, /account stays accessible.+financial records must be retained/);
+  assert.match(document, /href="\/privacy">How BuriMunsi uses your data/);
   assert.doesNotMatch(document, /mailto:|<script\b|<form\b/i);
   const alias = await worker.fetch(request('/functions/v1/collect-api' + path), env);
   assert.equal(await alias.text(), document);
@@ -199,4 +202,25 @@ test('public BuriMunsi deletion support serves only its static document and styl
   const head = await worker.fetch(request(path, {method: 'HEAD'}), env);
   assert.equal(head.status, 200);
   assert.equal(await head.text(), '');
+});
+
+test('public privacy notice describes actual collection and access and leads back to deletion', async () => {
+  const worker = createAdminWorker({fetchImpl: unexpected});
+  for (const path of ['/privacy', '/privacy/', '/functions/v1/collect-api/privacy']) {
+    const response = await worker.fetch(request(path), env);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('X-Collect-Document'), 'burimunsi.privacy.notice.v1');
+    assert.match(response.headers.get('Cache-Control'), /no-store/);
+    const text = await response.text();
+    assert.match(text, /BuriMunsi Staff, Admin Sync and Web Admin/);
+    assert.match(text, /eligible M-Money messages to Supabase/);
+    assert.match(text, /records the reason for that access\. Staff cannot read original messages/);
+    assert.match(text, /image to OpenAI to extract names and mobile numbers/);
+    assert.match(text, /review the extracted members before saving/);
+    assert.match(text, /href="\/privacy\/account-deletion">request account deletion/);
+    assert.doesNotMatch(text, /<form\b|<script\b/i);
+  }
+  for (const path of ['/privacy', '/privacy/anything']) {
+    assert.equal((await worker.fetch(request(path, {method: 'POST', headers: {Origin: BURIMUNSI_ADMIN_ORIGIN}}), env)).status, 404);
+  }
 });

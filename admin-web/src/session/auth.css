@@ -13,7 +13,8 @@
   display: flex; align-items: center; gap: 12px; width: fit-content; max-width: calc(100% - 24px);
   margin-inline: auto; padding: 8px 12px;
 }
-.admin-auth-help { margin: 4px 0 0; color: var(--admin-muted); }
+.admin-auth-help { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; margin: 4px 0 0; color: var(--admin-muted); }
+.admin-auth-help a { display: inline-flex; align-items: center; min-height: 44px; }
 .admin-auth-task { width: min(100%, 520px); padding: 8px 0; }
 .admin-challenge-dialog { width: min(420px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 16px; border: 1px solid var(--admin-line); border-radius: 20px; background: var(--admin-surface); color: var(--admin-ink); }
 .admin-challenge-dialog::backdrop { background: rgb(0 0 0 / 45%); }

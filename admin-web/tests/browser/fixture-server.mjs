@@ -5,6 +5,7 @@ import {analyzeCanonicalPaymentRows,parsePaymentAnalysisQuery}
 import {promises as fs} from 'node:fs';
 import path from 'node:path';
 import {versionedStatic} from '../../../deploy/platform-admin/src/static-recovery.js';
+import {standalonePrivacySupport} from '../../../supabase/functions/_shared/burimunsi-privacy-support.js';
 import {createPaymentCommitFixture} from './payment-commit-fixture.mjs';
 import {createPhoneAccountFixture, fixtureAdminId} from './phone-account-fixture.mjs';
 import {fixtureMembers, fixtureMembership, fixtureMomoDetail, fixtureMomoRecord, fixtureOutgoingPayment, fixturePayment, fixtureSmsEvidenceId, fixtureOriginalSms, fixtureOriginalDigest,
@@ -105,6 +106,12 @@ if (commitFixture) process.on('message', command => {
 createServer(async (request, response) => {
   const url = new URL(request.url ?? '/', origin);
   if (url.origin !== origin) return json(response, 403, {error: {code: 'fixture_origin_denied'}});
+  if (url.pathname === '/privacy' || url.pathname.startsWith('/privacy/')) {
+    const privacy = standalonePrivacySupport(new Request(url, {method: request.method}));
+    if (!privacy) return json(response, 404, {error: {code: 'not_found'}});
+    response.writeHead(privacy.status, Object.fromEntries(privacy.headers));
+    return response.end(await privacy.text());
+  }
   if (process.env.COLLECT_FIXTURE_MISSING_ENTRY === '1' && /^\/_build\/[a-f0-9]{64}\/assets\/admin-entry\.js$/.test(url.pathname)) {
     const recovery = await versionedStatic(new Request(url, {method: request.method}), {fetch: async () =>
       new Response('<html>synthetic SPA fallback</html>', {headers: {'Content-Type': 'text/html'}})});

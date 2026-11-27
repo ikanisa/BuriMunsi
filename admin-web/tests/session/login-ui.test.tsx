@@ -46,6 +46,9 @@ describe('BuriMunsi phone and passcode sign-in', () => {
     const help = screen.getByRole('link', {name: 'WhatsApp support · +250 788 767 816'});
     expect(help).toHaveAttribute('href', 'https://wa.me/250788767816');
     expect(help).toHaveAttribute('rel', 'noopener noreferrer');
+    const privacy = screen.getByRole('link', {name: 'Privacy and data use (opens in a new tab)'});
+    expect(privacy).toHaveAttribute('href', '/privacy');
+    expect(privacy).toHaveAttribute('target', '_blank');
     expect(screen.getByLabelText('Mobile number')).toBeDisabled();
     expect(screen.getByText(/workspace could not be reached/i)).toBeInTheDocument();
     fireEvent.click(check);

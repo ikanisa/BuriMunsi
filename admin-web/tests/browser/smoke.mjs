@@ -91,6 +91,24 @@ try {
     return { context, page };
   }
 
+  async function openPrivacyAndDeletion(page) {
+    const source = page.url();
+    const [notice] = await Promise.all([
+      page.waitForEvent('popup'),
+      page.getByRole('link', {name: 'Privacy and data use (opens in a new tab)'}).click(),
+    ]);
+    try {
+      await notice.getByRole('heading', {name: 'Privacy and data use', level: 1}).waitFor();
+      assert.equal(notice.url(), origin + '/privacy');
+      await notice.getByRole('link', {name: 'request account deletion'}).click();
+      await notice.getByRole('heading', {name: 'Account deletion', level: 1}).waitFor();
+      assert.equal(notice.url(), origin + '/privacy/account-deletion');
+      assert.equal(page.url(), source);
+    } finally {
+      await notice.close();
+    }
+  }
+
   const starterNotice = 'If this page does not finish opening, reopen it while online.';
   const startup = await open({ width: 390, height: 844 }, 'block');
   const entryPath = /^\/_build\/[0-9a-f]{64}\/assets\/admin-entry\.js$/;
@@ -117,6 +135,8 @@ try {
   await page.getByRole('heading', { name: 'Welcome to BuriMunsi' }).waitFor();
   assert.equal(await page.getByLabel('Email', { exact: true }).count(), 0);
   await page.getByLabel('Mobile number', { exact: true }).fill('0780 000 001');
+  await openPrivacyAndDeletion(page);
+  assert.equal(await page.getByLabel('Mobile number', { exact: true }).inputValue(), '0780 000 001');
   await page.getByLabel('Four-digit passcode', { exact: true }).fill('0123');
   const loginRequests = [];
   const recordLogin = request => {
@@ -194,6 +214,7 @@ try {
   assert(await accountMenu.getByRole('link',{name:'Team',exact:true}).isVisible());
   assert.equal(await accountMenu.getByText(/^(Help|Activity|Workspace|Privacy requests|Open-source notices)$/).count(),0);
   assert.equal(await accountMenu.getByRole('link',{name:/WhatsApp support/}).count(),0);
+  await openPrivacyAndDeletion(page);
   await page.getByRole('button', {name:/^Account:/}).click();
   page.off('request', recordLogin);
   assert.deepEqual(loginRequests, legacySessions ? [signInPath, sessionPath] : [signInPath]);
@@ -721,6 +742,7 @@ try {
   assert.deepEqual(unexpectedAuth, []);
   assert.deepEqual(incorrectIdentityHeaders, []);
   const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'home_has_no_sms_status_and_retired_admin_pages_return_home', 'long_home_member_names_truncate_with_full_text', 'home_loading_follows_the_request_and_respects_motion_preference', 'retired_passcode_bookmark_returns_to_overview', 'three_daily_links_and_no_redundant_sidebar_search', 'canonical_payment_direction_filter_and_clear', 'inline_inbox_preserves_financial_table_and_390px_scroll', 'protected_sms_deep_link', 'filtered_member_detail_and_return', 'single_mobile_number_in_member_roster_and_detail', 'member_refresh_preserves_filter_and_rows', 'inline_member_statement_pinned_revision_full_balance_and_320px_reflow', 'payment_expansion_shows_authorized_original_sms', 'payment_without_source_and_320px_reflow', 'sms_read_failure_retry',
+      'signed_out_privacy_and_deletion_link_preserves_form', 'signed_in_account_opens_privacy_and_deletion',
       'payer_sms_empty_and_reported_delivered', 'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
       'retired_authenticator_bookmark_preserves_safe_destination', 'missing_scoped_admin_identity_removes_controls', 'session_failure_and_recovery_require_server_authority', 'expired_request_and_history_return_require_sign_in',
       'mobile_drawer_traps_and_restores_focus_and_reflows', 'tablet_core_routes_fit_viewport_and_collect_reconciliation_stays_closed', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, ...authorityChecks, 'no_unexpected_auth_request', 'identity_version_only_on_session_exchanges'];

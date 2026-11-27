@@ -80,6 +80,9 @@ describe('Admin shell', () => {
     expect(account).toHaveTextContent(/^Staff$/);
     await user.click(account);
     expect(screen.queryByText('Help', {selector:'summary'})).not.toBeInTheDocument();
+    const privacy = screen.getByRole('link', {name: 'Privacy and data use (opens in a new tab)'});
+    expect(privacy).toHaveAttribute('href', '/privacy');
+    expect(privacy).toHaveAttribute('rel', 'noopener noreferrer');
     expect(screen.queryByText(/registered Android receiver/)).not.toBeInTheDocument();
     expect(screen.queryByRole('link', {name:/WhatsApp support|Open-source notices|Review payments/})).not.toBeInTheDocument();
     expect(screen.getByRole('button',{name:'Sign out'})).toBeVisible();

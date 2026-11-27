@@ -159,6 +159,25 @@ test('standalone source reveal reads the verified table envelope and rechecks it
   }
  }
 });
+test('one standalone synthetic original is audited for its own group before the open session loses disclosure access', async () => {
+ const f = await fixture();
+ f.env.BURIMUNSI_PRODUCT_MODE = 'standalone';
+ f.inlineEnvelope = f.sealed;
+ const reason = 'Verify the synthetic payment receipt';
+ const reveal = group => call(f, `observations/${sourceId}/content?collectionId=${group}`, {'X-Collect-Review-Reason': reason});
+ await assert.rejects(reveal(other), error(403, 'permission_required'));
+ assert.equal(f.audits.length, 0);
+ const reply = await (await reveal(gid)).json();
+ assert.equal(reply.bodySha256, await digest(message));
+ assert.equal(f.audits.length, 1);
+ const [userId, sessionId, entityId, details] = f.audits[0];
+ assert.deepEqual([userId, sessionId, entityId], [principal, session, sourceId]);
+ assert.deepEqual(JSON.parse(details), {reason, collection_id: gid, request_id: requestId,
+  body_sha256: reply.bodySha256, object_sha256: f.source.objectSha256});
+ f.allowed.clear();
+ await assert.rejects(reveal(gid), error(403, 'permission_required'));
+ assert.equal(f.audits.length, 1);
+});
 test('scope revocation or audit failure after retrieval never returns plaintext',async()=>{
  for(const cause of ['revoke','audit']){
   const f=await fixture();if(cause==='revoke')f.onRead=()=>f.allowed.clear();else f.failAudit=true;

@@ -169,6 +169,15 @@ Deno.test('standalone direct deletion information remains available without acco
   assertEquals(document.includes(`href="${style}"`), true);
   assertEquals(document.includes('href="https://wa.me/250788767816" rel="noreferrer">Contact support on WhatsApp at +250 788 767 816</a>'), true);
   assertEquals(/mailto:|<form\b|<script\b|@collect\.ikanisa\.com/i.test(document), false);
+  assertEquals(document.includes('href="/functions/v1/collect-api/privacy"'), true);
+  const notice = await handler(request('collect-api', '/privacy', 'GET'));
+  assertEquals(notice.status, 200);
+  assertEquals(notice.headers.get('X-Collect-Document'), 'burimunsi.privacy.notice.v1');
+  const body = await notice.text();
+  assertEquals(body.includes(`href="${style}"`), true);
+  assertEquals(body.includes('href="/functions/v1/collect-api/privacy/account-deletion"'), true);
+  assertEquals(body.includes('Staff cannot read original messages'), true);
+  assertEquals(body.includes('image to OpenAI'), true);
   const head = await handler(request('collect-api', path, 'HEAD'));
   assertEquals(head.status, 200);
   assertEquals(await head.text(), '');

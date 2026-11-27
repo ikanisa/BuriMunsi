@@ -6,7 +6,7 @@ import {versionedStatic} from './static-recovery.js';
 import {BURIMUNSI_ADMIN_ORIGIN, BURIMUNSI_ADMIN_PROFILE_ID} from './admin-session-realm.js';
 
 const API_ROOT = '/api';
-const MANAGED_ROOTS = [API_ROOT, '/v1', '/functions', '/privacy/account-deletion'];
+const MANAGED_ROOTS = [API_ROOT, '/v1', '/functions', '/privacy'];
 // Every installed Admin worker passes this exact online document through to the host.
 const ONLINE_WORKSPACE = '/api/admin/workspace';
 
