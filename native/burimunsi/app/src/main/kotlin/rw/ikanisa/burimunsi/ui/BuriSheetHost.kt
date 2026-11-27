@@ -92,7 +92,7 @@ import rw.ikanisa.burimunsi.core.Role
                         val staff=s.staff?.items.orEmpty()
                         if(staff.isNotEmpty())item{Column(Modifier.fillMaxWidth().background(BuriTheme.Group,RoundedCornerShape(24.dp)).padding(horizontal=16.dp,vertical=2.dp)){
                             staff.forEachIndexed{index,person->
-                                SettingRow(R.drawable.ic_members,person.name,t("%1\$s · %2\$s",person.phone,t(if(person.active)"Active" else "Disabled")),enabled=!s.busy){m.openSheet(Sheet.STAFF_EDIT,person.id)}
+                                SettingRow(R.drawable.ic_members,person.name,t("%1\$s · %2\$s",person.phone,t(if(person.active)"Active" else "Disabled")),enabled=!s.busy,singleLineTitle=true){m.openSheet(Sheet.STAFF_EDIT,person.id)}
                                 if(index<staff.lastIndex)HorizontalDivider(color=Color.White.copy(alpha=.08f))
                             }
                         }}

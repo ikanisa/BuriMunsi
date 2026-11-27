@@ -1,5 +1,5 @@
 import {webcrypto} from 'node:crypto';
-import {act, fireEvent, render, screen} from '@testing-library/react';
+import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {useState} from 'react';
 import {createMemoryRouter, RouterProvider} from 'react-router';
 import {afterEach, describe, expect, it, vi} from 'vitest';
@@ -194,11 +194,16 @@ describe('scheduled Admin session checks', () => {
     const rowName = new RegExp(member.display_name);
     const openRecord = {name: 'View ' + member.public_id};
     const {contract_version, model} = core.members;
+    const recoveredSession = holdResponse();
     let checks = 0, detailReads = 0;
     const searches: string[] = [];
     const fetchImpl: typeof fetch = async input => {
       const url = new URL(String(input), window.location.origin);
-      if (url.pathname === sessionPath) {checks++; return checks >= 2 && checks <= 4 ? maintenance() : verified(['overview.read', 'users.read']);}
+      if (url.pathname === sessionPath) {
+        checks++;
+        if (checks === 5) return recoveredSession.promise;
+        return checks >= 2 && checks <= 4 ? maintenance() : verified(['overview.read', 'users.read']);
+      }
       if (url.pathname === '/api/admin/core/members' && url.searchParams.get('directory') === 'roster') {
         const query = url.searchParams.get('search') ?? '';
         searches.push(query);
@@ -227,7 +232,10 @@ describe('scheduled Admin session checks', () => {
       await act(async () => {await vi.advanceTimersByTimeAsync(28_000);});
       expect(screen.getByText('Rechecking account access…')).toBeInTheDocument();
       await act(async () => {await vi.advanceTimersByTimeAsync(3_000);});
-      expect(screen.queryByText('Rechecking account access…')).toBeNull();
+      await waitFor(() => expect(checks).toBe(5));
+      expect(search.closest('[inert]')).toBeInTheDocument();
+      await act(async () => {recoveredSession.release(verified(['overview.read', 'users.read']));});
+      await waitFor(() => expect(screen.queryByText('Rechecking account access…')).toBeNull());
       expect(search.closest('[inert]')).toBeNull();
       expect(screen.getByRole('textbox', {name: 'Search Members'})).toBe(search);
       expect(search).toHaveValue('recorded');

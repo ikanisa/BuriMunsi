@@ -1306,7 +1306,7 @@ class NativeUiContractTest {
                 BuriContent(reduceMotion=true) {
                     Box(Modifier.fillMaxSize()) {
                         Column(Modifier.width(216.dp).verticalScroll(rememberScrollState())) {
-                            SettingRow(app.cool.mobile.R.drawable.ic_members,name,click={opened++})
+                            SettingRow(app.cool.mobile.R.drawable.ic_members,name,singleLineTitle=true,click={opened++})
                             Primary(action,{},icon=app.cool.mobile.R.drawable.ic_arrow,iconTrailing=true)
                             BuriStatusMessage(warning,error=true)
                         }
@@ -1526,13 +1526,21 @@ class NativeUiContractTest {
         ui.runOnIdle{check(c.filterCalls==1&&c.lastAppliedQuery?.fromAt=="2026-11-13T22:00:00Z"&&c.lastAppliedQuery?.untilAt=="2026-11-14T22:00:00Z"&&c.lastAppliedQuery?.minRwf==0L&&c.lastAppliedQuery?.maxRwf==100L&&c.state.sheet==null)}
     }
     @Test fun typedFilterOverlayReturnsToItsStaffPanelAndRetainsTheSelection(){
-        val c=FakeController(Route.SETTINGS);c.openSheet(Sheet.STAFF);show(c)
+        val person=StaffAccount("staff-example","Example cooperative operator with an especially long personal name",
+            "+250780000003",false,1,emptySet())
+        val c=FakeController(Route.SETTINGS)
+        c.state=c.state.copy(staff=checkNotNull(c.state.staff).copy(items=listOf(person),totalCount=1))
+        c.openSheet(Sheet.STAFF);show(c)
         ui.onNodeWithTag("listing-tools:STAFF").assertExists()
         ui.onNodeWithTag("listing-sort-menu").performClick();ui.onNodeWithText("Newest first").performClick()
         ui.runOnIdle{check(c.state.sheet==Sheet.STAFF&&c.lastAppliedQuery?.sort==ListingSort.NEWEST)}
         button("Filters").performClick();ui.onNodeWithTag("listing-active-select").performClick();ui.onNodeWithText("Inactive").performClick()
         ui.onNodeWithTag("listing-active-select").assert(hasText("Inactive"));button("Apply").performClick()
         ui.runOnIdle{check(c.state.sheet==Sheet.STAFF&&c.lastAppliedQuery?.active=="inactive")}
+        panelList("Staff access").performScrollToNode(hasText(person.name))
+        assertTextLayout(person.name,ellipsized=true)
+        panelButton("Staff access",person.name).performClick()
+        ui.runOnIdle{check(c.state.sheet==Sheet.STAFF_EDIT && c.state.sheetId==person.id)}
     }
     @Test fun smsDownloadsStayMetadataOnlyAndRequireClearingBodySearch(){
         val c=FakeController(if(BuildConfig.IS_GATEWAY)Route.SMS else Route.SETTINGS);c.smsAccessGranted=true;show(c)
