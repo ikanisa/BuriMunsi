@@ -125,7 +125,13 @@ export function parseStatementPage(raw: unknown, memberId: string, membership: P
 export type StatementPage = ReturnType<typeof parseStatementPage>;
 export type StatementPayment = StatementPage['items'][number];
 
+export function statementGroupTitle(groupId:string, title:string|null) {
+  const value=title?.trim();
+  return value && value!==groupId ? value : null;
+}
+
 export async function readCompleteMemberStatement(current: StatementPage, membership: ProfileMembership, request: AdminRequest, signal: AbortSignal) {
+  if (current.groupId!==membership.groupId || current.membershipId!==membership.id) throw new Error('The statement membership changed.');
   const items: StatementPayment[] = [], ids = new Set<string>();
   let running = 0n;
   for (let offset = 0; offset < current.totalCount; offset += memberStatementPageSize) {
@@ -142,7 +148,8 @@ export async function readCompleteMemberStatement(current: StatementPage, member
   }
   signal.throwIfAborted();
   if (items.length !== current.totalCount || running !== current.closingRwf) throw new Error('The closing balance could not be verified.');
-  return {publicId:membership.publicId ?? null, recordNumber:membership.recordNumber, asOf:current.asOf, revision:current.revision, transactions:items, closingRwf:current.closingRwf};
+  return {groupTitle:statementGroupTitle(current.groupId,membership.groupTitle),publicId:membership.publicId ?? null,
+    recordNumber:membership.recordNumber, asOf:current.asOf, revision:current.revision, transactions:items, closingRwf:current.closingRwf};
 }
 export type CompleteMemberStatement = Awaited<ReturnType<typeof readCompleteMemberStatement>>;
 

@@ -101,6 +101,9 @@ async function read(db,plan){
   await db.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
   try{await db.query("SET LOCAL TimeZone='UTC'; SET LOCAL DateStyle='ISO,YMD'");return await witness(db,plan);}finally{await db.query('ROLLBACK');}
 }
+const sameFence=(prior,now)=>{
+  for(const key of ['project','source','epoch','mode'])assert.equal(now[key],prior[key],'payment_release_fence_changed');
+};
 const sameCustody=(prior,now)=>assert.ok(now.grants===prior.grants&&now.custody===prior.custody,'payment_release_custody_or_grants_changed');
 
 export async function runPaymentEvidenceRelease(args,{open=connect}={}){
@@ -118,6 +121,7 @@ export async function runPaymentEvidenceRelease(args,{open=connect}={}){
       const intent=JSON.parse(await readPrivateFile(join(dest,file),32768));
       assert.equal(intent.fingerprint,preimage);assert.equal(intent.proof.sourceDigest,sourceDigest);
       assert.equal(hash(canonical(intent.proof)),preimage);
+      assert.equal(intent.proof.mode,'fenced');sameFence(intent.proof,first.proof);
       if(first.proof.phase==='predecessor')assert.equal(first.fingerprint,preimage);
       else sameCustody(intent.proof,first.proof);
     }else{
@@ -133,11 +137,18 @@ export async function runPaymentEvidenceRelease(args,{open=connect}={}){
     const independent=await read(peer,plan);
     assert.notEqual(first.pid,independent.pid,'payment_release_independent_session_required');
     sameCustody(first.proof,independent.proof);
-    for(const key of ['project','source','epoch','mode'])assert.equal(independent.proof[key],first.proof[key],'payment_release_fence_changed');
+    sameFence(first.proof,independent.proof);
     if(action==='apply')assert.equal(independent.proof.phase,'successor');
     else assert.equal(independent.fingerprint,first.fingerprint,'payment_release_readback_changed');
     const result={status:independent.proof.phase==='successor'?'recorded_and_verified':'predecessor_verified',preimage,...independent};
-    await writeReleaseEvidence(dest,plan.entry.version+'-'+action+'-'+result.fingerprint+'.json',result);
+    const receipt=plan.entry.version+'-'+action+'-'+result.fingerprint+'.json';
+    try{await writeReleaseEvidence(dest,receipt,result);}
+    catch(error){
+      if(action!=='reconcile'||error.code!=='EEXIST')throw error;
+      const existing=JSON.parse(await readPrivateFile(join(dest,receipt),32768));
+      assert.deepEqual(existing.proof,result.proof,'payment_release_receipt_changed');
+      for(const key of ['status','preimage','fingerprint'])assert.equal(existing[key],result[key],'payment_release_receipt_changed');
+    }
     return result;
   }finally{try{await peer?.end();}finally{await db.end();}}
 }

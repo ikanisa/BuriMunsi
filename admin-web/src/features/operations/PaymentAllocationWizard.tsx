@@ -14,6 +14,7 @@ import {useOperationRead} from './useOperationRead';
 type WizardProps = {id: string; group?: string; onClose: () => void; onAllocated: () => void; onStale: () => void};
 type Member = {id:string; name:string; publicId?:string | null; memberNumber?:string | null};
 const family = 'burimunsi.payment-allocation', permission = 'payments.read';
+const conflictingReceipts = 'Allocation blocked. Ask an Admin to review the conflicting receipts.';
 const originalIntent = z.object({memberId:paymentId, expectedVersion:z.number().int().positive().max(Number.MAX_SAFE_INTEGER)}).strict();
 const membersPage = z.object({items:z.array(z.object({id:paymentId,name:z.string().refine(value => !!value.trim()),
   publicId:z.string().regex(/^\d{6}$/).nullish(), memberNumber:z.string().regex(/^\d{12}$/).nullish()})).max(25),
@@ -94,7 +95,7 @@ function AllocationFlow({id,group,payment,onClose,onAllocated,onStale,session,us
   const [busy,setBusy] = useState(false), [canRetry,setCanRetry] = useState(false), [done,setDone] = useState(false);
   const [message,setMessage] = useState(''), [terminal,setTerminal] = useState('');
   const stale = terminal || (recovery.result?.status === 'success' && original === null && !done
-    ? payment.state === 'allocated' ? (payment.memberName ? 'This payment is already allocated to ' + payment.memberName + '.' : 'This payment is already allocated.')
+    ? payment.evidenceDisputed ? conflictingReceipts : payment.state === 'allocated' ? (payment.memberName ? 'This payment is already allocated to ' + payment.memberName + '.' : 'This payment is already allocated.')
       : payment.canAllocate !== true ? 'Allocation is unavailable for this payment.' : '' : '');
   const canChoose = recovery.result?.status === 'success' && original === null && !stale && !done;
   const membersQuery = useCallback(async (signal: AbortSignal) => {
@@ -168,7 +169,9 @@ function AllocationFlow({id,group,payment,onClose,onAllocated,onStale,session,us
       }
       const latest = buriMunsiPayment.parse(await request('burimunsi/payments/' + id));
       if (!current()) return;
-      if (latest.id !== id || latest.groupId !== group || latest.canAllocate !== true) throw Error('Payment scope changed.');
+      if (latest.id !== id || latest.groupId !== group) throw Error('Payment scope changed.');
+      if (latest.evidenceDisputed) {setTerminal(conflictingReceipts); return;}
+      if (latest.canAllocate !== true) throw Error('Payment scope changed.');
       if (latest.state === 'unallocated' && latest.version === intent.expectedVersion && payment.version === latest.version) {
         setCanRetry(true);
         setMessage('No completed request was found and the payment is still unallocated. You can retry the original request.');
@@ -181,7 +184,7 @@ function AllocationFlow({id,group,payment,onClose,onAllocated,onStale,session,us
   async function confirm() {
     if (sending.current || !current() || recovery.result?.status !== 'success' || (!original && !review) || (original && !canRetry) || stale || done) return;
     const intent = original ? originalIntent.parse(original.intent) : {memberId:review!.id,expectedVersion:payment.version};
-    if (payment.state !== 'unallocated' || payment.version !== intent.expectedVersion || payment.canAllocate !== true) return;
+    if (payment.evidenceDisputed || payment.state !== 'unallocated' || payment.version !== intent.expectedVersion || payment.canAllocate !== true) return;
     sending.current = true; setBusy(true); setCanRetry(false); setMessage('');
     let attempt = original, sent = false;
     try {
@@ -197,13 +200,21 @@ function AllocationFlow({id,group,payment,onClose,onAllocated,onStale,session,us
       if (current()) {setPending(null); setDone(true); onAllocated();}
     } catch (error) {
       if (!current()) return;
-      const rejected = error instanceof AdminRequestError && !error.outcomeUnknown && error.statusCode === 409 &&
-        (error.code === 'member_unavailable' || error.code === 'payment_changed');
-      if (!original && attempt && sent && rejected) {
+      const rejection = error instanceof AdminRequestError && !error.outcomeUnknown && error.statusCode===409 ? error.code : undefined;
+      const disputed = rejection==='payment_evidence_conflict';
+      if (original && sent && disputed) {
+        // The retry was refused. Preserve the earlier uncertain attempt's identity.
+        setTerminal(conflictingReceipts);
+      } else if (!original && attempt && sent && (disputed || rejection==='member_unavailable' || rejection==='payment_changed')) {
         try {
           await clearOriginalAttempt(identity,attempt,current);
-          if (current()) {setPending(null); setTerminal('The payment, member or allocation access changed. Close and review the current records.');}
-        } catch {if (current()) setMessage('The original reference remains. Check the payment before continuing.');}
+          if (current()) {setPending(null); setTerminal(disputed ? conflictingReceipts : 'The payment, member or allocation access changed. Close and review the current records.');}
+        } catch {
+          if (current()) {
+            if (disputed) setTerminal(conflictingReceipts);
+            else setMessage('The original reference remains. Check the payment before continuing.');
+          }
+        }
       } else setMessage(sent ? 'Allocation was not confirmed. Check the original request before trying again.' :
         'The original request reference could not be saved. No allocation was sent.');
     } finally {sending.current = false; if (current()) setBusy(false);}
@@ -241,7 +252,9 @@ function AllocationFlow({id,group,payment,onClose,onAllocated,onStale,session,us
   </>}>
     {!recovery.result ? <LoadingState label="Checking allocation reference" /> : recovery.result.status === 'error' ?
       <ErrorState message={recovery.result.message} onRetry={recovery.retry} /> :
-      finished ? <p role="status">{done ? 'Payment allocated.' : stale}</p> : <>
+      finished ? <><p role="status">{done ? 'Payment allocated.' : stale}</p>
+        {stale && original && <p>Original request <code>{original.request_key}</code></p>}</> : <>
+        {original && payment.evidenceDisputed && <p role="status">{conflictingReceipts}</p>}
         {reviewedId ? <h3 tabIndex={-1} ref={reviewHeading}>{original ? 'Original allocation request' : 'Review allocation'}</h3> : <h3>Choose a member</h3>}
         <Facts items={[[payment.ftId ? 'FT reference' : 'Payment ID',payment.ftId || payment.id],
           ['Amount',payment.amountRwf === null ? 'Not recorded' : 'RWF ' + money.format(payment.amountRwf)],

@@ -7,7 +7,7 @@ import {FinancialAnalysisTable, type FinancialColumn, type FinancialSort} from '
 import type {ColumnFilters} from '../operations/financialAnalysisModel';
 import {useOperationRead} from '../operations/useOperationRead';
 import {canReadMemberStatement, memberStatementPageSize, memberStatementPath, parseStatementPage, readCompleteMemberStatement,
-  readMemberStatement, readMemberStatementPage, statementAmount, type CompleteMemberStatement, type MemberStatementPosition,
+  readMemberStatement, readMemberStatementPage, statementAmount, statementGroupTitle, type CompleteMemberStatement, type MemberStatementPosition,
   type ProfileMembership, type StatementPage, type StatementPayment} from './memberStatement';
 import {isId} from './contracts';
 import {memberStatementCsv, statementFilename} from './memberStatementDownload';
@@ -77,8 +77,8 @@ export function MemberStatementPage({id, expectedGroup, returnTo, actorId, autho
       !result ? <LoadingState label="Loading member statement" layout="table" /> :
       result.status === 'error' ? <ErrorState title="Member statement unavailable" message={result.message} onRetry={restart} /> : data && <Card className="admin-content-enter"><div className="core-detail">
         <div className="member-statement-heading"><h2>{profile ? 'Member statement' : data.membership.groupTitle ?? 'Membership'}</h2>
-          {!suspended && <StatementDownload key={JSON.stringify([scope, data.membership.id, data.revision, offset])}
-            readHistory={readHistory} refresh={restart} />}</div>
+          {!suspended && (statementGroupTitle(data.groupId,data.membership.groupTitle) ? <StatementDownload key={JSON.stringify([scope,data.membership.id,data.membership.groupTitle,data.membership.recordNumber,data.membership.publicId,data.revision,offset])}
+            readHistory={readHistory} refresh={restart} /> : <span>A verified group name is required to download this statement.</span>)}</div>
         <dl>{!profile && <div><dt>Record ID</dt><dd>{data.membership.recordNumber ?? 'Unavailable'}</dd></div>}
           <div><dt>Closing balance</dt><dd>{profile ? <Link className="operations-link" to={memberStatementPath(id) + (returnTo !== '/admin/members' ? profileQuery : '')}
             aria-label={'Open member statement, total balance ' + statementAmount(data.closingRwf, true)}>{statementAmount(data.closingRwf, true)}</Link> :

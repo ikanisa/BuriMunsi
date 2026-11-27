@@ -97,6 +97,7 @@ describe('scoped member statement', () => {
       await screen.findByRole('link',{name:'Download statement'});
       const csv = await new Response(await (create.mock.calls[0][0] as Blob).arrayBuffer()).text();
       expect(csv.match(/^Transaction,/gm)).toHaveLength(51);
+    expect(csv).toContain('Group,"Member group"');
     expect(csv).toContain('Membership record number,"'+number+'"');
     expect(csv).toContain('Statement revision,"'+revision+'"');
     expect(csv).toContain('Statement read as of (UTC),"2026-11-26T12:00:00.000Z"');
@@ -219,6 +220,7 @@ describe('scoped member statement', () => {
     expect(csv).toContain('"FT-line1\nline2",,4,8');
     expect(csv).toContain('Transaction,"24 Nov 2026, 14:00:00","FT-0050",4,,196\r\nClosing balance,,,,,196\r\n');
     expect(csv.match(/^Transaction,/gm)).toHaveLength(51);
+    expect(csv).toContain('Group,"Member group"');
     expect(csv).toContain('Membership record number,"'+number+'"');
     expect(csv).toContain('Statement revision,"'+revision+'"');
     expect(csv).toContain('Statement read as of (UTC),"2026-11-26T12:00:00.000Z"');
@@ -465,7 +467,7 @@ describe('scoped member statement', () => {
 });
 
 it('distinguishes two empty statements without exposing internal identifiers or contact data', () => {
-  const plain={publicId:'000001',recordNumber:null,revision:'a'.repeat(64),asOf:'2026-11-26T12:00:00.000Z',transactions:[],closingRwf:0n};
+  const plain={groupTitle:'Verified group',publicId:'000001',recordNumber:null,revision:'a'.repeat(64),asOf:'2026-11-26T12:00:00.000Z',transactions:[],closingRwf:0n};
   const other={...plain,publicId:'000002'};
   expect(statementFilename(plain)).not.toEqual(statementFilename(other));
   expect(memberStatementCsv(plain)).not.toEqual(memberStatementCsv(other));
@@ -487,4 +489,30 @@ it('uses the known provider instant and labels an unknown event consistently in 
   const csv=memberStatementCsv(await readCompleteMemberStatement(first,first.membership,request,new AbortController().signal));
   expect(csv).toContain('"04 May 2026, 08:20:00","FT-0001"');
   expect(csv).toContain('"Unknown","FT-0002"');
+});
+
+it('exports each verified group title from its own membership and omits internal group IDs',async()=>{
+  const signal=new AbortController().signal;
+  const sources=[
+    {privateGroup:'group-private-one',name:'Kigali Savings',encoded:'Group,"Kigali Savings"'},
+    {privateGroup:'group-private-two',name:'=SUM(1,2)',encoded:`Group,"'=SUM(1,2)"`},
+  ];
+  for(const {privateGroup,name,encoded} of sources){
+    const request=vi.fn(async()=>({...detail,related:{memberships:[{...membership,group_id:privateGroup,group_title:name}]},
+      member_statement:{...statement([]),groupId:privateGroup}}));
+    const page=await readMemberStatement(request,signal,person.id,actor,privateGroup,{offset:0});
+    const full=await readCompleteMemberStatement(page,page.membership,request,signal);
+    const csv=memberStatementCsv(full);
+    expect(csv).toContain(encoded);
+    for(const hidden of [privateGroup,person.id,membership.id])expect(csv).not.toContain(hidden);
+    await expect(readCompleteMemberStatement(page,{...page.membership,groupId:'other'},request,signal)).rejects.toThrow();
+  }
+});
+
+it.each([null,group])('keeps the legacy balance available and withholds a file without a public group name',async title=>{
+  const request=source([],{...detail,related:{memberships:[{...membership,group_title:title}]}});
+  render(<MemoryRouter><MemberStatementPage {...props} request={request}/></MemoryRouter>);
+  expect(await screen.findByText('A verified group name is required to download this statement.')).toBeVisible();
+  expect(screen.getByText('Closing balance')).toBeVisible();
+  expect(screen.queryByRole('button',{name:'Download statement'})).toBeNull();
 });

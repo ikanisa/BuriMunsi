@@ -30,7 +30,12 @@ export async function exerciseEvidenceRelease(f){
     const applied=await run(['apply',pre.fingerprint,dir]);
     assert.equal(applied.status,'recorded_and_verified');assert.equal(applied.proof.ledger,plan.summary.successorDigest);
     assert.equal(pre.proof.custody,applied.proof.custody);assert.equal(pre.proof.grants,applied.proof.grants);
-    assert.deepEqual((await run(['reconcile',pre.fingerprint,dir])).proof,applied.proof);
+    const reconcile=()=>run(['reconcile',pre.fingerprint,dir]);
+    assert.deepEqual((await reconcile()).proof,applied.proof);
+    assert.deepEqual((await reconcile()).proof,applied.proof);
+    await f.client.query('UPDATE private.collect_fence_control SET epoch=epoch+1 WHERE singleton');
+    try{await assert.rejects(reconcile(),/payment_release_fence_changed/);}
+    finally{await f.client.query('UPDATE private.collect_fence_control SET epoch=epoch-1 WHERE singleton');}
     await assert.rejects(run(['apply',pre.fingerprint,dir]),/payment_release_preimage_changed/);
   }finally{
     await f.client.query('DELETE FROM supabase_migrations.schema_migrations WHERE NOT (version=ANY($1::text[]))',[baseline]);

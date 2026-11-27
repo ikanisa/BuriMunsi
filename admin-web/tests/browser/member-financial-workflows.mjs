@@ -65,7 +65,8 @@ export async function verifyTwoEmptyStatements(page,origin){
       const file=await download;
       const csv=await readFile(await file.path(),'utf8');
       assert.match(csv,/Statement read as of \(UTC\)/);assert.match(csv,/Closing balance,,,,,0/);
-      assert(!csv.includes(member.id));files.push({name:file.suggestedFilename(),csv});
+      assert(csv.includes('Group,"Synthetic group"\r\n'));
+      assert(!csv.includes('fixture-group'));assert(!csv.includes(member.id));files.push({name:file.suggestedFilename(),csv});
     }
     assert.notEqual(files[0].name,files[1].name);assert.notEqual(files[0].csv,files[1].csv);
   }finally{await page.unroute(match,emptyStatement);}

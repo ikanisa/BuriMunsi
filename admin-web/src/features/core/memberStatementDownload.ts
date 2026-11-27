@@ -12,8 +12,9 @@ export function statementFilename({publicId, recordNumber, revision}: CompleteMe
   return 'burimunsi-member-' + (recordNumber ?? publicId) + '-' + revision.slice(0,12) + '.csv';
 }
 
-export function memberStatementCsv({publicId, recordNumber, revision, asOf, transactions, closingRwf}: CompleteMemberStatement) {
-  const lines = [
+export function memberStatementCsv({groupTitle, publicId, recordNumber, revision, asOf, transactions, closingRwf}: CompleteMemberStatement) {
+  if (!groupTitle) throw new Error('A verified group name is required to download this statement.');
+  const lines = ['Group,' + csvText(groupTitle),
     ...(publicId ? ['Collect ID,' + csvText(publicId)] : []),
     ...(recordNumber ? ['Membership record number,' + csvText(recordNumber)] : []),
     'Statement revision,' + csvText(revision), ...(asOf ? ['Statement read as of (UTC),' + csvText(asOf)] : []), '',

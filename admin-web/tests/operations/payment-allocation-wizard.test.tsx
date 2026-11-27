@@ -245,6 +245,78 @@ describe('payment allocation wizard', () => {
     expect(request.mock.calls.filter(([,options]) => options?.method === 'POST')).toHaveLength(1);
   });
 
+  it('stops a definitive receipt conflict after review and retires only the new rejected attempt', async () => {
+    let rejectedKey='';
+    const original=api(), request=vi.fn<AdminRequest>(async (url,options)=>{
+      if (options?.method==='POST') {
+        rejectedKey=options.idempotencyKey!;
+        throw new AdminRequestError('Conflict',{statusCode:409,code:'payment_evidence_conflict'});
+      }
+      return original(url,options);
+    });
+    const ui=open(request), dialog=await review();
+    fireEvent.click(dialog.getByRole('button',{name:'Confirm allocation'}));
+    expect(await dialog.findByText(/Ask an Admin to review the conflicting receipts/)).toBeVisible();
+    expect(dialog.queryByRole('button',{name:'Check request'})).toBeNull();
+    expect(dialog.queryByRole('button',{name:'Retry allocation'})).toBeNull();
+    expect(request.mock.calls.filter(([,opts])=>opts?.method==='POST')).toHaveLength(1);
+    expect(request.mock.calls.some(([url])=>url.endsWith('/allocation-receipt'))).toBe(false);
+    expect(rejectedKey).toMatch(/^[0-9a-f-]{36}$/);
+    expect(sessionStorage.getItem(PENDING_KEY)??'').not.toContain(rejectedKey);
+    expect(ui.onStale).toHaveBeenCalledOnce();
+    expect(ui.onAllocated).not.toHaveBeenCalled();
+  });
+
+  it('preserves a previously uncertain reference and withholds retry when the scoped payment is disputed', async () => {
+    let held=false, key='';
+    const original=api(), request=vi.fn<AdminRequest>(async (url,options)=>{
+      if (options?.method==='POST') {
+        key=options.idempotencyKey!;
+        throw new AdminTransportError('Outcome unknown');
+      }
+      if (url===path && held) return {...payment,evidenceDisputed:true,canAllocate:false};
+      return original(url,options);
+    });
+    const ui=open(request), confirmation=await review();
+    fireEvent.click(confirmation.getByRole('button',{name:'Confirm allocation'}));
+    await confirmation.findByText(/Allocation was not confirmed/);
+    ui.unmount();held=true;
+    const reopened=open(request);
+    expect(await screen.findByText(/Ask an Admin to review the conflicting receipts/)).toBeVisible();
+    expect(screen.getByText(key)).toBeVisible();
+    fireEvent.click(screen.getByRole('button',{name:'Check request'}));
+    await waitFor(()=>expect(screen.queryByRole('button',{name:'Check request'})).toBeNull());
+    expect(screen.queryByRole('button',{name:'Retry allocation'})).toBeNull();
+    expect(screen.getByText(key)).toBeVisible();
+    expect(sessionStorage.getItem(PENDING_KEY)).toContain(key);
+    expect(request.mock.calls.filter(([,opts])=>opts?.method==='POST')).toHaveLength(1);
+    expect(request.mock.calls.filter(([url])=>url.endsWith('/allocation-receipt'))).toHaveLength(1);
+    expect(reopened.onAllocated).not.toHaveBeenCalled();
+  });
+
+  it('stops a refused retry without retiring the earlier uncertain request',async()=>{
+    const original=api(),keys:string[]=[];
+    const request=vi.fn<AdminRequest>(async(url,options)=>{
+      if(options?.method==='POST'){
+        keys.push(options.idempotencyKey!);
+        if(keys.length===1)throw new AdminTransportError('Lost reply');
+        throw new AdminRequestError('Conflict',{statusCode:409,code:'payment_evidence_conflict'});
+      }
+      return original(url,options);
+    });
+    open(request);const dialog=await review();
+    fireEvent.click(dialog.getByRole('button',{name:'Confirm allocation'}));
+    await dialog.findByText(/Allocation was not confirmed/);
+    fireEvent.click(dialog.getByRole('button',{name:'Check request'}));
+    fireEvent.click(await dialog.findByRole('button',{name:'Retry allocation'}));
+    expect(await dialog.findByText(/Ask an Admin to review the conflicting receipts/)).toBeVisible();
+    expect(keys).toEqual([keys[0],keys[0]]);
+    expect(sessionStorage.getItem(PENDING_KEY)).toContain(keys[0]);
+    expect(dialog.queryByRole('button',{name:'Check request'})).toBeNull();
+    expect(dialog.queryByRole('button',{name:'Retry allocation'})).toBeNull();
+    expect(request.mock.calls.filter(([url])=>url.endsWith('/allocation-receipt'))).toHaveLength(1);
+  });
+
   it('does not issue a write after authority changes or publish another session’s late response', async () => {
     let current = true, complete!: (value:JsonObject) => void;
     const original = api(), request = vi.fn<AdminRequest>((url,options) => options?.method === 'POST'
