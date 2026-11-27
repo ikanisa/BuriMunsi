@@ -59,6 +59,22 @@ class WalletTests(unittest.TestCase):
         self.assertEqual(r['wallet_rwf']['difference'], 0)
         self.assertEqual([i['reason'] for i in r['exceptions']], ['reversal_requires_original_review'])
 
+    def test_incoming_fee_needs_review_even_when_statement_closes(self):
+        self.export([self.p()], [self.w(), self.w(kind='fee', direction='incoming',
+                    amount_rwf='4', provider_reference='fee1', original_reference='001')])
+        r = self.check(204)
+        self.assertEqual(r['wallet_rwf']['difference'], 0)
+        self.assertEqual(r['matched_payments'], 1)
+        self.assertEqual(r['result'], 'exceptions')
+        self.assertEqual(r['exceptions'], [{'reason': 'incoming_fee_requires_review',
+                                           'wallet_lines': [3], 'canonical_lines': []}])
+
+    def test_valid_outgoing_standalone_fee_can_clear(self):
+        self.export([self.p()], [self.w(), self.w(kind='fee', direction='outgoing',
+                    amount_rwf='4', provider_reference='fee1', original_reference='001')])
+        r = self.check(196)
+        self.assertEqual((r['result'], r['matched_payments']), ('matched', 1))
+
     def test_double_reported_fee_and_imprecise_canonical_time(self):
         self.export([self.p(occurred_at='')], [self.w(fee_rwf='5'), self.w(kind='fee', direction='outgoing',
                     amount_rwf='5', provider_reference='fee1', original_reference='001')])

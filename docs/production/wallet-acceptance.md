@@ -21,7 +21,7 @@ Preserve the provider original. Write a UTF-8 CSV with this header. Use the orig
 collection_id,receiving_account_id,provider,currency,occurred_at,provider_reference,direction,amount_rwf,kind,fee_rwf,original_reference
 ```
 
-Use `RWF`, an offset-aware event time, a positive whole amount and the actual movement direction (`incoming` or `outgoing`). For a `payment`, record the principal and any separately stated embedded fee. For a separately booked `fee` or `reversal`, record its own amount, movement direction and original reference when available. Enter an explicit zero embedded fee when appropriate. The operator checks how the provider reports charges before normalizing. Retain the total number of source rows and all adjustments across both boundaries.
+Use `RWF`, an offset-aware event time, a positive whole amount and the actual movement direction (`incoming` or `outgoing`). For a `payment`, record the principal and any separately stated embedded fee. For a separately booked `fee` or `reversal`, record its own amount, movement direction and original reference when available. Enter an explicit zero embedded fee when appropriate. The operator checks how the provider reports charges before normalizing. Keep outgoing standalone charges as fees; an incoming fee row stays in the totals but requires review as a possible refund or a coding error. If supported by the provider record, normalize a confirmed refund as a reversal and retain its original reference. Retain the total number of source rows and all adjustments across both boundaries.
 
 ```sh
 python3 scripts/qa/wallet_reconciliation.py \

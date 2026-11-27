@@ -119,8 +119,11 @@ def reconcile(canonical, wallet, original, scope, start, end, opening, closing):
     if not totals:
         flag('empty_statement_requires_independent_confirmation')
     for row in fee_rows:
+        if row['direction'] == 'incoming':
+            flag('incoming_fee_requires_review', source=[row])
+            continue
         parent = wallet_refs.get(row['original_reference'], [])
-        if row['direction'] == 'outgoing' and any(p['fee_rwf'] for p in parent):
+        if any(p['fee_rwf'] for p in parent):
             flag('fee_may_be_counted_twice', source=[*parent, row])
     for row in reversal_rows:
         flag('reversal_requires_original_review',
