@@ -608,14 +608,20 @@ try {
   await recovery.context.addCookies(cookies);
   const sessionPage = recovery.page;
   let nextSession = 'default';
+  let expiresAt;
   await recovery.context.route(sessionApi, async route => {
     const mode = nextSession;
     nextSession = 'default';
     if (mode === 'default') return route.fallback();
     if (mode === 'unavailable') return route.fulfill({ status: 503, json: { error: { code: 'service_unavailable' } } });
-    // The role and grants alone cannot establish the current Admin's scope.
-    const response = await route.fetch();
+    const response = await route.fetch({maxRedirects: 0});
     const body = await response.json();
+    if (mode === 'capture-expiry') {
+      // Chromium can release the previous document's response body on navigation.
+      expiresAt = body.expiresAt;
+      return route.fulfill({response});
+    }
+    // The role and grants alone cannot establish the current Admin's scope.
     return route.fulfill({ response, json: { ...body, adminIdentity: null } });
   });
   const protectedReads = [];
@@ -642,9 +648,11 @@ try {
   await sessionPage.getByRole('button', { name: 'Try again' }).click();
   await loadAccess.waitFor();
 
-  const sessionRead = sessionPage.waitForResponse(response => sessionApi(new URL(response.url())));
+  nextSession = 'capture-expiry';
+  const sessionRead = sessionPage.waitForResponse(response => sessionApi(new URL(response.url())) && response.request().method() === 'GET');
   await sessionPage.goto(origin + '/admin/licenses');
-  const { expiresAt } = await (await sessionRead).json();
+  assert.equal((await sessionRead).status(), 200);
+  assert.ok(Number.isFinite(Date.parse(expiresAt)), 'The fixture session must supply its expiry.');
   await sessionPage.getByRole('heading', { name: 'Open-source licenses' }).waitFor();
   // Advance only wall time, as on tab resume before the browser runs due timers.
   await sessionPage.clock.setSystemTime(new Date(Date.parse(expiresAt) + 1));
