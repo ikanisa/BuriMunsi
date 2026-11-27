@@ -207,9 +207,16 @@ internal val UiState.isMemberStatement:Boolean get() = route==Route.PAYMENTS && 
                 add(t("Direction") to t(PaymentPresentation.directionLabel(p.direction)))
                 p.paymentReference?.let{add(t("Payment reference") to it)}
                 p.ftId?.let{add(t("FT Id") to it)}
-                add(t("Provider time") to historyTime(p.atRaw,t.locale).ifBlank{t("Unavailable")})
+                add(t("Date") to historyTime(p.atRaw,t.locale).ifBlank{t("Unavailable")})
                 add((if(p.memberPhone!=null&&p.memberPhone!=p.payerPhoneRaw)t("Member MoMo")else t("MoMo")) to (p.memberPhone?:p.payerPhoneRaw.ifBlank{t("Unavailable")}))
-                if(p.memberPhone!=null&&p.memberPhone!=p.payerPhoneRaw)add(t(if(p.direction=="outgoing")"Recipient" else "from") to "${p.payerNameRaw} (${p.payerPhoneRaw})")
+                if(p.memberPhone!=null&&p.memberPhone!=p.payerPhoneRaw){
+                    val counterparty=when {
+                        p.payerPhoneRaw.isBlank()->p.payerNameRaw.ifBlank{t("Unavailable")}
+                        p.payerNameRaw.isBlank()->p.payerPhoneRaw
+                        else->"${p.payerNameRaw} (${p.payerPhoneRaw})"
+                    }
+                    add(t(if(p.direction=="outgoing")"Recipient" else "from") to counterparty)
+                }
                 p.feeRwf?.let{add(t("Fee") to t("RWF %1\$s",money(it,t.locale)))}
             },compactValueLabels=setOf(t("Recipient"),t("from")))}
             p.sourceId?.takeIf{m.allows(Capability.SMS)}?.let{sourceId->

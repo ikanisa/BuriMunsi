@@ -1166,6 +1166,19 @@ class NativeUiContractTest {
         ui.onNodeWithText("RWF 25").assertExists()
         ui.onNodeWithText("null").assertDoesNotExist()
         button("Allocate").assertDoesNotExist()
+        val allocated=checkNotNull(c.state.payment).copy(
+            amountRwf=1_000,state="allocated",outcome="successful",memberId="member-1",memberPhone="250780000010")
+        for((name,identifier,display) in listOf(
+            Triple("","","Unavailable"),
+            Triple("Market Cooperative","","Market Cooperative"),
+            Triple("","merchant-17","merchant-17"),
+            Triple("Market Cooperative","merchant-17","Market Cooperative (merchant-17)"),
+        )){
+            ui.runOnIdle{c.state=c.state.copy(payment=allocated.copy(payerNameRaw=name,payerPhoneRaw=identifier))}
+            ui.onNodeWithTag("payment-details-scroll").performScrollToNode(hasText("Recipient"))
+            ui.onNodeWithText("Recipient").assertIsDisplayed()
+            ui.onNodeWithText(display).assertIsDisplayed()
+        }
         if(BuildConfig.IS_GATEWAY){
             ui.onNodeWithTag("payment-details-scroll").performScrollToNode(hasContentDescription("Original SMS"))
             ui.onNodeWithContentDescription("Original SMS").performClick()
@@ -1186,7 +1199,7 @@ class NativeUiContractTest {
         ui.runOnIdle{c.state=c.state.copy(payment=c.state.payment!!.copy(paymentReference=null))}
         ui.onNodeWithText("Payment reference").assertDoesNotExist()
         ui.onNodeWithText("FT-EXAMPLE").assertIsDisplayed()
-        list.performScrollToNode(hasText("Provider time"))
+        list.performScrollToNode(hasText("Date"))
         ui.onNodeWithText("25 Nov 2026 12:30:00 UTC+02:00").assertExists()
         ui.runOnIdle { c.state=c.state.copy(payment=c.state.payment!!.copy(atRaw="2026-11-25 10:30:00")) }
         ui.onNodeWithText("2026-11-25 10:30:00").assertExists()

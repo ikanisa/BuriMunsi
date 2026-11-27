@@ -606,4 +606,5 @@ internal val UiStringIds:Map<String,Int> = mapOf(
     "Couldn’t load payers" to R.string.ui_payer_load_error,
     "No matching payers" to R.string.ui_payer_no_matches,
     "No new payers yet" to R.string.ui_payer_empty,
+    "Date" to R.string.ui_payment_date,
 )

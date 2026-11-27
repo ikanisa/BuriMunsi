@@ -19,6 +19,9 @@ import rw.ikanisa.burimunsi.core.export.ExportFormat
 import rw.ikanisa.burimunsi.core.export.ExportTable
 import java.io.File
 
+private val ApiFailure.connectionUnavailable: Boolean
+    get() = status == 0 && code == "connection_unavailable"
+
 class BuriViewModel(private val app:Application,private val checkpoints:NavigationCheckpointStore,
     private val clock:()->Long
 ):AndroidViewModel(app),BuriController{
@@ -802,7 +805,8 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                     restoreRetryPending=false;sessionRetryPending=false;clearViews();state=UiState(error=error,busy=true,pending=state.pending||e.uncertain,failure=PresentationState.failure(e.code,e.uncertain))
                 }
                 else {
-                    state=state.copy(error=message(e.code,e.uncertain),offline=e.status==0,failure=PresentationState.failure(e.code,e.uncertain))
+                    // A rejected action cannot promote cached records or establish a lost connection.
+                    state=state.copy(error=message(e.code,e.uncertain),offline=state.offline||e.connectionUnavailable,failure=PresentationState.failure(e.code,e.uncertain))
                     if(state.failure==DisplayFailure.CONFLICT)quarantineRecords()
                 }
             }catch(e:ContractFailure){
@@ -1362,7 +1366,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                 }
                 val canonical=if(paired)try{
                     pagedRestoration.restore(request, canonicalPage(null), SmsRow::id, ::canonicalPage)
-                }catch(e:ApiFailure){if(!unavailableRead(e))throw e;unavailable=true;disconnected=disconnected||e.status==0;null}else null
+                }catch(e:ApiFailure){if(!unavailableRead(e))throw e;unavailable=true;disconnected=disconnected||e.connectionUnavailable;null}else null
                 // Revoking Android SMS access also revokes the corresponding
                 // server consent. A restored SMS route must not query that
                 // stream while permission is absent: the expected 403 would
@@ -1381,7 +1385,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                         // reconciliation finishes.  Keep the stream unavailable
                         // on a scoped 403; session and role checks still apply.
                         if(e.status!=403&&!unavailableRead(e))throw e
-                        unavailable=true;disconnected=disconnected||e.status==0;null
+                        unavailable=true;disconnected=disconnected||e.connectionUnavailable;null
                     }
                     else if(canonical==null)Page(emptyList(),null,0,"filtered",java.time.Instant.ofEpochMilli(clock()).toString()) else null
                 pagedRestoration.withCurrent(request) {

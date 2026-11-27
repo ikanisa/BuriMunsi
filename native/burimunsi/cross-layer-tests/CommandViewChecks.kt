@@ -91,7 +91,14 @@ private class Scenario(private val role: String = "admin") {
  }
  suspend fun idle(){withTimeout(15000){while(model.state.busy)delay(2)};delay(10)}
  suspend fun start(){model=BuriViewModel(Application()){System.currentTimeMillis()+uiClockOffset};idle();model.login("0780000001","2468");idle();check(model.state.operator!=null)}
- suspend fun allocation(){model.navigate(Route.PAYMENT,"payment-1");idle();model.openSheet(Sheet.ALLOCATE);idle();model.selectMember(model.state.members!!.items.single());model.editDraft("query","Example")}
+ suspend fun allocation(){
+  model.onFixtureMain { navigate(Route.PAYMENT,"payment-1") };idle()
+  model.onFixtureMain { openSheet(Sheet.ALLOCATE) };idle()
+  val query="Synthetic"
+  model.onFixtureMain { editDraft("query",query);allocationSearch(query) };idle()
+  model.onFixtureMain { selectMember(checkNotNull(state.members).items.single()) }
+  check(model.state.selectedMember?.id=="member-1" && model.state.allocationQuery==query)
+ }
  suspend fun recreate(){
   close()
   val protectedRecords=SecureStore.records.toMap()
@@ -217,6 +224,11 @@ fun main()=runBlocking {
   val replacementQuery="other-beneficiary"
   s.failedMemberQuery=replacementQuery
   s.model.editDraft("query",replacementQuery)
+  s.model.selectMember(former)
+  s.submit()
+  ck("$role submitting while a different beneficiary search awaits dispatch stays online without a payment or journal entry",
+      s.model.state.draft["query"]==replacementQuery&&s.model.state.allocationQuery!=replacementQuery&&
+          !s.model.state.offline&&s.posts()==0&&s.journal()==null)
   s.model.allocationSearch(replacementQuery)
   s.idle()
   ck("$role failed replacement search drops stale candidates and keeps the new query",

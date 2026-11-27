@@ -1,7 +1,7 @@
 package rw.ikanisa.burimunsi.data
 import org.json.JSONObject
 import java.util.concurrent.CopyOnWriteArrayList
-class ApiFailure(val code:String,val status:Int=400,val uncertain:Boolean=false):RuntimeException(code)
+class ApiFailure(val code:String,val status:Int=0,val uncertain:Boolean=false):RuntimeException(code)
 class ManagedRequestAccess(val token:String,val collectionId:String)
 fun interface ManagedSessionTokenProvider { fun currentAccessToken():String?;fun currentAccessContext():ManagedRequestAccess?=null;fun currentCollectionId():String?=null }
 object ManagedScopeFixture { var collectionId:String?="synthetic-group" }
