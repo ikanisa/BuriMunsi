@@ -1034,6 +1034,66 @@ fun main(args:Array<String>) {
   cycle=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
   check(!cycle.completed&&e.repository.requests.size==2&&e.repository.reports.last().pendingCount==1)
  }
+ test("receiving SIM holds survive restart without exposing a different Admin or reading the inbox from status") {
+  val e=setup()
+  val inbox=e.context.contentResolver
+  ReceiverFixture.subscriptions=setOf(3,4)
+  fun status():GatewayStatus {
+   val before=inbox.queries to inbox.bodyReads
+   return ObservationGateway.status(e.context).also{check(before==(inbox.queries to inbox.bodyReads))}
+  }
+  fun cycle()=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
+  inbox.rows=listOf(row(1)+("sub_id" to null),row(2)+("sub_id" to 4))
+  check(!cycle().completed&&status().problem=="observation_source_held"&&status().pending==0)
+  check(e.repository.requests.size==1&&e.repository.requests.single().subscriptionId==4)
+  val before=SecureStore.data.filterKeys{it.startsWith("observation-bounded-rescan-")}.values.single()
+  check(JSONObject(before).getBoolean("sourceHold")&&!before.contains(body)&&!before.contains("M-Money"))
+  NativeRepository.switch(adminB)
+  val config=ObservationConfigStore(e.context)
+  config.saveConsent(adminB,ObservationConsentState(ObservationConsentRevision(true,1),true))
+  config.saveProfile(adminB,e.approved,System.currentTimeMillis())
+  check(status().problem==null)
+  NativeRepository.switch(adminA)
+  check(status().problem=="observation_waiting")
+  config.saveConsent(adminA,ObservationConsentState(ObservationConsentRevision(true,1),true))
+  config.saveProfile(adminA,e.approved,System.currentTimeMillis())
+  check(status().problem=="observation_source_held")
+  ReceiverFixture.subscriptions=emptySet()
+  check(status().problem=="observation_no_sim")
+  ReceiverFixture.subscriptions=null
+  check(status().problem=="observation_no_sim")
+  ReceiverFixture.subscriptions=setOf(3,4)
+  inbox.rows=listOf(row(1)+("sub_id" to 3),row(2)+("sub_id" to 4))
+  ObservationInboxRevision.changed()
+  check(status().problem=="observation_source_held")
+  check(cycle().completed&&status().problem==null)
+  check(cycle().completed&&e.repository.requests.map{it.subscriptionId}==listOf(4,3))
+  check(e.repository.requests.map{it.requestId}.toSet().size==2)
+ }
+ test("an incomplete second page cannot clear a retained source hold; old checkpoints and nonreceipts remain compatible") {
+  val e=setup()
+  val inbox=e.context.contentResolver
+  fun scan()=ObservationRecovery(e.context).scanStatus()
+  fun problem()=ObservationGateway.status(e.context).problem
+  inbox.rows=listOf(row(1,"Your code is 123456")+("sub_id" to null))
+  check(scan()==ObservationRecovery.Scan.COMPLETE&&problem()==null)
+  val name=SecureStore.data.keys.single{it.startsWith("observation-bounded-rescan-")}
+  val old=JSONObject(SecureStore.data.getValue(name))
+  old.remove("sourceHold");old.remove("passSourceHold");SecureStore.data[name]=old.toString()
+  check(problem()==null)
+  inbox.rows=(1L..101L).map{if(it==101L)row(it)+("sub_id" to null) else row(it,"Your code is 123456")}
+  ObservationInboxRevision.changed()
+  check(scan()==ObservationRecovery.Scan.MORE&&scan()==ObservationRecovery.Scan.COMPLETE&&problem()=="observation_source_held")
+  inbox.rows=inbox.rows.dropLast(1)+row(101)
+  ObservationInboxRevision.changed()
+  check(scan()==ObservationRecovery.Scan.MORE&&problem()=="observation_source_held")
+  check(ObservationRecovery(e.context).scanStatus{true}==ObservationRecovery.Scan.BLOCKED&&problem()=="observation_source_held")
+  check(scan()==ObservationRecovery.Scan.COMPLETE&&problem()==null&&pending(adminA).size==1)
+  ReceiverFixture.subscriptions=setOf(4)
+  check(problem()=="observation_source_held"&&pending(adminA).single().observation.subscriptionId==3)
+  ReceiverFixture.subscriptions=setOf(3,4)
+  check(problem()==null&&pending(adminA).single().observation.subscriptionId==3)
+ }
  test("first authorized historical sources are automatically retained under their original consent and held for review") {
   val e=setup();app.cool.mobile.BuildConfig.CLOUD_HOLD_EXISTING_INBOX=true
   try{

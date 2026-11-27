@@ -11,6 +11,7 @@ SOURCES=(); while IFS= read -r -d '' source; do SOURCES+=("$source"); done < <(f
 kotlinc "${SOURCES[@]}" "$HERE"/observation-adapter-tests/*.kt "$HERE/repository-tests/JsonAdapter.kt" "$HERE/app/src/main/kotlin/rw/ikanisa/burimunsi/data/ObservationPayload.kt" \
  "$HERE"/gateway-tests/{ManifestStub,PermissionStub,SubscriptionStub,BuildConfigStub,ApiFailureStub,ReceiverStub,ContinuousSyncStub}.kt \
  "$HERE/app/src/main/kotlin/rw/ikanisa/burimunsi/gateway/GatewayPort.kt" \
+ "$HERE/app/src/internal_receiver/kotlin/app/cool/mobile/receiver_sms/ObservationGateway.kt" \
  "$HERE/app/src/internal_receiver/kotlin/app/cool/mobile/receiver_sms/ContinuousSyncHealth.kt" \
  "$HERE"/app/src/internal_receiver/kotlin/app/cool/mobile/receiver_sms/{BuriReceiverReliability,BuriReceiverProfile,BuriCapturePolicy,HeldRecoveryJournal,ObservationLegacyOwnership,ObservationReceivingSim,ObservationConfigStore,ObservationInboxPolicyRevision,AndroidUnclassifiedSmsStore,LocalUnclassifiedSms,UnclassifiedReviewCheckpoint,ObservationCapture,ObservationPduCapture,ObservationSmsReceiver,PduInboxCorrelation,PduCorrelationStore,ObservationRecovery,ObservationHeldInbox,ObservationInboxAudit,ObservationInboxBackfill,ObservationInboxQueries,ObservationCoordinator,ObservationSyncCycle,ObservationSyncDiagnostics,ContinuousSyncWork}.kt \
  "$TMP"/build/receiver/{MomoGatewayPolicy,MomoMultipartPolicy,MomoGatewayHttp,ReceiptAckPolicy}.kt -include-runtime -d "$TMP/adapter-checks.jar"

@@ -78,7 +78,11 @@ import rw.ikanisa.burimunsi.core.*
             item{FactGroup(listOf(
                 t("SMS permission") to t(if(m.smsAccessGranted)"Granted" else "Required"),
                 t("Sender") to (g.approvedSenders?.joinToString(", ")?:t("Unavailable")),
-                t("Sync") to t(if(health.code in setOf("permissions","waiting","reauthorize","queue","qualification"))"Blocked" else if(g.captureEnabled)"Listening" else "Paused"),
+                t("Sync") to t(when(health.code){
+                    "source","permissions","waiting","reauthorize","queue","qualification"->"Blocked"
+                    "status_unavailable"->"Unavailable"
+                    else->if(g.captureEnabled)"Listening" else "Paused"
+                }),
                 t("Queued") to (if(g.pending>=0)g.pending.toString()else t("Unavailable"))
             ),BuriTheme.Group,compactValueLabels=setOf(t("Sender")))}
             item{Text(t(health.explanation),fontSize=15.sp,color=BuriTheme.Muted)}

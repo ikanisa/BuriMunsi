@@ -922,6 +922,20 @@ class NativeUiContractTest {
             ui.onNodeWithText("Gateway").assertExists();field("Pairing code").assertDoesNotExist()
             ui.onNodeWithTag("check:Business SIM inserted").assertDoesNotExist()
             panelButton("Gateway","SMS permission").performClick();ui.runOnIdle{check(requests==1&&c.pairCalls==0)}
+            fun receivingProblem(problem:String?){
+                ui.runOnIdle{c.state=c.state.copy(gateway=c.state.gateway!!.copy(problem=problem))}
+            }
+            receivingProblem("observation_no_sim")
+            ui.onNodeWithText("SIM source not verified").assertExists()
+            ui.onNodeWithText("Blocked").assertExists()
+            ui.onNodeWithText("Listening").assertDoesNotExist()
+            receivingProblem("observation_source_held")
+            ui.onNodeWithText("Some receipts are on hold").assertExists()
+            ui.onNodeWithText("Listening").assertExists()
+            panelButton("Gateway","Sync").assertIsEnabled()
+            receivingProblem(null)
+            ui.onNodeWithText("Some receipts are on hold").assertDoesNotExist()
+            ui.onNodeWithText("Sync enabled").assertExists()
         }else{
             assertReceiverControlsAbsent(c);field("Pairing code").assertDoesNotExist()
             ui.runOnIdle{c.state=c.state.copy(route=Route.SETTINGS)};assertReceiverControlsAbsent(c)

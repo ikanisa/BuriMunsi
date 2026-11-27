@@ -25,6 +25,12 @@ object GatewayHealth {
                 "Previously retained receipts are not erased.",canResume=true)
             if(problem=="observation_waiting")return GatewayDiagnosis("waiting","Sync pending",
                 "The approved provider profile and consent must be confirmed before sync.",canPause=true)
+            if(problem=="observation_no_sim")return GatewayDiagnosis("source","SIM source not verified",
+                "Check that a receiving SIM is active in Android, then tap Sync. Retained receipts keep their original source.",canPause=pause)
+            if(problem=="observation_source_held")return GatewayDiagnosis("partial_source","Some receipts are on hold",
+                "Android has not verified the receiving SIM for a receipt. Other verified receipts can still sync. Check the SIM in Android, then tap Sync.",canPause=pause)
+            if(problem=="observation_status_unavailable")return GatewayDiagnosis("status_unavailable","Receiving needs attention",
+                "Refresh the receiving-phone status.",canPause=pause)
             return GatewayDiagnosis("observation","Sync enabled",
                 "Messages sync automatically.",canPause=true)
         }

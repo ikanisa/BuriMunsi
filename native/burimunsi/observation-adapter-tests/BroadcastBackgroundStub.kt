@@ -8,6 +8,8 @@ object ObservationBackground {
         if(revision==null||revision!=cloudRevision){recordChanges++;if(revision!=null)cloudRevision=revision}
     }
     fun watchInbox(context:Context){}
+    fun ensure(context:Context){}
+    fun signal(context:Context){signals++}
     fun signalLocal(context:Context,delay:Long=0){check(delay==0L);signals++}
     fun hasPending(context:Context)=try{rw.ikanisa.burimunsi.data.NativeRepository.withObservationOwner(context){group,account->
         rw.ikanisa.burimunsi.core.ObservationJournal(ObservationStateStore(context)).pending(rw.ikanisa.burimunsi.core.ObservationOwner(group,account)).isNotEmpty()

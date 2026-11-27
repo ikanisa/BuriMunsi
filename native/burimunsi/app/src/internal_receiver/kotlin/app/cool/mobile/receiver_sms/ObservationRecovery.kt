@@ -50,6 +50,41 @@ internal class ObservationRecovery(context:Context) {
     }
     private fun rescanStore(owner:ObservationOwner,legacy:Boolean)=SecureStore(app,"observation-bounded-rescan-"+
         Values.sha256(listOf(owner.collectionId,owner.accountId,legacy.toString()).joinToString(""){"${it.length}:$it"}))
+    private fun rescanScope(owner:ObservationOwner,profile:ObservationProfile,consent:ObservationConsentState,
+        control:ObservationConfigStore.Control,device:String)=Values.sha256(listOf(owner.collectionId,owner.accountId,profile.fingerprint(),
+        profile.legacyHold.toString(),consent.revision.enabled.toString(),consent.revision.generation.toString(),
+        consent.confirmed.toString(),control.paused.toString(),control.revision.toString(),Values.sha256(device))
+        .joinToString(""){"${it.length}:$it"})
+
+    private fun checkpoint(raw:String,owner:ObservationOwner):JSONObject {
+        val v=JSONObject(raw)
+        val fields=v.keys().asSequence().toSet()
+        val original=setOf("collectionId","accountId","lastId")
+        val scoped=original+setOf("scope","epoch","revision")
+        val resumable=scoped+"needsWrap"
+        val sourceAware=resumable+setOf("sourceHold","passSourceHold")
+        checkContract(fields in setOf(original,scoped,resumable,sourceAware)&&
+            v.getString("collectionId")==owner.collectionId&&v.getString("accountId")==owner.accountId&&v.getLong("lastId")>=0&&
+            (fields!=sourceAware||(v.opt("sourceHold") is Boolean&&v.opt("passSourceHold") is Boolean)),
+            "observation_cursor_unavailable")
+        return v
+    }
+
+    /** Status reads the current Admin's encrypted checkpoint and SIM metadata only. */
+    fun receivingSimProblem(owner:ObservationOwner,profile:ObservationProfile,consent:ObservationConsentState,
+        control:ObservationConfigStore.Control,retainedSubscriptions:Sequence<Int?>):String? {
+        val active=BuriCapturePolicy.activeSubscriptions(app)
+        if(active.isNullOrEmpty())return "observation_no_sim"
+        if(retainedSubscriptions.any{it==null||it !in active})return "observation_source_held"
+        return try {
+            val store=rescanStore(owner,profile.legacyHold==true||heldInbox.legacyExists(owner.collectionId))
+            val saved=store.read()?.let{checkpoint(it,owner)}?:return null
+            val device=heldInbox.deviceId()?:return "observation_status_unavailable"
+            if(saved.optString("scope")==rescanScope(owner,profile,consent,control,device)&&saved.optBoolean("sourceHold",false))
+                "observation_source_held" else null
+        }catch(_:Exception){"observation_status_unavailable"}
+    }
+
     /** Scan the whole inbox in bounded passes. A later insertion with a reused
      * or lower row ID is considered on the next pass regardless of its date. */
     private fun scanHeld(session:ObservationSessionOwner,profile:ObservationProfile,consent:ObservationConsentState,
@@ -60,24 +95,20 @@ internal class ObservationRecovery(context:Context) {
         val seen=NativeRepository.withObservationOwner(app,session){_,_->journal.seenSnapshot(owner)}?:return Scan.BLOCKED
         val seenByKey=seen.entries.associateBy{it.sourceKey}
         val revision=ObservationInboxRevision.snapshot();val epoch=ObservationInboxRevision.epoch()
-        val scope=Values.sha256(listOf(owner.collectionId,owner.accountId,profile.fingerprint(),
-            profile.legacyHold.toString(),consent.revision.enabled.toString(),consent.revision.generation.toString(),
-            consent.confirmed.toString(),control.paused.toString(),control.revision.toString(),Values.sha256(device))
-            .joinToString(""){"${it.length}:$it"})
+        val scope=rescanScope(owner,profile,consent,control,device)
         val store=rescanStore(owner,profile.legacyHold==true||heldInbox.legacyExists(owner.collectionId));var stored=store.read()
         var wrap=false
+        var sourceHold=false
+        var passSourceHold=false
         val last=stored?.let{raw->
-            val v=JSONObject(raw);val fields=v.keys().asSequence().toSet()
-            checkContract((fields==setOf("collectionId","accountId","lastId")||
-                fields==setOf("collectionId","accountId","lastId","scope","epoch","revision")||
-                fields==setOf("collectionId","accountId","lastId","scope","epoch","revision","needsWrap"))&&
-                v.getString("collectionId")==owner.collectionId&&v.getString("accountId")==owner.accountId&&v.getLong("lastId")>=0,
-                "observation_cursor_unavailable")
+            val v=checkpoint(raw,owner)
             if(!v.has("scope")||v.getString("scope")!=scope)0L else {
+                sourceHold=v.optBoolean("sourceHold",false)
                 val sameEpoch=v.getString("epoch")==epoch
                 if(sameEpoch&&v.getLong("revision")!=revision)0L else {
                     val cursor=v.getLong("lastId")
                     wrap=cursor>0 && (!sameEpoch || v.optBoolean("needsWrap",false))
+                    passSourceHold=cursor>0 && v.optBoolean("passSourceHold",false)
                     cursor
                 }
             }
@@ -89,8 +120,11 @@ internal class ObservationRecovery(context:Context) {
             else{
                 val current=store.read()
                 if(current!=stored)false else{
+                    // Never clear a prior hold from a partial or interrupted pass.
+                    val held=passSourceHold||(sourceHold&&(next>0||wrap))
                     val text=JSONObject().put("collectionId",owner.collectionId).put("accountId",owner.accountId).put("lastId",next)
-                        .put("scope",scope).put("epoch",epoch).put("revision",revision).put("needsWrap",wrap && next>0).toString()
+                        .put("scope",scope).put("epoch",epoch).put("revision",revision).put("needsWrap",wrap && next>0)
+                        .put("sourceHold",held).put("passSourceHold",next>0&&passSourceHold).toString()
                     store.write(text);if(store.read()!=text)false else{stored=text;true}
                 }
             }
@@ -109,6 +143,8 @@ internal class ObservationRecovery(context:Context) {
                 val sent=if(sentCol<0||it.isNull(sentCol))null else it.getLong(sentCol).takeIf{v->v>0}
                 val sub=if(subCol<0||it.isNull(subCol))null else it.getInt(subCol).takeIf{v->v>=0}
                 val candidate=ObservationCapture.candidate(app,session,profile.fingerprint(),sender,body)?:return Scan.BLOCKED
+                if(sub==null&&candidate==InboxDisposition.CANDIDATE&&ObservedReceiptEvidence.isNewCandidate(sender,body,profile.receipt))
+                    passSourceHold=true
                 fun retain()=ObservationCapture.retain(app,session,profile.fingerprint(),"inbox:$id",sender,body,"catch_up",false,
                     sent?.let{v->Instant.ofEpochMilli(v).toString()},Instant.ofEpochMilli(received).toString(),sub)
                 val key=heldInboxSourceKey(device,owner.collectionId,id,received)
@@ -121,7 +157,12 @@ internal class ObservationRecovery(context:Context) {
                     val retained=when(decision){
                         // The online audit verifies protected sources independently.
                         // This offline scanner cannot dispatch an uncertain historical source.
-                        ObservationLegacyOwnership.Decision.HOLD,ObservationLegacyOwnership.Decision.OTHER_SIM->true
+                        ObservationLegacyOwnership.Decision.HOLD->{
+                            if(sub!=null&&BuriCapturePolicy.activeSubscriptions(app).isNullOrEmpty()&&
+                                ObservedReceiptEvidence.isNewCandidate(sender,body,profile.receipt))passSourceHold=true
+                            true
+                        }
+                        ObservationLegacyOwnership.Decision.OTHER_SIM->true
                         ObservationLegacyOwnership.Decision.OWNED->{ObservationLegacyOwnership.retained(app,sender,body,sent,received,sub);true}
                         ObservationLegacyOwnership.Decision.UNOWNED->{
                             val receivedAt=Instant.ofEpochMilli(received).toString()

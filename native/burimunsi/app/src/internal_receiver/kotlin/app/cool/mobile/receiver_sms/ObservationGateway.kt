@@ -97,20 +97,23 @@ internal object ObservationGateway {
         if(BuildConfig.IS_QUALIFICATION)return GatewayStatus(false,false,null,0,null,null,null,"qualification_offline",observationMode=true)
         return NativeRepository.withObservationOwner(context){group,account->
             val owner=ObservationOwner(group,account);val config=ObservationConfigStore(context)
-            val paused=config.paused(owner)
+            val control=config.controlState(owner)
+            val paused=control.paused
             val permitted=listOf(Manifest.permission.RECEIVE_SMS,Manifest.permission.READ_SMS,Manifest.permission.READ_PHONE_STATE).all{
                 context.checkSelfPermission(it)==PackageManager.PERMISSION_GRANTED
             }
             val consent=config.consent(owner)
             val profile=config.profile(owner,System.currentTimeMillis())
-            val pending=ObservationJournal(ObservationStateStore(context)).pending(owner).size
+            val pending=ObservationJournal(ObservationStateStore(context)).pending(owner)
             val problem=when {
                 !permitted->"permission_required"
                 paused->"observation_paused"
                 consent?.canCapture(true)!=true||profile==null->"observation_waiting"
-                else->null
+                else->ObservationRecovery(context).receivingSimProblem(owner,profile,consent,control,pending.asSequence()
+                    .map{it.observation}.filter{ObservedReceiptEvidence.isNewCandidate(it.rawSender,it.rawBody,profile.receipt)}
+                    .map{it.subscriptionId})
             }
-            GatewayStatus(true,!paused,null,pending,null,null,null,problem,
+            GatewayStatus(true,!paused,null,pending.size,null,null,null,problem,
                 approvedSenders=profile?.receipt?.senders?.sorted(),observationMode=true)
         }?:GatewayStatus(false,false,null,0,null,null,null,"authorization_required",observationMode=true)
     }

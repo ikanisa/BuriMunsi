@@ -2998,6 +2998,18 @@
     {
       "key": "ui_export_one_row",
       "en": "%1$d of 1 row"
+    },
+    {
+      "key": "ui_receiving_no_sim_help",
+      "en": "Check that a receiving SIM is active in Android, then tap Sync. Retained receipts keep their original source."
+    },
+    {
+      "key": "ui_receiving_partial_sim_hold",
+      "en": "Some receipts are on hold"
+    },
+    {
+      "key": "ui_receiving_partial_sim_help",
+      "en": "Android has not verified the receiving SIM for a receipt. Other verified receipts can still sync. Check the SIM in Android, then tap Sync."
     }
   ]
 }
