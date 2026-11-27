@@ -67,14 +67,14 @@ class NativeUiContractTest {
             }
         }
     }
-    private fun assertFullCameraDisclosure(notice:String,expectedScale:Float?=null){
-        val text=ui.onNodeWithText(notice,useUnmergedTree=true).assertIsDisplayed()
+    private fun assertCompleteText(label:String,expectedScale:Float?=null){
+        val text=ui.onNodeWithText(label,useUnmergedTree=true).assertIsDisplayed()
         val layout=mutableListOf<TextLayoutResult>()
         text.performSemanticsAction(SemanticsActions.GetTextLayoutResult){check(it(layout))}
         val actual=layout.single()
         check(!actual.hasVisualOverflow && (0 until actual.lineCount).none(actual::isLineEllipsized) &&
-            actual.getLineEnd(actual.lineCount-1)==notice.length){
-            "Camera disclosure must render all words without overflow or ellipsis."
+            actual.getLineEnd(actual.lineCount-1,visibleEnd=true)==label.length){
+            "Expected the complete text “$label” across ${actual.lineCount} rendered lines."
         }
         if(expectedScale!=null)check(actual.layoutInput.density.fontScale==expectedScale)
     }
@@ -255,7 +255,7 @@ class NativeUiContractTest {
         ui.runOnIdle{c.onboardingOptions()}
         val cameraNotice="Taking a photo sends it to OpenAI for extraction. Review members before saving."
         val camera=visiblePanelButton("Add member","Scan a list").assert(hasText(cameraNotice))
-        assertFullCameraDisclosure(cameraNotice)
+        assertCompleteText(cameraNotice)
         camera.performClick()
         ui.runOnIdle{check(captures==1&&c.state.onboarding.step==SmartOnboardingStep.IMPORT&&c.state.onboarding.photoCaptureFlow)}
         ui.onNodeWithText("Import member list").assertDoesNotExist()
@@ -409,7 +409,9 @@ class NativeUiContractTest {
                 ){
                     BuriContent(reduceMotion=true){
                         check(LocalUiText.current.locale.language=="en")
-                        SmartEnrollPanel(c.state,c,{},{},{},{})
+                        Box(Modifier.width(320.dp).testTag("enrollment-test-viewport")){
+                            SmartEnrollPanel(c.state,c,{},{},{},{})
+                        }
                     }
                 }
             }
@@ -419,25 +421,23 @@ class NativeUiContractTest {
                 "The English-only migration must remove only the legacy language preference."
             }
         }
+        ui.onNodeWithTag("enrollment-test-viewport").assertWidthIsEqualTo(320.dp)
         val list=ui.onNode(hasScrollToIndexAction())
         fun method(label:String):SemanticsNodeInteraction{
             val match=hasText(label) and hasClickAction()
             list.performScrollToNode(match)
-            return ui.onNode(match).performScrollTo().assertIsDisplayed().assertIsEnabled()
+            val row=ui.onNode(match).performScrollTo().assertIsDisplayed().assertIsEnabled()
+            assertCompleteText(label,2f)
+            return row
         }
         val suggestions=method("MoMo suggestions").fetchSemanticsNode().boundsInRoot
         val manual=method("Add manually").fetchSemanticsNode().boundsInRoot
-        val layouts=mutableListOf<TextLayoutResult>()
-        ui.onNodeWithText("Add manually",useUnmergedTree=true).performSemanticsAction(SemanticsActions.GetTextLayoutResult){
-            check(it(layouts))
-        }
-        check(layouts.single().layoutInput.density.fontScale==2f){"The rendered method label must use 200% text."}
         check(kotlin.math.abs(suggestions.left-manual.left)<=1f && kotlin.math.abs(suggestions.right-manual.right)<=1f){
             "At 200% text size the first two methods must stack in one column."
         }
         val notice="Taking a photo sends it to OpenAI for extraction. Review members before saving."
         method("Scan a list").assert(hasText(notice))
-        assertFullCameraDisclosure(notice,2f)
+        assertCompleteText(notice,2f)
         method("Choose a photo")
         method("Choose a file")
         method("Add manually").performClick()

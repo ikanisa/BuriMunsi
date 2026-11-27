@@ -38,7 +38,7 @@ import rw.ikanisa.burimunsi.core.Role
     Row(action.modifier.fillMaxWidth().heightIn(min=58.dp).clickable(enabled=enabled,role=SemanticRole.Button,onClick=action.click).semantics(mergeDescendants=true){}.padding(vertical=12.dp),verticalAlignment=Alignment.CenterVertically){
         Box(Modifier.size(38.dp).background(BuriTheme.Tone,CircleShape),contentAlignment=Alignment.Center){Glyph(icon,null,if(enabled)BuriTheme.Text else BuriTheme.Muted,22)};Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)){
-            CompactLabel(title,style=MaterialTheme.typography.titleSmall)
+            Text(title,Modifier.fillMaxWidth(),style=MaterialTheme.typography.titleSmall)
             if(subtitle!=null){
                 Spacer(Modifier.height(2.dp))
                 if(wrapSubtitle)Text(subtitle,style=MaterialTheme.typography.bodySmall,color=BuriTheme.Muted)
