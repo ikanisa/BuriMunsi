@@ -40,7 +40,7 @@ internal fun HomeWalletOverview(totals: HomeWalletTotals?, smsAllowed: Boolean) 
         horizontalAlignment=Alignment.CenterHorizontally, verticalArrangement=Arrangement.spacedBy(8.dp)) {
         Column(Modifier.clearAndSetSemantics { heading(); contentDescription=description },
             horizontalAlignment=Alignment.CenterHorizontally) {
-            CompactLabel(label, color=BuriTheme.Muted, fontSize=15.sp, textAlign=TextAlign.Center)
+            Text(label, color=BuriTheme.Muted, fontSize=15.sp, lineHeight=21.sp, textAlign=TextAlign.Center)
             SavingsAmount(incoming,primary=true,ink=BuriTheme.Text,unitInk=BuriTheme.Muted)
         }
         val outgoing = totals?.let { format.format(it.outgoingRwf) }

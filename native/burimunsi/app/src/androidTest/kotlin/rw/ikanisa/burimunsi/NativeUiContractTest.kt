@@ -790,7 +790,20 @@ class NativeUiContractTest {
         ui.onNode(hasContentDescription(c.operator.name) and hasClickAction()).assertIsDisplayed().performClick()
         ui.runOnIdle{check(c.state.sheet==Sheet.PROFILE)}
         panelButton("Profile","Change passcode").assertIsDisplayed().performClick();ui.runOnIdle{check(c.state.sheet==Sheet.PIN)}
-        ui.onNodeWithContentDescription("Back to previous panel").assertDoesNotExist();ui.onNodeWithTag("panel-close").performClick()
+        val profilePane=SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle,"Profile")
+        val pinPane=SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle,"Change passcode")
+        val accountPane=SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle,"Account")
+        val currentPasscode=ui.onNode(hasContentDescription("Current passcode") and hasAnyAncestor(pinPane))
+        ui.waitUntil(timeoutMillis=5_000){
+            ui.onAllNodes(profilePane).fetchSemanticsNodes().isEmpty() &&
+                runCatching{ui.onNode(pinPane).assertIsDisplayed();currentPasscode.assertIsDisplayed()}.isSuccess
+        }
+        ui.onNodeWithContentDescription("Back to previous panel").assertDoesNotExist()
+        ui.onNode(hasTestTag("panel-close") and hasAnyAncestor(pinPane)).assertIsDisplayed().performTouchInput{click()}
+        ui.waitUntil(timeoutMillis=5_000){
+            c.state.sheet==null && ui.onAllNodes(pinPane).fetchSemanticsNodes().isEmpty() &&
+                runCatching{ui.onNode(accountPane).assertIsDisplayed()}.isSuccess
+        }
         ui.runOnIdle{check(c.state.sheet==null&&c.state.route==Route.SETTINGS)}
     }
     @Test fun passcodeConfirmationImeDoesNotChangeCredentialUntilSave(){
@@ -1334,6 +1347,17 @@ class NativeUiContractTest {
                 check(image.compress(Bitmap.CompressFormat.PNG,100,it))
             }
         }
+        ui.runOnIdle{
+            val zero="0".toBigInteger()
+            c.state=c.state.copy(home=home.copy(paymentTotals=HomeWalletTotals(zero,zero,null,null,false)))
+        }
+        list.performScrollToNode(hasContentDescription("Cumulative incoming payments · 0 RWF"))
+        assertCompleteText("Cumulative incoming payments",2f)
+        ui.runOnIdle{c.navigate(Route.MEMBER,checkNotNull(c.state.member).id)}
+        for(label in listOf("View payments","Member details")){
+            list.performScrollToNode(hasText(label) and hasClickAction())
+            assertCompleteText(label,2f)
+        }
         ui.runOnIdle{widthFraction=1f;c.navigate(Route.PAYMENTS,null)}
         ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasContentDescription("10,000 RWF"))
         ui.onNodeWithContentDescription("10,000 RWF").assertExists();ui.onNodeWithContentDescription("EXAMPLE PERSON WITH A VERY LONG FULL NAME",substring=true).assertExists()
@@ -1375,7 +1399,7 @@ class NativeUiContractTest {
             }
         }
         assertTextLayout(name,ellipsized=true)
-        assertTextLayout(action,ellipsized=true)
+        assertTextLayout(action,ellipsized=false)
         assertTextLayout(warning,ellipsized=false)
         button(name).performClick()
         ui.runOnIdle{check(opened==1)}

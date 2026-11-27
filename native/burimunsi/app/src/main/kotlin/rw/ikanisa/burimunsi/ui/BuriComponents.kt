@@ -86,24 +86,27 @@ internal fun historyTime(value: String, locale: Locale, includeOffset: Boolean =
         colors=ButtonDefaults.buttonColors(containerColor=if(danger)BuriTheme.Bad.copy(alpha=.13f) else if(secondary)BuriTheme.Raised else BuriTheme.Text,contentColor=if(danger)BuriTheme.Bad else if(secondary)BuriTheme.Text else Color(0xFF151517))){
         if(showProgress){BuriOrbit(size=22,tint=if(danger)BuriTheme.Bad else BuriTheme.Blue);Spacer(Modifier.width(12.dp))}
         else if(icon!=null&&!iconTrailing){Icon(painterResource(icon),null,Modifier.size(23.dp));Spacer(Modifier.width(10.dp))}
-        CompactLabel(t(label),Modifier.weight(1f,fill=false),fontSize=18.sp,fontWeight=FontWeight.SemiBold,textAlign=TextAlign.Center,lineHeight=26.sp)
+        Text(t(label),Modifier.weight(1f,fill=false),fontSize=18.sp,fontWeight=FontWeight.SemiBold,textAlign=TextAlign.Center,lineHeight=26.sp)
         if(icon!=null&&iconTrailing&&!working){Spacer(Modifier.width(10.dp));Icon(painterResource(icon),null,Modifier.size(23.dp))}
     }
 }
-@Composable private fun Fact(label:String,value:String,compactValue:Boolean){
+@Composable private fun Fact(label:String,value:String,compactValue:Boolean,maxValueWidth:Dp){
     val t=LocalUiText.current
     Row(Modifier.fillMaxWidth().padding(vertical=15.dp),horizontalArrangement=Arrangement.spacedBy(16.dp),verticalAlignment=Alignment.Top){
-        Text(t(label),Modifier.weight(.44f),fontSize=14.sp,color=BuriTheme.Muted,lineHeight=21.sp)
-        Text(value,Modifier.weight(.64f),fontSize=17.sp,fontWeight=FontWeight.Medium,lineHeight=25.sp,textAlign=TextAlign.End,
+        Text(t(label),Modifier.weight(1f),fontSize=14.sp,color=BuriTheme.Muted,lineHeight=21.sp)
+        Text(value,Modifier.widthIn(max=maxValueWidth),fontSize=17.sp,fontWeight=FontWeight.Medium,lineHeight=25.sp,textAlign=TextAlign.End,
             maxLines=if(compactValue)1 else Int.MAX_VALUE,softWrap=!compactValue,
             overflow=if(compactValue)TextOverflow.Ellipsis else TextOverflow.Clip)
     }
 }
 @Composable internal fun FactGroup(facts:List<Pair<String,String>>,surface:Color=BuriTheme.Surface,compactValueLabels:Set<String> = emptySet()){
-    Column(Modifier.fillMaxWidth().background(surface,RoundedCornerShape(24.dp)).padding(horizontal=18.dp,vertical=4.dp)){
-        facts.forEachIndexed{index,(label,value)->
-            Fact(label,value,label in compactValueLabels)
-            if(index<facts.lastIndex)HorizontalDivider(color=Color.White.copy(alpha=.08f))
+    BoxWithConstraints(Modifier.fillMaxWidth().background(surface,RoundedCornerShape(24.dp)).padding(horizontal=18.dp,vertical=4.dp)){
+        val maxValueWidth=(maxWidth-16.dp).coerceAtLeast(0.dp)*.60f
+        Column {
+            facts.forEachIndexed{index,(label,value)->
+                Fact(label,value,label in compactValueLabels,maxValueWidth)
+                if(index<facts.lastIndex)HorizontalDivider(color=Color.White.copy(alpha=.08f))
+            }
         }
     }
 }
