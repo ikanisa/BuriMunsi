@@ -42,6 +42,7 @@ internal val UiState.isMemberStatement:Boolean get() = route==Route.PAYMENTS && 
         role=SemanticRole.Button,onClickLabel=t(if(opensStatement)"Open member statement" else "Payment details"),onClick=action.click)
         .semantics(mergeDescendants=true){}.padding(horizontal=14.dp,vertical=12.dp)){
         val stacked=maxWidth<280.dp||fontScale>=1.5f
+        val fullWidthDetails=stacked&&!preview
         Column(Modifier.fillMaxWidth()){
             Row(verticalAlignment=Alignment.CenterVertically){
                 if(statement){
@@ -52,16 +53,7 @@ internal val UiState.isMemberStatement:Boolean get() = route==Route.PAYMENTS && 
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)){
                     SingleLineName(if(statement)direction else p.payerNameRaw.ifBlank{t("Unavailable")},size=17)
-                    p.atRaw.takeIf{it.isNotBlank()}?.let{rawTime ->
-                        val timestamp = if (preview) ExactDisplay.recentPaymentTimestamp(rawTime, t.locale.toLanguageTag())
-                            else historyTime(rawTime, t.locale)
-                        CompactLabel(timestamp,style=MaterialTheme.typography.bodySmall,color=BuriTheme.Muted)
-                    }
-                    if(!preview)p.ftId?.let{CompactLabel(t("FT Id: %1\$s",it),style=MaterialTheme.typography.bodySmall,color=BuriTheme.Muted)}
-                    if(!statement)when(p.direction) {
-                        "incoming","outgoing" -> Glyph(directionIcon,direction,BuriTheme.Muted,22)
-                        else -> CompactLabel(direction,style=MaterialTheme.typography.bodySmall,color=BuriTheme.Muted)
-                    }
+                    if(!fullWidthDetails)PaymentRowDetails(p,preview,statement,direction,directionIcon)
                 }
                 if(!stacked){
                     Spacer(Modifier.width(8.dp))
@@ -71,6 +63,10 @@ internal val UiState.isMemberStatement:Boolean get() = route==Route.PAYMENTS && 
                     }
                 }
             }
+            if(fullWidthDetails){
+                Spacer(Modifier.height(4.dp))
+                PaymentRowDetails(p,preview,statement,direction,directionIcon)
+            }
             if(stacked){
                 Spacer(Modifier.height(8.dp))
                 MoneyText(p.amountRwf,Modifier.fillMaxWidth(),20,showHint=true)
@@ -78,6 +74,19 @@ internal val UiState.isMemberStatement:Boolean get() = route==Route.PAYMENTS && 
             }
         }
         if(!last)HorizontalDivider(Modifier.align(Alignment.BottomCenter),color=Color.White.copy(alpha=.08f))
+    }
+}
+@Composable private fun PaymentRowDetails(p:Payment,preview:Boolean,statement:Boolean,direction:String,directionIcon:Int){
+    val t=LocalUiText.current
+    val style=MaterialTheme.typography.bodySmall
+    if(p.atRaw.isNotBlank()){
+        if(preview)CompactLabel(ExactDisplay.recentPaymentTimestamp(p.atRaw,t.locale.toLanguageTag()),style=style,color=BuriTheme.Muted)
+        else Text(historyTime(p.atRaw,t.locale),style=style,color=BuriTheme.Muted)
+    }
+    if(!preview)p.ftId?.let{Text(t("FT Id: %1\$s",it),style=style,color=BuriTheme.Muted)}
+    if(!statement)when(p.direction){
+        "incoming","outgoing" -> Glyph(directionIcon,direction,BuriTheme.Muted,22)
+        else -> CompactLabel(direction,style=style,color=BuriTheme.Muted)
     }
 }
 @Composable private fun PaymentStatusLabel(status:PaymentStatus){

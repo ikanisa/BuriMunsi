@@ -202,7 +202,7 @@ internal fun stateIcon(name:String)=when(name){"check"->R.drawable.ic_check;"lin
     val t=LocalUiText.current
     val keyboard=LocalSoftwareKeyboardController.current
     OutlinedTextField(value,change,Modifier.fillMaxWidth().heightIn(min=56.dp).semantics{contentDescription=t(hint)},singleLine=true,enabled=!busy,
-        textStyle=LocalTextStyle.current.copy(fontSize=18.sp),placeholder={CompactLabel(t(hint),color=BuriTheme.Muted,fontSize=18.sp)},leadingIcon={Glyph(R.drawable.ic_search,null,BuriTheme.Muted,22)},
+        textStyle=LocalTextStyle.current.copy(fontSize=18.sp),placeholder={Text(t(hint),color=BuriTheme.Muted,fontSize=18.sp,lineHeight=24.sp)},leadingIcon={Glyph(R.drawable.ic_search,null,BuriTheme.Muted,22)},
         trailingIcon=if(value.isEmpty())null else {{IconButton({change("")},enabled=!busy){Glyph(R.drawable.ic_close,t("Clear search"),BuriTheme.Muted,20)}}},
         keyboardOptions=KeyboardOptions(autoCorrectEnabled=false,imeAction=ImeAction.Search),keyboardActions=KeyboardActions(onSearch={keyboard?.hide();submit()}),
         shape=RoundedCornerShape(28.dp),colors=OutlinedTextFieldDefaults.colors(focusedContainerColor=BuriTheme.Tone,unfocusedContainerColor=BuriTheme.Tone,focusedBorderColor=BuriTheme.Blue,unfocusedBorderColor=Color.Transparent))

@@ -82,9 +82,20 @@ class NativeUiContractTest {
         val layout=mutableListOf<TextLayoutResult>()
         text.performSemanticsAction(SemanticsActions.GetTextLayoutResult){check(it(layout))}
         val actual=layout.single()
-        check(!actual.hasVisualOverflow && (0 until actual.lineCount).none(actual::isLineEllipsized) &&
-            actual.getLineEnd(actual.lineCount-1,visibleEnd=true)==label.length){
-            "Expected the complete text “$label” across ${actual.lineCount} rendered lines."
+        val width = actual.size.width
+        val height = actual.size.height
+        val visibleEnd = actual.getLineEnd(actual.lineCount - 1, visibleEnd = true)
+        check(actual.layoutInput.text.text == label)
+        // Compose can reconstruct a paragraph at its parent width for a shorter wrap-content Text.
+        // Check the rendered characters against the measured node, allowing one physical pixel for rounding.
+        val glyphsFit = label.indices.filterNot { label[it].isWhitespace() }.all { index ->
+            val box = actual.getBoundingBox(index)
+            box.left >= -1f && box.right <= width + 1f && box.top >= -1f && box.bottom <= height + 1f
+        }
+        check(glyphsFit && !actual.didOverflowHeight && (0 until actual.lineCount).none(actual::isLineEllipsized) &&
+            visibleEnd == label.length){
+            "Expected the complete text “$label” inside ${width}x$height px. " +
+                "Rendered ${actual.lineCount} lines through character $visibleEnd of ${label.length}."
         }
         if(expectedScale!=null)check(actual.layoutInput.density.fontScale==expectedScale)
     }
@@ -98,6 +109,12 @@ class NativeUiContractTest {
         val match=hasText("FT Id: $reference") and hasClickAction()
         ui.onNode(hasScrollToIndexAction()).performScrollToNode(match)
         return ui.onNode(match).performScrollTo().assertIsDisplayed()
+    }
+    private fun waitForFilterHeading(){
+        val heading=ui.onNode(hasText("Filters") and SemanticsMatcher.expectValue(SemanticsProperties.Heading,Unit))
+        ui.waitUntil("Filters heading receives focus in the open sheet",timeoutMillis=10_000){
+            runCatching{heading.assertIsDisplayed().assertIsFocused()}.isSuccess
+        }
     }
     private fun panelButton(title:String,label:String)=ui.onNode(hasText(label) and hasClickAction() and hasAnyAncestor(
         SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.PaneTitle,title)))
@@ -626,7 +643,11 @@ class NativeUiContractTest {
     }
     @Test fun paymentFiltersUseOnlyTheAllocationStates(){
         val c=FakeController(Route.PAYMENTS);show(c);ui.onNodeWithContentDescription("Payment filters").performClick()
-        ui.onNodeWithText("Filters").assertExists();ui.onNodeWithText("Status").assertExists();ui.onNodeWithTag("payment-filter-select").performClick()
+        waitForFilterHeading()
+        val search=ui.onNode(hasSetTextAction() and hasContentDescription("Search"))
+        search.assertIsNotFocused()
+        ui.onNodeWithText("Status").assertExists()
+        ui.onNodeWithTag("payment-filter-select").assertIsDisplayed().performTouchInput{click()}
         ui.onNodeWithTag("listing-choice-dialog").assertIsDisplayed()
         val radioOption = SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.Role, androidx.compose.ui.semantics.Role.RadioButton)
         ui.onNode(hasText("All") and radioOption and isSelected()).assertExists()
@@ -638,6 +659,13 @@ class NativeUiContractTest {
         val resetBounds=button("Reset all").fetchSemanticsNode().boundsInRoot
         check(applyBounds.bottom<=resetBounds.top){"Filter Apply and Reset must have separate hit areas"}
         button("Apply").performClick();ui.runOnIdle{check(c.filterCalls==1&&c.state.filter=="unallocated"&&c.state.sheet==null){"Expected Unallocated applied once; actual sheet=${c.state.sheet}, filter=${c.state.filter}, applies=${c.filterCalls}"}}
+        ui.onNodeWithContentDescription("Payment filters").performClick()
+        waitForFilterHeading()
+        search.assertIsNotFocused().performTouchInput{click()}
+        search.assertIsFocused().performTextInput("Aline")
+        search.assertTextContains("Aline")
+        panelButton("Filters","Apply").performClick()
+        ui.runOnIdle{check(c.listingQuery.q=="Aline" && c.state.filter=="unallocated" && c.state.sheet==null)}
     }
     @Test fun overviewKeepsReportedUnallocatedCountAndAllPaymentsAction(){
         val c=FakeController(Route.HOME,Role.STAFF)
@@ -1385,6 +1413,33 @@ class NativeUiContractTest {
         return RenderedHomeAmount(value,style.fontSize.value,(style.fontWeight?:FontWeight.Normal).weight,card)
     }
 
+    @Test fun compactLargeTextShowsTheWholeSignInActionSearchHintAndPaymentTime(){
+        val signedOut = FakeController(Route.LOGIN, Role.STAFF)
+        val payments = FakeController(Route.PAYMENTS, Role.STAFF).apply { seedStatementReview() }
+        var screen by mutableStateOf(signedOut)
+        ui.setContent {
+            CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, 2f)) {
+                Box(Modifier.width(320.dp).fillMaxHeight()) {
+                    BuriContent(reduceMotion = true) {
+                        BuriApp(screen, onSupport = {}, onPermissions = {}, onExport = {}, onPhoneSettings = {})
+                    }
+                }
+            }
+        }
+
+        val support = "Contact admin on WhatsApp"
+        ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText(support) and hasClickAction())
+        assertCompleteText(support, 2f)
+        button(support).assertHeightIsAtLeast(48.dp)
+
+        ui.runOnIdle { screen = payments }
+        ui.onNode(hasScrollToIndexAction()).performScrollToIndex(0)
+        assertCompleteText("Name or payment reference", 2f)
+        visiblePayment("ST-A-IN")
+        assertCompleteText("25 Nov 2026 12:30:00 UTC+02:00", 2f)
+        assertCompleteText("FT Id: ST-A-IN", 2f)
+    }
+
     @Test fun twoHundredPercentTypePreservesCompleteMoneyAndAccessibleIdentity(){
         val c=FakeController(Route.HOME,Role.STAFF)
         val home=checkNotNull(c.state.home)
@@ -1625,6 +1680,7 @@ class NativeUiContractTest {
         ui.onNodeWithContentDescription("75,000 RWF").assertIsDisplayed()
         list.performScrollToNode(hasText("Filters") and hasClickAction())
         button("Filters").performScrollTo().performClick()
+        waitForFilterHeading()
         ui.onNodeWithTag("payment-filter-select").assertDoesNotExist()
         panelList("Filters").performScrollToNode(hasTestTag("listing-direction-select"))
         ui.onNodeWithTag("listing-direction-select").performScrollTo().performClick()

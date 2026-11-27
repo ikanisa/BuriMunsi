@@ -20,6 +20,9 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.platform.LocalWindowInfo
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.*
@@ -54,6 +57,16 @@ import rw.ikanisa.burimunsi.core.Role
     ModalBottomSheet(onDismissRequest=m::closeSheet,sheetState=sheetState,containerColor=Color(0xFF1C1C1E),contentColor=BuriTheme.Text,shape=RoundedCornerShape(topStart=32.dp,topEnd=32.dp),scrimColor=Color.Black.copy(alpha=.62f),dragHandle={
         Box(Modifier.fillMaxWidth().padding(top=11.dp,bottom=3.dp),contentAlignment=Alignment.Center){Box(Modifier.size(width=34.dp,height=4.dp).background(Color(0xFF505054),RoundedCornerShape(4.dp)))}
     }){
+        val initialFilterFocus=if(sheet==Sheet.FILTERS) remember { FocusRequester() } else null
+        if(initialFilterFocus!=null){
+            val window=LocalWindowInfo.current
+            val sheetKeyboard=LocalSoftwareKeyboardController.current
+            LaunchedEffect(initialFilterFocus){
+                snapshotFlow{window.isWindowFocused}.first{it}
+                initialFilterFocus.requestFocus()
+                sheetKeyboard?.hide()
+            }
+        }
         BackHandler(enabled=payerPicker && !imeVisible && !s.busy && !s.discardRequested) { m.onboardingOptions() }
         BackHandler(enabled=s.discardRequested && !s.busy) { m.keepDraft() }
         Column(Modifier.fillMaxWidth().heightIn(max=LocalConfiguration.current.screenHeightDp.dp*.94f).imePadding().semantics{paneTitle=title}.onPreviewKeyEvent{
@@ -61,7 +74,8 @@ import rw.ikanisa.burimunsi.core.Role
         }){
             Row(Modifier.fillMaxWidth().heightIn(min=65.dp).padding(start=if(payerPicker)8.dp else 22.dp,end=12.dp,top=7.dp,bottom=10.dp),verticalAlignment=Alignment.CenterVertically){
                 if(payerPicker)IconButton({keyboard?.hide();m.onboardingOptions()},enabled=!s.busy&&!s.discardRequested){Glyph(R.drawable.ic_back,t("Back"))}
-                CompactLabel(title,Modifier.weight(1f).semantics{heading()},fontSize=30.sp,fontWeight=FontWeight.SemiBold,lineHeight=38.sp)
+                val headingFocus=if(initialFilterFocus==null)Modifier else Modifier.focusRequester(initialFilterFocus).focusable()
+                CompactLabel(title,Modifier.weight(1f).then(headingFocus).semantics{heading()},fontSize=30.sp,fontWeight=FontWeight.SemiBold,lineHeight=38.sp)
                 IconButton(m::closeSheet,enabled=!s.busy&&!s.discardRequested,modifier=Modifier.testTag("panel-close")){Glyph(R.drawable.ic_close,t("Close"))}
             }
             BoxWithConstraints(Modifier.fillMaxWidth().weight(1f,fill=false)){

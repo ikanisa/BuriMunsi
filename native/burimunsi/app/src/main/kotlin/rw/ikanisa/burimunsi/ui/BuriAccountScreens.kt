@@ -25,6 +25,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.*
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.cool.mobile.BuildConfig
@@ -162,7 +163,21 @@ import rw.ikanisa.burimunsi.core.Role
         }
         item{Primary(t(if(signingIn)"Signing in…" else "Sign in"),submit,ready&&!busy,icon=R.drawable.ic_arrow,iconTrailing=true,working=signingIn,
             modifier=if(signingIn)Modifier.testTag("active-operation:SIGN_IN") else Modifier)}
-        item{TextButton(support,Modifier.fillMaxWidth().heightIn(min=48.dp).padding(top=12.dp),enabled=supportAvailable){CompactLabel(t("Contact admin on WhatsApp"),color=if(supportAvailable)BuriTheme.Blue else BuriTheme.Muted,fontSize=15.sp)}}
+        item {
+            TextButton(
+                onClick = support,
+                modifier = Modifier.fillMaxWidth().padding(top = 12.dp).heightIn(min = 48.dp),
+                enabled = supportAvailable,
+            ) {
+                Text(
+                    t("Contact admin on WhatsApp"),
+                    modifier = Modifier.fillMaxWidth(),
+                    color = if (supportAvailable) BuriTheme.Blue else BuriTheme.Muted,
+                    fontSize = 15.sp,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
     }
 }
 

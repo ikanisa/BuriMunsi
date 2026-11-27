@@ -111,6 +111,7 @@ EXPECTED_STAFF_CASES = {
     'rw.ikanisa.burimunsi.NativeUiContractTest#staffViewsHaveNoInventedPreferencesOrAdminGatewayControls',
     'rw.ikanisa.burimunsi.NativeUiContractTest#startupShowsBlackBrandedSplashBeforeOriginalLogin',
     'rw.ikanisa.burimunsi.NativeUiContractTest#supportUsesThePublishedWhatsAppNumberFromHelpAndSignIn',
+    'rw.ikanisa.burimunsi.NativeUiContractTest#compactLargeTextShowsTheWholeSignInActionSearchHintAndPaymentTime',
     'rw.ikanisa.burimunsi.NativeUiContractTest#syncPolicySettingsStayInTheReceiverAdminRole',
     'rw.ikanisa.burimunsi.NativeUiContractTest#twoHundredPercentTypePreservesCompleteMoneyAndAccessibleIdentity',
     'rw.ikanisa.burimunsi.NativeUiContractTest#typedFilterOverlayReturnsToItsStaffPanelAndRetainsTheSelection',
