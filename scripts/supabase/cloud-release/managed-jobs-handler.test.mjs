@@ -1,9 +1,11 @@
 // Run the current Cloud handler in an owned temporary copy with dependency doubles.
 import assert from 'node:assert/strict';
+import {existsSync} from 'node:fs';
 import {cp,mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 const dir=await mkdtemp(join(tmpdir(),'collect-managed-jobs-handler-'));
 const once=(s,a,b)=>{const i=s.indexOf(a);assert(i>=0&&s.indexOf(a,i+a.length)<0);return s.slice(0,i)+b+s.slice(i+a.length);};
 try{
@@ -126,10 +128,18 @@ Deno.test('payer receipt observations are bounded and unconfirmed work cannot co
 
 `;
  await writeFile(join(shared,'managed-jobs-handler-candidate.test.ts'),script);
- const cwd=join(dir,'supabase/functions'),deno=process.env.DENO_BIN??'/Users/jeanbosco/.local/bin/deno';
+ const cwd=join(dir,'supabase/functions');
+ const packagedDeno=new URL('../node_modules/deno/bin.cjs',import.meta.url);
+ const usePackage=!process.env.DENO_BIN && existsSync(packagedDeno);
+ const deno=process.env.DENO_BIN || (usePackage ? process.execPath : 'deno');
  for(const args of [['check','--cached-only','collect-jobs/index.ts'],['test','--no-check','--cached-only','--allow-env','_shared/managed-jobs-handler-candidate.test.ts']]){
-  const result=spawnSync(deno,args,{cwd,encoding:'utf8',timeout:120000,maxBuffer:2*1024*1024});
-  if(result.status!==0){process.stderr.write(result.stderr||result.stdout);throw Error('candidate_handler_fixture_failed');}
+  const result=spawnSync(deno,usePackage ? [fileURLToPath(packagedDeno),...args] : args,{cwd,encoding:'utf8',timeout:120000,maxBuffer:2*1024*1024});
+  if(result.error)throw result.error;
+  if(result.status!==0){
+   if(result.stderr)process.stderr.write(result.stderr);
+   if(result.stdout)process.stderr.write(result.stdout);
+   throw Error(`candidate_handler_fixture_failed: deno ${args[0]} (${result.signal ?? result.status})`);
+  }
  }
  console.log(JSON.stringify({suite:'managed-jobs-handler',checks:5,edge_source:'Cloud handler with isolated dependencies',provider_calls:0}));
 }finally{await rm(dir,{recursive:true,force:true});}

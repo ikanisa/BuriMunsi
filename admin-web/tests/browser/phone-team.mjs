@@ -11,33 +11,47 @@ export async function qualifyPhoneTeam({admin, origin, open, legacySessions}) {
   const button = (page, title) => page.getByRole('button', {name: title, exact: true});
   const targetRow = admin.getByRole('row').filter({hasText: name});
   async function submit(page, title, path, status = 200) {
-    const [response] = await Promise.all([
-      page.waitForResponse(response => response.url() === endpoint(path) && response.request().method() === 'POST'),
-      button(page, title).click(),
-    ]);
-    assert.equal(response.status(), status, path);
-    return response;
+    const url = endpoint(path);
+    let responseBytes;
+    // Navigation can discard Chromium's response body. Keep the exact bytes
+    // from the loopback server before delivering its response to the page.
+    const capture = async route => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      const upstream = await route.fetch({maxRedirects: 0});
+      responseBytes = await upstream.body();
+      await route.fulfill({response: upstream, body: responseBytes});
+    };
+    await page.route(url, capture);
+    try {
+      const [response] = await Promise.all([
+        page.waitForResponse(response => response.url() === url && response.request().method() === 'POST'),
+        button(page, title).click(),
+      ]);
+      assert.equal(response.status(), status, path);
+      return {request: response.request(), body: JSON.parse(responseBytes)};
+    } finally {
+      await page.unroute(url, capture);
+    }
   }
   async function signIn(page, pin, status = 200) {
     await page.getByLabel('Mobile number', {exact: true}).fill(number);
     await page.getByLabel('Four-digit passcode', {exact: true}).fill(pin);
-    const response = await submit(page, 'Sign in', 'auth/phone-passcode', status);
-    assert.deepEqual(response.request().postDataJSON(), {phone, pin});
-    assert.equal(await response.request().headerValue('x-collect-owner-identity-version'), '1');
+    const {request, body} = await submit(page, 'Sign in', 'auth/phone-passcode', status);
+    assert.deepEqual(request.postDataJSON(), {phone, pin});
+    assert.equal(await request.headerValue('x-collect-owner-identity-version'), '1');
     if (status === 200) {
-      assert.equal((await response.json()).sessionContract, legacySessions ? undefined : 2);
+      assert.equal(body.sessionContract, legacySessions ? undefined : 2);
     } else {
       await page.getByText('Check your mobile number and passcode.', {exact: true}).waitFor();
     }
   }
   async function accountReceipt(title, path, expectedBody, version) {
-    const response = await submit(admin, title, path);
-    const body = response.request().postDataJSON(), requestId = body.requestId;
+    const {request, body: receipt} = await submit(admin, title, path);
+    const body = request.postDataJSON(), requestId = body.requestId;
     assert.match(requestId, /^[0-9a-f-]{36}$/);
     assert.deepEqual(body, {...expectedBody, requestId});
-    assert.equal(await response.request().headerValue('idempotency-key'), requestId);
-    assert.match(await response.request().headerValue('x-collect-csrf'), /^[a-f0-9]{64}$/);
-    const receipt = await response.json();
+    assert.equal(await request.headerValue('idempotency-key'), requestId);
+    assert.match(await request.headerValue('x-collect-csrf'), /^[a-f0-9]{64}$/);
     assert.deepEqual(receipt, {applied: true, id: receipt.id, version});
     assert.match(receipt.id, /^[0-9a-f-]{36}$/);
     return receipt.id;
@@ -93,7 +107,7 @@ export async function qualifyPhoneTeam({admin, origin, open, legacySessions}) {
     await staffPage.getByLabel('New passcode', {exact: true}).fill(changedPin);
     await staffPage.getByLabel('Confirm new passcode', {exact: true}).fill(changedPin);
     const changed = await submit(staffPage, 'Change passcode', 'auth/passcode/change');
-    assert.deepEqual(changed.request().postDataJSON(), {current: fixtureInitialPasscode, newPin: changedPin, confirm: changedPin});
+    assert.deepEqual(changed.request.postDataJSON(), {current: fixtureInitialPasscode, newPin: changedPin, confirm: changedPin});
     await heading(staffPage, 'Welcome to BuriMunsi').waitFor();
     assert(!(await staff.context.cookies(origin)).some(cookie => cookie.name === 'collect_fixture_session'));
     await signIn(staffPage, fixtureInitialPasscode, 401);
