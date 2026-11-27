@@ -120,6 +120,16 @@ fun main(){
         check(f.posts.get()==0&&f.repo.pending()==original)
         val req=f.api.calls.last();check(req.token==f.token&&req.recoveryOrigin==original.sessionScope)
     }
+    test("a disputed payment returns its evidence error and neither retry nor recovery repeats the financial POST") {
+        val f=Fixture();f.postFailure=ApiFailure("payment_evidence_conflict",409,false)
+        val denied=runCatching{f.repo.allocate(f.payment,f.member)}.exceptionOrNull()
+        check(denied is ApiFailure&&denied.code=="payment_evidence_conflict"&&denied.status==409)
+        val original=checkNotNull(f.repo.pending())
+        check(original.state==OperationState.UNKNOWN&&f.posts.get()==1)
+        check(runCatching{f.repo.retryPending()}.isFailure)
+        f.repo.reconcilePending()
+        check(f.posts.get()==1&&f.repo.pending()?.requestId==original.requestId)
+    }
     for(status in listOf(400,401,403,404,409,422,429,500,503)) {
         test("first POST HTTP $status retains operation and cannot authorize replacement") {
             val f=Fixture();f.postFailure=ApiFailure("synthetic_http_error",status,false)

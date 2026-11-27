@@ -3,7 +3,7 @@
 This explicit phase serves the owner's current six-task MVP. It permits compiling
 configured Release APKs before signing and the physical-phone pilot that consume
 those APKs. It grants no signing, distribution, financial-operation or production
-promotion authority. Legacy `build` and `promotion` checks are unchanged.
+promotion authority. Standalone promotion uses the product-bound Payments witness described in the physical-carrier acceptance document.
 
 Create a physical evidence bundle outside `native/burimunsi` and
 `vendor/receiver-compat`, on the build-evidence volume. It may contain retained copies,

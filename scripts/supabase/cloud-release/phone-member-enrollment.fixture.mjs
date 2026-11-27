@@ -42,6 +42,16 @@ export async function verifyBrowserMemberEnrollment({call,group,admin,otherAdmin
   assert.equal(roster.data.total,1);
   assert.equal(roster.data.rows[0].id,member.id);
   assert.equal(roster.data.rows[0].membership_status,'active');
+  const windowPath='core/members?directory=roster&window=1&sort=public_id_asc&limit=25&search='+encodeURIComponent(command.name);
+  const window=await call(windowPath,admin);
+  verify(window,200);
+  assert.equal(window.data.matching,1);
+  assert.equal(window.data.items[0].id,member.id);
+  assert.match(window.data.revision,/^[0-9a-f]{64}$/);
+  verify(await call(windowPath+'&revision='+'0'.repeat(64),admin),409);
+  verify(await call(windowPath+'&collectionId=foreign-group',admin),400);
+  verify(await call(windowPath),401);
+  await withoutGrant('users.read',async()=>verify(await call(windowPath,admin),403));
   const profile=await call('operations/members/'+member.id,admin);
   verify(profile,200);
   assert.equal(profile.data.resource.membership_status,'active');

@@ -24,7 +24,7 @@
     "supabase/functions/_shared/edge-http-transport.js": "a1a139845ab438a52e8962ad6b98d9258d2e8aaf39903ad3c2f8d48ae7d35aab",
     "supabase/functions/_shared/edge-jobs-handler.js": "c3f141631bbbc0937853807789a7c48a9c41988f915ef3b54cf34272db56a373",
     "supabase/functions/_shared/edge-job-cycle.js": "1c202ad0e41b555281d9de2fdbed4355a9bd90b6fcd9f6510aa1212852384224",
-    "supabase/functions/_shared/burimunsi-standalone.js": "f439a27185d777195b7b7a0174f7de84ec130db84877fa99a1b8a1e784bf22f8",
+    "supabase/functions/_shared/burimunsi-standalone.js": "cfc6f46a4aaf24e2ac2a34f6bbae529c02effaa66ae97f8e2547167cfab52696",
     "supabase/functions/_shared/deployment-database.js": "229d924c0f009e2a0eecfbb84deaba4a2ca8871713e242a5d2837da5b5e96840",
     "supabase/functions/_shared/scheduled-native-sms-ledger.js": "ed1ab702b9dd8682d1cb05a558baa52067b7bc0c57da01881e5f142d92806aec"
   },

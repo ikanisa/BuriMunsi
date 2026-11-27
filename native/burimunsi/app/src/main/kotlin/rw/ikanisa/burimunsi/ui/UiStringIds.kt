@@ -613,4 +613,5 @@ internal val UiStringIds:Map<String,Int> = mapOf(
     "Some receipts are on hold" to R.string.ui_receiving_partial_sim_hold,
     "Android has not verified the receiving SIM for a receipt. Other verified receipts can still sync. Check the SIM in Android, then tap Sync." to R.string.ui_receiving_partial_sim_help,
     "Privacy notice" to R.string.ui_public_privacy_notice,
+    "Allocation blocked. Ask an admin to review the conflicting receipts." to R.string.ui_payment_evidence_conflict,
 )

@@ -11,7 +11,7 @@ import {previewSmartOnboardingImport} from '../../domain/burimunsi/smart-onboard
 const secret='synthetic-roster-bridge-signing-key-0123456789';
 const build='a'.repeat(64),endpoint='https://decoder.example.invalid/decode';
 const key='synthetic-provider-key';
-const toolchain={python:'3.12',pillow:'12.3.0',pypdfium2:'5.2.0',pypdf:'6.19.0',openpyxl:'3.1.5',defusedxml:'0.7.1'};
+const toolchain={python:'3.12',pillow:'13.0.0',pypdfium2:'5.2.0',pypdf:'7.2.0',openpyxl:'3.1.5',defusedxml:'0.7.1'};
 const corpus=new URL('../../../../../tools/roster-decoder/native-probe/corpus/',import.meta.url);
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const rows=[{momoName:'Example Member',momoNumber:'0781234567'}];

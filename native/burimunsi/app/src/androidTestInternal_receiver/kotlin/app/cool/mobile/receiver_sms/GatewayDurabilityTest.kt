@@ -349,6 +349,25 @@ class GatewayDurabilityTest {
         assertTrue(runCatching { heldStore.write(oversized) }.exceptionOrNull() is IllegalArgumentException)
         assertArrayEquals(ciphertext, heldFile.readBytes())
     }
+    @Test fun exactOverflowLocatorsReopenEncryptedAndRetireOnlyUnderTheirOwner() {
+        val now = System.currentTimeMillis()
+        val device = Values.sha256("synthetic-instrumentation-device")
+        fun review(account: String = "synthetic-admin") = AndroidUnclassifiedSmsStore(
+            context, "synthetic-group", account, "synthetic-installation", device, { true }, capacity = 1)
+        assertEquals(CursorPermission.MAY_ADVANCE, review().hold(1, now))
+        assertEquals(CursorPermission.MAY_ADVANCE, review().hold(2, now))
+        assertFalse(review("other-account").hasUnresolved())
+        assertTrue(review().hasUnresolved())
+        val encrypted = root.listFiles().orEmpty().filter { it.name.startsWith("buri-sms-review-page-") }
+        assertTrue(encrypted.isNotEmpty())
+        assertFalse(encrypted.any { it.readBytes().toString(Charsets.ISO_8859_1).contains("2:$now") })
+        assertEquals(ReviewResult.BLOCKED, review().resolve(2, now + 1) { ReviewDecision.PROVEN_NOT_FINANCIAL })
+        assertEquals(ReviewResult.RESOLVED, review().resolve(1, now) { ReviewDecision.ACCEPTED_BY_DURABLE_JOURNAL })
+        assertFalse(review().complete(true))
+        assertEquals(ReviewResult.RESOLVED, review().resolve(2, now) { ReviewDecision.PROVEN_NOT_FINANCIAL })
+        assertFalse(review().complete(false))
+        assertTrue(review().complete(true))
+    }
     @Test fun observationPauseIsEncryptedAndSurvivesAnotherAccount() {
         val owner=ObservationOwner("synthetic-group","synthetic-admin")
         val other=ObservationOwner("synthetic-group","synthetic-staff")

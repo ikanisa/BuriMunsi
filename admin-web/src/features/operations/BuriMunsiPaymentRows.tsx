@@ -2,7 +2,7 @@ import {Link} from 'react-router';
 import {CompactText, StatusBadge} from '../../ui';
 import {MomoCell, MomoTable} from './MomoRecordViews';
 import {PaymentTermIcon} from './PaymentTermIcon';
-import {paymentMemberName, paymentTime, type BuriMunsiPayment} from './canonicalPaymentAnalysis';
+import {paymentMemberName, paymentEventTime, type BuriMunsiPayment} from './canonicalPaymentAnalysis';
 import {paymentsPath as buriMunsiPaymentsPath} from './paymentLocations';
 import './operations.css';
 import './paymentsWorkspace.css';
@@ -17,15 +17,14 @@ export const recordedText = (value: string | null | undefined) => value?.trim() 
 
 export function PaymentDirection({direction}: {direction: BuriMunsiPayment['direction']}) {
   return <span className="payment-direction" data-payment-flow={direction}>
-    <PaymentTermIcon term={direction} /><span aria-hidden="true">{direction === 'incoming' ? 'IN' : 'OUT'}</span>
+    <PaymentTermIcon term={direction} />
   </span>;
 }
 
 export function AllocationStatus({row, search, text = false}: {row: BuriMunsiPayment; search?: URLSearchParams; text?: boolean}) {
   const allocated = row.state === 'allocated';
-  const label = allocated ? 'Allocated' : 'Unallocated';
   const badge = <StatusBadge tone={allocated ? 'success' : 'warning'}>
-    {text ? label : <PaymentTermIcon term={row.state} />}
+    <PaymentTermIcon term={row.state} />
   </StatusBadge>;
   if (row.state !== 'unallocated' || row.canAllocate !== true) return badge;
   const next = new URLSearchParams(search);
@@ -41,6 +40,6 @@ export function BuriMunsiPaymentRows({rows}: {rows: BuriMunsiPayment[]}) {
       <CompactText cell>{row.ftId ?? 'View payment'}</CompactText></Link></MomoCell>
       <MomoCell label="IN/OUT"><PaymentDirection direction={row.direction} /></MomoCell><MomoCell label="Amount"><span className="payment-exact-value">{paymentAmount(row.amountRwf)}</span></MomoCell>
       <MomoCell label="Member"><CompactText cell>{paymentMemberName(row) ?? '—'}</CompactText></MomoCell><MomoCell label="Status"><AllocationStatus row={row} /></MomoCell>
-      <MomoCell label="Payment time"><span className="payment-exact-value">{paymentTime(row.atRaw)}</span></MomoCell></tr>)}
+      <MomoCell label="Payment time"><span className="payment-exact-value">{paymentEventTime(row)}</span></MomoCell></tr>)}
   </MomoTable>;
 }

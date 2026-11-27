@@ -34,7 +34,7 @@ function Figure({label, icon, value, to, onOpen, paymentMetric}:
   const className = 'overview-metric overview-metric-card';
   const formatted = paymentMetric ? amountRwf(value) : value === null ? 'Unavailable' : amountFormat.format(value);
   const longAmount = paymentMetric && formatted.length > 15 ? true : undefined;
-  const iconLabel = <><Icon name={icon} /><span className="admin-sr-only">{label}</span></>;
+  const iconLabel = <><Icon name={icon} /><span className="overview-metric-label">{label}</span></>;
   if (onOpen) return <button type="button" className={className + ' overview-metric-opener'} data-payment-metric={paymentMetric}
     title={label} aria-label={label + ' · ' + formatted} aria-haspopup="dialog" onClick={onOpen}>
     <span className="overview-metric-icon">{iconLabel}</span>

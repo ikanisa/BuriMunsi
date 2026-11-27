@@ -144,13 +144,15 @@ export class RecordsService {
     if(memberId!==null)requireId(memberId);
     const filterHash=await sha256(canonicalJson(listing.advanced?{...listingFilterIdentity(listing),memberId,kind}:{q,filter,memberId,kind}));
     return this.within(actor,capability,async(tx,current)=>{
-      if(kind==='members'){
-        requirePort(tx,['memberListingRevision','readMemberPage']);
-        const revision=await tx.memberListingRevision(this.groupId);
+      const canonicalPayments=this.paymentsOnly&&kind==='payments'&&typeof tx.readCanonicalPaymentPage==='function';
+      if(kind==='members'||canonicalPayments){
+        requirePort(tx,canonicalPayments?['listRevision','readCanonicalPaymentPage']:['memberListingRevision','readMemberPage']);
+        const revision=canonicalPayments?await tx.listRevision(this.groupId,kind,memberId):await tx.memberListingRevision(this.groupId);
         requireThat(typeof revision==='string'&&revision.length>0,'snapshot_unavailable',503);
         const scope={groupId:this.groupId,actorId:current.id,snapshot:revision,filterHash,sort:listing.sort};
         const after=query.cursor?await this.cursor.read(query.cursor,scope,this.clock()):null;
-        const result=await tx.readMemberPage({groupId:this.groupId,listing,after,anchorId});
+        const result=canonicalPayments?await tx.readCanonicalPaymentPage({groupId:this.groupId,memberId,listing,after}):
+          await tx.readMemberPage({groupId:this.groupId,listing,after,anchorId});
         requireThat(result&&Array.isArray(result.items)&&result.items.length<=limit&&Number.isSafeInteger(result.totalCount)&&
           result.totalCount>=result.items.length,'invalid_page',503);
         const items=this.projectRows(result.items,kind);

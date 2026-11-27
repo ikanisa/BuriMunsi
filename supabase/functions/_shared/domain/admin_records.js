@@ -1,3 +1,4 @@
+import {readMemberRosterWindow} from './admin_member_roster.js';
 import {first,uuid,integer,now} from './core.js';
 import {coreStatuses,coreOrdering,coreSearch} from './admin_search.js';
 import {marker,contributionBasis,collectedBasis,fail,unavailable,iso,exact,amountString} from './admin_record_values.js';
@@ -30,6 +31,10 @@ async function list(env,type,url,{id:resourceId=null,activeOnly=false,eligiblePe
  const roster=type==='members'&&rosterGroupId!==null;
  const spec=roster?rosterSource:lists[type],filterType=roster?'roster':type;
  if(!spec)unavailable();
+ if(roster&&url.searchParams.has('window')&&!resourceId){
+  const f=filters(url,['directory','window','country','limit','offset','sort','search','columns','revision'],filterType);
+  return readMemberRosterWindow(env,rosterGroupId,url,f);
+ }
  const f=filters(url,roster?[...listFilters,'directory']:listFilters,filterType),args=[],predicates=[];
  if(roster&&url.searchParams.get('directory')!=='roster')fail(400,'invalid_filter','This member directory is unavailable.');
  if(resourceId){predicates.push('id=?');args.push(uuid(resourceId));}

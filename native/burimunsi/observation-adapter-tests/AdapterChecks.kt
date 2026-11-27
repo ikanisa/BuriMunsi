@@ -73,6 +73,77 @@ fun main(args:Array<String>) {
   if(phase in setOf("CONFIRMED","MATCHED_EXISTING"))value.put("terminalSourceId","synthetic-existing-source")
   return (name to value.toString()).also{SecureStore.data[it.first]=it.second}
  }
+ test("full sync retires only the exact locator admitted by the new approved profile") {
+  val e=setup();val raw=body.replace("You have received","Funds credited")
+  e.context.contentResolver.rows=listOf(row(1277,raw))
+  val first=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
+  val oldKey=SecureStore.data.entries.single{it.key.startsWith("unclassified-sms-")}.key
+  check(!first.completed&&e.repository.requests.isEmpty())
+  val approved=profile().put("profileVersion","approved-v2")
+      .put("incomingPrefixes",JSONArray().put("You have received").put("Funds credited"))
+  e.repository.profile=approved
+  ObservationConfigStore(e.context).saveProfile(adminA,approved,System.currentTimeMillis())
+  ObservationInboxRevision.changed()
+  var result=first
+  repeat(10){if(!result.completed)result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})}
+  check(result.completed&&e.repository.requests.size==1&&cloudKey(adminA,1277) in e.repository.retainedSources)
+  check(SecureStore.data[oldKey]=="1|0"&&e.repository.reports.last().state=="verified")
+ }
+ test("confirmed local credential-only exclusion clears its locator without exposing a body or digest") {
+  val e=setup();val notice="Your verification code is 789012."
+  e.context.contentResolver.rows=listOf(row(1280,"Unknown format for local review"))
+  check(!ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false}).completed)
+  e.context.contentResolver.rows=listOf(row(1280,notice));ObservationInboxRevision.changed()
+  var complete=false
+  repeat(6){if(!complete)complete=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false}).completed}
+  check(complete&&e.repository.requests.isEmpty()&&e.repository.reconciliationBatches.flatten().isEmpty())
+  check(SecureStore.data.values.none{it.contains(notice)||it.contains(Values.sha256(notice))})
+ }
+ test("scoped locator overflow survives interrupted publication and requires every exact resolution") {
+  val e=setup();var active=true;val scope=Values.sha256("1234567890abcdef")
+  fun store()=AndroidUnclassifiedSmsStore(e.context,adminA.collectionId,adminA.accountId,installation,scope,{active},1)
+  check(store().hold(1,time)==CursorPermission.MAY_ADVANCE)
+  SecureStore.beforeWrite={name->if(name.startsWith("sms-review-page-count-"))error("simulated process interruption")}
+  check(store().hold(2,time)==CursorPermission.BLOCKED)
+  SecureStore.beforeWrite=null
+  check(store().hasUnresolved()&&!store().complete(true))
+  check(store().hold(2,time)==CursorPermission.MAY_ADVANCE&&store().hold(3,time)==CursorPermission.MAY_ADVANCE)
+  check(store().resolve(1,time){ReviewDecision.PROVEN_NOT_FINANCIAL}==ReviewResult.RESOLVED)
+  check(store().resolve(2,time+1){ReviewDecision.ACCEPTED_BY_DURABLE_JOURNAL}==ReviewResult.BLOCKED)
+  check(store().resolve(2,time){active=false;ReviewDecision.PROVEN_NOT_FINANCIAL}==ReviewResult.BLOCKED)
+  active=true
+  check(store().resolve(2,time){ReviewDecision.ACCEPTED_BY_DURABLE_JOURNAL}==ReviewResult.RESOLVED)
+  check(!store().complete(true))
+  check(store().resolve(3,time){ReviewDecision.PROVEN_NOT_FINANCIAL}==ReviewResult.RESOLVED)
+  check(!store().complete(false)&&store().complete(true))
+  val original=SecureStore.data.keys.single{it.startsWith("unclassified-sms-")}
+  SecureStore.data[original]="1|1"
+  check(!store().complete(true))
+ }
+ test("encrypted first-enrollment pages fit the protected record and resume the original cut after interruption") {
+  for(n in listOf(0,29_849,30_000,100_000)){
+   val e=setup();val config=ObservationConfigStore(e.context)
+   val original=profile().put("legacyHold",true);e.repository.profile=original
+   config.saveProfile(adminA,original,System.currentTimeMillis())
+   val p=config.profile(adminA,System.currentTimeMillis())!!;val consent=config.consent(adminA)!!
+   val session=NativeRepository.observationOwner(e.context)!!
+   e.context.contentResolver.rows=(1L..n.toLong()).map{row(it)}
+   fun snapshot()=ObservationHeldInbox(e.context,config).snapshot(session,p,consent,config.controlState(adminA)){false}
+   if(n==30_000){
+    var written=0
+    SecureStore.beforeWrite={name->if(name.startsWith("observation-baseline-page-")&&++written==3)error("simulated interruption")}
+    check(runCatching{snapshot()}.getOrNull()==null&&written==3)
+    check(SecureStore.data.keys.none{it.startsWith("observation-legacy-held-")})
+    SecureStore.beforeWrite=null
+    e.context.contentResolver.rows=e.context.contentResolver.rows+row(n.toLong()+1)
+   }
+   val held=snapshot()!!.second
+   check(held.size==n&&snapshot()!!.second==held&&cloudKey(adminA,n.toLong()+1) !in held)
+   check(e.context.contentResolver.bodyReads==0&&e.repository.requests.isEmpty())
+   check(SecureStore.data.values.all{it.toByteArray().size<=2_000_000})
+   if(n!=0)check(cloudKey(adminA,1) in held&&cloudKey(adminA,n.toLong()) in held)
+  }
+ }
  test("held repair requires positive receipt evidence and exact reconciled identity before marker or transport"){
   val e=setup()
   val config=ObservationConfigStore(e.context)

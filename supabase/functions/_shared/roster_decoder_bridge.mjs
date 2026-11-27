@@ -5,8 +5,8 @@ const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const UTF8 = new TextEncoder();
 const TOOLCHAIN = Object.freeze({
-  python: '3.12', pillow: '12.3.0', pypdfium2: '5.2.0',
-  pypdf: '6.19.0', openpyxl: '3.1.5', defusedxml: '0.7.1',
+  python: '3.12', pillow: '13.0.0', pypdfium2: '5.2.0',
+  pypdf: '7.2.0', openpyxl: '3.1.5', defusedxml: '0.7.1',
 });
 const KINDS = Object.freeze({
   'image/png': 'image', 'image/jpeg': 'image', 'image/webp': 'image',

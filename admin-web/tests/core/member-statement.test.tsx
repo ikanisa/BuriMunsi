@@ -6,7 +6,7 @@ import {AdminRequestError} from '../../src/api/client';
 import {CoreRecordPage} from '../../src/features/core/CoreRecordPage';
 import {MemberStatementPage} from '../../src/features/core/MemberStatementPage';
 import {readCompleteMemberStatement, readMemberStatement, readMemberStatementPage} from '../../src/features/core/memberStatement';
-import {memberStatementCsv} from '../../src/features/core/memberStatementDownload';
+import {memberStatementCsv, statementFilename} from '../../src/features/core/memberStatementDownload';
 import type {AdminRequest} from '../../src/features/core/types';
 import fixture from './canonical-core-fixtures.json';
 
@@ -29,7 +29,7 @@ function statement(rows: ReturnType<typeof payment>[], offset = 0) {
   const items = rows.map(row => ({...row,
     balanceRwf: String(running += BigInt(row.amountRwf) * (row.direction === 'incoming' ? 1n : -1n))}));
   return {groupId: group, memberId: person.id, membershipId: internal, offset, limit: 25,
-    totalCount: rows.length, revision, closingRwf: String(running), items: items.slice(offset, offset + 25)};
+    totalCount: rows.length, revision, asOf:'2026-11-26T12:00:00.000Z', closingRwf: String(running), items: items.slice(offset, offset + 25)};
 }
 function source(rows: ReturnType<typeof payment>[], profile: Record<string, unknown> = detail) {
   return vi.fn(async (path: string) => {
@@ -97,6 +97,9 @@ describe('scoped member statement', () => {
       await screen.findByRole('link',{name:'Download statement'});
       const csv = await new Response(await (create.mock.calls[0][0] as Blob).arrayBuffer()).text();
       expect(csv.match(/^Transaction,/gm)).toHaveLength(51);
+    expect(csv).toContain('Membership record number,"'+number+'"');
+    expect(csv).toContain('Statement revision,"'+revision+'"');
+    expect(csv).toContain('Statement read as of (UTC),"2026-11-26T12:00:00.000Z"');
       expect(csv.indexOf('"FT-0000"')).toBeLessThan(csv.indexOf('"Late-50"'));
       expect(csv).toContain('"Late-49",1,,195');
       expect(csv).toContain('Closing balance,,,,,198');
@@ -216,6 +219,9 @@ describe('scoped member statement', () => {
     expect(csv).toContain('"FT-line1\nline2",,4,8');
     expect(csv).toContain('Transaction,"24 Nov 2026, 14:00:00","FT-0050",4,,196\r\nClosing balance,,,,,196\r\n');
     expect(csv.match(/^Transaction,/gm)).toHaveLength(51);
+    expect(csv).toContain('Membership record number,"'+number+'"');
+    expect(csv).toContain('Statement revision,"'+revision+'"');
+    expect(csv).toContain('Statement read as of (UTC),"2026-11-26T12:00:00.000Z"');
     for (const hidden of [internal, person.id, 'p-25', person.phone_e164, person.momo_number]) if (hidden) expect(csv).not.toContain(hidden);
     expect(request.mock.calls.map(([path])=>path)).toEqual([0,50].map(offset =>
       'burimunsi/payments?statement=1&memberId=' + person.id + '&offset=' + offset + '&revision=' + revision));
@@ -252,7 +258,7 @@ describe('scoped member statement', () => {
     try {
       fireEvent.click(await screen.findByRole('button', {name:'Download statement'}));
       const link = await screen.findByRole('link', {name:'Download statement'});
-      expect(link).toHaveAttribute('download','burimunsi-member-statement.csv');
+      expect(link).toHaveAttribute('download','burimunsi-member-'+number+'-'+revision.slice(0,12)+'.csv');
       expect(link).toHaveAttribute('href','blob:https://example.test/statement');
       expect(click.mock.instances).toEqual([link]);
       const file = create.mock.calls[0][0] as Blob;
@@ -456,4 +462,29 @@ describe('scoped member statement', () => {
     expect(next).toBe(profilePath + '?include=statement');
     expect(next).not.toContain('revision');
   });
+});
+
+it('distinguishes two empty statements without exposing internal identifiers or contact data', () => {
+  const plain={publicId:'000001',recordNumber:null,revision:'a'.repeat(64),asOf:'2026-11-26T12:00:00.000Z',transactions:[],closingRwf:0n};
+  const other={...plain,publicId:'000002'};
+  expect(statementFilename(plain)).not.toEqual(statementFilename(other));
+  expect(memberStatementCsv(plain)).not.toEqual(memberStatementCsv(other));
+  expect(()=>statementFilename({...plain,publicId:null})).toThrow();
+});
+
+it('uses the known provider instant and labels an unknown event consistently in retained UI, filters and CSV', async()=>{
+  const rows=statement([payment(1),payment(2)]);
+  const document={...rows,items:[{...rows.items[0],atRaw:'04/05/2026 08:20',occurredAt:'2026-05-04T06:20:00.000Z'},
+    {...rows.items[1],atRaw:'2026-05-04T06:20:00.000Z',occurredAt:null}]};
+  const request=vi.fn(async()=>({...detail,member_statement:document}));
+  render(<MemoryRouter><MemberStatementPage {...props} request={request}/></MemoryRouter>);
+  const table=await screen.findByRole('table',{name:'Member transactions'});
+  expect(within(table).getByText('Unknown')).toBeVisible();
+  editFilter('Date (Kigali)',{From:'2026-05-04',Through:'2026-05-04'});
+  expect(within(table).getByText('FT-0001')).toBeVisible();
+  expect(within(table).queryByText('FT-0002')).toBeNull();
+  const first=await readMemberStatement(request,new AbortController().signal,person.id,actor,group,{offset:0});
+  const csv=memberStatementCsv(await readCompleteMemberStatement(first,first.membership,request,new AbortController().signal));
+  expect(csv).toContain('"04 May 2026, 08:20:00","FT-0001"');
+  expect(csv).toContain('"Unknown","FT-0002"');
 });

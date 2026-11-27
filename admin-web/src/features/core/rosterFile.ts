@@ -1,3 +1,4 @@
+import {classifyRosterImage} from '../../../../supabase/functions/_shared/roster_image_policy.mjs';
 import type {SourceKind} from './memberRoster';
 
 const workbookMime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -23,7 +24,16 @@ export function describeRosterFile(file: File): {source: SourceKind; mimeType: s
   return {source, mimeType:source === 'csv' ? 'text/csv' : source === 'image' ? 'image/jpeg' : type};
 }
 
+export class RosterPhotoError extends Error {}
+
 async function preparePhoto(file: File, signal: AbortSignal) {
+  const original = new Uint8Array(await file.arrayBuffer());
+  signal.throwIfAborted();
+  const mime = file.type.toLowerCase().split(';')[0];
+  const actualType = photoTypes.includes(mime) ? mime : extensions[file.name.split('.').pop()?.toLowerCase() ?? ''];
+  const classification = classifyRosterImage(original, actualType);
+  if (classification === 'animated') throw new RosterPhotoError('Choose a still image. Animated and multi-frame photos cannot be imported.');
+  if (classification !== 'static') throw new RosterPhotoError('This photo could not be verified. Choose a static JPEG, PNG or WebP image.');
   const url = URL.createObjectURL(file), image = new Image();
   try {
     image.src = url;

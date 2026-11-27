@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { installLocalNetworkFence } from './local-network-fence.cjs';
+import {verifyContinuedAllocation,verifyRosterImages,verifyTwoEmptyStatements,verifyVisibleFinancialLabels} from './member-financial-workflows.mjs';
 import { qualifyPhoneTeam } from './phone-team.mjs';
 import { qualifyPaymentAuthority } from './payment-authority.mjs';
 import { fixtureInactiveMember, fixtureMember, fixtureOriginalSms, fixtureOutgoingPayment, fixturePayment, fixtureSmsEvidenceId } from './operator-read-fixture.mjs';
@@ -183,11 +184,11 @@ try {
   ]) {
     const card = page.getByRole('link', {name});
     assert.equal(await card.getAttribute('href'), href);
-    assert.equal(await card.locator('dt span').evaluate(label => getComputedStyle(label).clip), 'rect(0px, 0px, 0px, 0px)');
+    assert(await card.locator('.overview-metric-label').evaluate(label=>label.getBoundingClientRect().width>30 && getComputedStyle(label).clip==='auto'));
     paymentCardBackgrounds.add(await card.evaluate(element => getComputedStyle(element).backgroundColor));
   }
   const walletCard = page.getByRole('button',{name:/Latest MoMo SMS balance.*RWF 0/});
-  assert.equal(await walletCard.locator('.admin-sr-only').evaluate(label=>getComputedStyle(label).clip),'rect(0px, 0px, 0px, 0px)');
+  assert(await walletCard.locator('.overview-metric-label').evaluate(label=>label.getBoundingClientRect().width>30 && getComputedStyle(label).clip==='auto'));
   paymentCardBackgrounds.add(await walletCard.evaluate(element=>getComputedStyle(element).backgroundColor));
   assert.equal(paymentCardBackgrounds.size, 3);
   await walletCard.click();
@@ -277,6 +278,7 @@ try {
 
   // The canonical financial table remains available while its scoped M-Money inbox is open.
   const nav = page.getByRole('navigation', {name: 'Admin sections'});
+  await verifyVisibleFinancialLabels(page);
   assert.deepEqual(await nav.getByRole('link').allTextContents(), ['Home', 'Members', 'Payments']);
   assert.equal(await page.getByRole('searchbox', {name: 'Search admin sections'}).count(), 0);
   for (const retiredPath of ['/admin/requests', '/admin/privacy-requests', '/admin/groups']) {
@@ -351,9 +353,11 @@ try {
   await membersTable.getByRole('button',{name:'Sort Collect ID ascending',exact:true}).click();
   await membersTable.locator('th[aria-label="Collect ID"][aria-sort="ascending"]').waitFor();
   const memberIds = () => membersTable.locator('tbody tr td:first-child').allTextContents();
+  await page.waitForFunction(()=>document.querySelector('.member-roster tbody tr td')?.textContent==='900001');
   assert.deepEqual(await memberIds(), ['900001','900002']);
   await membersTable.getByRole('button',{name:'Sort Collect ID descending',exact:true}).click();
   await membersTable.locator('th[aria-label="Collect ID"][aria-sort="descending"]').waitFor();
+  await page.waitForFunction(()=>document.querySelector('.member-roster tbody tr td')?.textContent==='900002');
   assert.deepEqual(await memberIds(), ['900002','900001']);
   const searchMember = async value => {
     await memberSearch.fill(value);
@@ -378,10 +382,17 @@ try {
   await inactiveRow.getByRole('cell', {name: 'Inactive', exact:true}).waitFor();
   const memberHeadings = await membersTable.getByRole('columnheader').evaluateAll(headers => headers.map(header => header.getAttribute('aria-label')));
   assert.deepEqual(memberHeadings.filter(name => /number|phone|WhatsApp/i.test(name)), ['Mobile number']);
+  const fullDirectoryDownload=page.waitForEvent('download');
+  await page.getByRole('button',{name:'Export all members',exact:true}).click();
+  const directoryFile=await fullDirectoryDownload;
+  const directoryCsv=await readFile(await directoryFile.path(),'utf8');
+  assert.match(directoryFile.suggestedFilename(),/^burimunsi-members-[a-f0-9]{12}\.csv$/);
+  assert(directoryCsv.includes(fixtureMember.public_id) && directoryCsv.includes(fixtureInactiveMember.public_id));
+  assert(!directoryCsv.includes(fixtureMember.id));
   const refreshedRoster = page.waitForResponse(response => {
     const url = new URL(response.url());
     return url.origin === origin && url.pathname === '/api/admin/core/members' &&
-      url.searchParams.get('directory') === 'roster' && url.searchParams.get('limit') === '100' && response.ok();
+      url.searchParams.get('directory') === 'roster' && url.searchParams.get('window') === '1' && url.searchParams.get('limit') === '25' && response.ok();
   });
   await page.getByRole('button', {name: 'Refresh Members', exact: true}).click();
   await refreshedRoster;
@@ -459,8 +470,10 @@ try {
   const statementDownload = page.waitForEvent('download');
   await page.getByRole('button',{name:'Download statement',exact:true}).click();
   const downloadedStatement = await statementDownload;
-  assert.equal(downloadedStatement.suggestedFilename(),'burimunsi-member-statement.csv');
+  assert.match(downloadedStatement.suggestedFilename(),/^burimunsi-member-100000000001-[a-f0-9]{12}\.csv$/);
   const exportedStatement = await readFile(await downloadedStatement.path(),'utf8');
+  assert.match(exportedStatement,/Membership record number,"100000000001"/);
+  assert.match(exportedStatement,/Statement revision,"[a-f0-9]{64}"/);
   assert.match(exportedStatement,/STATEMENT-01/);
   assert.match(exportedStatement,/STATEMENT-26/);
   assert.match(exportedStatement,/Closing balance[^\r\n]*4000/);
@@ -505,6 +518,9 @@ try {
   const rosterFormats = (await rosterFile.getAttribute('accept')).toLowerCase();
   assert.match(rosterFormats,/csv/);
   assert.match(rosterFormats,/image\/png|\.png/);
+  await verifyRosterImages(page,root,origin);
+  await verifyTwoEmptyStatements(page,origin);
+  await verifyContinuedAllocation(page,origin);
 
   await nav.getByRole('link', {name: 'Payments', exact: true}).click();
   await page.getByRole('button', {name: 'Filter FT reference', exact: true}).click();
@@ -749,7 +765,7 @@ try {
   assert.deepEqual(denied, []);
   assert.deepEqual(unexpectedAuth, []);
   assert.deepEqual(incorrectIdentityHeaders, []);
-  const checks = ['missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'home_has_no_sms_status_and_retired_admin_pages_return_home', 'long_home_member_names_truncate_with_full_text', 'home_loading_follows_the_request_and_respects_motion_preference', 'retired_passcode_bookmark_returns_to_overview', 'three_daily_links_and_no_redundant_sidebar_search', 'canonical_payment_direction_filter_and_clear', 'inline_inbox_preserves_financial_table_and_390px_scroll', 'protected_sms_deep_link', 'filtered_member_detail_and_return', 'single_mobile_number_in_member_roster_and_detail', 'member_refresh_preserves_filter_and_rows', 'inline_member_statement_pinned_revision_full_balance_and_320px_reflow', 'payment_expansion_shows_authorized_original_sms', 'payment_without_source_and_320px_reflow', 'sms_read_failure_retry',
+  const checks = ['visible_financial_labels_320_1280','static_roster_and_multiframe_refusal_before_upload','distinct_empty_member_statement_downloads','continued_same_name_allocation_lookup','full_directory_export_from_filtered_view','missing_react_entry_retains_readable_static_notice', 'healthy_react_mount_replaces_static_notice', 'obsolete_password_route_returns_to_phone_sign_in', 'phone_passcode_sign_in_and_httponly_cookie', 'sign_in_with_expected_session_request_count', 'verification_with_expected_session_request_count', 'reload_restores_session', 'home_has_no_sms_status_and_retired_admin_pages_return_home', 'long_home_member_names_truncate_with_full_text', 'home_loading_follows_the_request_and_respects_motion_preference', 'retired_passcode_bookmark_returns_to_overview', 'three_daily_links_and_no_redundant_sidebar_search', 'canonical_payment_direction_filter_and_clear', 'inline_inbox_preserves_financial_table_and_390px_scroll', 'protected_sms_deep_link', 'filtered_member_detail_and_return', 'single_mobile_number_in_member_roster_and_detail', 'member_refresh_preserves_filter_and_rows', 'inline_member_statement_pinned_revision_full_balance_and_320px_reflow', 'payment_expansion_shows_authorized_original_sms', 'payment_without_source_and_320px_reflow', 'sms_read_failure_retry',
       'signed_out_privacy_and_deletion_link_preserves_form', 'signed_in_account_opens_privacy_and_deletion',
       'payer_sms_empty_and_reported_delivered', 'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
       'retired_authenticator_bookmark_preserves_safe_destination', 'missing_scoped_admin_identity_removes_controls', 'session_failure_and_recovery_require_server_authority', 'expired_request_and_history_return_require_sign_in',

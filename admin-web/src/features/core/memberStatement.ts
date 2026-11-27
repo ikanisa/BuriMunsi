@@ -12,6 +12,7 @@ export const canReadMemberStatement = (permissions: readonly string[]) =>
 export interface ProfileMembership {
   id: string | null;
   recordNumber: string | null;
+  publicId?:string | null;
   groupId: string | null;
   groupTitle: string | null;
 }
@@ -30,7 +31,9 @@ export function profileMembership(data: Record<string, unknown>, memberId: strin
   }
   const recordNumber = typeof row.membership_record_number === 'string' && /^\d{12}$/.test(row.membership_record_number)
     ? row.membership_record_number : null;
-  return {id: isId(row.id) ? row.id : null, recordNumber, groupId: row.user_id === memberId ? present(row.group_id) : null,
+  const person = isObject(data.resource) && data.resource.id===memberId ? data.resource : null;
+  const publicId = [row.public_id,person?.public_id].find((id):id is string => typeof id==='string' && /^\d{6}$/.test(id));
+  return {id: isId(row.id) ? row.id : null, recordNumber, publicId:publicId ?? null, groupId: row.user_id === memberId ? present(row.group_id) : null,
     groupTitle: present(row.group_title)};
 }
 
@@ -41,10 +44,10 @@ const signedRwf = z.string().regex(/^(0|-?[1-9]\d{0,30})$/).transform(value => B
 const statementPage = z.object({
   groupId: paymentId, memberId: paymentId, membershipId: paymentId,
   totalCount: z.number().int().nonnegative().max(100_100), offset: z.number().int().nonnegative(),
-  limit: z.literal(memberStatementPageSize), revision: z.string().regex(revisionPattern), closingRwf: signedRwf,
+  limit: z.literal(memberStatementPageSize), asOf:z.iso.datetime().optional(), revision: z.string().regex(revisionPattern), closingRwf: signedRwf,
   items: z.array(z.object({
     id: paymentId, direction: paymentDirection, amountRwf: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-    atRaw: z.string(), ftId: z.string().nullable(), balanceRwf: signedRwf,
+    atRaw: z.string(), occurredAt:z.iso.datetime({offset:true}).nullable().optional(), ftId: z.string().nullable(), balanceRwf: signedRwf,
   }).strict()).max(memberStatementPageSize),
 }).strict();
 
@@ -139,7 +142,7 @@ export async function readCompleteMemberStatement(current: StatementPage, member
   }
   signal.throwIfAborted();
   if (items.length !== current.totalCount || running !== current.closingRwf) throw new Error('The closing balance could not be verified.');
-  return {transactions: items, closingRwf: current.closingRwf};
+  return {publicId:membership.publicId ?? null, recordNumber:membership.recordNumber, asOf:current.asOf, revision:current.revision, transactions:items, closingRwf:current.closingRwf};
 }
 export type CompleteMemberStatement = Awaited<ReturnType<typeof readCompleteMemberStatement>>;
 

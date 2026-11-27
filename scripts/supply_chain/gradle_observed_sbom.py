@@ -16,6 +16,8 @@ ROOT = Path(__file__).resolve().parents[2]
 FLAVOR_CONFIGURATIONS = {
     "production": {"productionReleaseRuntimeClasspath", "productionReleaseCompileClasspath"},
     "internal_gateway": {"internal_gatewayReleaseRuntimeClasspath", "internal_gatewayReleaseCompileClasspath"},
+    "staff": {"staffReleaseRuntimeClasspath", "staffReleaseCompileClasspath"},
+    "internal_receiver": {"internal_receiverReleaseRuntimeClasspath", "internal_receiverReleaseCompileClasspath"},
 }
 
 
@@ -87,7 +89,9 @@ def build(graphs, evidence, flavor="production"):
     scope = "Selected compile/runtime graphs and external artifacts; no signed APK/AAB contents, license approval, advisory or device acceptance"
     if flavor == "internal_gateway":
         scope += "; Gateway graph observation does not establish the separately reviewed production dependency lock"
-    inventory = {"kind": "observed_locked_android_graph_inventory" if flavor == "production" else "observed_android_gateway_graph_inventory", "scope": scope,
+    kinds = {"production": "observed_locked_android_graph_inventory", "internal_gateway": "observed_android_gateway_graph_inventory",
+             "staff": "observed_burimunsi_staff_graph_inventory", "internal_receiver": "observed_burimunsi_admin_sync_graph_inventory"}
+    inventory = {"kind": kinds[flavor], "scope": scope,
                  "flavor": flavor, "configurations": sorted(expected),
                  "evidence_sha256": evidence, "components": len(components), "external_artifact_occurrences": len(artifacts),
                  "constraints": constraints, "artifacts": artifacts}

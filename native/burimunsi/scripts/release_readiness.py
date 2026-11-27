@@ -316,7 +316,7 @@ def evaluate_candidate(evidence_path,profile_path,properties,*,pipeline=None,now
  return result
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--status',type=pathlib.Path);p.add_argument('--evidence',type=pathlib.Path,required=True);p.add_argument('--phase',choices=['build','promotion','testing-candidate'],default='promotion');p.add_argument('--guard-evidence',type=pathlib.Path);p.add_argument('--profile',type=pathlib.Path);a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--product-mode',choices=('standalone','collect-legacy'),default='standalone');p.add_argument('--status',type=pathlib.Path);p.add_argument('--evidence',type=pathlib.Path,required=True);p.add_argument('--phase',choices=['build','promotion','testing-candidate'],default='promotion');p.add_argument('--guard-evidence',type=pathlib.Path);p.add_argument('--profile',type=pathlib.Path);a=p.parse_args()
  if a.phase=='testing-candidate':
   if a.status or a.guard_evidence or not a.profile:result={'ready':False,'errors':['CANDIDATE_INPUT_MODE_WRONG'],'production_authorized':False}
   else:
@@ -324,12 +324,17 @@ def main():
    except (ValueError,TypeError):properties={}
    result=evaluate_candidate(a.evidence,a.profile,properties)
   print(json.dumps(result,indent=2));return 0 if result['ready'] else 2
- if a.status is None or a.profile is not None:
-  print(json.dumps({'ready':False,'errors':['Legacy status required; candidate profile is a separate phase.'],'production_authorized':False}));return 2
  root=pathlib.Path(__file__).resolve().parents[3]
  sys.path.insert(0,str(root/'scripts'))
  from release_guard import load
  from release_guard_adapter import enforce
+ if a.product_mode=='standalone':
+  errors=(['Standalone evidence must be the product-bound release manifest.'] if a.status or a.profile or a.guard_evidence
+          else enforce(root,'BuriMunsi-standalone',a.phase,a.evidence))
+  print(json.dumps({'ready':not errors,'errors':errors,'phase':a.phase,'product_mode':'standalone','production_authorized':False},indent=2))
+  return 2 if errors else 0
+ if a.status is None or a.profile is not None:
+  print(json.dumps({'ready':False,'errors':['Historical task register required.'],'production_authorized':False}));return 2
  result=evaluate(load(a.status),load(a.evidence),a.evidence.resolve().parent,a.phase)
  result['errors'].extend(enforce(root,'BuriMunsi',a.phase,a.guard_evidence,legacy=a.evidence,status=a.status))
  result['ready']=not result['errors'];result['production_authorized']=False

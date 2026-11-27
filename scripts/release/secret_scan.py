@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Pinned, quiet, offline-content release scans. No report or findings are written."""
 import hashlib
+import json
 import os
 from pathlib import Path, PurePosixPath
 import platform
@@ -101,23 +102,62 @@ def history_preflight(root, env):
         raise Refused('missing Git objects')
 
 
+def history_group_digests(findings):
+    """Bind the detector's exact matched bytes to an immutable commit and source position."""
+    groups = {}
+    for hit in findings:
+        commit = hit['Commit']
+        if (not re.fullmatch(r'[0-9a-f]{40}', commit) or not hit['File'] or not hit['RuleID']
+                or not 0 < hit['StartLine'] <= hit['EndLine'] or not hit['Secret'] or not hit['Match']):
+            raise Refused('incomplete history finding')
+        identity = [commit, hit['File'], hit['RuleID'], hit['StartLine'], hit['EndLine'],
+                    hashlib.sha256(hit['Secret'].encode()).hexdigest(),
+                    hashlib.sha256(hit['Match'].encode()).hexdigest()]
+        groups.setdefault(commit, set()).add(json.dumps(identity, separators=(',', ':')))
+    return {commit: hashlib.sha256('\n'.join(sorted(rows)).encode()).hexdigest()
+            for commit, rows in groups.items()}
+
+
+def verify_history_report(report, code, root, env):
+    review = json.loads((ROOT / 'scripts/release/reviewed-history.json').read_bytes())
+    reachable = set(git_output(root, env, 'rev-list', '--all', 'HEAD').decode('ascii').splitlines())
+    if (review['scannerVersion'] != VERSION or review['reviewedSource'] not in reachable
+            or review['policySha256'] != hashlib.sha256(POLICY).hexdigest()
+            or git_output(root, env, 'rev-parse', review['reviewedSource'] + '^{tree}').decode().strip()
+            != review['reviewedTree']):
+        raise Refused('history review does not cover this repository or scanner')
+    if len(report) > 32 * CHUNK:
+        raise Refused('history findings exceed private review limit')
+    findings = json.loads(report)
+    if type(findings) is not list or bool(findings) != (code == 19):
+        raise Refused('incomplete history scan report')
+    expected = {commit: digest for commit, digest in review['commitDigests'].items() if commit in reachable}
+    if history_group_digests(findings) != expected:
+        raise Refused('git findings require private review')
+
+
 def run_scan(scanner, work, env, mode, path):
-    # The scanner and Git stdout/stderr can contain matches, paths, ref names
-    # and commit messages even with redaction. Drop both entirely.
+    # Only the private parent process receives the Git JSON report through a pipe.
+    # Scanner diagnostics and matched text must never reach the terminal or a file.
     config, ignore = work / 'strict.toml', work / 'empty.ignore'
     if (ROOT / '.gitleaks.toml').read_bytes() != POLICY:
         raise Refused('unreviewed scanner policy')
     config.write_bytes(POLICY)
     ignore.write_text('')
     args = [str(scanner), mode, '--config', str(config), '--gitleaks-ignore-path', str(ignore),
-            '--ignore-gitleaks-allow', '--no-banner', '--redact=100', '--exit-code=19', '--max-decode-depth=2']
+            '--ignore-gitleaks-allow', '--no-banner', '--exit-code=19', '--max-decode-depth=2']
     if mode == 'git':
-        args += ['--log-opts=--all HEAD --full-history -m --no-ext-diff --no-textconv']
-    result = command(args + [str(path)], work, env, 540)
-    if result.returncode == 19:
-        raise Refused(f'{mode} findings require private review')
-    if result.returncode:
+        args += ['--log-opts=--all HEAD --full-history -m --no-ext-diff --no-textconv',
+                 '--report-path=-', '--report-format=json', '--redact=0', '--log-level=error']
+    else:
+        args += ['--redact=100']
+    result = command(args + [str(path)], work, env, 540, capture=(mode == 'git'))
+    if result.returncode not in (0, 19):
         raise Refused(f'{mode} scanner failed')
+    if mode == 'git':
+        verify_history_report(result.stdout, result.returncode, path, env)
+    elif result.returncode == 19:
+        raise Refused(f'{mode} findings require private review')
 
 
 def verify_detection_is_live(scanner, work, env):
@@ -240,7 +280,7 @@ def main(args):
             scanner = verified_scanner(work, env)
             verify_detection_is_live(scanner, work, env)
             run_scan(scanner, work, env, 'git', ROOT)
-            print('[secret-scan] PASS Git HEAD and reachable local refs')
+            print('[secret-scan] PASS Git HEAD and reachable local refs; reviewed history matches')
         else:
             directory = work / 'inputs'
             directory.mkdir(mode=0o700)
@@ -268,7 +308,7 @@ if __name__ == '__main__':
     except Refused as exc:
         print('[secret-scan] BLOCKED: ' + str(exc), file=sys.stderr)
         sys.exit(1)
-    except (OSError, ValueError, KeyError, RuntimeError, NotImplementedError,
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError, NotImplementedError,
             subprocess.TimeoutExpired, tarfile.TarError, zipfile.BadZipFile, EOFError):
         print('[secret-scan] BLOCKED: tool, repository or artifact unavailable', file=sys.stderr)
         sys.exit(1)

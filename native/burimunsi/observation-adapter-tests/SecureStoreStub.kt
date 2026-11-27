@@ -6,6 +6,7 @@ class SecureStore(context:Context,private val name:String){
   val data=mutableMapOf<String,String>()
   val unreadable=mutableSetOf<String>()
   val readCounts=mutableMapOf<String,Int>()
+  var beforeWrite:((String)->Unit)?=null
   @Volatile var beforeDirectoryRead:(()->Unit)?=null
   val fixtureDirectory=object:java.io.File("synthetic-no-backup"){
    override fun listFiles(filter:java.io.FilenameFilter):Array<java.io.File> {
@@ -18,10 +19,10 @@ class SecureStore(context:Context,private val name:String){
     }.toTypedArray()
    }
   }
-  fun reset(){data.clear();unreadable.clear();readCounts.clear();beforeDirectoryRead=null}
+  fun reset(){data.clear();unreadable.clear();readCounts.clear();beforeDirectoryRead=null;beforeWrite=null}
  }
  fun read():String?{readCounts[name]=(readCounts[name]?:0)+1;check(name !in unreadable);return data[name]}
  fun readWithoutRepair():String? = read()
- fun write(value:String){check(name !in unreadable);data[name]=value}
+ fun write(value:String){check(name !in unreadable);require(value.toByteArray().size<=2_000_000);beforeWrite?.invoke(name);data[name]=value}
  fun clear(){data.remove(name)}
 }

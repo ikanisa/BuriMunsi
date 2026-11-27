@@ -276,7 +276,7 @@ export async function verifyPhoneOperatorAccounts({owner,database,fixtureRoot,ph
     } finally { await owner.query('ROLLBACK'); }
   }
   async function withoutGrant(principal,permission,verify) {
-    assert.ok(['users.manage','collections.manage'].includes(permission));
+    assert.ok(['users.read','users.manage','collections.manage'].includes(permission));
     const removed=await owner.query('DELETE FROM app.admin_grants WHERE user_id=$1 AND permission=$2 RETURNING *',[principal,permission]);
     assert.equal(removed.rowCount,1);
     try { await verify(); }

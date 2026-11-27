@@ -26,10 +26,12 @@ export async function setPaymentsScope(sql,groupId) {
   await sql.unsafe("SELECT set_config('burimunsi.collection_id',$1,true)",[groupId]);
 }
 
-export function paymentRecord(row,{showSms=false}={}) {
+export function paymentRecord(row,{showSms=false,financialDate=false}={}) {
   return {
     id:row.id,groupId:row.collection_id,direction:row.direction,amountRwf:pgInteger(row.amount_rwf),
-    atRaw:row.source_time||iso(row.page_at),ftId:row.provider_reference,state:row.allocation_state,
+    atRaw:row.source_time||(financialDate?null:iso(row.page_at)),
+    ...(financialDate&&{occurredAt:row.occurred_at==null?null:iso(row.occurred_at),evidenceDisputed:row.evidence_disputed===true}),
+    ftId:row.provider_reference,state:row.allocation_state,
     version:pgInteger(row.version),payerNameRaw:row.counterparty_name??'',
     payerPhoneRaw:row.counterparty_identifier??'',memberId:row.member_id??null,memberName:row.member_name??null,
     memberPhone:row.member_phone?normalizePhone(row.member_phone):null,
@@ -114,7 +116,9 @@ export async function readOptionalPaymentsHome(sql,groupId,asOf,projection) {
 }
 
 export async function readPayment(sql,groupId,id,projection) {
-  const [row]=await sql.unsafe(display+' AND p.id=$2',[groupId,id]);
+  const detail=projection?.financialDate?display.replace('SELECT p.*,',`SELECT p.*,
+    EXISTS(SELECT FROM burimunsi.payment_evidence_holds h WHERE h.collection_id=p.collection_id AND h.payment_id=p.id) AS evidence_disputed,`):display;
+  const [row]=await sql.unsafe(detail+' AND p.id=$2',[groupId,id]);
   return row?paymentRecord(row,projection):null;
 }
 
@@ -175,7 +179,7 @@ export async function readMemberPaymentStatement(sql, groupId, memberId, {offset
     JOIN app.users u ON u.id=m.user_id AND u.member_type IN ('app','direct')
     WHERE m.collection_id=$1 AND m.user_id=$2
   ), movements AS MATERIALIZED (
-    SELECT p.id,p.direction,p.amount_rwf,p.provider_reference,p.source_time,
+    SELECT p.id,p.direction,p.amount_rwf,p.provider_reference,p.source_time,p.occurred_at,
       coalesce(p.occurred_at,p.created_at) AS page_at,
       CASE WHEN p.direction='incoming' THEN p.amount_rwf ELSE -p.amount_rwf END AS net_rwf
     FROM burimunsi.payments p CROSS JOIN membership
@@ -184,7 +188,7 @@ export async function readMemberPaymentStatement(sql, groupId, memberId, {offset
   ), totals AS (
     SELECT count(*)::int AS total_count,coalesce(sum(net_rwf),0)::text AS closing_rwf,
       encode(sha256(convert_to(coalesce(string_agg(encode(sha256(convert_to(jsonb_build_array(
-        id,direction,amount_rwf,provider_reference,source_time,extract(epoch FROM page_at)
+        id,direction,amount_rwf,provider_reference,source_time,extract(epoch FROM occurred_at),extract(epoch FROM page_at)
       )::text,'UTF8')),'hex'),'' ORDER BY page_at,id),''),'UTF8')),'hex') AS movements_sha256
     FROM movements
   ), statement AS (
@@ -192,8 +196,8 @@ export async function readMemberPaymentStatement(sql, groupId, memberId, {offset
       encode(sha256(convert_to(jsonb_build_array($1::text,$2::text,membership.id,movements_sha256)::text,'UTF8')),'hex') AS revision
     FROM membership CROSS JOIN totals
   )
-  SELECT statement.*,page.* FROM statement LEFT JOIN LATERAL (
-    SELECT id,direction,amount_rwf,provider_reference,source_time,page_at,
+  SELECT statement.*,transaction_timestamp() AS statement_as_of,page.* FROM statement LEFT JOIN LATERAL (
+    SELECT id,direction,amount_rwf,provider_reference,source_time,occurred_at,page_at,
       sum(net_rwf) OVER (ORDER BY page_at,id ROWS UNBOUNDED PRECEDING)::text AS balance_rwf
     FROM movements
     WHERE statement.total_count<=$5 AND ($6::text IS NULL OR statement.revision=$6)
@@ -207,50 +211,12 @@ export async function readMemberPaymentStatement(sql, groupId, memberId, {offset
   requireThat(offset === 0 || offset < totalCount, 'invalid_query');
   const items = rows.filter(row => row.id != null).map(row => ({
     id: row.id, direction: row.direction, amountRwf: pgInteger(row.amount_rwf, {minimum: 1}),
-    atRaw: row.source_time || iso(row.page_at), ftId: row.provider_reference, balanceRwf: row.balance_rwf,
+    atRaw: row.source_time || '', occurredAt: row.occurred_at == null ? null : iso(row.occurred_at),
+    ftId: row.provider_reference, balanceRwf: row.balance_rwf,
   }));
   return {groupId, memberId, membershipId: summary.membership_id, totalCount, offset, limit,
+    ...(summary.statement_as_of!=null&&{asOf:iso(summary.statement_as_of)}),
     revision: summary.revision, closingRwf: summary.closing_rwf, items};
-}
-
-// Bound the scan before applying text search. A broad collection over the
-// reviewed limit returns no projection, never totals for a truncated sample.
-export const PAYMENT_ANALYSIS_LIMIT=5000;
-export async function readPaymentAnalysisRows(sql,groupId,{q,showSms}) {
-  const rows=await sql.unsafe(`WITH candidate AS MATERIALIZED (
-   SELECT p.id,p.collection_id,p.occurred_at,p.created_at,p.source_time,p.direction,p.amount_rwf::text AS amount_rwf,
-    p.provider_reference,p.counterparty_name,p.counterparty_identifier,p.member_id,p.allocation_state,p.version,
-    CASE WHEN $3::boolean THEN p.sms_source_id ELSE NULL END AS sms_source_id,
-    coalesce(p.occurred_at,p.created_at) AS page_at
-   FROM burimunsi.payments p WHERE p.collection_id=$1
-   LIMIT ($4::int+1)
-  ), checked AS (SELECT count(*)::int AS candidate_count FROM candidate)
-  SELECT result.*,checked.candidate_count FROM checked
-  LEFT JOIN LATERAL (
-   SELECT p.*,member.full_name AS member_name,member.momo_number AS member_phone
-   FROM candidate p LEFT JOIN app.users member ON member.id=p.member_id
-   WHERE checked.candidate_count<=$4::int AND ($2::text='' OR
-    concat_ws(' ',p.provider_reference,p.counterparty_name,p.counterparty_identifier,p.amount_rwf,
-      p.source_time,member.full_name,member.momo_number) ILIKE $2 ESCAPE '\\')
-  ) result ON true ORDER BY result.page_at DESC,result.id DESC`,[groupId,q?escaped(q):'',showSms,PAYMENT_ANALYSIS_LIMIT]);
-  const count=pgInteger(rows[0]?.candidate_count);
-  requireThat(count<=PAYMENT_ANALYSIS_LIMIT,'payment_analysis_scope_too_large',503);
-  const amounts=new Map(),records=[];
-  for(const row of rows){
-    if(row.id==null)continue;
-    // Payload keeps a numeric per-row amount only under the schema's safe
-    // limit. Sum the original decimal supplied by PostgreSQL, not that value.
-    const amount=row.amount_rwf;
-    requireThat(typeof amount==='string'&&/^[1-9][0-9]*$/.test(amount),'payment_totals_unavailable',503);
-    const record=paymentRecord(row,{showSms});
-    requireThat(String(record.amountRwf)===amount&&!amounts.has(record.id),'payment_totals_unavailable',503);
-    amounts.set(record.id,BigInt(amount));records.push(record);
-  }
-  return {rows:records,amounts};
-}
-
-export async function paymentListingRows(sql,groupId,memberId=null) {
-  return sql.unsafe(display+(memberId?' AND p.member_id=$2':'')+' ORDER BY p.id LIMIT 100001',memberId?[groupId,memberId]:[groupId]);
 }
 
 export async function assignPayment(sql,{groupId,paymentId,memberId,expectedVersion}) {
@@ -258,9 +224,15 @@ export async function assignPayment(sql,{groupId,paymentId,memberId,expectedVers
     WHERE m.collection_id=$1 AND m.user_id=$2 AND m.active=1 AND u.access_status='active' AND u.member_type<>'operator'
     FOR SHARE OF m,u`,[groupId,memberId]);
   requireThat(member?.user_id===memberId,'member_unavailable',409);
-  const [payment]=await sql.unsafe(`UPDATE burimunsi.payments SET member_id=$3,version=version+1,updated_at=clock_timestamp()
-    WHERE collection_id=$1 AND id=$2 AND version=$4 AND member_id IS NULL
-    RETURNING id,member_id,allocation_state,version`,[groupId,paymentId,memberId,expectedVersion]);
+  let payment;
+  try{
+    [payment]=await sql.unsafe(`UPDATE burimunsi.payments SET member_id=$3,version=version+1,updated_at=clock_timestamp()
+      WHERE collection_id=$1 AND id=$2 AND version=$4 AND member_id IS NULL
+      RETURNING id,member_id,allocation_state,version`,[groupId,paymentId,memberId,expectedVersion]);
+  }catch(error){
+    if(error?.code==='P0001'&&error.message==='payment_evidence_conflict')requireThat(false,'payment_evidence_conflict',409);
+    throw error;
+  }
   requireThat(payment?.id===paymentId&&payment.member_id===memberId&&payment.allocation_state==='allocated','payment_changed',409);
   return {paymentId,memberId,state:payment.allocation_state,version:pgInteger(payment.version)};
 }

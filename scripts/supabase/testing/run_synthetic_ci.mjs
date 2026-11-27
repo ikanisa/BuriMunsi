@@ -10,6 +10,7 @@ const root = fileURLToPath(new URL('../../..', import.meta.url));
 const groups = {
   operations: [
     'deploy/managed-native-ingress/worker.test.mjs',
+    'deploy/managed-native-ingress/handler-integration/handler-integration.test.mjs',
     'deploy/collect-sms/test/ledger_snapshot_receipt_guard.test.mjs',
     'scripts/supabase/cloud-release/active-managed-jobs-handler.test.mjs',
     'scripts/supabase/cloud-release/managed-jobs-operator.test.mjs',
@@ -25,6 +26,7 @@ const groups = {
     'scripts/supabase/cloud-release/burimunsi-inbox-storage-page.test.mjs',
     'scripts/supabase/cloud-release/burimunsi-member-statement.test.mjs',
     'scripts/supabase/cloud-release/burimunsi-membership-record-number.test.mjs',
+    'scripts/supabase/cloud-release/burimunsi-web-directory.test.mjs',
     'scripts/supabase/cloud-release/burimunsi-payment-reference.test.mjs',
   ],
 };

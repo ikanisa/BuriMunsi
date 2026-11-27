@@ -2,7 +2,7 @@ import {useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, us
 import {Link} from 'react-router';
 import {CompactText, Button, Card, Dialog, EmptyState, ErrorState, LoadingState, PageHeader} from '../../ui';
 import {InteractionSuspendedContext} from '../../ui/useFocusScope';
-import {paymentInstant, paymentTime} from '../operations/canonicalPaymentAnalysis';
+import {paymentEventInstant, paymentEventTime} from '../operations/canonicalPaymentAnalysis';
 import {FinancialAnalysisTable, type FinancialColumn, type FinancialSort} from '../operations/FinancialAnalysisTable';
 import type {ColumnFilters} from '../operations/financialAnalysisModel';
 import {useOperationRead} from '../operations/useOperationRead';
@@ -10,7 +10,7 @@ import {canReadMemberStatement, memberStatementPageSize, memberStatementPath, pa
   readMemberStatement, readMemberStatementPage, statementAmount, type CompleteMemberStatement, type MemberStatementPosition,
   type ProfileMembership, type StatementPage, type StatementPayment} from './memberStatement';
 import {isId} from './contracts';
-import {memberStatementCsv} from './memberStatementDownload';
+import {memberStatementCsv, statementFilename} from './memberStatementDownload';
 import type {AdminRequest, FeatureAccess} from './types';
 import './core.css';
 
@@ -113,17 +113,17 @@ function StatementTransactions({page, showSourceTime, readHistory, changePage, r
   const items = complete ?? (criteria ? [] : page.items);
   const selected = items.find(payment => payment.id === paymentId);
   const columns = useMemo<FinancialColumn<StatementPayment>[]>(() => [
-    {key: 'date', label: 'Date (Kigali)', kind: 'date', value: payment => paymentInstant(payment.atRaw),
+    {key: 'date', label: 'Date (Kigali)', kind: 'date', value: payment => paymentEventInstant(payment),
       render: payment => {
-        const formatted = paymentTime(payment.atRaw);
+        const formatted = paymentEventTime(payment);
         return <><span className="statement-local-time" title={formatted}>{formatted}</span>
-          {showSourceTime && payment.atRaw.trim() && formatted !== payment.atRaw && <small className="statement-source-time">{payment.atRaw}</small>}</>;
+          {showSourceTime && payment.occurredAt!==null && payment.atRaw.trim() && formatted !== payment.atRaw && <small className="statement-source-time">{payment.atRaw}</small>}</>;
       }},
     {key: 'reference', label: 'Reference', kind: 'text', value: payment => payment.ftId,
       render: payment => {
         const reference = payment.ftId?.trim();
         const label = reference ? 'View transaction ' + reference :
-          ['View transaction', payment.direction === 'incoming' ? 'Credit' : 'Debit', statementAmount(payment.amountRwf, true), paymentTime(payment.atRaw)].join(', ');
+          ['View transaction', payment.direction === 'incoming' ? 'Credit' : 'Debit', statementAmount(payment.amountRwf, true), paymentEventTime(payment)].join(', ');
         return <button type="button" className="member-statement-reference" aria-label={label} aria-haspopup="dialog"
           onClick={() => setPaymentId(payment.id)}><CompactText cell>{reference || 'View transaction'}</CompactText></button>;
       }},
@@ -150,7 +150,7 @@ function StatementTransactions({page, showSourceTime, readHistory, changePage, r
         <div className="member-transaction-amount"><dt>{selected.direction === 'incoming' ? 'Credit' : 'Debit'}</dt>
           <dd>{statementAmount(selected.amountRwf, true)}</dd></div>
         <div><dt>Reference</dt><dd>{selected.ftId?.trim() || 'Not recorded'}</dd></div>
-        <div><dt>Date (Kigali)</dt><dd>{paymentTime(selected.atRaw)}</dd></div>
+        <div><dt>Date (Kigali)</dt><dd>{paymentEventTime(selected)}</dd></div>
         <div><dt>Running balance</dt><dd>{statementAmount(selected.balanceRwf, true)}</dd></div>
       </dl>
     </Dialog>}
@@ -158,14 +158,14 @@ function StatementTransactions({page, showSourceTime, readHistory, changePage, r
 }
 
 function StatementDownload({readHistory, refresh}: {readHistory: HistoryReader; refresh: () => void}) {
-  const [busy, setBusy] = useState(false), [error, setError] = useState(false), [href, setHref] = useState<string>();
+  const [busy, setBusy] = useState(false), [error, setError] = useState(false), [file, setFile] = useState<{href:string; name:string}>();
   const flight = useRef<AbortController | null>(null), resource = useRef<string | undefined>(undefined);
   const link = useRef<HTMLAnchorElement>(null);
   useLayoutEffect(() => () => {
     flight.current?.abort();
     if (resource.current) URL.revokeObjectURL(resource.current);
   }, []);
-  useEffect(() => {if (href) link.current?.click();}, [href]);
+  useEffect(() => {if (file) link.current?.click();}, [file]);
 
   async function prepare() {
     if (flight.current || resource.current) return;
@@ -175,8 +175,9 @@ function StatementDownload({readHistory, refresh}: {readHistory: HistoryReader; 
     try {
       const history = await readHistory();
       controller.signal.throwIfAborted();
+      const name=statementFilename(history);
       resource.current = URL.createObjectURL(new Blob([memberStatementCsv(history)], {type: 'text/csv;charset=utf-8'}));
-      setHref(resource.current);
+      setFile({href:resource.current, name});
     } catch {
       if (!controller.signal.aborted) setError(true);
     } finally {
@@ -185,7 +186,7 @@ function StatementDownload({readHistory, refresh}: {readHistory: HistoryReader; 
     }
   }
   return <div className="member-statement-download">
-    {href ? <a className="admin-btn admin-btn--secondary" ref={link} href={href} download="burimunsi-member-statement.csv">Download statement</a> :
+    {file ? <a className="admin-btn admin-btn--secondary" ref={link} href={file.href} download={file.name}>Download statement</a> :
       <Button loading={busy} onClick={() => void prepare()}>{busy ? 'Preparing CSV…' : 'Download statement'}</Button>}
     {error && <><span role="alert">Could not prepare the complete statement.</span><Button onClick={refresh}>Refresh statement</Button></>}
   </div>;

@@ -14,12 +14,14 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import subprocess
 import sys
 
 sys.dont_write_bytecode = True
 import native_pipeline as pipeline
 import release_readiness as readiness
 import sign_candidate as signer
+import standalone_payments
 
 CHECKS = {
     'production_deployment': 'live_existing_collect_backend',
@@ -33,6 +35,15 @@ CHECKS = {
     'backup_restore': 'actual_database_restore',
     'shared_admin': 'live_transactions',
     'installed_update': readiness.UPGRADE_SCOPE,
+}
+
+
+STANDALONE_CHECKS = {
+    'production_deployment': 'live_burimunsi_backend', 'admin_signin_persistence': 'physical_device',
+    'staff_signin_persistence': 'physical_device', 'sms_permissions_capture': 'physical_device',
+    'phone_journeys': standalone_payments.CHECK_SCOPE, 'offline_catch_up': 'physical_device_to_burimunsi_payments',
+    'access_boundaries': 'live_native_and_admin', 'backup_restore': 'actual_database_restore',
+    'installed_update': readiness.UPGRADE_SCOPE, 'operations_authorization': 'responsible_owner_authorization',
 }
 
 
@@ -78,30 +89,40 @@ def fingerprint(source):
     return {'sha256': digest(json.dumps(rows, sort_keys=True).encode()), 'files': rows}
 
 
-def live_evidence(path, expected, binding, now, certificate=None, sdk=None, java_home=None):
+def live_evidence(path, expected, binding, now, certificate=None, sdk=None, java_home=None, *, mode="collect-legacy"):
     raw, path = read_bound(path, expected)
     doc = readiness._object(raw)
-    readiness._keys(doc, ('format', 'checked_at', 'source_sha256', 'backend_sha256', 'profile_sha256', 'apk_sha256', 'checks'))
-    need(doc['format'] == 'collect.burimunsi.production-uat.v1', 'uat_format_wrong')
+    need(mode in ('standalone', 'collect-legacy'), 'uat_mode_wrong')
+    standalone = mode == 'standalone'
+    fields = standalone_payments.BINDINGS if standalone else ('source_sha256', 'backend_sha256', 'profile_sha256', 'apk_sha256')
+    readiness._keys(doc, ('format', 'checked_at', *fields, 'checks'))
+    need(doc['format'] == ('burimunsi.standalone.production-uat.v1' if standalone else 'collect.burimunsi.production-uat.v1'), 'uat_format_wrong')
+    checks = STANDALONE_CHECKS if standalone else CHECKS
+    if standalone:
+        standalone_payments.binding_hash(binding)
     readiness._fresh(doc['checked_at'], now)
     need(all(doc[name] == value for name, value in binding.items()), 'uat_identity_wrong')
-    readiness._keys(doc['checks'], CHECKS)
+    readiness._keys(doc['checks'], checks)
     bound = []
-    for name, scope in CHECKS.items():
+    for name, scope in checks.items():
         check = doc['checks'][name]
         readiness._keys(check, ('status', 'scope', 'evidence'))
         need(check['status'] == 'PASS' and check['scope'] == scope, 'uat_check_not_passed:' + name)
         refs = check['evidence']
         need(type(refs) is list and 1 <= len(refs) <= 20, 'uat_evidence_missing:' + name)
-        if name == 'installed_update':
-            need(len(refs) == 1, 'uat_upgrade_witness_ambiguous')
+        if name == 'installed_update' or standalone and name in ('phone_journeys', 'operations_authorization'):
+            need(len(refs) == 1, 'uat_witness_ambiguous')
         for ref in refs:
             raw, artifact = read_ref(path.parent, ref)
+            if standalone and name == 'phone_journeys':
+                bound.extend(standalone_payments.verify(readiness._object(raw), artifact.parent, binding, now))
+            if standalone and name == 'operations_authorization':
+                standalone_payments.approval(readiness._object(raw), binding, now)
             if name == 'installed_update':
                 readiness.installed_update(readiness._object(raw), artifact.parent, binding['source_sha256'],
                                           binding['apk_sha256'], certificate, sdk, java_home)
             bound.append({'check': name, 'path': str(artifact), 'sha256': ref['sha256']})
-    return {'manifest_sha256': expected, 'checked_at': doc['checked_at'], 'checks': list(CHECKS), 'artifacts': bound}
+    return {'manifest_sha256': expected, 'checked_at': doc['checked_at'], 'checks': list(checks), 'artifacts': bound}
 
 
 def production_profile(profile, expected_sha):
@@ -169,8 +190,12 @@ def qualify(args):
         readiness._digest(args.backend_sha256)
         binding = {'source_sha256': source['sha256'], 'backend_sha256': args.backend_sha256,
                    'profile_sha256': profile_sha, 'apk_sha256': {r['flavor']: r['sha256'] for r in artifacts}}
+        mode = args.product_mode
+        if mode == 'standalone':
+            binding['source_commit'] = standalone_payments.source_commit(args.source_root)
+            result.update(format='burimunsi.standalone.production-qualification.v1', source_commit=binding['source_commit'])
         result['uat'] = live_evidence(args.live_evidence, args.live_evidence_sha256, binding,
-                                      dt.datetime.now(dt.timezone.utc), certificate, args.sdk, args.java_home)
+                                      dt.datetime.now(dt.timezone.utc), certificate, args.sdk, args.java_home, mode=mode)
         result.update(status='PASS', production_evidence_complete=True, backend_sha256=args.backend_sha256)
     # Check all retained source/APK bytes again after potentially slow SDK tools.
     need(fingerprint(args.source_root) == source, 'source_changed')
@@ -186,6 +211,7 @@ def main():
     for name in ('signed-result', 'source-root', 'profile', 'sdk', 'java-home'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--signed-result-sha256', required=True)
+    parser.add_argument('--product-mode', choices=('standalone', 'collect-legacy'), default='standalone')
     parser.add_argument('--live-evidence', type=Path)
     parser.add_argument('--live-evidence-sha256')
     parser.add_argument('--backend-sha256')
@@ -202,7 +228,7 @@ def main():
             signer.write_private(path, json.dumps(result, indent=2).encode() + b'\n')
         print(json.dumps(result, indent=2))
         return 0 if result['production_evidence_complete'] else 2
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError) as error:
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError, AttributeError, RecursionError) as error:
         # Never print SDK output, SMS text, credentials, or arbitrary evidence.
         code = str(error) if isinstance(error, QualificationRejected) else 'qualification_input_or_tool_invalid'
         print(json.dumps({'status': 'FAIL', 'production_evidence_complete': False, 'error_code': code}))

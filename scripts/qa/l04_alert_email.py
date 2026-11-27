@@ -45,6 +45,9 @@ def deliver(path, event_id, role, recipient, sender, relay):
             if prior[0] != key:
                 raise ValueError('the original handoff has a different recipient')
             return prior[1]
+        if db.execute('SELECT 1 FROM mail_handoff WHERE event_id=? AND destination_sha256=?',
+                      (event_id, key)).fetchone():
+            raise ValueError('two distinct operators required')
         message = EmailMessage()
         message['From'], message['To'] = sender, recipient
         message['Message-ID'] = f'<burimunsi.{event_id}.{role}@{Address(addr_spec=sender).domain}>'
@@ -99,7 +102,11 @@ def acknowledge_reply(path, event_id, role, sender, original):
             raise ValueError('the original acknowledgement is already recorded')
         if not previous:
             db.execute('INSERT INTO mail_ack VALUES(?,?,?)', (event_id, role, proof))
-        count = db.execute('SELECT count(*) FROM mail_ack WHERE event_id=?', (event_id,)).fetchone()[0]
+        count = db.execute("""
+            SELECT count(DISTINCT h.destination_sha256)
+            FROM mail_ack a JOIN mail_handoff h USING(event_id,role)
+            WHERE a.event_id=? AND a.role IN ('primary','backup') AND a.reply_sha256 IS NOT NULL
+        """, (event_id,)).fetchone()[0]
         if count == 2:
             db.execute('DELETE FROM pending WHERE event_id=?', (event_id,))
     return count

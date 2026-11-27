@@ -24,9 +24,9 @@ gradle.projectsEvaluated {
     app.tasks.register('collectRuntimeGraph') {
         doLast {
             def configuration = app.findProperty('collectInventoryConfiguration') ?: 'productionReleaseRuntimeClasspath'
-            if (!(configuration in ['productionReleaseRuntimeClasspath', 'productionReleaseCompileClasspath',
-                                    'internal_gatewayReleaseRuntimeClasspath', 'internal_gatewayReleaseCompileClasspath'])) {
-                throw new GradleException('Only declared production or internal Gateway compile/runtime graph configurations are supported')
+            def flavors = ['production', 'internal_gateway', 'staff', 'internal_receiver']
+            if (!flavors.any { flavor -> configuration in [flavor + 'ReleaseRuntimeClasspath', flavor + 'ReleaseCompileClasspath'] }) {
+                throw new GradleException('Select a declared release flavor compile or runtime configuration')
             }
             def cfg = app.configurations.getByName(configuration)
             def resolution = cfg.incoming.resolutionResult

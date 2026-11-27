@@ -143,14 +143,18 @@ def incidents(path):
 
 
 def acknowledge(path, event_id):
+    """Record a verified transport handoff once. Operator replies retire the event."""
     if (type(event_id) is not str or len(event_id) != 32
             or any(c not in '0123456789abcdef' for c in event_id)):
         raise ValueError('invalid event ID')
     with closing(_connect(path)) as db, db:
         db.execute('BEGIN IMMEDIATE')
         _verify(db)
-        return db.execute('DELETE FROM pending WHERE event_id=?',
-                          (event_id,)).rowcount == 1
+        # Existing version-one checkpoints acquire this receipt table on first use.
+        db.execute('CREATE TABLE IF NOT EXISTS transport_handoff '
+                   '(event_id TEXT PRIMARY KEY NOT NULL, recorded_utc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)')
+        return db.execute('INSERT OR IGNORE INTO transport_handoff(event_id) '
+                          'SELECT event_id FROM pending WHERE event_id=?', (event_id,)).rowcount == 1
 
 
 def _unique_pairs(pairs):
@@ -184,7 +188,7 @@ def main():
         elif args.action == 'incidents':
             result = incidents(args.checkpoint)
         elif args.action == 'ack':
-            result = {'acknowledged': acknowledge(args.checkpoint, args.event_id)}
+            result = {'transport_handoff_added': acknowledge(args.checkpoint, args.event_id)}
         else:
             raw = sys.stdin.buffer.read(LIMIT + 1)
             if len(raw) > LIMIT:

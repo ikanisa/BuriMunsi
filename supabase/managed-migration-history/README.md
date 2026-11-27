@@ -32,7 +32,10 @@ The forward release uses that 89-migration baseline to verify the four
 writer-journal changes, the SMS helper search paths and the redundant index
 cleanup. The complete cohort ends at `20261122045039` with 95 recorded
 migrations. Run `make supabase-forward-release-postgres-test` to rehearse the
-release and recovery on disposable PostgreSQL. To inspect the hosted ledger,
+release and recovery on disposable PostgreSQL. Use Node 24 with the locked
+`scripts/supabase` npm dependencies installed and the qualified PostgreSQL 17
+tools. On Linux run as an unprivileged user in the pinned PostgreSQL 17.10
+CI image. The fixture starts its own socket-only database. To inspect the hosted ledger,
 catalog and write fence using the
 existing Supabase CLI authentication, run
 `node scripts/supabase/cloud-release/apply.mjs --managed-forward inspect`.

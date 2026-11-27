@@ -13,7 +13,7 @@ import {PaymentTotalsSummary} from './PaymentFlowTotals';
 import {AllocationStatus, PaymentDirection, buriMunsiPaymentsPath, paymentAmount, recordedText} from './BuriMunsiPaymentRows';
 import {initialColumnFilters, type ColumnFilter, type FinancialSort} from './financialAnalysisModel';
 import {type PaymentAnalysisQuery} from '../../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
-import {buriMunsiPayment, paymentAllocation, paymentCounterpartyEvidence, paymentDirection, paymentId, paymentInstant, paymentMemberName, paymentMemberNumber, paymentTime, readCanonicalPaymentAnalysis, type BuriMunsiPayment} from './canonicalPaymentAnalysis';
+import {buriMunsiPayment, paymentAllocation, paymentCounterpartyEvidence, paymentDirection, paymentId, paymentEventInstant, paymentMemberName, paymentMemberNumber, paymentEventTime, paymentTime, readCanonicalPaymentAnalysis, type BuriMunsiPayment} from './canonicalPaymentAnalysis';
 import {useOperationRead, type OperationReadState} from './useOperationRead';
 
 const maxSearchLength = 80;
@@ -67,14 +67,18 @@ function ScopedPaymentRecords() {
   const query = (params.get('q') ?? '').trim().slice(0, maxSearchLength);
   const allocation = paymentAllocation.safeParse(params.get('status')).data, direction = paymentDirection.safeParse(params.get('direction')).data;
   const offsetText = params.get('offset') ?? '0';
-  const offset = /^\d{1,6}$/.test(offsetText) ? Number(offsetText) : 0;
+  const offset = /^\d{1,16}$/.test(offsetText) ? Number(offsetText) : 0;
   const [resettingOffset,setResettingOffset] = useState(false);
-  const page = !resettingOffset && offset <= 100_000 && offset % 25 === 0 ? offset / 25 + 1 : 1;
+  const page = !resettingOffset && Number.isSafeInteger(offset) && offset % 25 === 0 ? offset / 25 + 1 : 1;
   if (offset===0 && resettingOffset) setResettingOffset(false);
   const [filters,setFilters] = useState(() => initialColumnFilters(categoryBookmarks.map(column=>({...column,label:column.key,value:()=>null})),
     {...(allocation && {allocation}), ...(direction && {direction})}));
   const [sort,setSort] = useState(defaultSort);
-  const payload = JSON.stringify({q:query,offset:(page-1)*25,limit:25,filters:[...filters].map(([key,value])=>({key,...value})),sort});
+  const [pageProof,setPageProof] = useState<{criteria:string;revision:string}|null>(null);
+  const criteria = {q:query,filters:[...filters].map(([key,value])=>({key,...value})),sort};
+  const criteriaKey = JSON.stringify(criteria);
+  const payload = JSON.stringify({...criteria,offset:(page-1)*25,limit:25,
+    ...(page>1 && pageProof?.criteria===criteriaKey && {revision:pageProof.revision})});
   const load = useCallback(async (signal: AbortSignal) => {
     try {return await readCanonicalPaymentAnalysis(request, signal, JSON.parse(payload) as PaymentAnalysisQuery, group, canReadSms);}
     catch (error) {
@@ -101,7 +105,8 @@ function ScopedPaymentRecords() {
     listContext: JSON.stringify([payload, detailRevision, allocationRevision]),
   });
   const refresh = () => {
-    retry();
+    if (page>1 && result?.status==='error') changePage(1);
+    else retry();
     if (selected) setDetailRevision(value => value + 1);
   };
   function changeCriteria(nextFilters:ReadonlyMap<string,ColumnFilter>,nextSort:FinancialSort) {
@@ -113,6 +118,7 @@ function ScopedPaymentRecords() {
     else {const next = new URLSearchParams(params); next.delete('allocate'); setParams(next, {replace:true, preventScrollReset:true});}
   }
   function changePage(nextPage: number) {
+    setPageProof(nextPage>1 && data?.revision ? {criteria:criteriaKey,revision:data.revision} : null);
     const next = new URLSearchParams(params);
     if (nextPage > 1) next.set('offset',String((nextPage - 1) * 25)); else next.delete('offset');
     setParams(next, {replace:true});
@@ -134,7 +140,7 @@ function ScopedPaymentRecords() {
   }
   const columns: FinancialColumn<BuriMunsiPayment>[] = [
     {key:'reference',label:'FT reference',kind:'text',value:r=>recordedText(r.ftId),render:r=>rowButton(r, recordedText(r.ftId) ?? 'View payment',true)},
-    {key:'time',label:'Time',kind:'date',value:r=>paymentInstant(r.atRaw),render:r=>paymentTime(r.atRaw)},
+    {key:'time',label:'Time',kind:'date',value:paymentEventInstant,render:paymentEventTime},
     {key:'amount',label:'Amount',kind:'number',align:'end',value:r=>r.amountRwf,render:r=>r.amountRwf === null ? '—' :
       <span className="payment-flow-amount" data-payment-flow={r.direction}>{amountFormat.format(r.amountRwf)}</span>},
     {key:'direction',label:'IN/OUT',kind:'category',value:r=>r.direction,render:r=><PaymentDirection direction={r.direction} />,
@@ -246,9 +252,11 @@ function PaymentDetail({id, row, search, onClose, result, retry}: {id:string; ro
       payment && <>
         {!row && <div className="payment-detail-summary" role="group" aria-label="Payment summary">
           <strong>{paymentAmount(payment.amountRwf)}</strong><PaymentDirection direction={payment.direction} />
-          <span>{paymentTime(payment.atRaw)}</span><AllocationStatus row={payment} search={search} text />
+          <span>{paymentEventTime(payment)}</span><AllocationStatus row={payment} search={search} text />
           {member && <CompactText>{member}</CompactText>}
         </div>}
+        {payment.evidenceDisputed && <p>Conflicting receipt evidence holds this payment for review.</p>}
+        {payment.occurredAt !== undefined && payment.atRaw && <p>Receipt time <span>{payment.atRaw}</span></p>}
         {row && reference && reference !== recordedText(row.ftId) && <p>Current reference <span id={referenceId}>{reference}</span></p>}
         {payment.sourceId && payment.groupId && <CanonicalPaymentEvidence key={payment.sourceId} paymentId={payment.id}
           group={payment.groupId} sourceId={payment.sourceId} headingId={inlineSmsHeading} />}

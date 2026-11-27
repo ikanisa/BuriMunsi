@@ -37,6 +37,7 @@ const latest = [
   '20261126150200_burimunsi_admin_sms_payment_scope.sql',
   '20261126152453_burimunsi_home_savings.sql',
   '20261126170200_burimunsi_admin_home_sms_balance.sql',
+  '20261127222536_burimunsi_payment_evidence_and_listing.sql',
 ];
 
 export async function verifyFreshPhoneReads({owner,admin,database,fixtureRoot}) {

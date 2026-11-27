@@ -31,12 +31,19 @@ nonce and policy identities. It stores nonce claims in SQLite and signs the exac
 response payload, including source and build hashes. Provision a strong
 `ROSTER_DECODER_SECRET` separately from source and persist the nonce state volume.
 
-## Historical locked build inputs
+## Locked inputs for the compatibility build
 
-The following documents the retained Linux image build, not a BuriMunsi release
-or deployment step. It uses the pinned base image and the hash-locked Python
-3.12/Linux ARM64 wheels in `requirements.lock`. A different architecture requires its own reviewed
-wheel hashes and verification. The acquisition helper captures official package
+The Linux compatibility build uses the pinned base image and the hash-locked
+Python 3.12/Linux ARM64 wheels in `requirements.lock`. The November 28 lock
+updates Pillow and pypdf. An existing image retains its original dependencies
+until rebuilt. The standalone BuriMunsi release uses the Edge paths below.
+For a Collect installation using the signed bridge, qualify the rebuilt image,
+coordinate the bridge update with its decoder build digest and finish pending
+imports against their original build. The bridge verifies the toolchain and
+build digest in every newly signed response.
+
+A different architecture requires its own reviewed wheel hashes and verification.
+The acquisition helper captures official package
 metadata and exact lock-selected wheel bytes into a fresh directory:
 
 ```sh

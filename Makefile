@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 export NATIVE_OUTPUT
 
-.PHONY: help check-source test-backend test-backend-operations test-backend-owned-pg test-admin admin-fixture admin-web-build native-build revolut-design-authority
+.PHONY: help check-source supabase-source-test supabase-forward-release-postgres-test test-backend test-backend-operations test-backend-owned-pg test-admin admin-fixture admin-web-build native-build revolut-design-authority
 
 help:
 	@printf '%s\n' 'BuriMunsi commands' \
@@ -16,11 +16,20 @@ help:
 	  '  make admin-web-build    Build the dedicated production Admin artifact' \
 	  '  make native-build NATIVE_OUTPUT=/absolute/evidence/path'
 
-check-source:
+check-source: supabase-source-test
 	@python3 scripts/generate_ui_copy.py --check
 	@python3 scripts/generate_burimunsi_wire.py --check
 	@python3 supabase/schema-src/generate_baseline.py --check
 	@python3 -m unittest scripts.supabase.test_admin_build_config
+
+supabase-source-test:
+	@python3 supabase/templates/build_templates.py --check
+	@python3 supabase/templates/validate_templates.py --check
+
+supabase-forward-release-postgres-test:
+	@pg_bin="$$(node --input-type=module -e "import {resolvePg17Bin} from './scripts/supabase/current-pg-transfer/test-support/owned-pg17.mjs'; console.log(resolvePg17Bin())")" && \
+	  env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin TMPDIR=/tmp COLLECT_SYNTHETIC_PG_BIN="$$pg_bin" \
+	  "$$(command -v node)" scripts/supabase/cloud-release/chain.test.mjs --managed-lifecycle --text-subjects --forward-migration-release
 
 revolut-design-authority:
 	@python3 scripts/qa/revolut_design_authority.py

@@ -2003,6 +2003,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         code=="gateway_action_unavailable"->"Refresh the receiving-phone status and follow the displayed recovery steps."
         code=="fresh_records_required"->"These records have expired. Reconnect and refresh before continuing."
         code=="invalid_name"->"Use a name of 2–100 characters without control characters."
+        code=="payment_evidence_conflict"->"Allocation blocked. Ask an admin to review the conflicting receipts."
         code=="allocation_unavailable"->"This payment is unavailable for allocation."
         code in setOf("invalid_page","invalid_api_response","invalid_member_payment_scope")->"Received inconsistent records. Refresh or contact support on WhatsApp at +250 788 767 816."
         code=="record_unavailable"->"This record is unavailable. Go back or refresh."

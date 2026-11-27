@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock
 
-from l04_alert_checkpoint import ingest, initialize, pending
+from l04_alert_checkpoint import acknowledge, ingest, initialize, pending
 from l04_alert_email import acknowledge_reply, deliver
 from test_l04_alert_rules import BASE
 
@@ -38,9 +38,13 @@ class MailHandoff(unittest.TestCase):
         return acknowledge_reply(self.path, self.event, role, self.sender, path)
 
     def test_two_confirmations_and_private_reference(self):
+        self.assertTrue(acknowledge(self.path, self.event))
         self.assertEqual(self.send(), 'relay_accepted')
+        with self.assertRaises(ValueError):
+            deliver(self.path, self.event, 'backup', 'primary@example.invalid', self.sender, self.relay)
         self.assertEqual(self.send('backup'), 'relay_accepted')
         self.assertEqual(self.reply('primary'), 1)
+        self.assertFalse(acknowledge(self.path, self.event))
         self.assertEqual(self.reply('primary'), 1)
         self.assertEqual(len(pending(self.path)), 1)
         with self.assertRaises(ValueError):
@@ -48,6 +52,8 @@ class MailHandoff(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.reply('backup', **{'Auto-Submitted': 'auto-replied'})
         self.assertEqual(self.reply('backup'), 2)
+        self.assertEqual(self.reply('backup'), 2)
+        self.assertFalse(acknowledge(self.path, self.event))
         self.assertEqual(pending(self.path), [])
 
     def test_parallel_invocations_and_lost_response_do_not_resend(self):

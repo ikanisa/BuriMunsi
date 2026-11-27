@@ -5,7 +5,7 @@ import {CompactText, Button, Dialog, ErrorState, Icon, LoadingState} from '../..
 import {useOperationRead} from '../operations/useOperationRead';
 import {disclosureVersion, IMPORT_PATH, readRosterPreview, readSuggestions, SUGGESTIONS_PATH,
   type PreviewRow, type RosterCandidate, type SourceKind} from './memberRoster';
-import {describeRosterFile, rosterFileAccept, rosterFileBytes} from './rosterFile';
+import {RosterPhotoError, describeRosterFile, rosterFileAccept, rosterFileBytes} from './rosterFile';
 
 export const methodLabels = {suggestions:'Suggested from MoMo', manual:'Add manually', file:'Import member list'} as const;
 const icons = {suggestions:'users', manual:'edit', file:'file'} as const;
@@ -73,6 +73,7 @@ export function RosterSuggestions({request, group, onSelect, onBack}: {
 }
 
 function previewFailure(error: unknown) {
+  if (error instanceof RosterPhotoError) return error.message;
   if (error instanceof AdminRequestError) {
     const code = error.code ?? '';
     if (/headers_invalid/.test(code)) return 'Use a Name column and a Phone column in the file.';

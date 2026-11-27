@@ -8,10 +8,15 @@ import {fileURLToPath} from 'node:url';
 import {join} from 'node:path';
 import test from 'node:test';
 import {startPayerFixture} from './fixtures/burimunsi-payer-postgres.mjs';
+import {exerciseEvidenceRelease} from './fixtures/payment-evidence-release.mjs';
 import {openFixturePayerWorker} from './fixtures/burimunsi-payer-delivery.mjs';
 import pg from '../node_modules/pg/lib/index.js';
 import {installNativeChain,installHandsetInventory,nativeRuntime,nativeActor,uuid,sha,testProfile} from './fixtures/burimunsi-native-chain.mjs';
-import {assignPayment,readPaymentsHome,readPaymentAnalysisRows,PAYMENT_ANALYSIS_LIMIT} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-payments.js';
+import {PostgresCanonicalStore} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-canonical-store.js';
+import {PaymentAllocationService} from '../../../supabase/functions/_shared/domain/burimunsi/payment-allocation.js';
+import {paymentListingRevision} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-payment-listing.js';
+import {assignPayment,readPaymentsHome} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-payments.js';
+import {readPaymentAnalysis} from '../../../supabase/functions/_shared/domain/burimunsi/postgres-payment-analysis.js';
 import {lockCollectMutation} from '../../../supabase/functions/_shared/postgres-mutation-lock.js';
 import {body as stripFraming} from './migrations.mjs';
 import {adminBuriMunsiPayments} from '../../../supabase/functions/_shared/domain/admin_burimunsi_payments.js';
@@ -391,6 +396,17 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
  const owner=runtime.run('http_collect');
  await owner(sql=>allocate(sql,archivedPayment)); // already assigned before the allocation notification feature
  await f.client.query(allocation);
+ const peopleSql=await load('20261119114500_burimunsi_members_keyset.sql');
+ await f.client.query(peopleSql.slice(peopleSql.indexOf('CREATE FUNCTION private.burimunsi_member_phone'),peopleSql.indexOf('-- Membership and ledger')));
+ const evidenceMigration=await load('20261127222536_burimunsi_payment_evidence_and_listing.sql');
+ await f.client.query('BEGIN');
+ try{
+  await f.client.query('UPDATE app.momo_transactions SET has_conflict=1 WHERE id=$1',[archivedPayment]);
+  await f.client.query(stripFraming(evidenceMigration));
+  assert.deepEqual((await f.client.query('SELECT payment_id FROM burimunsi.payment_evidence_holds')).rows,[{payment_id:archivedPayment}]);
+ }finally{await f.client.query('ROLLBACK');}
+ await t.test('managed ledger, custody, grants and independent readback qualify the fenced forward migration',
+  async()=>exerciseEvidenceRelease(f));
  assert.equal(await count(),0);
  const paymentSnapshot=async()=>(await f.client.query(`SELECT id,direction,provider_reference,amount_rwf::text AS amount,
   sms_source_id,member_id,allocation_state,version::text FROM burimunsi.payments WHERE collection_id=$1 ORDER BY id`,[group])).rows;
@@ -719,7 +735,7 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
   } finally {await peer.end();}
   assert.deepEqual((await f.client.query('SELECT count(*) AS n FROM app.ledger_entries')).rows[0],before);
  });
- await t.test('scoped analysis SQL masks SMS and bounds scans before matching, preserving each exact integer',async()=>{
+ await t.test('scoped analysis SQL masks SMS and pages exact financial totals across collection sizes',async()=>{
   const foreign='analysis-other-group';
   await f.client.query("INSERT INTO private.burimunsi_scopes VALUES($1,'wallet',NULL)",[foreign]);
   const seed=async(groupId,id,amount)=>{
@@ -730,14 +746,15 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
   await seed(group,'analysis-large-two','9007199254740991');
   await seed(foreign,'analysis-foreign','9007199254740991');
   const rune=runtime.run('http_collect',{readOnly:true});
-  const scoped=(options={},id=group)=>rune(tx=>readPaymentAnalysisRows(tx,id,{q:'',showSms:false,...options}));
+  const defaults={q:'',offset:0,limit:25,filters:[],sort:{key:'amount',direction:'desc'}};
+  const scoped=({showSms=false,...options}={},id=group)=>rune(tx=>readPaymentAnalysis(tx,id,{...defaults,...options},{showSms}));
   const maskedRead=await scoped();
-  assert.equal(maskedRead.rows.every(row=>row.sourceId===null),true);
-  assert.ok((await scoped({showSms:true})).rows.some(row=>row.sourceId!==null));
+  assert.ok(maskedRead.items.every(row=>row.sourceId===null));
+  assert.ok((await scoped({showSms:true})).items.some(row=>row.sourceId!==null));
   const matches=await scoped({q:'Analysis fixture'});
-  assert.equal(matches.rows.length,2);
-  assert.equal([...matches.amounts.values()].reduce((s,v)=>s+v,0n).toString(),'18014398509481982');
-  assert.deepEqual((await scoped({q:'Analysis fixture'},foreign)).rows,[]);
+  assert.equal(matches.items.length,2);
+  assert.equal(matches.directionTotalsRwf.incoming,'18014398509481982');
+  assert.deepEqual((await scoped({q:'Analysis fixture'},foreign)).items,[]);
 
   // The standalone Payments schema records only incoming/outgoing; a
   // genuine reversal notice is not silently projected as a signed payment.
@@ -763,9 +780,9 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
   try{
    await writer.query('SET ROLE postgres; BEGIN; SELECT pg_advisory_xact_lock(552711::bigint)');
    // Test-only barrier after the reader's repeatable snapshot is established.
-   frozen=rune(tx=>readPaymentAnalysisRows({unsafe:(sql,args)=>tx.unsafe(
-     sql.replace('WITH candidate AS','WITH wait_barrier AS MATERIALIZED (SELECT pg_advisory_xact_lock_shared(552711::bigint)),candidate AS')
-       .replace('FROM checked','FROM checked CROSS JOIN wait_barrier'),args)},group,{q:'Analysis fixture',showSms:false}));
+   frozen=rune(tx=>readPaymentAnalysis({unsafe:(sql,args)=>tx.unsafe(
+     sql.replace('WITH searched AS','WITH wait_barrier AS MATERIALIZED (SELECT pg_advisory_xact_lock_shared(552711::bigint)),searched AS')
+       .replace('FROM totals LEFT JOIN page','FROM totals CROSS JOIN wait_barrier LEFT JOIN page'),args)},group,{...defaults,q:'Analysis fixture'},{showSms:false}));
    const deadline=performance.now()+3000;
    while(!(await writer.query('SELECT pg_backend_pid()=ANY(pg_blocking_pids($1)) AS blocked',[pgId])).rows[0].blocked){
     assert.ok(performance.now()<deadline);await new Promise(resolve=>setTimeout(resolve,10));
@@ -776,51 +793,66 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
     VALUES ('analysis-in-addition',$1,'wallet','mtn_momo','incoming',13,'Analysis fixture'),
      ('analysis-recorded-return',$1,'wallet','mtn_momo','outgoing',5,'Analysis fixture')`,[group]);
    await writer.query('COMMIT');
-   const summarize=({rows,amounts})=>Object.fromEntries(['incoming','outgoing'].map(direction=>[direction,
-    rows.filter(row=>row.direction===direction).reduce((total,row)=>total+amounts.get(row.id),0n).toString()]));
    const whileWriting=await frozen;
-   assert.equal(whileWriting.rows.length,2);
-   assert.deepEqual(summarize(whileWriting),{incoming:'18014398509481982',outgoing:'0'});
+   assert.equal(whileWriting.items.length,2);
+   assert.deepEqual(whileWriting.directionTotalsRwf,{incoming:'18014398509481982',outgoing:'0'});
    const next=await scoped({q:'Analysis fixture'});
-   assert.equal(next.rows.length,4);
+   assert.equal(next.items.length,4);
    const independently=(await f.client.query(`SELECT
     coalesce(sum(amount_rwf) FILTER (WHERE direction='incoming'),0)::text AS incoming,
     coalesce(sum(amount_rwf) FILTER (WHERE direction='outgoing'),0)::text AS outgoing
     FROM burimunsi.payments WHERE collection_id=$1 AND counterparty_name='Analysis fixture'`,[group])).rows[0];
-   assert.deepEqual(summarize(next),independently);
+   assert.deepEqual(next.directionTotalsRwf,independently);
    assert.deepEqual(independently,{incoming:'18014398509481995',outgoing:'5'});
   }finally{await reversalWorker.end();await writer.query('ROLLBACK');await writer.end();if(frozen)await frozen;}
   const before=(await f.client.query('SELECT count(*)::int AS n FROM burimunsi.payments WHERE collection_id=$1',[group])).rows[0].n;
   await f.client.query(`INSERT INTO burimunsi.payments(id,collection_id,receiving_account_id,provider,direction,amount_rwf)
     SELECT 'analysis-benchmark-'||n,$1,'wallet','mtn_momo','incoming',1 FROM generate_series(1,$2::int) n`,
-    [group,PAYMENT_ANALYSIS_LIMIT-before]);
+    [group,5000-before]);
   await f.client.query(`INSERT INTO burimunsi.payments(id,collection_id,receiving_account_id,provider,direction,amount_rwf)
     SELECT 'analysis-outside-benchmark-'||n,$1,'wallet','mtn_momo','incoming',1 FROM generate_series(1,15000) n`,[foreign]);
   await f.client.query('ANALYZE burimunsi.payments');
   let statement,bindings;
   const start=performance.now();
-  const cap=await rune(tx=>readPaymentAnalysisRows({unsafe:(sql,args)=>{
+  const cap=await rune(tx=>readPaymentAnalysis({unsafe:(sql,args)=>{
     statement=sql;bindings=args;return tx.unsafe(sql,args);
-  }},group,{q:'',showSms:false}));
-  const ms=Math.round(performance.now()-start);
+  }},group,defaults,{showSms:false}));
   const plan=await rune(tx=>tx.unsafe('EXPLAIN (FORMAT JSON) '+statement,bindings));
   const indexes=[...JSON.stringify(plan).matchAll(/"Index Name":"(burimunsi_payments_(?:recent|member))"/g)].map(x=>x[1]);
   assert.ok(indexes.length,'analysis scan did not use an indexed collection prefix in the reviewed fixture');
-  t.diagnostic('Default PG indexed collection plan: '+indexes.join(',')+'; '+ms+'ms at '+cap.rows.length+' visible rows and 15001 other-group rows');
-
-  assert.equal(cap.rows.length,PAYMENT_ANALYSIS_LIMIT);
-  const independentCap=(await f.client.query(`SELECT
-   coalesce(sum(amount_rwf) FILTER(WHERE direction='incoming'),0)::text AS incoming,
-   coalesce(sum(amount_rwf) FILTER(WHERE direction='outgoing'),0)::text AS outgoing,
-   count(*)::int AS count FROM burimunsi.payments WHERE collection_id=$1`,[group])).rows[0];
-  const exactCap=Object.fromEntries(['incoming','outgoing'].map(direction=>[direction,
-   cap.rows.filter(row=>row.direction===direction).reduce((sum,row)=>sum+cap.amounts.get(row.id),0n).toString()]));
-  assert.deepEqual({...exactCap,count:cap.rows.length},independentCap);
-  assert.ok(BigInt(independentCap.incoming)>BigInt(Number.MAX_SAFE_INTEGER));
-  t.diagnostic('W02: SQL sums matched both directions at the inclusive cap, with the other collection excluded.');
-  t.diagnostic('Co-located PG capped reader including row decode: '+Math.round(performance.now()-start)+'ms at '+cap.rows.length+' rows');
+  assert.equal(cap.matchingCount,5000);assert.equal(cap.items.length,25);
+  const independent=(await f.client.query(`SELECT coalesce(sum(amount_rwf) FILTER(WHERE direction='incoming'),0)::text AS incoming,
+    coalesce(sum(amount_rwf) FILTER(WHERE direction='outgoing'),0)::text AS outgoing FROM burimunsi.payments WHERE collection_id=$1`,[group])).rows[0];
+  assert.deepEqual(cap.directionTotalsRwf,independent);
+  assert.ok(BigInt(independent.incoming)>BigInt(Number.MAX_SAFE_INTEGER));
   await seed(group,'analysis-over-limit','1');
-  await assert.rejects(scoped({q:'No existing match'}),{status:503,code:'payment_analysis_scope_too_large'});
+  assert.equal((await scoped({q:'No existing match'})).matchingCount,0);
+  const exact=await scoped({q:'987654322'});
+  assert.equal(exact.matchingCount,1);assert.equal(exact.items[0].ftId,'987654322');
+  await assert.rejects(scoped({offset:4975,revision:cap.revision}),{status:409,code:'payment_analysis_changed'});
+  const updatedFirst=await scoped();
+  const last=await scoped({offset:5000,revision:updatedFirst.revision});
+  assert.equal(last.revision,updatedFirst.revision);
+  assert.equal(last.matchingCount,5001);assert.equal(last.items.length,1);
+  assert.deepEqual(last.directionTotalsRwf,{incoming:(BigInt(independent.incoming)+1n).toString(),outgoing:independent.outgoing});
+  t.diagnostic('Exact page and totals at 5,000 and 5,001 group rows, with 15,001 other-group rows. Indexed read '+Math.round(performance.now()-start)+'ms including repeated reads.');
+
+  await f.client.query(`INSERT INTO burimunsi.payments(id,collection_id,receiving_account_id,provider,direction,amount_rwf,
+    source_time,occurred_at,created_at,counterparty_name) VALUES
+    ('date-may-first',$1,'wallet','mtn','incoming',3,'04/05/2026 00:00','2026-05-03 22:00Z','2026-05-06 14:00Z','Dáte fixture'),
+    ('date-may-last',$1,'wallet','mtn','outgoing',5,'04/05/2026 23:59','2026-05-04 21:59:59.999Z','2026-05-07 14:00Z','Dáte fixture'),
+    ('date-tomorrow',$1,'wallet','mtn','incoming',7,'05/05/2026 00:00','2026-05-04 22:00Z','2026-05-07 14:00Z','Dáte fixture'),
+    ('date-unknown',$1,'wallet','mtn','incoming',11,'',NULL,'2026-05-04 08:20Z','Dáte fixture')`,[group]);
+  const filter={key:'time',presence:'any',min:'2026-05-04',max:'2026-05-04',text:'',choices:[]};
+  const name={key:'memberName',presence:'any',text:'date fixt',min:'',max:'',choices:[]};
+  const may=await scoped({filters:[name,filter],sort:{key:'time',direction:'asc'}});
+  assert.deepEqual(may.items.map(row=>row.id),['date-may-first','date-may-last']);
+  assert.equal(may.items[0].occurredAt,'2026-05-03T22:00:00.000Z');
+  assert.equal(may.items[0].atRaw,'04/05/2026 00:00');
+  assert.deepEqual(may.directionTotalsRwf,{incoming:'3',outgoing:'5'});
+  const undated=await scoped({filters:[name,{...filter,min:'',max:'',presence:'blank'}]});
+  assert.deepEqual(undated.items.map(row=>[row.id,row.atRaw,row.occurredAt]),[['date-unknown',null,null]]);
+  assert.deepEqual(undated.directionTotalsRwf,{incoming:'11',outgoing:'0'});
  });
 
 
@@ -1024,6 +1056,111 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
    await one.complete();
   }
  });
+ await t.test('disputed originals hold allocation and unarmed confirmations, including concurrent assignment',async()=>{
+  const sourceFor=async(reference)=>{
+   const wire=fullWire(),input={...wire,requestId:randomUUID(),sourceKey:sha(randomUUID()),rawBody:wire.rawBody.replace('987654322',reference)};
+   const seen=await flow.route('',input);
+   flow.provider({...providerOutput(input.rawBody),schema_version:NATIVE_AUTO_SCHEMA_VERSION,wallet_effect:'credit'});
+   assert.deepEqual(await flow.parser.process(seen.sourceId),{state:'completed',relation:'accepted'});
+   return {input,id:seen.sourceId};
+  };
+  const second=async({input},conflict=true)=>{
+   const receipt={...input,requestId:randomUUID(),sourceKey:sha(randomUUID()),
+    rawBody:conflict?input.rawBody.replace('1000 RWF','1100 RWF'):input.rawBody};
+   const seen=await flow.route('',receipt);
+   flow.provider({...providerOutput(receipt.rawBody),schema_version:NATIVE_AUTO_SCHEMA_VERSION,wallet_effect:'credit'});
+   return seen.sourceId;
+  };
+  const money=async id=>(await f.client.query('SELECT amount_rwf::int,member_id,version::int,sms_source_id FROM burimunsi.payments WHERE id=$1',[id])).rows[0];
+  const hold=async id=>(await f.client.query('SELECT payment_id FROM burimunsi.payment_evidence_holds WHERE payment_id=$1',[id])).rowCount;
+  await f.client.query(`CREATE TABLE IF NOT EXISTS private.burimunsi_command_receipts (
+   collection_id text NOT NULL,actor_id uuid NOT NULL,request_id uuid NOT NULL,session_id uuid NOT NULL,
+   operation text NOT NULL,fingerprint text NOT NULL,response jsonb NOT NULL,created_at bigint NOT NULL,
+   PRIMARY KEY(collection_id,actor_id,request_id));
+   GRANT SELECT,INSERT,UPDATE ON private.burimunsi_command_receipts TO collect_runtime`);
+  // Match the signed-in scope required by the production canonical command store.
+  await f.client.query(`ALTER TABLE private.burimunsi_scopes ADD COLUMN IF NOT EXISTS enabled boolean DEFAULT true;
+   ALTER TABLE private.burimunsi_scopes ADD COLUMN IF NOT EXISTS version bigint DEFAULT 1;
+   GRANT SELECT,UPDATE ON private.burimunsi_scopes TO collect_runtime`);
+  const before=await sourceFor('987654351'),conflict=await second(before);
+  const nativeRevision=()=>runtime.run('http_collect',{readOnly:true})(tx=>paymentListingRevision(tx,group,null,false));
+  const beforeRevision=await nativeRevision();
+  const peer=new pg.Client({host:f.cluster.socket,port:f.cluster.port,database:'postgres',user:f.cluster.initialUser});
+  await peer.connect();
+  let finish,locked,processing,assignment;
+  try{
+   await peer.query('SET ROLE postgres');
+   const pid=(await peer.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+   const recorded=new Promise(resolve=>{locked=resolve;}),release=new Promise(resolve=>{finish=resolve;});
+   const concurrent=Object.assign(Object.create(Object.getPrototypeOf(flow.parser)),flow.parser,{
+    authority:{write:fn=>runtime.run('jobs')(tx=>fn({unsafe:async(query,args)=>{
+     const result=await tx.unsafe(query,args);
+     if(query.includes('private.burimunsi_auto_finish(')){locked();await release;}
+     return result;
+    }}))}});
+   processing=concurrent.process(conflict);
+   await Promise.race([recorded,processing.then(()=>{throw Error('parser skipped conflict transaction');})]);
+   assignment=nativeRuntime(peer,group).run('http_admin')(async tx=>{await lockCollectMutation(tx);return allocate(tx,before.id);});
+   const blocked=assert.rejects(assignment,{code:'payment_evidence_conflict',status:409}),deadline=performance.now()+3000;
+   while(!(await f.client.query('SELECT pg_backend_pid()=ANY(pg_blocking_pids($1)) AS waiting',[pid])).rows[0].waiting){
+    assert.ok(performance.now()<deadline);await new Promise(resolve=>setTimeout(resolve,5));
+   }
+   finish();assert.deepEqual(await processing,{state:'completed',relation:'conflict'});await blocked;
+  }finally{finish?.();await Promise.allSettled([processing,assignment]);await peer.end();}
+  assert.equal(await hold(before.id),1);
+  assert.deepEqual(await money(before.id),{amount_rwf:1000,member_id:null,version:1,sms_source_id:before.id});
+  assert.equal(await receiptStatus(before.id),undefined);
+  assert.notEqual(await nativeRevision(),beforeRevision);
+  const native=nativeActor(group),requestId=randomUUID(),unused=()=>assert.fail('unexpected side effect');
+  const actor={id:native.accountId,sessionId:native.sessionId,groupId:group,role:'admin',capabilities:['payments.allocate'],
+   active:true,revoked:false,expiresAt:Date.now()+60000};
+  const authority={groupId:group,write:fn=>runtime.run('http_collect')(async tx=>{await lockCollectMutation(tx);return fn(tx);}),
+   session:async(_sql,selector)=>selector.id===actor.sessionId?actor:null};
+  const store=new PostgresCanonicalStore({authority,paymentsOnly:true,commands:{postContribution:unused,createDirectMember:unused,
+   setMembershipActive:unused,enqueueEligibleRematch:unused},identities:{policy:unused,members:unused,verified:unused},jobs:{assertPostingLease:unused}});
+  const handler=createNativeHandler({auth:{authenticate:async()=>actor,login:unused,logout:unused,changePasscode:unused,manageStaff:unused},
+   contributions:new PaymentAllocationService({groupId:group,store}),records:{home:unused,page:unused,detail:unused,exportLedger:unused,commandStatus:unused},
+   members:{enroll:unused,setActive:unused},gateway:{status:unused,replace:unused},paymentsOnly:true,strictContract:true,groupId:group,origin,networkBucket:unused});
+  for(const legacyNote of [false,true]){
+   const response=await handler(new Request(origin+'/v1/burimunsi/payments/'+before.id+'/allocate',{method:'POST',headers:{
+    'x-burimunsi-installation':native.installationId,'x-burimunsi-contract':'burimunsi.native.v1','x-burimunsi-generation':'1',
+    'x-burimunsi-request':randomUUID(),authorization:'Bearer '+'a'.repeat(64),'content-type':'application/json'
+   },body:JSON.stringify({memberId:differentMember,expectedVersion:1,requestId,...(legacyNote&&{note:'Fixture allocation request'})})}));
+   const reply=await response.json();assert.equal(response.status,409,JSON.stringify(reply));
+   assert.deepEqual(reply,{contractVersion:'burimunsi.native.v1',ok:false,error:{code:'payment_evidence_conflict'}});
+  }
+  assert.equal((await f.client.query('SELECT request_id FROM private.burimunsi_command_receipts WHERE request_id=$1',[requestId])).rowCount,0);
+  assert.equal(await receiptStatus(before.id),undefined);
+  assert.deepEqual(await money(before.id),{amount_rwf:1000,member_id:null,version:1,sms_source_id:before.id});
+  assert.deepEqual(await flow.parser.process(conflict),{state:'completed',relation:'conflict'});
+  await assert.rejects(owner(tx=>allocate(tx,before.id)),{code:'payment_evidence_conflict',status:409});
+  assert.equal((await f.client.query('SELECT id FROM burimunsi.raw_sms WHERE id=ANY($1::text[])',[[before.id,conflict]])).rowCount,2);
+  assert.equal(await nativeRuntime(f.client,'foreign').run('http_admin',{readOnly:true})(async tx=>(await tx.unsafe(
+   'SELECT payment_id FROM burimunsi.payment_evidence_holds WHERE payment_id=$1',[before.id])).length),0);
+
+  const claimed=await sourceFor('987654352'),revised=await second(claimed);
+  await owner(tx=>allocate(tx,claimed.id));
+  const pending=await openFixturePayerWorker({client:f.client,collectionId:group,enabledAt:f.enabledAt,allocation:true,
+   afterClaim:async()=>{assert.deepEqual(await flow.parser.process(revised),{state:'completed',relation:'conflict'});}});
+  try{
+   assert.deepEqual(await pending.drain(),{status:'complete',processed:1,outcome:'suppressed'});
+   assert.deepEqual(pending.requests,[]);
+   assert.deepEqual(await receiptStatus(claimed.id),{status:'suppressed',reason:'payment_evidence_conflict'});
+   assert.equal((await money(claimed.id)).member_id,differentMember);
+  }finally{await pending.complete();}
+
+  const armed=await sourceFor('987654353'),identical=await second(armed,false);
+  assert.deepEqual(await flow.parser.process(identical),{state:'completed',relation:'duplicate'});
+  assert.equal(await hold(armed.id),0);await owner(tx=>allocate(tx,armed.id));
+  const worker=await openFixturePayerWorker({client:f.client,collectionId:group,enabledAt:f.enabledAt,allocation:true,lostReply:true});
+  try{
+   assert.deepEqual(await worker.drain(),{status:'complete',processed:1,outcome:'unknown'});
+   assert.deepEqual(await flow.parser.process(await second(armed)),{state:'completed',relation:'conflict'});
+   await worker.carrierDelivered();
+   assert.deepEqual(await worker.drain(),{status:'complete',processed:1,outcome:'accepted',gateway_state:'delivered'});
+   assert.deepEqual(worker.requests,['POST','GET']);assert.equal(await hold(armed.id),1);
+  }finally{await worker.complete();}
+ });
  await t.test('two tabs recover one committed browser allocation after a lost response',async()=>{
   const fixtureOrigin='https://burimunsi-admin.ikanisa.com';
   const a=nativeActor(group),requestId=randomUUID(),browserSession=randomUUID(),secondSession=randomUUID();
@@ -1037,11 +1174,7 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
   const paymentId=held.sourceId,path='/api/admin/burimunsi/payments/'+paymentId;
   // The owned fixture substitutes only the browser identity resolver and
   // minimal journal schema. The production route, mutation and read-back SQL run.
-  await f.client.query(`CREATE TABLE IF NOT EXISTS private.burimunsi_command_receipts (
-   collection_id text NOT NULL,actor_id uuid NOT NULL,request_id uuid NOT NULL,session_id uuid NOT NULL,
-   operation text NOT NULL,fingerprint text NOT NULL,response jsonb NOT NULL,created_at bigint NOT NULL,
-   PRIMARY KEY(collection_id,actor_id,request_id));
-   GRANT SELECT,INSERT,UPDATE ON private.burimunsi_command_receipts TO collect_runtime`);
+
   const gate=()=>{let release;const wait=new Promise(resolve=>{release=resolve});return {release,wait};};
   const beforeCommit=gate(),commitPermission=gate();
   let permitted=true,posts=0;
@@ -1107,6 +1240,24 @@ test('standalone capture commits encrypted SMS and records incoming and outgoing
    assert.deepEqual(state,{commands:1,notices:1,version:2,legacy_credits:0});
    assert.equal(posts,2); // First write and deliberate conflicting request; GETs never retry.
   } finally {commitPermission.release();if(sent)await sent.catch(()=>{});await peer.end();}
+ });
+ await t.test('standalone native paging uses the pinned driver beyond 100,000 group payments',async()=>{
+  const fixtureGroup='native-large-fixture';
+  await f.client.query("INSERT INTO private.burimunsi_scopes VALUES($1,'wallet',NULL)",[fixtureGroup]);
+  await f.client.query('INSERT INTO app.memberships VALUES($1,$2,1)',[fixtureGroup,differentMember]);
+  await f.client.query(`INSERT INTO burimunsi.payments(id,collection_id,receiving_account_id,provider,direction,amount_rwf,
+    provider_reference,occurred_at,member_id)
+    SELECT 'native-'||n,$1,'wallet','mtn',CASE WHEN n%2=0 THEN 'outgoing' ELSE 'incoming' END,n%11+1,
+      'N'||n,'2026-05-04T18:00Z'::timestamptz+n*interval '1 second',CASE WHEN n<=2 THEN $2 END
+      FROM generate_series(1,100001) n`,[fixtureGroup,differentMember]);
+  const socket=f.cluster.socket,port=String(f.cluster.port),endpoint=socket+'/.s.PGSQL.'+port;
+  const root=new URL('../../../',import.meta.url);
+  const lock=fileURLToPath(new URL('supabase/functions/deno.lock',root));
+  const entry=fileURLToPath(new URL('supabase/tests/burimunsi/canonical-payment-pages.mjs',root));
+  const result=execFileSync(process.env.DENO_BIN??'deno',['run','--no-prompt','--node-modules-dir=none','--lock='+lock,
+    '--frozen','--cached-only','--allow-read='+f.cluster.root,'--allow-env','--allow-net=unix:'+endpoint,'--allow-write='+endpoint,
+    entry,socket,port,differentMember],{encoding:'utf8',timeout:90000});
+  assert.match(result,/PASS postgres.js 3.4.7/);t.diagnostic(result.trim());
  });
 });
 

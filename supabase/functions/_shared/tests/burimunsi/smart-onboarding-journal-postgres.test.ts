@@ -88,7 +88,7 @@ Deno.test({name:'synthetic signed decoder and provider flow with real PostgreSQL
    ROSTER_DECODER_BUILD_SHA256:build,OPENAI_PROJECT_ID:policy.project_id,OPENAI_ORGANIZATION_ID:policy.organization_id,
    ROSTER_AI_MODEL:policy.model,OPENAI_API_KEY:key,DATA_KEY_ID:'synthetic-key',
    DATA_ENCRYPTION_KEY:btoa(String.fromCharCode(...new Uint8Array(32).fill(7)))};
-  const tools={python:'3.12',pillow:'12.3.0',pypdfium2:'5.2.0',pypdf:'6.19.0',openpyxl:'3.1.5',defusedxml:'0.7.1'};
+  const tools={python:'3.12',pillow:'13.0.0',pypdfium2:'5.2.0',pypdf:'7.2.0',openpyxl:'3.1.5',defusedxml:'0.7.1'};
   let decodes=0,providers=0;
   globalThis.fetch=async(url:any,init:any)=>{
    if(url===endpoint){decodes++;const wire=JSON.parse(init.body);

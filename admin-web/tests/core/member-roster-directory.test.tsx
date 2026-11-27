@@ -1,6 +1,8 @@
 import {useState} from 'react';
-import {act, fireEvent, render, screen, within} from '@testing-library/react';
+import {act, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
 import {describe, expect, it, vi} from 'vitest';
+import {AdminRequestError} from '../../src/api/client';
+import {readRosterExport} from '../../src/features/core/memberRosterWindow';
 import {CoreListPage} from '../../src/features/core/CoreListPage';
 import {comparableMemberPhone, matchesMemberPhone, readCompleteRoster, rosterSearch} from '../../src/features/core/memberRosterRead';
 import {readRosterCriteria, rosterLocation, safeRosterReturn} from '../../src/features/core/memberRosterLocation';
@@ -56,8 +58,8 @@ describe('complete scoped member roster', () => {
     expect(within(table).getByText('000026')).toBeVisible();
     expect(screen.queryByRole('button',{name:'Filter Open'})).toBeNull();
     expect(request.mock.calls.map(([path]) => offsetOf(path))).toEqual([0,100]);
-    for (const [path] of request.mock.calls) {
-      expect([...new URL(path,'https://fixture.invalid').searchParams.keys()].sort()).toEqual(['country','directory','limit','offset','sort']);
+    for (const [index,[path]] of request.mock.calls.entries()) {
+      expect([...new URL(path,'https://fixture.invalid').searchParams.keys()].sort()).toEqual(['country','directory','limit','offset','sort',...(index===0?['window']:[])]);
     }
   });
 
@@ -187,5 +189,42 @@ describe('complete scoped member roster', () => {
     for (const unsafe of ['https://elsewhere.invalid/admin/members','//elsewhere.invalid/admin/members','/admin/members/../users',
       '/admin/members?search=x&search=y','/admin/members?secret=x','/admin/members#private']) expect(safeRosterReturn(unsafe)).toBe('/admin/members');
     expect(readRosterCriteria('?filters=' + encodeURIComponent('[["operator","any","private"],["status","any",["owner"]]]')).filters.size).toBe(0);
+  });
+});
+
+describe('revision-bound directory windows',()=>{
+  const rows=(count:number)=>roster(count).map(row=>({id:row.id,publicId:row.title,name:row.display_name as string,
+    type:'direct',status:'active',phone:null,createdAt:row.created_at}));
+  it('renders the first 25 immediately and refreshes the current page after an equal-count edit',async()=>{
+    const data=rows(53);let current='a'.repeat(64);
+    const request=vi.fn<AdminRequest>(async path=>{
+      const q=new URL(path,'https://fixture.invalid').searchParams,offset=Number(q.get('offset')),limit=Number(q.get('limit'));
+      if(q.has('revision')&&q.get('revision')!==current)throw new AdminRequestError('Changed',{statusCode:409,code:'member_roster_changed'});
+      return {items:data.slice(offset,offset+limit),total:data.length,matching:data.length,revision:current,limit,offset};
+    });
+    render(<Directory request={request}/>);
+    expect(await screen.findByText('Directory member 1')).toBeVisible();
+    expect(screen.queryByText('Directory member 26')).toBeNull();
+    expect(request).toHaveBeenCalledTimes(1);
+    current='b'.repeat(64);
+    fireEvent.click(screen.getByRole('button',{name:'Next page'}));
+    expect(await screen.findByText('The member directory changed. Refresh Members to continue.')).toBeVisible();
+    expect(screen.queryByText('Directory member 1')).toBeNull();
+    fireEvent.click(screen.getByRole('button',{name:'Refresh Members'}));
+    expect(await screen.findByText('Directory member 26')).toBeVisible();
+    const calls=request.mock.calls.map(([path])=>new URL(path,'https://fixture.invalid').searchParams);
+    expect(calls.map(q=>[q.get('offset'),q.get('revision')])).toEqual([['0',null],['25','a'.repeat(64)],['25',null]]);
+  });
+
+  it('exports all 103 entries independently of the viewed slice and rejects a changed revision',async()=>{
+    const data=rows(103),revision='d'.repeat(64);
+    const request=vi.fn<AdminRequest>(async path=>{
+      const q=new URL(path,'https://fixture.invalid').searchParams,offset=Number(q.get('offset')),limit=Number(q.get('limit'));
+      return {items:data.slice(offset,offset+limit),total:data.length,matching:data.length,revision,limit,offset};
+    });
+    expect(await readRosterExport(request,new AbortController().signal,revision)).toHaveLength(103);
+    expect(request.mock.calls.map(([p])=>offsetOf(p))).toEqual([0,100]);
+    await expect(readRosterExport(request,new AbortController().signal,'e'.repeat(64))).rejects.toThrow();
+    await waitFor(()=>expect(request).toHaveBeenCalledTimes(3));
   });
 });

@@ -9,7 +9,8 @@ import {readMemberListing} from './postgres-member-listing.js';
 import {nativePaymentListingScope,paymentAllocationFilterSql,paymentReferenceSql,paymentsSql,readCanonicalHome} from './postgres-payment-reads.js';
 import {projectLedger,projectMember,projectPayment} from './postgres-record-projections.js';
 import {claimPhonePinReadSnapshot} from './phone-pin-request.js';
-import {paymentListingRows,paymentRecord,readOptionalPaymentsHome,readPayment as readPaymentRecord,readPayments,readPaymentsHome} from './postgres-payments.js';
+import {paymentListingRevision,readCanonicalPaymentPage} from './postgres-payment-listing.js';
+import {readOptionalPaymentsHome,readPayment as readPaymentRecord,readPayments,readPaymentsHome} from './postgres-payments.js';
 
 const membersSql=includeBalance=>`SELECT u.id,m.collection_id,u.full_name,u.momo_number,m.active,m.revision,u.revision AS person_revision,m.joined_at
  ${includeBalance?',coalesce((SELECT sum(l.amount_minor) FROM app.ledger_entries l WHERE l.collection_id=m.collection_id AND l.member_id=m.user_id),0) AS balance':''}
@@ -97,9 +98,13 @@ export class PostgresRecordsStore {
           const {rows,totalCount,after}=await readMemberListing(sql,{...query,includeBalance});
           return {items:rows.map(row=>projectMember(row,{includeBalance})),totalCount,after,asOf:at};
         },
+        readCanonicalPaymentPage:async query=>{
+          scope(query.groupId);
+          return {...await readCanonicalPaymentPage(sql,query,projection()),asOf:at};
+        },
         listRevision:async(g,kind,memberId,paymentReference=null)=>{
           scope(g);let rows;
-          if(kind==='payments'&&this.paymentsOnly)rows=await paymentListingRows(sql,g,memberId);
+          if(kind==='payments'&&this.paymentsOnly)return paymentListingRevision(sql,g,memberId,projection().showSms);
           else if(kind==='payments')rows=await sql.unsafe(`${auto?nativePaymentListingScope:''}SELECT t.id,t.version,t.has_conflict,p.revision AS payment_revision,p.status,p.member_id,
             f.beneficiary_member_id,pm.revision AS membership_revision,u.revision AS member_revision,${paymentReference?`(${paymentReferenceSql}=$2) AS reference_match,`:''}
             ${auto?'coalesce(src.conflict_count,0)':`(SELECT count(*) FROM app.momo_transaction_sources bad WHERE bad.transaction_id=t.id AND bad.relation='conflict')`} AS conflict_count,
@@ -118,16 +123,8 @@ export class PostgresRecordsStore {
         },
         readListingSnapshot:async({groupId:g,kind,memberId,paymentReference=null})=>{
           scope(g);let rows,entries;
-          if(kind==='payments'&&this.paymentsOnly){
-            rows=await paymentListingRows(sql,g,memberId);
-            entries=rows.map(row=>{
-              const item=paymentRecord(row,projection());
-              return {item,at:canonicalListingInstant(row.page_at instanceof Date?row.page_at.toISOString():row.page_at),
-                amount:item.amountRwf,direction:item.direction,filters:[item.state],
-                search:listingText([item.id,item.payerNameRaw,item.payerPhoneRaw,item.ftId,item.amountRwf,
-                  item.atRaw,item.memberName,item.memberPhone,localPhone(item.memberPhone)].join(' '))};
-            });
-          }else if(kind==='payments'){
+          if(kind==='payments'){
+            requireThat(!this.paymentsOnly,'invalid_list');
             const args=[g];let extra='';
             if(memberId!==null){await this.memberExists(sql,g,memberId);args.push(memberId);extra=' AND u.id=$2';}
             const batch=auto&&memberId===null;

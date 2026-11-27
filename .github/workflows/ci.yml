@@ -116,6 +116,7 @@ jobs:
             scripts/supabase/cloud-release/fixtures/burimunsi-census-jsonb-driver.mjs \
             scripts/supabase/cloud-release/fixtures/burimunsi-page-storage-driver.mjs
           fixture make test-backend-owned-pg
+          fixture make supabase-forward-release-postgres-test
       - name: Stop the isolated Edge PostgreSQL fixture
         if: ${{ always() && steps.postgres.outcome != '' && steps.postgres.outcome != 'skipped' }}
         run: sh scripts/supabase/testing/ci-native-postgres.sh stop
@@ -143,7 +144,9 @@ jobs:
           fetch-depth: 0
       - name: Scan Git HEAD and all acquired refs for secrets
         id: history_secrets
-        run: bash scripts/release_secret_scan.sh --history
+        run: |
+          python3 -B -m unittest discover -s scripts/release -p 'test_secret_scan.py'
+          bash scripts/release_secret_scan.sh --history
       - name: Report history scanning coverage
         if: always()
         env:

@@ -2,12 +2,14 @@ import {adminAccountSession,validateAdminOrigin} from './admin_accounts.js';
 import {managedAdminObservationsEnabled,readPaymentSmsEvidence} from './admin_burimunsi_observations.js';
 import {BURI_ADMIN_PRIVATE_HEADERS} from './admin_burimunsi_authority.js';
 import {paymentsContext,readScopedAdminHome} from './admin_burimunsi_payment_scope.js';
+import {readAllocationMemberPage} from './admin_burimunsi_allocation_members.js';
 import {ApiError,json,readJson} from './core.js';
 import {lockCollectMutation} from '../postgres-mutation-lock.js';
 import {BuriError,requireThat} from './burimunsi/errors.js';
-import {assignPayment,readPayment,readPaymentAnalysisRows,readPayments,
+import {assignPayment,readPayment,readPayments,
   readMemberPaymentStatement,readOptionalMemberPaymentBalance,MEMBER_STATEMENT_PAGE_SIZE,MEMBER_STATEMENT_MAX_ROWS} from './burimunsi/postgres-payments.js';
-import {analyzeCanonicalPaymentRows,parsePaymentAnalysisQuery} from './burimunsi/payment-analysis-shared.mjs';
+import {readPaymentAnalysis} from './burimunsi/postgres-payment-analysis.js';
+import {parsePaymentAnalysisQuery} from './burimunsi/payment-analysis-shared.mjs';
 import {canonicalJson,exactKeys,requireId,requireRequestId,sha256} from './burimunsi/values.js';
 
 const base='/api/admin/burimunsi/';
@@ -22,7 +24,7 @@ function query(url,allowed,{maxOffset=100000}={}) {
   for(const [key,fallback,max] of [['limit',25,100],['offset',0,maxOffset]]){
     if(!allowed.includes(key))continue;
     const raw=values[key];
-    requireThat(raw===undefined||/^\d{1,6}$/.test(raw)&&Number(raw)<=max&&(key!=='limit'||Number(raw)>0),'invalid_query');
+    requireThat(raw===undefined||/^\d{1,16}$/.test(raw)&&Number.isSafeInteger(Number(raw))&&Number(raw)<=max&&(key!=='limit'||Number(raw)>0),'invalid_query');
     values[key]=raw===undefined?fallback:Number(raw);
   }
   requireThat(!values.status||['allocated','unallocated'].includes(values.status),'invalid_query');
@@ -76,31 +78,16 @@ export async function adminBuriMunsiPayments(request,env) {
       if(request.method!=='POST')throw new ApiError(404,'not_found','This Payments action does not exist.');
       query(url,[]);
       const input=await readJson(request,8192);
-      const {rows,amounts,query:criteria,showSms,canAllocate,asOf}=await db.withLockedReadSnapshot(async sql=>{
+      result=await db.withLockedReadSnapshot(async sql=>{
         await sql.unsafe("SET LOCAL statement_timeout='1250ms'");
         const {canAnalyzeSms:showSms,canAllocate}=await scoped(sql);
         let criteria;
         try{criteria=parsePaymentAnalysisQuery(input,showSms);}
         catch(error){if(error instanceof TypeError)requireThat(false,'invalid_payment_analysis',400);throw error;}
-        const snapshot=await readPaymentAnalysisRows(sql,groupId,{q:criteria.q,showSms});
+        const page=await readPaymentAnalysis(sql,groupId,criteria,{showSms,canAllocate});
         await authority.assertOwned();
-        return {...snapshot,query:criteria,showSms,canAllocate,asOf:new Date().toISOString()};
+        return {...page,asOf:new Date().toISOString()};
       });
-      // Work on authorized in-memory projections after SQL and its locks have
-      // ended. Membership, ordering, count, totals and page use the same rows.
-      const matched=analyzeCanonicalPaymentRows(rows,criteria.filters,criteria.sort,showSms);
-      let incoming=0n,outgoing=0n;
-      for(const row of matched){
-        const exact=amounts.get(row.id);
-        requireThat(typeof exact==='bigint','payment_totals_unavailable',503);
-        if(row.direction==='incoming')incoming+=exact;
-        else if(row.direction==='outgoing')outgoing+=exact;
-        else requireThat(false,'payment_totals_unavailable',503);
-      }
-      const {offset,limit}=criteria;
-      await authority.assertOwned();
-      result={items:matched.slice(offset,offset+limit).map(row=>({...row,canAllocate})),totalCount:rows.length,matchingCount:matched.length,
-        directionTotalsRwf:{incoming:incoming.toString(),outgoing:outgoing.toString()},missing:0,offset,limit,asOf};
     }else if(request.method==='GET'&&relative==='home'){
       query(url,[]);
       result=await db.withLockedReadSnapshot(sql=>readScopedAdminHome(sql,{groupId,scoped}));
@@ -117,20 +104,19 @@ export async function adminBuriMunsiPayments(request,env) {
         return page;
       });
     }else if(request.method==='GET'&&relative==='payments'){
-      const filters=query(url,['status','direction','memberId','q','limit','offset']);
+      const filters=query(url,['status','direction','memberId','q','limit','offset'],{maxOffset:Number.MAX_SAFE_INTEGER});
       result=await db.withLockedReadSnapshot(async sql=>{
         const projection=await scoped(sql);
         return {...await readPayments(sql,groupId,{...filters,...projection}),canAllocate:projection.canAllocate,asOf:new Date().toISOString()};
       });
     }else if(request.method==='GET'&&relative==='payments/members'){
-      const {q='',limit}=query(url,['q','limit']);
+      const {q='',limit,after}=query(url,['q','limit','after']);
+      if(after!==undefined)requireId(after);
       result=await db.withLockedReadSnapshot(async sql=>{
         requireThat((await scoped(sql)).canAllocate,'access_denied',403);
-        const items=await sql.unsafe(`SELECT u.id,u.full_name AS name
-          FROM app.memberships m JOIN app.users u ON u.id=m.user_id
-          WHERE m.collection_id=$1 AND m.active=1 AND u.access_status='active' AND u.member_type<>'operator'
-            AND strpos(lower(u.full_name),lower($2))>0 ORDER BY u.full_name,u.id LIMIT $3`,[groupId,q,limit]);
-        return {items};
+        const page=await readAllocationMemberPage(sql,groupId,{q,limit,after});
+        await authority.assertOwned();
+        return page;
       });
     }else if(evidenceMatch){
       if(request.method!=='GET'||!managedAdminObservationsEnabled(env))
@@ -171,9 +157,9 @@ export async function adminBuriMunsiPayments(request,env) {
       query(url,[]);
       result=await db.withLockedReadSnapshot(async sql=>{
         const projection=await scoped(sql);
-        const payment=await readPayment(sql,groupId,requireId(match[1]),projection);
+        const payment=await readPayment(sql,groupId,requireId(match[1]),{...projection,financialDate:true});
         requireThat(payment,'record_unavailable',404);
-        return {...payment,canAllocate:projection.canAllocate};
+        return {...payment,canAllocate:projection.canAllocate&&!payment.evidenceDisputed};
       });
     }else if(request.method==='POST'&&match?.[2]){
       query(url,[]);
@@ -207,8 +193,10 @@ export async function adminBuriMunsiPayments(request,env) {
     return json(result,200,BURI_ADMIN_PRIVATE_HEADERS);
   }catch(error){
     if(error instanceof ApiError)throw error;
-    if(error instanceof BuriError&&error.code==='payment_analysis_scope_too_large')
-      throw new ApiError(503,error.code,'This collection is too large for exact payment analysis.');
+    if(error instanceof BuriError&&error.code==='payment_analysis_changed')
+      throw new ApiError(409,error.code,'Payments changed between pages. Refresh to return to the first page.');
+    if(error instanceof BuriError&&error.code==='payment_evidence_conflict')
+      throw new ApiError(409,error.code,'Conflicting receipt evidence holds this payment for review.');
     if(error instanceof BuriError&&error.code==='member_statement_scope_too_large')
       throw new ApiError(503,error.code,'This membership is too large for a complete statement.');
     if(error instanceof BuriError&&error.code==='member_statement_changed')

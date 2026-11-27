@@ -67,6 +67,10 @@ export async function runCloudRelease(args, options) {
   const {runWriterJournal}=await import('./writer-journal-release.mjs');
   return runWriterJournal(args.slice(1),options);
  }
+ if (args[0]==='--payment-evidence') {
+  const {runPaymentEvidenceRelease}=await import('./payment-evidence-release.mjs');
+  return runPaymentEvidenceRelease(args.slice(1),options);
+ }
  if (args[0]==='--managed-forward') {
   const {runManagedForwardRelease}=await import('./managed-forward-release.mjs');
   return runManagedForwardRelease(args.slice(1),options);

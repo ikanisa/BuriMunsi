@@ -3014,6 +3014,11 @@
     {
       "key": "ui_public_privacy_notice",
       "en": "Privacy notice"
+    },
+    {
+      "key": "ui_payment_evidence_conflict",
+      "en": "Allocation blocked. Ask an admin to review the conflicting receipts.",
+      "rw": "Ubu bwishyu ntibushobora kugenerwa umunyamuryango. Saba umuyobozi kugenzura inyemezabwishyu zivuguruzanya."
     }
   ]
 }

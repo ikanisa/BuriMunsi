@@ -70,7 +70,12 @@ describe('Members refresh', () => {
 
   it('rereads the exact filtered page, retaining verified rows, controls and the URL until the fresh result arrives', async () => {
     const fresh = pending(), navigate = vi.fn();
-    const request = vi.fn().mockResolvedValueOnce(roster('First member', 26)).mockReturnValueOnce(fresh.promise);
+    const filteredPage=(name:string)=>{
+      const row=roster(name,26).rows[25];
+      return {items:[{id:row.id,publicId:row.public_id,name,type:row.member_type,status:'active',phone:null,createdAt:row.created_at}],
+        total:26,matching:26,revision:'b'.repeat(64),limit:25,offset:25};
+    };
+    const request = vi.fn().mockResolvedValueOnce(filteredPage('First member')).mockReturnValueOnce(fresh.promise);
     render(<CoreListPage {...props} role="staff" request={request} navigate={navigate}
       locationSearch="?search=member&status=active&sort=public_id_asc&page=2" />);
     await screen.findByText('First member');
@@ -86,12 +91,12 @@ describe('Members refresh', () => {
     expect(screen.getByText('Page 2 of 2')).toBeVisible();
     expect(screen.queryByText('Loading members')).not.toBeInTheDocument();
     fireEvent.click(refreshButton());
-    expect(request.mock.calls.map(call=>call[0])).toEqual([
-      'core/members?directory=roster&country=RW&limit=100&offset=0&sort=created_at_asc',
-      'core/members?directory=roster&country=RW&limit=100&offset=0&sort=created_at_asc',
-    ]);
+    expect(request.mock.calls[1][0]).toEqual(request.mock.calls[0][0]);
+    const query=new URL(request.mock.calls[0][0],'https://fixture.invalid').searchParams;
+    expect([query.get('window'),query.get('offset'),query.get('search'),query.get('sort')]).toEqual(['1','25','member','public_id_asc']);
+    expect(JSON.parse(query.get('columns')!)).toEqual([['status','any',['active']]]);
     expect(navigate).not.toHaveBeenCalled();
-    await act(async () => fresh.resolve(roster('Updated member',26)));
+    await act(async () => fresh.resolve(filteredPage('Updated member')));
     expect(within(region).getByText('Updated member')).toBeVisible();
     expect(refreshButton()).toBeEnabled();
     expect(region).not.toHaveAttribute('aria-busy');

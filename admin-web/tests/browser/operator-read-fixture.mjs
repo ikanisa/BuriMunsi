@@ -62,6 +62,25 @@ export const fixtureMomoPaymentsOnlyDetail = {
 export function readMemberList(params) {
   const search = (params.get('search') ?? '').toLowerCase(), status = params.get('status') ?? '';
   const offset = Number(params.get('offset') ?? 0), limit = Number(params.get('limit') ?? 25);
+  if (params.get('window')==='1') {
+    const fold=value=>value.normalize('NFKD').replace(/\p{M}/gu,'').toLowerCase();
+    const filters=JSON.parse(params.get('columns')??'[]');
+    const candidates=fixtureMembers.rows.map(row=>({id:row.id,publicId:row.public_id,name:row.display_name,
+      type:row.member_type,status:row.membership_status,phone:row.phone_e164??row.momo_number,createdAt:row.created_at}));
+    const revision=createHash('sha256').update(JSON.stringify(candidates)).digest('hex');
+    const rows=candidates.filter(row=>{
+      if(filters.some(([key,,value])=>key==='status' && value.length && !value.includes(row.status)))return false;
+      if(!search)return true;
+      if(/^[+0-9 ().-]+$/.test(search)){
+        const digits=search.replace(/\D/g,'').replace(/^(?:00250|250|0)/,'');
+        return row.publicId.includes(search)||!!row.phone?.replace(/\D/g,'').includes(digits);
+      }
+      return fold(search).trim().split(/\s+/).every(word=>fold(row.name).includes(word));
+    });
+    const dir=params.get('sort')?.endsWith('_desc')?-1:1;
+    rows.sort((a,b)=>dir*a.publicId.localeCompare(b.publicId));
+    return {items:rows.slice(offset,offset+limit),total:candidates.length,matching:rows.length,revision,offset,limit};
+  }
   const rows = fixtureMembers.rows.filter(member => (!search || `${member.display_name} ${member.public_id}`.toLowerCase().includes(search)) &&
     (!status || member.membership_status === status));
   if (params.get('sort') === 'created_at_asc') rows.sort((first, second) =>
@@ -107,7 +126,7 @@ export function readMemberStatementFixture(params) {
   const revision = createHash('sha256').update(JSON.stringify([membership.id,items])).digest('hex');
   if (params.has('revision') && params.get('revision') !== revision) return {status:409, body:{error:{code:'member_statement_changed'}}};
   return {status:200, body:{groupId:membership.group_id,memberId:member.id,membershipId:membership.id,totalCount:items.length,
-    closingRwf:items.at(-1)?.balanceRwf ?? '0',revision,offset,limit,items:items.slice(offset,offset+limit)}};
+    closingRwf:items.at(-1)?.balanceRwf ?? '0',revision,asOf:time,offset,limit,items:items.slice(offset,offset+limit)}};
 }
 export function readBuriMunsiPayments(params, sms) {
   const q = (params.get('q') ?? '').toLowerCase(), status = params.get('status'), direction = params.get('direction');

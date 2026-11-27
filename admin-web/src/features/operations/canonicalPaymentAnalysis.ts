@@ -2,7 +2,7 @@ import {z} from 'zod';
 import type {AdminRequest} from '../../api/client';
 import {normalizeLoginPhone} from '../../session/phonePasscode';
 import {paymentInstant, type PaymentAnalysisQuery} from '../../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
-export {paymentInstant, paymentMemberName, paymentMemberNumber} from '../../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
+export {paymentEventInstant, paymentInstant, paymentMemberName, paymentMemberNumber} from '../../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
 
 export const paymentId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,159}$/);
 export const paymentDirection = z.enum(['incoming', 'outgoing']);
@@ -10,7 +10,7 @@ export const paymentAllocation = z.enum(['allocated', 'unallocated']);
 const count = z.number().int().nonnegative();
 export const buriMunsiPayment = z.object({
   id: paymentId, groupId: paymentId.optional(), version: count.min(1), direction: paymentDirection,
-  amountRwf: count.nullable(), atRaw: z.string().nullable(), ftId: z.string().nullable(),
+  amountRwf: count.nullable(), atRaw: z.string().nullable(), occurredAt: z.string().datetime().nullish(), evidenceDisputed:z.boolean().optional(), ftId: z.string().nullable(),
   payerNameRaw: z.string().nullable(), payerPhoneRaw: z.string().nullish(), memberId: paymentId.nullable(),
   memberName: z.string().nullable(), memberPhone: z.string().nullish(), state: paymentAllocation, sourceId: paymentId.nullish(), canAllocate: z.boolean().optional(),
 }).refine(row => (row.state === 'allocated') === (row.memberId !== null) && (row.memberId !== null || row.memberName === null));
@@ -42,7 +42,7 @@ export function paymentCounterpartyEvidence(row: BuriMunsiPayment) {
 
 const decimal = z.string().regex(/^(0|[1-9]\d{0,30})$/).transform(value => BigInt(value));
 const analysisResponse = z.object({
-  items: z.array(buriMunsiPayment).max(25), totalCount: count, matchingCount: count, offset: count, limit: z.literal(25),
+  revision:z.string().regex(/^[a-f0-9]{64}$/).optional(), items: z.array(buriMunsiPayment).max(25), totalCount: count, matchingCount: count, offset: count, limit: z.literal(25),
   asOf: z.string().refine(value => Number.isFinite(Date.parse(value))), directionTotalsRwf: z.object({incoming:decimal.nullable(),outgoing:decimal.nullable()}), missing:count,
 });
 export async function readCanonicalPaymentAnalysis(request:AdminRequest, signal:AbortSignal, query:PaymentAnalysisQuery, expectedGroup:string|undefined, showSms:boolean) {
@@ -51,7 +51,7 @@ export async function readCanonicalPaymentAnalysis(request:AdminRequest, signal:
   signal.throwIfAborted();
   const result = analysisResponse.parse(response);
   const {items,totalCount,matchingCount,offset,missing,directionTotalsRwf:{incoming,outgoing}} = result;
-  if (offset!==query.offset || matchingCount>totalCount || missing>matchingCount || items.length!==Math.min(25, Math.max(0,matchingCount-offset)) ||
+  if (query.revision!==undefined && query.revision!==result.revision || offset!==query.offset || matchingCount>totalCount || missing>matchingCount || items.length!==Math.min(25, Math.max(0,matchingCount-offset)) ||
       new Set(items.map(row=>row.id)).size!==items.length || items.some(row=>!row.groupId || row.groupId!==(expectedGroup ?? items[0].groupId) || !showSms && row.sourceId) ||
       (incoming===null || outgoing===null)!==(missing>0) || (matchingCount===0 && (incoming!==0n || outgoing!==0n))) {
     throw new Error('The matching payments could not be verified.');
@@ -86,4 +86,9 @@ export function paymentTime(raw: string | null) {
   if (!seconds) return kigaliMinutes.format(time);
   const fraction = seconds[2] && /[1-9]/.test(seconds[2]) ? seconds[2] : '';
   return kigaliSeconds.format(time) + fraction;
+}
+
+export function paymentEventTime(row: Pick<BuriMunsiPayment, 'atRaw' | 'occurredAt'>) {
+  if (row.occurredAt === undefined) return paymentTime(row.atRaw);
+  return row.occurredAt === null ? 'Unknown' : paymentTime(row.occurredAt);
 }

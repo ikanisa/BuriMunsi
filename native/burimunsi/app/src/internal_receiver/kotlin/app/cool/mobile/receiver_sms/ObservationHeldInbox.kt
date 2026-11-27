@@ -39,6 +39,7 @@ internal class ObservationHeldInbox(
 ) {
     private companion object {
         const val MAX_HELD = 100_000
+        const val PAGE_KEYS = 4096
         // The v57/v58 count ceiling was 100,000, but their SecureStore writer
         // cannot persist plaintext above 2,000,000 UTF-8 bytes. Each genuine
         // nonfirst digest consumes 67 bytes (comma + quotes + 64 hex digits).
@@ -51,10 +52,15 @@ internal class ObservationHeldInbox(
 
     data class PreviousCursor(val profileLastId: Long?, val scanStart: Long)
 
-    private fun legacyStore(collection:String)=SecureStore(app,"observation-legacy-held-"+Values.sha256(collection))
-    private fun priorCursorStore(owner:ObservationOwner)=SecureStore(app,"observation-prior-cursor-held-"+
-        Values.sha256(listOf(owner.collectionId,owner.accountId).joinToString(""){"${it.length}:$it"}))
-    fun legacyExists(collection:String)=legacyStore(collection).read()!=null
+    private fun legacyName(collection:String)="observation-legacy-held-"+Values.sha256(collection)
+    private fun priorCursorName(owner:ObservationOwner)="observation-prior-cursor-held-"+
+        Values.sha256(listOf(owner.collectionId,owner.accountId).joinToString(""){"${it.length}:$it"})
+    private fun intentStore(name:String)=SecureStore(app,"observation-baseline-plan-"+Values.sha256(name))
+    private fun pageStore(name:String,deviceScope:String,hash:String)=SecureStore(app,
+        "observation-baseline-page-"+Values.sha256("$name:$deviceScope:$hash"))
+    fun legacyExists(collection:String)=legacyName(collection).let { name ->
+        SecureStore(app,name).read()!=null || intentStore(name).read()!=null
+    }
     fun deviceId():String?=Settings.Secure.getString(app.contentResolver,Settings.Secure.ANDROID_ID)
 
     fun holdsExisting(profile: ObservationProfile, collection: String): Boolean =
@@ -93,61 +99,155 @@ internal class ObservationHeldInbox(
         // exact existing rows at the first authorized scan even if Cloud has no
         // legacy records. Later insertions remain eligible for normal capture.
         val legacy=holdsExisting(profile, owner.collectionId)
-        val store=if(legacy)legacyStore(owner.collectionId)else priorCursorStore(owner)
+        val name=if(legacy)legacyName(owner.collectionId) else priorCursorName(owner)
+        val store=SecureStore(app,name)
         val existing=store.read()
         if(existing!=null){
-            checkContract(existing.length<=PREDECESSOR_MAX_BYTES&&
-                (existing.all{it.code<128}||existing.toByteArray(Charsets.UTF_8).size<=PREDECESSOR_MAX_BYTES),
-                "observation_cursor_unavailable")
-            val value=JSONObject(existing);checkContract(value.keys().asSequence().toSet()==setOf("collectionId","deviceScope","keys")&&
-                value.get("collectionId")==owner.collectionId&&value.get("deviceScope")==deviceScope,"observation_cursor_unavailable")
-            val list=value.getJSONArray("keys");checkContract(list.length()<=MAX_EXISTING_HELD,"observation_cursor_unavailable")
-            val keys=linkedSetOf<String>()
-            for(index in 0 until list.length()){
-                val key=list.get(index) as? String
-                checkContract(key!=null&&heldKey.matches(key)&&keys.add(key),"observation_cursor_unavailable")
-            }
+            val doc=JSONObject(existing)
+            if(!doc.has("version"))return device to predecessor(existing,doc,owner.collectionId,deviceScope)
+            val keys=readPages(name,deviceScope,descriptors(doc,owner.collectionId,deviceScope))
+            val original=JSONObject(doc.getString("enrollment"))
+            checkContract(original.getString("collection")==owner.collectionId&&original.getString("device")==Values.sha256(device)&&
+                original.getString("keys")==Values.sha256(keys.sorted().joinToString("")),"observation_cursor_unavailable")
             return device to keys
         }
         if(profile.legacyHold==null)return null
-        val prior=if(legacy)null else previousCursor(owner, profile.fingerprint()).scanStart
+        val prior=if(legacy)null else previousCursor(owner,profile.fingerprint()).scanStart
         val ambiguous=if(legacy)emptySet() else ObservationStateStore(app).read().seen
             .filter{it.owner.collectionId==owner.collectionId&&it.inboxReceivedAt==null}.map{it.inboxRowId}.toSet()
-        val cursor=queryObservationInbox(app,0,profile.receipt)?:return null
-        val keys=linkedSetOf<String>()
-        cursor.use{
-            val idCol=it.getColumnIndexOrThrow("_id");val dateCol=it.getColumnIndexOrThrow("date")
-            val senderCol=it.getColumnIndexOrThrow("address")
-            while(it.moveToNext()){
-                if(it.isNull(senderCol)||!ObservationCandidate.senderAllowed(it.getString(senderCol),profile.receipt))continue
-                if(stopped()||!observationInboxPermitted(app)||it.isNull(idCol))return null
-                val id=it.getLong(idCol)
-                if(prior!=null&&id>prior&&id !in ambiguous)continue
-                if(it.isNull(dateCol))return null
-                val date=it.getLong(dateCol)
-                checkContract(id>0&&date>0&&keys.size<MAX_HELD,"observation_cursor_unavailable")
-                checkContract(keys.add(heldInboxSourceKey(device,owner.collectionId,id,date)),"observation_cursor_unavailable")
-            }
-        }
         val enrollment=enrollmentStore(owner,device)
-        val encoded=JSONObject().put("collectionId",owner.collectionId).put("deviceScope",deviceScope)
-            .put("keys",JSONArray().also{array->keys.forEach{array.put(it)}}).toString()
+        val intent=intentStore(name)
+        val pending=intent.read()
+        val originals=mutableMapOf<String,String>()
+        fun scan(first:Long,last:Long?):List<Pair<Long,String>>? {
+            val cursor=queryObservationInbox(app,first-1,profile.receipt,through=last)?:return null
+            val rows=ArrayList<Pair<Long,String>>()
+            cursor.use{
+                val idCol=it.getColumnIndexOrThrow("_id");val dateCol=it.getColumnIndexOrThrow("date")
+                val senderCol=it.getColumnIndexOrThrow("address");var prev=first-1
+                while(it.moveToNext()){
+                    if(it.isNull(senderCol)||!ObservationCandidate.senderAllowed(it.getString(senderCol),profile.receipt))continue
+                    if(stopped()||!observationInboxPermitted(app)||it.isNull(idCol))return null
+                    val id=it.getLong(idCol)
+                    checkContract(id>prev&&(last==null||id<=last),"observation_cursor_unavailable");prev=id
+                    if(prior!=null&&id>prior&&id !in ambiguous)continue
+                    if(it.isNull(dateCol))return null
+                    val date=it.getLong(dateCol)
+                    checkContract(date>0&&rows.size<MAX_HELD,"observation_cursor_unavailable")
+                    rows.add(id to heldInboxSourceKey(device,owner.collectionId,id,date))
+                }
+            }
+            return rows
+        }
+        val plan=if(pending!=null)JSONObject(pending) else {
+            val rows=scan(1,null)?:return null
+            val keys=rows.mapTo(linkedSetOf()){it.second}
+            checkContract(keys.size==rows.size,"observation_cursor_unavailable")
+            val grant=enrollmentRecord(owner,device,consent,profile,keys)
+            // An older writer may have committed the original grant and crashed before its baseline.
+            // A changed inbox or account cannot replace that commitment.
+            if(enrollment.read()?.let{it!=grant}==true)return null
+            val parts=JSONArray()
+            for(chunk in rows.chunked(PAGE_KEYS)){
+                val payload=chunk.joinToString("\n"){it.second}
+                val hash=Values.sha256(payload);originals[hash]=payload
+                parts.put(JSONObject().put("first",chunk.first().first).put("last",chunk.last().first)
+                    .put("count",chunk.size).put("sha256",hash))
+            }
+            JSONObject().put("version",2).put("collectionId",owner.collectionId).put("deviceScope",deviceScope)
+                .put("count",keys.size).put("pages",parts).put("enrollment",grant)
+        }
+        val pages=descriptors(plan,owner.collectionId,deviceScope)
+        val grant=plan.getString("enrollment")
+        val grantFields=JSONObject(grant)
+        if(grantFields.getString("account")!=owner.accountId || grantFields.getString("collection")!=owner.collectionId ||
+            grantFields.getString("device")!=Values.sha256(device) || grantFields.getString("installation")!=MomoGatewayStore(app).existingInstallationId() ||
+            grantFields.getLong("generation")!=consent.revision.generation || grantFields.getString("profile")!=profile.fingerprint())return null
+        val authorized={
+            !stopped()&&observationInboxPermitted(app)&&NativeRepository.observationOwner(app)==session&&
+                config.controlState(owner)==control&&config.consent(owner)==consent&&consent.canCapture(true)&&
+                config.profile(owner,System.currentTimeMillis())==profile&&deviceId()==device
+        }
         val saved=ObservationLegacyOwnership.withoutControlTransition(app){
             NativeRepository.withObservationOwner(app,session){group,account->
-                if(stopped()||!observationInboxPermitted(app)||owner!=ObservationOwner(group,account)||config.controlState(owner)!=control||
-                    config.consent(owner)!=consent||!consent.canCapture(observationInboxPermitted(app))||config.profile(owner,System.currentTimeMillis())!=profile||
-                    deviceId()!=device||store.read()!=null||(!legacy&&(
-                        previousCursor(owner, profile.fingerprint()).scanStart!=prior||ObservationStateStore(app).read().seen
-                            .filter{it.owner.collectionId==owner.collectionId&&it.inboxReceivedAt==null}.map{it.inboxRowId}.toSet()!=ambiguous)))false
-                else {
-                    val enrollmentData=enrollmentRecord(owner,device,consent,profile,keys)
-                    // Write scope first. A crash before the immutable inbox snapshot leaves no eligible row.
-                    enrollment.write(enrollmentData)
-                    if(enrollment.read()!=enrollmentData)false else {store.write(encoded);store.read()==encoded}
+                if(!authorized()||owner!=ObservationOwner(group,account)||store.read()!=null||intent.read()!=pending||
+                    (!legacy&&(previousCursor(owner,profile.fingerprint()).scanStart!=prior||ObservationStateStore(app).read().seen
+                        .filter{it.owner.collectionId==owner.collectionId&&it.inboxReceivedAt==null}.map{it.inboxRowId}.toSet()!=ambiguous)))
+                    return@withObservationOwner null
+                val encodedPlan=pending?:plan.toString()
+                if(pending==null){intent.write(encodedPlan);if(intent.read()!=encodedPlan)return@withObservationOwner null}
+                // The intent fixes each original row range and digest before the first page write.
+                // Resume missing pages only. Later arrivals cannot expand the original baseline.
+                val keys=linkedSetOf<String>()
+                for(page in pages){
+                    if(!authorized())return@withObservationOwner null
+                    val file=pageStore(name,deviceScope,page.hash)
+                    val existingPage=file.read()
+                    val payload=existingPage?:originals[page.hash]?:scan(page.first,page.last)?.joinToString("\n"){it.second}
+                        ?:return@withObservationOwner null
+                    appendPage(keys,page,payload)
+                    if(existingPage==null){file.write(payload);if(file.read()!=payload)return@withObservationOwner null}
                 }
-            }?:false
-        }?:false
-        return if(saved)device to keys else null
+                if(enrollmentRecord(owner,device,consent,profile,keys)!=grant||!authorized())return@withObservationOwner null
+                val oldGrant=enrollment.read()
+                if(oldGrant!=null&&oldGrant!=grant)return@withObservationOwner null
+                if(oldGrant==null)enrollment.write(grant)
+                if(enrollment.read()!=grant||!authorized())return@withObservationOwner null
+                val encoded=if(keys.size<=PAGE_KEYS)JSONObject().put("collectionId",owner.collectionId).put("deviceScope",deviceScope)
+                    .put("keys",JSONArray().also{a->keys.forEach{a.put(it)}}).toString() else encodedPlan
+                store.write(encoded)
+                if(store.read()!=encoded)return@withObservationOwner null
+                intent.clear()
+                if(keys.size<=PAGE_KEYS)pages.forEach{pageStore(name,deviceScope,it.hash).clear()}
+                keys
+            }
+        }
+        return saved?.let{device to it}
+    }
+
+    private data class Page(val first:Long,val last:Long,val count:Int,val hash:String)
+
+    private fun descriptors(doc:JSONObject,collection:String,deviceScope:String):List<Page>{
+        checkContract(doc.keys().asSequence().toSet()==setOf("version","collectionId","deviceScope","count","pages","enrollment")&&
+            doc.getInt("version")==2&&doc.getString("collectionId")==collection&&doc.getString("deviceScope")==deviceScope,
+            "observation_cursor_unavailable")
+        val count=doc.getInt("count");val parts=doc.getJSONArray("pages")
+        checkContract(count in 0..MAX_HELD&&parts.length()==(count+PAGE_KEYS-1)/PAGE_KEYS,"observation_cursor_unavailable")
+        var previous=0L
+        return (0 until parts.length()).map{i->
+            val part=parts.getJSONObject(i)
+            checkContract(part.keys().asSequence().toSet()==setOf("first","last","count","sha256"),"observation_cursor_unavailable")
+            val page=Page(part.getLong("first"),part.getLong("last"),part.getInt("count"),part.getString("sha256"))
+            checkContract(page.first>previous&&page.last>=page.first&&page.count==minOf(PAGE_KEYS,count-i*PAGE_KEYS)&&
+                heldKey.matches(page.hash),"observation_cursor_unavailable")
+            previous=page.last;page
+        }
+    }
+    private fun appendPage(keys:MutableSet<String>,page:Page,payload:String){
+        checkContract(payload.length==page.count*65-1&&Values.sha256(payload)==page.hash,"observation_cursor_unavailable")
+        val parts=payload.split('\n')
+        checkContract(parts.size==page.count&&parts.all{heldKey.matches(it)&&keys.add(it)},"observation_cursor_unavailable")
+    }
+    private fun readPages(name:String,scope:String,pages:List<Page>):Set<String>{
+        val keys=linkedSetOf<String>()
+        for(page in pages){
+            val payload=pageStore(name,scope,page.hash).read()?:error("observation_cursor_unavailable")
+            appendPage(keys,page,payload)
+        }
+        return keys
+    }
+    private fun predecessor(encoded:String,doc:JSONObject,collection:String,deviceScope:String):Set<String>{
+        checkContract(encoded.length<=PREDECESSOR_MAX_BYTES&&
+            (encoded.all{it.code<128}||encoded.toByteArray(Charsets.UTF_8).size<=PREDECESSOR_MAX_BYTES)&&
+            doc.keys().asSequence().toSet()==setOf("collectionId","deviceScope","keys")&&
+            doc.get("collectionId")==collection&&doc.get("deviceScope")==deviceScope,"observation_cursor_unavailable")
+        val list=doc.getJSONArray("keys");checkContract(list.length()<=MAX_EXISTING_HELD,"observation_cursor_unavailable")
+        val keys=linkedSetOf<String>()
+        for(index in 0 until list.length()){
+            val key=list.get(index) as? String
+            checkContract(key!=null&&heldKey.matches(key)&&keys.add(key),"observation_cursor_unavailable")
+        }
+        return keys
     }
     private fun enrollmentStore(owner:ObservationOwner,device:String)=SecureStore(app,"observation-held-enrollment-"+
         Values.sha256(listOf(owner.collectionId,owner.accountId,device).joinToString(""){"${it.length}:$it"}))

@@ -143,8 +143,13 @@ test('the Worker and PostgreSQL serve a scoped statement and reject a same-count
   assert.equal(first.items.length, 25);
   assert.equal(first.items[0].id, 'p-01');
   assert.equal(first.items.at(-1).balanceRwf, String(25n * amount));
-  assert.deepEqual(Object.keys(first.items[0]).sort(), ['amountRwf','atRaw','balanceRwf','direction','ftId','id']);
+  assert.deepEqual(Object.keys(first.items[0]).sort(), ['amountRwf','atRaw','balanceRwf','direction','ftId','id','occurredAt']);
   assert.match(first.revision, /^[0-9a-f]{64}$/);
+  assert.equal(first.items[0].occurredAt,null);assert.equal(first.items[0].atRaw,'');
+  const sameStatement=(next,expected)=>{
+    assert.ok(Number.isFinite(Date.parse(next.asOf))&&Date.parse(next.asOf)>=Date.parse(expected.asOf));
+    assert.deepEqual({...next,asOf:expected.asOf},expected);
+  };
   const detail=id=>'/api/admin/operations/members/'+id;
   const before=snapshots;
   profilePlans=true;
@@ -159,7 +164,7 @@ test('the Worker and PostgreSQL serve a scoped statement and reject a same-count
   assert.ok(JSON.stringify(plans[1]).includes('burimunsi_payments_member'));
   t.diagnostic(`Member detail plus closing balance with 26 scoped and 5,001 foreign movements. One locked snapshot; PG executor ${plans.map(p=>p['Execution Time'].toFixed(3)).join(' + ')} ms, balance uses collection/member index.`);
   const [boundOk,bound]=await request(detail(member)+'?include=statement');
-  assert.equal(boundOk,200,JSON.stringify(bound));assert.deepEqual(bound.member_statement,first);
+  assert.equal(boundOk,200,JSON.stringify(bound));sameStatement(bound.member_statement,first);
   const previousReads=paymentReads;
   assert.equal((await request(detail(outside)+'?include=balance'))[0],404);
   assert.equal((await request(detail(member)+'?include=statement&groupId=elsewhere'))[0],400);
@@ -180,7 +185,7 @@ test('the Worker and PostgreSQL serve a scoped statement and reject a same-count
   afterProfile=async()=>writer.query("UPDATE burimunsi.payments SET amount_rwf=amount_rwf-1 WHERE id IN ('p-01','p-26')");
   const [racingOk,racing]=await request(detail(member)+'?include=statement');
   afterProfile=undefined;
-  assert.equal(racingOk,200);assert.deepEqual(racing.member_statement,first);
+  assert.equal(racingOk,200);sameStatement(racing.member_statement,first);
   const [changed,change]=await request(later);
   assert.equal(changed,409);assert.equal(change.error.code,'member_statement_changed');
   const [refreshed, fresh] = await request(prefix + member);

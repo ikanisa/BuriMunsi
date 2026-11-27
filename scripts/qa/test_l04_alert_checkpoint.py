@@ -60,7 +60,7 @@ class Checkpoint(unittest.TestCase):
         self.assertNotEqual(first['id'], second['id'])
         self.assertTrue(acknowledge(self.path, first['id']))
         self.assertFalse(acknowledge(self.path, first['id']))
-        self.assertEqual(pending(self.path), [second])
+        self.assertEqual(pending(self.path), [first, second])
 
     def test_outbox_full_rolls_back_entire_window(self):
         self.sample(T, FAIL)
@@ -134,7 +134,7 @@ class Checkpoint(unittest.TestCase):
                          'open_incidents': {'api-unavailable': 'page'},
                          'pending_by_category': {'api-unavailable': 1}})
         self.assertTrue(acknowledge(self.path, f['id']))
-        self.assertEqual(incidents(self.path), {**seen, 'pending_by_category': {}})
+        self.assertEqual(incidents(self.path), seen)
 
     def test_incidents_reports_resolved_but_undelivered_notifications(self):
         self.sample(T, FAIL)
@@ -157,7 +157,8 @@ class Checkpoint(unittest.TestCase):
         before = self.path.read_bytes()
         out = json.loads(subprocess.check_output(cmd, text=True))
         self.assertEqual(self.path.read_bytes(), before)
-        self.assertEqual(out, {'last_window_end': T + 300, 'pending_by_category': {},
+        self.assertEqual(out, {'last_window_end': T + 300, 'pending_by_category': {
+                                   'api-unavailable': 1, 'privacy': 1, 'telemetry-blind': 1},
                          'open_incidents': {'api-unavailable': 'page',
                                             'telemetry-blind': 'page',
                                             'privacy': 'halt'}})

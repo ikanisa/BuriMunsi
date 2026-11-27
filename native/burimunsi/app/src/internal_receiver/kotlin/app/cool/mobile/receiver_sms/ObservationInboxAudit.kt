@@ -56,7 +56,7 @@ internal class ObservationInboxAudit(
     private fun AuditProgress.check(state:String)=ObservationInboxCheck(runId,scope.consent.revision.generation,state,
         candidates,missing,pending,phoneHead?.key,parsedHead?.key,collectionRevision)
 
-    private data class AuditAuthority(val scope:AuditScope,val profile:ObservationProfile,val device:String,val held:Set<String>)
+    private data class AuditAuthority(val scope:AuditScope,val profile:ObservationProfile,val device:String,val held:Set<String>,val review:AndroidUnclassifiedSmsStore)
     private class AuditAuthorityChanged:Exception()
     private data class AuditRow(val id:Long,val received:Long,val sender:String,val body:String,val sent:Long?,val sub:Int?){
         override fun toString()="AuditRow(redacted)"
@@ -97,17 +97,19 @@ internal class ObservationInboxAudit(
         val deviceScope=Values.sha256(device)
         val uncertainLegacy=HeldRecoveryJournal.hasRecords(app)&&
             HeldRecoveryJournal.hasUncertain(app,session.owner,installation,deviceScope)
-        val uncertainLocal=AndroidUnclassifiedSmsStore(app,session.owner.collectionId,session.owner.accountId,
+        val inboxRevision=ObservationInboxRevision.snapshot()
+        val review=AndroidUnclassifiedSmsStore(app,session.owner.collectionId,session.owner.accountId,
             installation,deviceScope,{
-                !stopped()&&observationInboxPermitted(app)&&NativeRepository.observationOwner(app)==session&&
+                !stopped()&&ObservationInboxRevision.snapshot()==inboxRevision&&observationInboxPermitted(app)&&NativeRepository.observationOwner(app)==session&&
                     config.controlState(session.owner)==control&&config.consent(session.owner)==consent&&
                     config.profile(session.owner,System.currentTimeMillis())==profile&&heldInbox.deviceId()==device
-            }).hasUnresolved()
+            })
+        val uncertainLocal=review.hasUnresolved()
         val heldScope=Values.sha256(keys.sorted().joinToString(""){"${it.length}:$it"})
         val scope=AuditScope(session,profile.fingerprint(),profile.legacyHold,consent,control,Values.sha256(device),heldScope,
-            ObservationInboxRevision.snapshot(),uncertainLegacy,uncertainLocal)
+            inboxRevision,uncertainLegacy,uncertainLocal)
         if(stopped()||!ObservationInboxRevision.observerActive()||!observationInboxPermitted(app)||NativeRepository.observationOwner(app)!=session)return null
-        return AuditAuthority(scope,profile,device,keys)
+        return AuditAuthority(scope,profile,device,keys,review)
     }
     /** A completed local sweep is reusable only for this exact authority and inbox revision. */
     fun sweepScope(stopped:()->Boolean={false}):String? = synchronized(lock){
@@ -311,6 +313,31 @@ internal class ObservationInboxAudit(
             val before=decisions[row.id]?:continue
             if(before!=ObservationLegacyOwnership.classify(app,owner,row.id,row.received,row.sender,row.body,row.sub)||
                 ObservationInboxRevision.snapshot()!=scope.revision||localStop())return@synchronized interrupted()
+        }
+        // Both local reads covered the same row ID, receive time, sender and body. The
+        // server match additionally binds the exact source key and body digest. Nothing
+        // derived from an excluded or still-unclassified body is sent to reconciliation.
+        if(scope.uncertainLocal){
+            val confirmed=requests.indices.filter { states[it]?.state=="matched" }.mapTo(mutableSetOf()){requests[it].sourceKey}
+            NativeRepository.withObservationOwner(app,scope.session){_,_->
+                for(row in rows){
+                    if(localStop()||ObservationInboxRevision.snapshot()!=scope.revision)break
+                    if(!ObservationCandidate.senderAllowed(row.sender,authority.profile.receipt))continue
+                    val decision=when{
+                        ObservationCandidate.excludeFromFinancialCensus(row.sender,row.body,authority.profile.receipt) ->
+                            ReviewDecision.PROVEN_NOT_FINANCIAL
+                        heldInboxSourceKey(authority.device,owner.collectionId,row.id,row.received) in confirmed ->
+                            ReviewDecision.ACCEPTED_BY_DURABLE_JOURNAL
+                        else -> continue
+                    }
+                    after.review.resolve(row.id,row.received){decision}
+                }
+            }
+            if(!after.review.hasUnresolved()){
+                // The uncertainty bit is part of the audit scope. Establish a fresh
+                // traversal from the beginning before claiming completeness.
+                resetAudit();return@synchronized Audit.MORE
+            }
         }
         val handledRepairs=if(savedPage==null)mutableSetOf() else progress.handledRepairs.toMutableSet()
         fun rememberRepairs(){

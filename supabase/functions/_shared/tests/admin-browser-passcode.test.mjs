@@ -329,7 +329,7 @@ test('payment analysis uses the original authorized projection, exact full total
   const input={q:'Financial probe',offset:0,limit:25,filters:[],sort:{key:'amount',direction:'desc'}};
   const {csrfToken}=await login.json(),cookie=login.headers.get('set-cookie').split(';')[0];
   setGrants(['payments.read','sms.read']);
-  let sms=false,active=true,tooLarge=false,unsafeAmount=false,scans=0,snapshots=0,inSnapshot=false;
+  let sms=false,active=true,badTotals=false,unsafeAmount=false,scans=0,snapshots=0,inSnapshot=false;
   const raw=[
     {id:'a',amount_rwf:'9007199254740991',direction:'incoming',allocation_state:'allocated'},
     {id:'b',amount_rwf:'9007199254740991',direction:'incoming',allocation_state:'unallocated'},
@@ -348,11 +348,13 @@ test('payment analysis uses the original authorized projection, exact full total
           assert.equal(args[0],group);
           return active?[{role:'admin',can_allocate:true,can_read_sms:sms}]:[];
         }
-        assert.match(sql,/CASE WHEN \$3::boolean THEN p.sms_source_id ELSE NULL/);
-        assert.match(sql,/LIMIT \(\$4::int\+1\)/);
-        assert.deepEqual(args,[group,'%Financial probe%',sms,5000]);scans++;
-        if(tooLarge)return [{candidate_count:5001,id:null}];
-        return raw.map((row,i)=>({candidate_count:raw.length,collection_id:group,page_at:new Date(1760000000000-i),
+        assert.match(sql,/CASE WHEN \$2::boolean THEN p.sms_source_id ELSE NULL/);
+        assert.match(sql,/sum\(amount_rwf\) FILTER/);
+        assert.match(sql,/LIMIT \$\d+ OFFSET \$\d+/);
+        assert.equal(args[0],group);assert.equal(args[1],sms);assert.ok(args.includes('%Financial probe%'));scans++;
+        const linked=args.includes('linked'),matches=linked?raw.slice(0,1):raw;
+        return matches.map((row,i)=>({total_count:raw.length,matching_count:matches.length,content_revision:'a'.repeat(64),collection_id:group,page_at:new Date(1760000000000-i),
+          incoming:badTotals?'invalid':linked?'9007199254740991':'18014398509481982',outgoing:linked?'0':'7',
           sms_source_id:sms&&i===0?'linked-synthetic-source':null,version:1,...row,
           ...(unsafeAmount&&i===0?{amount_rwf:'9007199254740993'}:{})}));
       }});}finally{inSnapshot=false;}
@@ -377,10 +379,10 @@ test('payment analysis uses the original authorized projection, exact full total
   assert.equal((await call()).status,403);assert.equal(scans,2);
   active=true;
   assert.equal((await call(input,'invalid-csrf')).status,403);assert.equal(scans,2);
-  tooLarge=true;
+  badTotals=true;
   const refused=await call();assert.equal(refused.status,503);
-  assert.match(await refused.text(),/payment_analysis_scope_too_large/);
-  tooLarge=false;unsafeAmount=true;
+  assert.match(await refused.text(),/payment_totals_unavailable/);
+  badTotals=false;unsafeAmount=true;
   assert.equal((await call()).status,503);
 });
 

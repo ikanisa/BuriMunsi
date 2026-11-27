@@ -15,6 +15,17 @@ refs, deleted unreachable history, uncommitted files or external evidence; the
 command refuses a dirty, shallow or incomplete checkout. Git patch scanning
 does not attest to opaque files or archived contents in commits; scan intended
 release deliverables explicitly instead.
+
+The November 27 private review classified 650 historical detections as
+noncredentials. `reviewed-history.json` records the reviewed source commit,
+tree, detector policy, digest of the private review and a digest of the distinct
+findings per immutable commit. Each finding includes the file, rule, line
+range and fingerprints of both the capture and full match. The gate rescans
+every acquired ref, requires every reviewed group that is reachable to match,
+and blocks a detection introduced in a new commit. A second private review of
+the exact observations is required to update this record. Keep the original
+classification evidence in private custody. The artifact command still flags
+every detection in its independently supplied inputs.
 The second command explicitly scans only the named regular files/trees and the
 supported ZIP-family package members (including APK/AAB, single archive level).
 It scans plain data and printable byte runs in binaries, not executable behavior
@@ -28,8 +39,8 @@ GitHub. It verifies the independently checked-in SHA-256 of the official archive
 before extraction and compares the executable version. It runs built-in detection
 rules with neither repository-wide path allowlists nor inline suppressions and
 requires an intentionally synthetic positive control to be caught. The scanner
-does not send artifact text to a provider. No findings, paths, refs or values
-are logged by the wrapper and it writes no report; temporary inputs are private
+does not send artifact text to a provider. The wrapper reads the history report
+through a private process pipe and writes no raw findings to a log or file. Temporary inputs are private
 and removed on normal completion. Do not upload suspected artifacts while
 investigating a finding; use an approved private review path and rotate/revoke
 actual exposures rather than rewriting shared history as a reflex.

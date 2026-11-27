@@ -7,7 +7,7 @@ const pageSize = 100;
 export const rosterUnavailable = 'The member records could not be verified. Try again.';
 class RosterChanged extends Error {}
 
-async function readRoster(request: AdminRequest, signal: AbortSignal): Promise<DataRow[]> {
+async function readRoster(request: AdminRequest, signal: AbortSignal, first?:Record<string,unknown>): Promise<DataRow[]> {
   const rows: DataRow[] = [], seen = new Set<string>();
   let total: number | undefined;
   do {
@@ -15,7 +15,7 @@ async function readRoster(request: AdminRequest, signal: AbortSignal): Promise<D
     const offset = rows.length;
     if (offset > 2147483647) throw new Error(rosterUnavailable);
     const query = new URLSearchParams({directory:'roster', country:'RW', limit:String(pageSize), offset:String(offset), sort:'created_at_asc'});
-    const data = await request('core/members?' + query, {signal}).catch((error: unknown) => {
+    const data = offset === 0 && first ? first : await request('core/members?' + query, {signal}).catch((error: unknown) => {
       signal.throwIfAborted();
       if (error instanceof AdminRequestError && error.statusCode === 503) {
         throw new AdminRequestError('Members are temporarily unavailable. Try again.');
@@ -39,9 +39,9 @@ async function readRoster(request: AdminRequest, signal: AbortSignal): Promise<D
 }
 
 /** Each page verifies its own count and rows. Restart once if the live roster moved between pages. */
-export async function readCompleteRoster(request: AdminRequest, signal: AbortSignal) {
+export async function readCompleteRoster(request: AdminRequest, signal: AbortSignal, first?:Record<string,unknown>) {
   try {
-    return await readRoster(request, signal);
+    return await readRoster(request, signal, first);
   } catch (error) {
     if (!(error instanceof RosterChanged)) throw error;
     return readRoster(request, signal);

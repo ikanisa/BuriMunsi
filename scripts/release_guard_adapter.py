@@ -11,8 +11,9 @@ def identity(root: Path, product: str) -> str:
     if product=='BuriMunsi':
         data=g.load(root/'release/canonical-integration-status.json')
         return g.text(data.get('version'),'SOURCE_VERSION_MISSING')
-    g.need(product=='M-Money','UNKNOWN_PRODUCT')
-    raw=g.read_file(root,'app/build.gradle.kts').decode('utf-8')
+    g.need(product in {'BuriMunsi-standalone','M-Money'},'UNKNOWN_PRODUCT')
+    path='native/burimunsi/app/build.gradle.kts' if product=='BuriMunsi-standalone' else 'app/build.gradle.kts'
+    raw=g.read_file(root,path).decode('utf-8')
     versions=re.findall(r'\bversionName\s*=\s*"([^"]+)"',raw)
     g.need(len(versions)==1,'SOURCE_VERSION_AMBIGUOUS')
     return versions[0]
@@ -48,10 +49,10 @@ def enforce(root: Path,product: str,phase: str,manifest: Path|None=None,
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--phase',choices=['source','build'],required=True)
+    p.add_argument('--phase',choices=['source','build','promotion'],required=True)
     p.add_argument('--manifest',type=Path)
     a=p.parse_args();root=Path(__file__).resolve().parents[1]
-    product='BuriMunsi' if (root/'release/canonical-integration-status.json').exists() else 'M-Money'
+    product='BuriMunsi-standalone' if (root/'native/burimunsi/app/build.gradle.kts').is_file() else 'BuriMunsi' if (root/'release/canonical-integration-status.json').exists() else 'M-Money'
     errors=enforce(root,product,a.phase,a.manifest)
     print(json.dumps({'status':'blocked' if errors else 'passed','gate_open':not errors,'phase':a.phase,
                       'errors':errors,'production_authorized':False}))

@@ -16,7 +16,7 @@ const actor={id:'member-actor',sessionId:'member-session',groupId:'group-1',role
  expiresAt:9999999999999,installationId:'device-1',installationProfile:'staff',capabilities:['members.enroll']};
 const secret='synthetic-roster-bridge-signing-key-0123456789',endpoint='https://decoder.example.invalid/decode';
 const build='a'.repeat(64),policyHash='b'.repeat(64),apiKey='synthetic-provider-key-long-enough';
-const toolchain={python:'3.12',pillow:'12.3.0',pypdfium2:'5.2.0',pypdf:'6.19.0',openpyxl:'3.1.5',defusedxml:'0.7.1'};
+const toolchain={python:'3.12',pillow:'13.0.0',pypdfium2:'5.2.0',pypdf:'7.2.0',openpyxl:'3.1.5',defusedxml:'0.7.1'};
 const corpus=new URL('../../../../../tools/roster-decoder/native-probe/corpus/',import.meta.url);
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const disclosure={importFlowId:'77777777-7777-4777-8777-777777777777',ocrDisclosureVersion:'burimunsi-ocr-disclosure-v1'};

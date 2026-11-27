@@ -68,8 +68,8 @@ android {
         applicationId = "rw.ikanisa.burimunsi"
         minSdk = 26
         targetSdk = 36
-        versionCode = 71
-        versionName = "0.23.0-collect.49"
+        versionCode = 72
+        versionName = "0.23.0-collect.50"
         resValue("string", "app_name", "BuriMunsi")
         buildConfigField("boolean", "IS_QUALIFICATION", "false")
         // The new Cloud identity snapshots the existing inbox before catch-up.
@@ -180,9 +180,11 @@ val verifyReleaseEvidence by tasks.registering(Exec::class) {
             commandLine("python3", rootProject.file("scripts/release_readiness.py"), "--phase", phase,
                 "--evidence", rootProject.file(evidence!!), "--profile", rootProject.file(profile!!))
         } else {
-            check(!status.isNullOrBlank()) { "Legacy build evidence requires its existing task register" }
-            commandLine("python3", rootProject.file("scripts/release_readiness.py"),
-                "--status", rootProject.file(status!!), "--evidence", rootProject.file(evidence!!), "--phase", "build")
+            val mode = providers.gradleProperty("burimunsiProductMode").orElse("standalone").get()
+            val args = mutableListOf<Any>("python3", rootProject.file("scripts/release_readiness.py"),
+                "--product-mode", mode, "--evidence", rootProject.file(evidence!!), "--phase", "build")
+            if (!status.isNullOrBlank()) args.addAll(listOf("--status", rootProject.file(status)))
+            commandLine(args)
         }
     }
 }
@@ -218,14 +220,13 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
-// Explicit promotion check: all 65 criteria, signed distribution and owner evidence.
+// Promotion verifies the signed product-bound role artifacts, evidence and owner authorization.
 // It verifies evidence only. It does not sign, publish, upload, migrate or deploy.
 tasks.register<Exec>("verifyProductionPromotion") {
     doFirst {
-        val status = providers.gradleProperty("burimunsiReleaseStatus").orNull
         val evidence = providers.gradleProperty("burimunsiReleaseEvidence").orNull
-        check(!status.isNullOrBlank() && !evidence.isNullOrBlank()) { "Production promotion evidence required." }
-        commandLine("python3", rootProject.file("scripts/release_readiness.py"),
-            "--status", rootProject.file(status!!), "--evidence", rootProject.file(evidence!!), "--phase", "promotion")
+        check(!evidence.isNullOrBlank()) { "Production promotion evidence required." }
+        commandLine("python3", rootProject.file("scripts/release_readiness.py"), "--product-mode", "standalone",
+            "--evidence", rootProject.file(evidence), "--phase", "promotion")
     }
 }

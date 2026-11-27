@@ -42,6 +42,10 @@ export function paymentInstant(raw) {
   return Number.isFinite(value) ? value : null;
 }
 
+export function paymentEventInstant(row) {
+  return paymentInstant(Object.hasOwn(row,'occurredAt') ? row.occurredAt : row.atRaw);
+}
+
 function columnPredicate(column, filter) {
   const {kind} = column;
   const needle = folded(filter.text.trim());
@@ -89,7 +93,7 @@ export function paymentMemberNumber(row) {
 
 const columns = [
   {key:'reference', kind:'text', value:r=>r.ftId},
-  {key:'time', kind:'date', value:r=>paymentInstant(r.atRaw)},
+  {key:'time', kind:'date', value:paymentEventInstant},
   {key:'amount', kind:'number', value:r=>r.amountRwf},
   {key:'direction', kind:'category', value:r=>r.direction, choices:['incoming','outgoing']},
   {key:'allocation', kind:'category', value:r=>r.state, choices:['allocated','unallocated']},
@@ -130,10 +134,12 @@ function exact(object, keys) {
       Object.keys(object).length !== keys.length || !keys.every(key=>Object.hasOwn(object,key))) fail();
 }
 export function parsePaymentAnalysisQuery(value, showSms) {
-  exact(value,['q','offset','limit','filters','sort']);
+  const revision=value?.revision;
+  exact(value,['q','offset','limit','filters','sort',...(revision!==undefined?['revision']:[])]);
+  if(revision!==undefined && (typeof revision!=='string'||!/^[a-f0-9]{64}$/.test(revision)))fail();
   const {q,offset,limit,filters,sort}=value;
   const definitions = new Map(allowed(showSms).map(column=>[column.key,column]));
-  if (typeof q !== 'string' || q.length > 80 || !Number.isInteger(offset) || offset < 0 || offset > 100_000 || offset % 25 ||
+  if (typeof q !== 'string' || q.length > 80 || !Number.isSafeInteger(offset) || offset < 0 || offset % 25 ||
       limit !== 25 || !Array.isArray(filters) || filters.length > definitions.size) fail();
   exact(sort,['key','direction']);
   if (!definitions.has(sort.key) || !['asc','desc'].includes(sort.direction)) fail();
@@ -153,7 +159,7 @@ export function parsePaymentAnalysisQuery(value, showSms) {
     if ((min&&lower===null)||(max&&upper===null)||(lower!==null&&upper!==null&&lower>upper)) fail();
     seen.add(key);
   }
-  return {q,offset,limit,filters,sort};
+  return {q,offset,limit,filters,sort,...(revision!==undefined&&{revision})};
 }
 
 export function analyzeCanonicalPaymentRows(rows, filters, sort, showSms) {

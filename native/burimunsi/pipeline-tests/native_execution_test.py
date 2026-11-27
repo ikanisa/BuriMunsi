@@ -137,6 +137,7 @@ EXPECTED_RECEIVER_ONLY_CASES = {
         'legacyMigrationCopiesBeforeDeletingOriginal',
         'corruptCiphertextBlocksOwnerResetAndPreservesBytes',
         'unresolvedObservationsStayEncryptedAndScopedAcrossReopen',
+        'exactOverflowLocatorsReopenEncryptedAndRetireOnlyUnderTheirOwner',
         'preReconciliationQueueKeepsOriginalIdentityUntilExactAcknowledgement',
         'code48HeldJournalPreservesUncertainCiphertextAndRedactsOnlyTerminalRecords',
         'corruptObservationCiphertextDoesNotResetTheQueue',

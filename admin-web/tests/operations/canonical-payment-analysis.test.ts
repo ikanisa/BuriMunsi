@@ -1,5 +1,5 @@
 import {describe, expect, it, vi} from 'vitest';
-import {buriMunsiPayment, paymentInstant, paymentTime, readCanonicalPaymentAnalysis, paymentCounterpartyEvidence, paymentMemberName, paymentMemberNumber} from '../../src/features/operations/canonicalPaymentAnalysis';
+import {buriMunsiPayment, paymentEventInstant, paymentEventTime, paymentInstant, paymentTime, readCanonicalPaymentAnalysis, paymentCounterpartyEvidence, paymentMemberName, paymentMemberNumber} from '../../src/features/operations/canonicalPaymentAnalysis';
 import {analyzeCanonicalPaymentRows,parsePaymentAnalysisQuery,type PaymentAnalysisQuery}
   from '../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
 
@@ -30,6 +30,14 @@ describe('canonical payment analysis source', () => {
     expect(value.items).toHaveLength(25);
     expect(value.items[0]).toMatchObject({amountRwf:0,payerPhoneRaw:'000007'});
     expect(value.directionTotalsRwf).toEqual({incoming:9007199254740993n,outgoing:null});
+  });
+
+  it('requires every linked page to return the requested revision', async()=>{
+    const revision='a'.repeat(64),signal=new AbortController().signal,query={...input,revision};
+    await expect(readCanonicalPaymentAnalysis(vi.fn(async()=>({...response,revision})),signal,query,'group-a',false)).resolves.toMatchObject({revision});
+    for(const changed of [undefined,'b'.repeat(64)]){
+      await expect(readCanonicalPaymentAnalysis(vi.fn(async()=>({...response,revision:changed})),signal,query,'group-a',false)).rejects.toThrow();
+    }
   });
 
   it('rejects bad counts, duplicate rows, wrong scope, forbidden evidence, and inaccurate totals representations', async () => {
@@ -132,6 +140,16 @@ describe('member and counterparty presentation', () => {
 });
 
 describe('payment time in Kigali', () => {
+  it('uses a validated provider instant and keeps a missing event date unknown even when earlier payloads display a capture time',()=>{
+    const canonical={atRaw:'04/05/2026 08:20',occurredAt:'2026-05-04T06:20:00.000Z'};
+    expect(paymentEventTime(canonical)).toMatch(/04 May 2026.*08:20/);
+    expect(paymentEventInstant(canonical)).toBe(Date.parse(canonical.occurredAt));
+    expect(paymentEventTime({atRaw:at,occurredAt:null})).toBe('Unknown');
+    expect(paymentEventInstant({atRaw:at,occurredAt:null})).toBeNull();
+    expect(paymentEventTime({atRaw:at})).toBe(paymentTime(at));
+    expect(parsePaymentAnalysisQuery({...input,offset:100025},false).offset).toBe(100025);
+  });
+
   it('converts explicit offsets and keeps exact seconds and fractional precision when stated', () => {
     expect(paymentInstant('2026-11-24T23:15:34.125+03:00')).toBe(Date.parse('2026-11-24T20:15:34.125Z'));
     expect(paymentTime('2026-11-24T23:15:34.125+03:00')).toMatch(/24 Nov 2026.*22:15:34\.125/);

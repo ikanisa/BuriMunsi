@@ -42,6 +42,8 @@ a.overview-evidence-card:hover,
   text-align: start;
   cursor: pointer;
 }
+.overview-metric :is(dt, .overview-metric-icon) { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+.overview-metric-label { font-size: .875rem; font-weight: 650; line-height: 1.25; overflow-wrap: anywhere; }
 .overview-metric dt { color: var(--admin-muted); font-weight: 650; }
 .overview-payment-metrics { margin-block-start: .75rem; }
 .overview-wallet-status { margin: .5rem 0 0; overflow-wrap: anywhere; }

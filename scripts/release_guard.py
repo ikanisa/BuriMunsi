@@ -279,22 +279,25 @@ def dependencies(source):
             'resolution_status':'unresolved','declarations':rows,'components':[]}
 
 def policy(product,phase):
-    need(product in {'BuriMunsi','M-Money','release-safeguards'},'UNKNOWN_PRODUCT')
+    need(product in {'BuriMunsi','BuriMunsi-standalone','M-Money','release-safeguards'},'UNKNOWN_PRODUCT')
     need(phase in {'source','build','promotion'},'UNKNOWN_PHASE')
     if phase=='source': requirements={'guard_regression':'local_release_validator_regression'}
     else:
         need(product!='release-safeguards','TOOLING_CANNOT_BE_PRODUCTION')
         requirements={'local_regression':'consolidated_platform_independent','source_reconciliation':'actual_working_checkout',
                       'dependency_resolution':'resolved_runtime_and_build_dependencies'}
-        if product=='BuriMunsi': requirements.update(BM)
+        if product in {'BuriMunsi','BuriMunsi-standalone'}: requirements.update(BM)
+        if product=='BuriMunsi-standalone':
+            requirements.update(canonical_writer='burimunsi_payments_with_original_sms',
+                                phone_journeys='physical_carrier_to_burimunsi_payment_allocation_and_statement')
         if phase=='promotion':
             requirements.update({'signed_distribution':'verified_release_artifacts',
-                                 'installed_update':'existing_signed_cloud_packages'} if product=='BuriMunsi'
+                                 'installed_update':'existing_signed_cloud_packages'} if product in {'BuriMunsi','BuriMunsi-standalone'}
                                 else {**MM,'native_matrix':'pinned_candidate_android_matrix'})
             requirements['operations_authorization']='responsible_owner_authorization'
     return {'validator_version':VERSION,'schema_version':SCHEMA,'product':product,'phase':phase,'max_age_seconds':MAX_AGE,
             'requirements':requirements,'designation':{'source':'source-only','build':'candidate','promotion':'production'}[phase],
-            'artifact_ids':([] if phase!='promotion' else ['staff-apk','receiver-apk'] if product=='BuriMunsi' else ['release-apk','release-aab'])}
+            'artifact_ids':([] if phase!='promotion' else ['staff-apk','receiver-apk'] if product in {'BuriMunsi','BuriMunsi-standalone'} else ['release-apk','release-aab'])}
 
 def policy_sha(product,phase): return sha(canonical(policy(product,phase)))
 
@@ -355,6 +358,28 @@ def verify_installed_update(log, directory, artifacts):
     need(result.returncode == 0, 'INSTALLED_UPDATE_NOT_VERIFIED')
 
 
+def verify_standalone_result(log, directory, root, artifacts, profile, now, stage):
+    """Use the release tools installed alongside this guard; never import a candidate's evidence."""
+    native_scripts = Path(__file__).resolve().parents[1] / 'native/burimunsi/scripts'
+    program = (
+        "import datetime as dt, json, sys\n"
+        "from pathlib import Path\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "import qualify_production as q, standalone_payments as s\n"
+        "doc, artifacts, profile = json.load(sys.stdin)\n"
+        "root, base = Path(sys.argv[2]), Path(sys.argv[3])\n"
+        "binding = {'source_commit':s.source_commit(root),'source_sha256':q.fingerprint(root)['sha256'],"
+        "'backend_sha256':artifacts['qualified-backend'],'profile_sha256':q.production_profile(profile,q.digest(q.signer.canonical(profile))),"
+        "'apk_sha256':{'staff':artifacts['staff-apk'],'internal_receiver':artifacts['receiver-apk']}}\n"
+        "now=dt.datetime.fromisoformat(sys.argv[4])\n"
+        "s.verify(doc,base,binding,now) if sys.argv[5]=='phone_journeys' else s.approval(doc,binding,now)"
+    )
+    result = subprocess.run([sys.executable, '-I', '-B', '-c', program, str(native_scripts), str(root), str(directory),
+                             now.isoformat(), stage], input=canonical([strict_json(log), artifacts, profile]),
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+    need(result.returncode==0,'STANDALONE_PAYMENT_OR_APPROVAL_NOT_VERIFIED')
+
+
 def _validate(root,eroot,m,product,version,phase,now):
     p=policy(product,phase);text(version,'INVALID_VERSION')
     keys(m,{'schema_version','kind','product','source_version','phase','designation','policy_sha256','run_id','created_at',
@@ -395,6 +420,11 @@ def _validate(root,eroot,m,product,version,phase,now):
     for aid in p['artifact_ids']:
         need(aid in artifacts,'REQUIRED_ARTIFACT_MISSING')
         need(next(a['kind'] for a in m['artifacts'] if a['id']==aid)==('aab' if aid.endswith('aab') else 'apk'),'ARTIFACT_KIND_MISMATCH')
+    standalone = product=='BuriMunsi-standalone' and phase=='promotion'
+    if standalone:
+        profiles = [a for a in m['artifacts'] if a['id']=='deployment-profile' and a['kind']=='report']
+        need(len(profiles)==1 and 'qualified-backend' in artifacts,'STANDALONE_RELEASE_BINDINGS_MISSING')
+        profile = strict_json(read_ref(eroot, profiles[0]['file'], True))
     need(type(m['qualifications']) is list,'INVALID_QUALIFICATIONS');qids=set();paths=set();rdigests=set()
     for q in m['qualifications']:
         keys(q,{'id','result'},'INVALID_QUALIFICATION');qid=text(q['id'],'INVALID_QUALIFICATION_ID')
@@ -419,6 +449,8 @@ def _validate(root,eroot,m,product,version,phase,now):
         need(type(r['command']) is list and len(r['command'])>0,'RESULT_COMMAND_MISSING')
         for arg in r['command']: text(arg,'INVALID_COMMAND_ARGUMENT')
         log=read_ref(eroot,r['log']);need(log.strip(),'EMPTY_TEST_LOG');need(r['log']['path'] not in paths,'REUSED_QUALIFICATION_LOG');paths.add(r['log']['path'])
+        if standalone and qid in ('phone_journeys','operations_authorization'):
+            verify_standalone_result(log, (eroot/r['log']['path']).parent, root, artifacts, profile, now, qid)
         if qid == 'installed_update':
             verify_installed_update(log, (eroot / r['log']['path']).parent, artifacts)
     need(qids==set(p['requirements']),'MISSING_QUALIFICATION_RESULTS')
