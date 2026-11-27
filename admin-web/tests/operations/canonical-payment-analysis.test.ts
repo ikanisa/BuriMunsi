@@ -36,7 +36,7 @@ describe('canonical payment analysis source', () => {
     const revision='a'.repeat(64),signal=new AbortController().signal,query={...input,revision};
     await expect(readCanonicalPaymentAnalysis(vi.fn(async()=>({...response,revision})),signal,query,'group-a',false)).resolves.toMatchObject({revision});
     for(const changed of [undefined,'b'.repeat(64)]){
-      await expect(readCanonicalPaymentAnalysis(vi.fn(async()=>({...response,revision:changed})),signal,query,'group-a',false)).rejects.toThrow();
+      await expect(readCanonicalPaymentAnalysis(vi.fn(async()=>({...response,revision:changed})),signal,query,'group-a',false)).rejects.toMatchObject({code:'payment_analysis_changed'});
     }
   });
 

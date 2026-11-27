@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import type {AdminRequest} from '../../api/client';
+import {AdminRequestError, type AdminRequest} from '../../api/client';
 import {normalizeLoginPhone} from '../../session/phonePasscode';
 import {paymentInstant, type PaymentAnalysisQuery} from '../../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
 export {paymentEventInstant, paymentInstant, paymentMemberName, paymentMemberNumber} from '../../../../supabase/functions/_shared/domain/burimunsi/payment-analysis-shared.mjs';
@@ -51,7 +51,10 @@ export async function readCanonicalPaymentAnalysis(request:AdminRequest, signal:
   signal.throwIfAborted();
   const result = analysisResponse.parse(response);
   const {items,totalCount,matchingCount,offset,missing,directionTotalsRwf:{incoming,outgoing}} = result;
-  if (query.revision!==undefined && query.revision!==result.revision || offset!==query.offset || matchingCount>totalCount || missing>matchingCount || items.length!==Math.min(25, Math.max(0,matchingCount-offset)) ||
+  if (query.revision!==undefined && query.revision!==result.revision) {
+    throw new AdminRequestError('The requested payment revision changed.', {code:'payment_analysis_changed'});
+  }
+  if (offset!==query.offset || matchingCount>totalCount || missing>matchingCount || items.length!==Math.min(25, Math.max(0,matchingCount-offset)) ||
       new Set(items.map(row=>row.id)).size!==items.length || items.some(row=>!row.groupId || row.groupId!==(expectedGroup ?? items[0].groupId) || !showSms && row.sourceId) ||
       (incoming===null || outgoing===null)!==(missing>0) || (matchingCount===0 && (incoming!==0n || outgoing!==0n))) {
     throw new Error('The matching payments could not be verified.');

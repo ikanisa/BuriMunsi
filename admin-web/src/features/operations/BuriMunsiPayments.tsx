@@ -104,20 +104,22 @@ function ScopedPaymentRecords() {
     seenVersion: selectedRow?.version,
     listContext: JSON.stringify([payload, detailRevision, allocationRevision]),
   });
+  const revisionChanged = result?.status==='error' && result.code==='payment_analysis_changed';
   const refresh = () => {
-    if (page>1 && result?.status==='error') changePage(1);
+    if (page>1 && revisionChanged) changePage(1);
     else retry();
     if (selected) setDetailRevision(value => value + 1);
   };
   function changeCriteria(nextFilters:ReadonlyMap<string,ColumnFilter>,nextSort:FinancialSort) {
     setFilters(nextFilters); setSort(nextSort);
-    if (page > 1) {setResettingOffset(true); changePage(1);}
+    if (page > 1) changePage(1);
   }
   function closeAllocation() {
     if (location.state?.allocationReturn === allocating) navigate(-1);
     else {const next = new URLSearchParams(params); next.delete('allocate'); setParams(next, {replace:true, preventScrollReset:true});}
   }
   function changePage(nextPage: number) {
+    if (page>1 && nextPage===1) setResettingOffset(true);
     setPageProof(nextPage>1 && data?.revision ? {criteria:criteriaKey,revision:data.revision} : null);
     const next = new URLSearchParams(params);
     if (nextPage > 1) next.set('offset',String((nextPage - 1) * 25)); else next.delete('offset');
@@ -168,7 +170,7 @@ function ScopedPaymentRecords() {
     {confirmation && !allocating && <p className="operations-note" role="status">{confirmation}</p>}
     <FinancialAnalysisTable label="Payments" rows={rows} columns={columns} rowKey={r=>r.id}
       remote={{filters,sort,total:data?.totalCount ?? null,matching:data?.matchingCount ?? null,refreshing,onCriteria:changeCriteria,
-        error:result?.status === 'error' ? <ErrorState message={result.message} onRetry={refresh} /> : undefined}}
+        error:result?.status === 'error' ? <ErrorState message={revisionChanged ? 'Payments changed between pages. Refresh to return to the first page.' : result.message} onRetry={refresh} /> : undefined}}
       actions={actions} summary={data ? () => <><PaymentTotalsSummary {...data.directionTotalsRwf} missing={data.missing} />
         <p>Payment totals as of <time dateTime={data.asOf}>{paymentTime(data.asOf)} (Kigali)</time>.</p></> : undefined}
       pageSize={25} page={page} onPageChange={changePage} expanded={selected && detail ? {key:selected,content:detail} : null} />

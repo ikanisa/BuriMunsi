@@ -5,7 +5,7 @@ import {InteractionSuspendedContext} from '../../ui/useFocusScope';
 
 export type OperationReadState<T> =
   | {key: string; status: 'success'; value: T; receivedAt: number}
-  | {key: string; status: 'error'; message: string};
+  | {key: string; status: 'error'; message: string; code?: string};
 
 /** Coalesce a single in-flight read across React's development effect replay. */
 export function useOperationRead<T>(
@@ -54,6 +54,7 @@ export function useOperationRead<T>(
         setRead({scope: key, result: {
           key: attemptKey, status: 'error',
           message: error instanceof AdminRequestError ? error.message : invalidResponse,
+          ...(error instanceof AdminRequestError && error.code && {code:error.code}),
         }});
       }
     }).finally(() => {

@@ -478,17 +478,23 @@ describe('BuriMunsi phone Payments', () => {
 
   it.each([403,503])('keeps the Payments page during refresh and stops loading on a %i without reporting a zero balance', async status => {
     mock.authMethod = 'phone_passcode';
-    const rows = Array.from({length:26}, (_, i) => ({...buriPayment,id:'pay-' + i,ftId:'FT-' + i}));
+    // Equal canonical event times are returned in descending payment ID order by the database.
+    const rows = Array.from({length:26}, (_, i) => {
+      const suffix=String(25-i).padStart(2,'0');
+      return {...buriPayment,id:'pay-'+suffix,ftId:'FT-'+suffix,occurredAt:time};
+    });
     const page = buriPage(rows,{...query99,offset:25});
     const held = pendingRead();
     mock.request.mockResolvedValueOnce(page).mockReturnValueOnce(held.promise).mockResolvedValueOnce(page);
     visit('/admin/payments?offset=25',['payments.read'],'staff');
-    const record = await screen.findByRole('button',{name:page.items[0].ftId!});
+    const record = await screen.findByRole('button',{name:'FT-00'});
+    record.focus();
     const totals = screen.getByRole('region',{name:'Totals for matching payments'});
     const table = screen.getByRole('table',{name:'Payments'}), refresh = screen.getByRole('button',{name:'Refresh'});
     const asOf = screen.getByText(/Payment totals as of/).querySelector('time');
     fireEvent.click(refresh);
-    expect(screen.getByRole('button',{name:page.items[0].ftId!})).toBe(record);
+    expect(screen.getByRole('button',{name:'FT-00'})).toBe(record);
+    expect(record).toHaveFocus();
     expect(screen.getByRole('region',{name:'Totals for matching payments'})).toBe(totals);
     expect(asOf).toHaveAttribute('dateTime',time);
     expect(totals).toHaveTextContent('RWF 130,000');
@@ -509,8 +515,29 @@ describe('BuriMunsi phone Payments', () => {
     expect(screen.queryByText(/^(Loading payments|0 records|No (?:matching )?records\.)/)).not.toBeInTheDocument();
     expect(location()).toHaveTextContent('/admin/payments?offset=25');
     fireEvent.click(screen.getByRole('button',{name:'Try again'}));
-    expect(await screen.findByRole('button',{name:page.items[0].ftId!})).toBeVisible();
+    expect(await screen.findByRole('button',{name:'FT-00'})).toBeVisible();
+    expect(location()).toHaveTextContent('/admin/payments?offset=25');
     expect(called('burimunsi/payments/analysis').map(([,options]) => options.body.offset)).toEqual([25,25,25]);
+  });
+
+  it('restarts a revision-bound page only after the operator retries a changed payment snapshot', async () => {
+    mock.authMethod='phone_passcode';
+    const rows=Array.from({length:26},(_,i)=>({...buriPayment,id:'pay-'+i,ftId:'FT-'+i}));
+    const first=buriPage(rows), revision='a'.repeat(64);
+    mock.request.mockResolvedValueOnce({...first,revision}).mockRejectedValueOnce(
+      new AdminRequestError('Conflict',{statusCode:409,code:'payment_analysis_changed'}),
+    ).mockResolvedValueOnce({...first,revision:'b'.repeat(64)});
+    visit('/admin/payments',['payments.read'],'staff');
+    fireEvent.click(await screen.findByRole('button',{name:'Next page'}));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Payments changed between pages. Refresh to return to the first page.');
+    expect(location()).toHaveTextContent('/admin/payments?offset=25');
+    expect(called('burimunsi/payments/analysis')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button',{name:'Try again'}));
+    expect(await screen.findByRole('button',{name:'FT-0'})).toBeVisible();
+    expect(location()).toHaveTextContent(/^\/admin\/payments$/);
+    expect(called('burimunsi/payments/analysis').map(([,options])=>[options.body.offset,options.body.revision])).toEqual([
+      [0,undefined],[25,revision],[0,undefined],
+    ]);
   });
 
   it('drops a retained payment on criteria or session changes and ignores late responses from each previous scope', async () => {
