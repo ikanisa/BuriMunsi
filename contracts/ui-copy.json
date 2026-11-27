@@ -3010,6 +3010,10 @@
     {
       "key": "ui_receiving_partial_sim_help",
       "en": "Android has not verified the receiving SIM for a receipt. Other verified receipts can still sync. Check the SIM in Android, then tap Sync."
+    },
+    {
+      "key": "ui_public_privacy_notice",
+      "en": "Privacy notice"
     }
   ]
 }

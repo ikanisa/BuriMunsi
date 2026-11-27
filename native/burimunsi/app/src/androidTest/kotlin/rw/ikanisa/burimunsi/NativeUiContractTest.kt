@@ -12,6 +12,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.runtime.remember
@@ -1299,10 +1301,27 @@ class NativeUiContractTest {
         ui.onNodeWithText("31415").performScrollTo().assertExists()
     }
     @Test fun supportUsesThePublishedWhatsAppNumberFromHelpAndSignIn(){
-        val c=FakeController(Route.SETTINGS);var calls=0;show(c,onSupport={calls++})
+        val c=FakeController(Route.SETTINGS);var calls=0
+        var browserAvailable=true
+        val opened=mutableListOf<String>()
+        val external=object:UriHandler{
+            override fun openUri(uri:String){
+                if(!browserAvailable)throw IllegalArgumentException("No browser")
+                opened+=uri
+            }
+        }
+        ui.setContent{CompositionLocalProvider(LocalUriHandler provides external){
+            BuriContent(reduceMotion=true){BuriApp(c,onSupport={calls++},onPermissions={},onExport={},onPhoneSettings={})}
+        }}
         ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Help") and hasClickAction())
         ui.onNodeWithText("Help").performClick()
         ui.onNodeWithText("+250 788 767 816").assertIsDisplayed()
+        val notice="https://burimunsi-admin.ikanisa.com/privacy"
+        panelButton("Help","Privacy notice").assertIsDisplayed().assertIsEnabled().performClick()
+        ui.runOnIdle{check(opened==listOf(notice));browserAvailable=false}
+        panelButton("Help","Privacy notice").performClick()
+        ui.onNodeWithText(notice).assertIsDisplayed()
+        ui.runOnIdle{check(opened==listOf(notice)&&calls==0)}
         panelButton("Help","WhatsApp").assertIsEnabled().performClick();ui.runOnIdle{check(calls==1)}
         ui.runOnIdle{c.state=UiState(configurationRequired=true)}
         ui.onNodeWithContentDescription("Contact admin on WhatsApp").assertIsEnabled().performClick()

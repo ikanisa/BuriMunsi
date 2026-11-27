@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -17,6 +18,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.*
@@ -77,7 +79,7 @@ import rw.ikanisa.burimunsi.core.Role
                         item{FactGroup(listOf(t("Name") to s.operator?.name.orEmpty(),t("Phone number") to s.operator?.phone.orEmpty()),BuriTheme.Group,compactValueLabels=setOf(t("Name")))}
                     }
                     Sheet.PIN->PinPanel(s.busy,s.pending,m::changePin)
-                    Sheet.HELP->Panel(footer={Primary(t("WhatsApp"),onSupport,!s.busy)}){item{Text(BuriMunsiSupport.phone,fontSize=26.sp,lineHeight=34.sp)}}
+                    Sheet.HELP->HelpPanel(!s.busy,onSupport)
                     Sheet.ALLOCATE->AllocatePanel(s,m)
                     Sheet.ENROLL->SmartEnrollPanel(s,m,onPickMemberFile,onPreviewMemberFile,onTakeMemberPhoto,onPickMemberPhoto)
                     Sheet.STAFF->Panel{
@@ -130,6 +132,23 @@ import rw.ikanisa.burimunsi.core.Role
     }
 }
 
+}
+
+@Composable private fun HelpPanel(enabled:Boolean,onSupport:()->Unit){
+    val t=LocalUiText.current
+    val external=LocalUriHandler.current
+    var showAddress by remember{mutableStateOf(false)}
+    Panel(footer={Primary(t("WhatsApp"),onSupport,enabled)}){
+        item{Text(BuriMunsiSupport.phone,fontSize=26.sp,lineHeight=34.sp)}
+        item{
+            OutlinedButton(onClick={
+                try{external.openUri(BuriMunsiSupport.privacyNoticeUrl);showAddress=false}
+                catch(_:IllegalArgumentException){showAddress=true}
+                catch(_:SecurityException){showAddress=true}
+            },enabled=enabled){CompactLabel(t("Privacy notice"))}
+        }
+        if(showAddress)item{SelectionContainer{Text(BuriMunsiSupport.privacyNoticeUrl)}}
+    }
 }
 
 @Composable private fun SheetFeedback(s:UiState,m:BuriController,sheet:Sheet,payerPicker:Boolean,progress:Boolean,modifier:Modifier){
