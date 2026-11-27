@@ -13,6 +13,17 @@ import rw.ikanisa.burimunsi.core.Values
 import rw.ikanisa.burimunsi.core.checkContract
 import rw.ikanisa.burimunsi.data.NativeRepository
 
+/** Compare with the identity originally shown, including the confirmations saved on a reviewed row. */
+internal fun SmartOnboardingState.memberFormChanged(draft: Map<String, String>): Boolean {
+    if (step != SmartOnboardingStep.MEMBER && step != SmartOnboardingStep.IMPORT_MEMBER) return false
+    val row = rows.firstOrNull { it.row == editingRow }
+    return draft["name"].orEmpty() != (row?.name ?: candidate?.momoName.orEmpty()) ||
+        draft["phone"].orEmpty() != row?.phone.orEmpty() ||
+        verifiedOwnership != (row?.verifiedOwnership == true) ||
+        acceptedTerms != (row?.acceptedTerms == true) ||
+        consentRecorded != (row?.consentRecorded == true)
+}
+
 /** Translates the registration wire contract for both native product flavors. */
 internal class NativeMemberRegistration(private val repository: () -> NativeRepository) {
     data class Suggestions(val query: String, val items: List<SmartCandidate>, val nextCursor: String?, val revision: String)

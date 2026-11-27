@@ -10,7 +10,8 @@ from native_artifacts import ROOT, ROLES
 from native_pipeline_io import PipelineError
 
 
-TEST_CLASSES = ('NativeUiContractTest', 'StaffPackageIsolationTest', 'NativeSandboxContractTest',
+TEST_CLASSES = ('NativeUiContractTest', 'MemberEnrollmentInputTest', 'NativeShellRecoveryTest',
+                'OperationUiContractTest', 'StaffPackageIsolationTest', 'NativeSandboxContractTest',
                 'export.ExportRenderingTest', 'storage.SecureStoreRecordTest')
 RECEIVER_TEST_CLASSES = ('app.cool.mobile.receiver_sms.GatewayDurabilityTest',)
 # CarrierFixtureReplayTest requires an approved private corpus and a disposable

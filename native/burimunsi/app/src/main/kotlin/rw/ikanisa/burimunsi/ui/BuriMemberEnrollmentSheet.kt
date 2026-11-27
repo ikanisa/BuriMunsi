@@ -174,6 +174,27 @@ private fun MoMoPayerPicker(s: UiState, m: BuriController, enabled: Boolean) {
         (candidate==null||normalized.endsWith(candidate.last3))&&o.verifiedOwnership&&o.acceptedTerms&&o.consentRecorded
     val previewNeedsConsent=SmartOnboardingPresentation.previewNeedsConsent(o.documentMimeType)
     val verified=o.rows.filter{it.verified}
+    var confirmBack by remember(o.step) { mutableStateOf(false) }
+    fun back() {
+        when {
+            o.step == SmartOnboardingStep.IMPORT_MEMBER -> m.onboardingImport()
+            o.step == SmartOnboardingStep.MEMBER && candidate != null -> m.onboardingSuggestions(o.query)
+            else -> m.onboardingOptions()
+        }
+    }
+    fun requestBack() {
+        if (o.memberFormChanged(s.draft) || (o.step == SmartOnboardingStep.IMPORT && verified.isNotEmpty())) {
+            confirmBack = true
+        } else back()
+    }
+    if (confirmBack) {
+        AlertDialog(onDismissRequest = { confirmBack = false }, containerColor = BuriTheme.Surface,
+            title = { Text(t("Discard unsaved changes?"), color = BuriTheme.Text) },
+            confirmButton = { TextButton({ confirmBack = false; back() }, enabled = !s.busy) {
+                Text(t("Discard changes"), color = BuriTheme.Bad)
+            } },
+            dismissButton = { TextButton({ confirmBack = false }) { Text(t("Keep editing"), color = BuriTheme.Blue) } })
+    }
     when(o.step){
         SmartOnboardingStep.OPTIONS->Panel{
             memberMethods(o,m,enabled,onTakePhoto,onPickPhoto,onPickFile)
@@ -184,17 +205,24 @@ private fun MoMoPayerPicker(s: UiState, m: BuriController, enabled: Boolean) {
                 {if(o.step==SmartOnboardingStep.MEMBER)m.onboardingSubmit(name,phone)else m.onboardingSaveRow(name,phone)},ready&&enabled,working=s.busy&&m.operation==UiOperation.COMMAND)
         }){
             if(candidate!=null)item{CompactLabel(t("Suggested from MoMo")+" ···"+candidate.last3,color=BuriTheme.Muted,fontSize=15.sp)}
-            item{Entry(t("MoMo name"),name,{m.editDraft("name",it)},enabled=!s.busy,nextFocus=phoneFocus,placeholder="Registered full name")}
-            item{Entry(t("MoMo number"),phone,{m.editDraft("phone",it)},phone=true,enabled=!s.busy,imeAction=ImeAction.Done,fieldFocus=phoneFocus,
-                errorText=if(phone.isNotBlank()&&normalized!=null&&candidate!=null&&!normalized.endsWith(candidate.last3))"The number does not match the suggestion." else null)}
+            item {
+                // The IME can leave room for only one field. Keep Next's focus target attached.
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                    Entry(t("MoMo name"),name,{m.editDraft("name",it)},enabled=!s.busy,nextFocus=phoneFocus,
+                        placeholder="Registered full name",
+                        errorText=if(name.isNotEmpty()&&!Presentation.validName(name)) "Use a name of 2–100 characters without control characters." else null)
+                    Entry(t("MoMo number"),phone,{m.editDraft("phone",it)},phone=true,enabled=!s.busy,
+                        imeAction=ImeAction.Done,fieldFocus=phoneFocus,errorText=when {
+                            phone.isNotEmpty() && normalized==null -> "Enter a valid phone number."
+                            normalized!=null && candidate!=null && !normalized.endsWith(candidate.last3) -> "The number does not match the suggestion."
+                            else -> null
+                        })
+                }
+            }
             item{SmartConsent("Full number and phone ownership verified",o.verifiedOwnership,enabled){m.onboardingConsent("ownership",it,s.draft)}}
             item{SmartConsent("Member accepted the savings terms",o.acceptedTerms,enabled){m.onboardingConsent("terms",it,s.draft)}}
             item{SmartConsent("Privacy notice and consent recorded",o.consentRecorded,enabled){m.onboardingConsent("consent",it,s.draft)}}
-            item{TextButton({when {
-                o.step==SmartOnboardingStep.IMPORT_MEMBER -> m.onboardingImport()
-                candidate!=null -> m.onboardingSuggestions(o.query)
-                else -> m.onboardingOptions()
-            }},enabled=!s.busy){CompactLabel(t("Back"),color=BuriTheme.Blue)}}
+            item{TextButton(::requestBack,enabled=!s.busy){CompactLabel(t("Back"),color=BuriTheme.Blue)}}
         }
         SmartOnboardingStep.IMPORT->Panel(footer=if(verified.isNotEmpty()){{
             Primary(t("Register verified members")+" (${verified.size})",m::onboardingSubmitBatch,enabled,working=s.busy&&m.operation==UiOperation.COMMAND)
@@ -219,12 +247,12 @@ private fun MoMoPayerPicker(s: UiState, m: BuriController, enabled: Boolean) {
             }
             if(o.rows.isNotEmpty())item{CompactLabel(t("%1\$d rows · %2\$d verified",o.rows.size,verified.size),fontSize=16.sp,fontWeight=FontWeight.Medium)}
             items(o.rows,key={it.row}){row->
-                Row(Modifier.fillMaxWidth().heightIn(min=64.dp).clickable(enabled=enabled){m.onboardingEditRow(row.row)}.padding(vertical=8.dp),verticalAlignment=Alignment.CenterVertically){
-                    Column(Modifier.weight(1f)){CompactLabel(row.name.ifBlank{t("Unreadable name")},fontSize=17.sp);CompactLabel(row.phone?:t("Number missing"),color=BuriTheme.Muted,fontSize=14.sp)}
+                Row(Modifier.fillMaxWidth().heightIn(min=64.dp).clickable(enabled=enabled,role=SemanticRole.Button){m.onboardingEditRow(row.row)}.padding(vertical=8.dp),verticalAlignment=Alignment.CenterVertically){
+                    Column(Modifier.weight(1f)){CompactLabel(row.name.ifBlank{t("Unreadable name")},fontSize=17.sp);CompactLabel(row.phone.orEmpty().ifBlank{t("Number missing")},color=BuriTheme.Muted,fontSize=14.sp)}
                     CompactLabel(t(if(row.verified)"Verified" else "Review"),color=if(row.verified)BuriTheme.Good else BuriTheme.Blue,fontSize=15.sp)
                 }
             }
-            item{TextButton(m::onboardingOptions,enabled=!s.busy){CompactLabel(t("Back"),color=BuriTheme.Blue)}}
+            item{TextButton(::requestBack,enabled=!s.busy){CompactLabel(t("Back"),color=BuriTheme.Blue)}}
         }
         SmartOnboardingStep.RESULTS->Panel(footer={Primary(t("Done"),m::closeSheet,!s.busy)}){
             item{CompactLabel(if(o.created==1)t("1 member registered")else t("%1\$d members registered",o.created),fontSize=22.sp,fontWeight=FontWeight.SemiBold)}

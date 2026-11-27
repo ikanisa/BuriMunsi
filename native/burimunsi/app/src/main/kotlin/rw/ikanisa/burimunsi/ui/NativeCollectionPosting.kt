@@ -12,6 +12,17 @@ import rw.ikanisa.burimunsi.core.SnapshotFreshness
 import rw.ikanisa.burimunsi.data.ApiFailure
 import rw.ikanisa.burimunsi.data.NativeRepository
 
+internal val UiState.allocationCandidates: Page<Member>?
+    get() = members.takeIf { draft["query"].orEmpty() == allocationQuery }
+
+private fun Page<Member>?.matchingBeneficiary(member: Member?): Member? {
+    if (member?.active != true) return null
+    return this?.items?.singleOrNull { it.active && it.id == member.id && it.version == member.version }
+}
+
+internal val UiState.allocationBeneficiary: Member?
+    get() = allocationCandidates.matchingBeneficiary(selectedMember)
+
 /** Allocation selection and command readback. The repository owns the durable request. */
 internal class NativeCollectionPosting(private val repository: NativeRepository) {
     enum class Outcome(val notice: String) {
@@ -28,20 +39,15 @@ internal class NativeCollectionPosting(private val repository: NativeRepository)
         state.sheet == Sheet.ALLOCATE && state.route == Route.PAYMENT && state.routeId == it.id
     }
 
-    private fun currentMember(page: Page<Member>?, member: Member?): Member? {
-        if (member?.active != true) return null
-        return page?.items?.singleOrNull { it.active && it.id == member.id && it.version == member.version }
-    }
-
     fun select(state: UiState, member: Member): UiState {
         if (displayedPayment(state) == null) return state
-        val current = currentMember(state.members, member) ?: return state
+        val current = state.allocationCandidates.matchingBeneficiary(member) ?: return state
         return state.copy(selectedMember = current, draftDirty = true)
     }
 
     fun allocation(state: UiState): Allocation {
         val payment = displayedPayment(state) ?: throw ApiFailure("record_unavailable")
-        val member = currentMember(state.members, state.selectedMember) ?: throw ApiFailure("member_unavailable")
+        val member = state.allocationBeneficiary ?: throw ApiFailure("member_unavailable")
         return Allocation(payment, member)
     }
 
@@ -66,11 +72,13 @@ internal class NativeCollectionPosting(private val repository: NativeRepository)
     }
 
     /** Accept the query before reading so a failed lookup cannot retain an earlier beneficiary. */
-    fun startCandidateSearch(state: UiState, query: String): UiState =
-        state.copy(
-            allocationQuery = query, members = null, selectedMember = null, panelSavedAt = null,
-            draftDirty = state.draft.values.any { it.isNotEmpty() },
+    fun startCandidateSearch(state: UiState, query: String): UiState {
+        val draft = if (state.draft["query"].orEmpty() == query) state.draft else state.draft + ("query" to query)
+        return state.copy(
+            allocationQuery = query, members = null, selectedMember = null, panelSavedAt = null, draft = draft,
+            draftDirty = draft.values.any { it.isNotEmpty() },
         )
+    }
 
     data class Candidates(val query: String, val page: Page<Member>, val cached: Boolean, val savedAt: Long?, val continued: Boolean)
 
@@ -89,7 +97,7 @@ internal class NativeCollectionPosting(private val repository: NativeRepository)
         val selected = when {
             result.continued -> state.selectedMember
             revalidating -> null
-            else -> currentMember(result.page, state.selectedMember)
+            else -> result.page.matchingBeneficiary(state.selectedMember)
         }
         return state.copy(members = result.page, offline = state.offline || result.cached,
             panelSavedAt = savedAt, selectedMember = selected)

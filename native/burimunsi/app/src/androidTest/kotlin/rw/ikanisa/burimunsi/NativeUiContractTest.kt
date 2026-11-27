@@ -79,6 +79,8 @@ class NativeUiContractTest {
         if(expectedScale!=null)check(actual.layoutInput.density.fontScale==expectedScale)
     }
     private fun button(label:String)=ui.onNode(hasText(label) and hasClickAction())
+    private fun membersFilters(label:String="Filters") =
+        ui.onNode((hasText(label) or hasContentDescription(label)) and hasClickAction())
     private fun radioOption(label:String)=ui.onNode(hasText(label) and
         SemanticsMatcher.expectValue(SemanticsProperties.Role,androidx.compose.ui.semantics.Role.RadioButton))
     private fun headerAction(label:String)=ui.onNode(hasContentDescription(label) and hasClickAction() and !hasAnyAncestor(hasScrollAction()))
@@ -146,11 +148,14 @@ class NativeUiContractTest {
         button("Sign in").assertIsNotEnabled()
         ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasContentDescription("Passcode"))
         field("Passcode").performTextInput("8")
+        ui.onNodeWithContentDescription("Show passcode").performClick()
+        ui.onNodeWithContentDescription("Hide passcode").assertExists()
         ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Sign in") and hasClickAction())
         button("Sign in").performClick()
         ui.runOnIdle{check(c.loginCalls==1&&c.lastPhone=="0780000001"&&c.lastPin=="2468")}
         ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasContentDescription("Passcode"))
         field("Passcode").assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.EditableText,androidx.compose.ui.text.AnnotatedString("")))
+        ui.onNodeWithContentDescription("Show passcode").assertExists()
     }
     @Test fun startupShowsBlackBrandedSplashBeforeOriginalLogin(){
         val c=FakeController(Route.LOGIN);c.state=c.state.copy(starting=true,busy=true);c.operation=UiOperation.INITIAL_READ;c.operationLabel="Checking access";show(c)
@@ -730,7 +735,10 @@ class NativeUiContractTest {
         }
         ui.onNodeWithText("Load more").assertDoesNotExist()
         ui.onNodeWithContentDescription("Members").performClick()
-        field("Name or MoMo number").assertIsDisplayed()
+        // The Android IME window can finish resizing after Compose becomes idle.
+        val memberSearch = field("Name or MoMo number")
+        ui.waitUntil(timeoutMillis=5_000) { runCatching { memberSearch.assertIsDisplayed() }.isSuccess }
+        memberSearch.assertIsDisplayed().assertIsNotFocused()
         val list=ui.onNode(hasScrollToIndexAction())
         list.performScrollToNode(hasTestTag("listing-sort-menu"))
         val sort=ui.onNodeWithTag("listing-sort-menu")
@@ -744,7 +752,7 @@ class NativeUiContractTest {
         radioOption("Name · Z–A").performClick()
         val directoryIndex=list.fetchSemanticsNode().config[SemanticsProperties.IndexForKey]
         ui.runOnIdle{check(directoryIndex("member-2")>=0 && directoryIndex("member-2")<directoryIndex("member-1"))}
-        button("Filters").performScrollTo().performClick()
+        membersFilters().performScrollTo().performClick()
         panelList("Filters").performScrollToNode(hasTestTag("listing-active-select"))
         val membership=ui.onNodeWithTag("listing-active-select")
         membership.performScrollTo().performClick()
@@ -757,7 +765,7 @@ class NativeUiContractTest {
         radioOption("Active").assertIsNotSelected()
         radioOption("Inactive").performClick()
         panelButton("Filters","Apply").performClick()
-        button("Filters (1)").assertExists()
+        membersFilters("Filters (1)").assertIsDisplayed()
         ui.runOnIdle{check(c.state.members?.items?.single()?.id=="member-2")}
         list.performScrollToNode(hasContentDescription("Name or MoMo number"))
         field("Name or MoMo number").performTextReplacement("780000002")
@@ -789,6 +797,32 @@ class NativeUiContractTest {
         field("Confirm passcode").performImeAction()
         ui.runOnIdle { check(c.pinChangeCalls == 0) }
         panelButton(panelTitle, "Save").assertIsEnabled().performClick()
+        ui.runOnIdle { check(c.pinChangeCalls == 1) }
+    }
+    @Test fun samePasscodeShowsTheCorrectionOnTheFieldBeforeSave(){
+        val c = FakeController(Route.SETTINGS, Role.STAFF)
+        c.state = c.state.copy(sheet = Sheet.PIN)
+        show(c)
+        val panel = panelList("Change passcode")
+        panel.performScrollToNode(hasContentDescription("Current passcode"))
+        field("Current passcode").performTextInput("2468")
+        field("Current passcode").performImeAction()
+        field("New passcode").performTextInput("2468")
+        field("New passcode").assert(SemanticsMatcher.expectValue(
+            SemanticsProperties.Error, "Choose a different passcode."
+        ))
+        field("New passcode").performImeAction()
+        field("Confirm passcode").performTextInput("2468")
+        field("Confirm passcode").performImeAction()
+        panelButton("Change passcode", "Save").assertIsNotEnabled()
+        ui.runOnIdle { check(c.pinChangeCalls == 0) }
+        panel.performScrollToNode(hasContentDescription("New passcode"))
+        field("New passcode").performTextReplacement("8642")
+        field("New passcode").assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.Error))
+        field("New passcode").performImeAction()
+        field("Confirm passcode").performTextReplacement("8642")
+        field("Confirm passcode").performImeAction()
+        panelButton("Change passcode", "Save").assertIsEnabled().performClick()
         ui.runOnIdle { check(c.pinChangeCalls == 1) }
     }
     @Test fun rawReceiptOpensDirectlyAndLinksToItsPayment(){
@@ -1321,6 +1355,65 @@ class NativeUiContractTest {
         ui.runOnIdle{check(opened==1)}
     }
 
+    @Test fun membersToolbarKeepsAllThreeActionsOnOneRowAtNormalAndDoubleType(){
+        val c = FakeController(Route.MEMBERS, Role.STAFF)
+        var scale by mutableStateOf(1f)
+        var exports = 0
+        ui.setContent {
+            BuriContent(reduceMotion=true) {
+                CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density,scale)) {
+                    Box(Modifier.fillMaxSize()) {
+                        Box(Modifier.width(320.dp).fillMaxHeight()) {
+                            MembersScreen(c.state,c) { exports++ }
+                        }
+                    }
+                }
+            }
+        }
+        val filters = membersFilters()
+        val sort = ui.onNodeWithTag("listing-sort-menu")
+        val download = ui.onNodeWithContentDescription("Export results")
+        fun checkRow(selected: String) {
+            ui.onNodeWithTag("listing-tools:MEMBERS").assertWidthIsEqualTo(280.dp)
+            val bounds = listOf(filters,sort,download).map { control ->
+                control.assertIsDisplayed().assertIsEnabled().assertHasClickAction()
+                    .assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp).getUnclippedBoundsInRoot()
+            }
+            check(bounds.zipWithNext().all { (left,right) -> left.right <= right.left })
+            check(bounds.maxOf { it.top } < bounds.minOf { it.bottom })
+            sort.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription,selected))
+            val visibleSort = sort.fetchSemanticsNode().config[SemanticsProperties.Text].single().text
+            check(visibleSort == selected || visibleSort == "Sort")
+            ui.onNodeWithText(visibleSort,useUnmergedTree=true)
+                .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { read ->
+                    val results = mutableListOf<TextLayoutResult>()
+                    check(read(results))
+                    val layout = results.single()
+                    check(layout.layoutInput.density.fontScale == scale && layout.lineCount == 1)
+                    check(!layout.didOverflowHeight && !layout.isLineEllipsized(0))
+                    check(layout.getLineEnd(0,visibleEnd=true) == visibleSort.length)
+                    check(visibleSort.indices.all { index ->
+                        val glyph = layout.getBoundingBox(index)
+                        glyph.left >= -0.5f && glyph.right <= layout.size.width + 0.5f
+                    })
+                }
+        }
+        for (size in listOf(1f,2f)) {
+            ui.runOnIdle { scale=size }
+            checkRow("Newest first")
+            sort.performClick()
+            radioOption("Phone · descending").performScrollTo().performClick()
+            checkRow("Phone · descending")
+            sort.performClick()
+            radioOption("Phone · descending").assertIsSelected()
+            radioOption("Newest first").performScrollTo().performClick()
+            filters.performClick()
+            ui.runOnIdle { check(c.state.sheet == Sheet.FILTERS); c.closeSheet() }
+            download.performClick()
+        }
+        ui.runOnIdle { check(exports == 2) }
+    }
+
     @Test fun longSearchChipFitsItsScrollingToolbarAndKeepsTheCompleteRemovalAction(){
         val search="Example member from the demonstration cooperative in Kigali"
         val label="Search: $search"
@@ -1561,7 +1654,7 @@ class NativeUiContractTest {
         ui.onNodeWithText("Retry loading").performClick();ui.mainClock.advanceTimeBy(700);ui.runOnIdle{check(c.moreCalls==1)}
     }
 }
-private class FakeController(route:Route,role:Role=Role.ADMIN):BuriController{
+internal class FakeController(route:Route,role:Role=Role.ADMIN):BuriController{
     private val snapshotAt=System.currentTimeMillis()
     val operator=Operator("operator-1","EXAMPLE STAFF","+250780000002",role,if(role==Role.ADMIN)Capability.values().map{it.key}.toSet()else setOf("records.read","members.enroll","payments.allocate"),Long.MAX_VALUE)
     val receiptBody="Synthetic M-Money receipt · no live SMS data"

@@ -16,6 +16,11 @@ internal class NativeSmsDisclosure(
     private val io: NativeOperationIo,
     private val clock: () -> Long,
 ) {
+    companion object {
+        const val PANEL_REVIEW_REASON = "Review original SMS for the selected payment or receipt"
+        const val UNAVAILABLE = "Original SMS unavailable."
+    }
+
     private var exposure = 0L
 
     fun invalidate() {
@@ -78,7 +83,7 @@ internal class NativeSmsDisclosure(
             val message = when {
                 error is ApiFailure && error.uncertain -> "Original SMS access is unconfirmed. Close and check before trying again."
                 error is ApiFailure && error.status == 403 -> "Original SMS access requires current permission and recent sign-in."
-                else -> "Original SMS unavailable."
+                else -> UNAVAILABLE
             }
             display(visible.copy(raw = null, rawDisclosure = RawDisclosureState.FAILURE, rawError = message))
         }

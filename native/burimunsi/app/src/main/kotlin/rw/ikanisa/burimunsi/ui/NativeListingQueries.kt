@@ -48,11 +48,12 @@ internal class NativeListingQueries(private val collectionId: () -> String?) {
         val statement = target == ListingTarget.PAYMENTS && state.route == Route.PAYMENTS && state.routeId != null
         val saved = (if (statement) state.statementListing else context(state)?.let(queries::get) ?: restored)
             ?: ListingQuery.defaultsFor(target)
+        val routeControls = state.sheet == null || (state.sheet == Sheet.FILTERS && origin?.context?.sheet == null)
         return when {
             target == ListingTarget.SMS -> saved.copy(q = "", filter = state.filter)
-            statement && state.sheet == Sheet.FILTERS -> saved.copy(q = state.search, filter = state.filter)
-            state.sheet == null && state.route in setOf(Route.PAYMENTS, Route.MEMBERS) ->
-                saved.copy(q = state.search, filter = if (target == ListingTarget.PAYMENTS) state.filter else "all")
+            routeControls && state.route == Route.PAYMENTS && target == ListingTarget.PAYMENTS ->
+                saved.copy(q = state.search, filter = state.filter)
+            routeControls && state.route == Route.MEMBERS && target == ListingTarget.MEMBERS -> saved.copy(q = state.search)
             else -> saved
         }
     }

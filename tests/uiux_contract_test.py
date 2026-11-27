@@ -63,7 +63,10 @@ class UiUxContract(unittest.TestCase):
         # Fixed audited API payloads are not user-facing copy and must not be translated.
         payment_review_reason='Review original SMS for the selected payment or receipt'
         audit_purposes={payment_review_reason,'Automatic SMS list preview'}
-        self.assertIn(f'if(sheet==Sheet.RAW)loadRawForCurrentPanel("{payment_review_reason}")',self.vm)
+        sms_disclosure = (UI/'NativeSmsDisclosure.kt').read_text()
+        self.assertIn(f'const val PANEL_REVIEW_REASON = "{payment_review_reason}"', sms_disclosure)
+        self.assertIn('if(sheet==Sheet.RAW)loadRawForCurrentPanel(NativeSmsDisclosure.PANEL_REVIEW_REASON)', self.vm)
+        self.assertIn('m.revealRaw(NativeSmsDisclosure.PANEL_REVIEW_REASON)', (UI/'BuriSmsScreen.kt').read_text())
         disclosure=self.vm.split('private suspend fun loadRawForCurrentPanel(',1)[1].split('override fun selectMember(',1)[0]
         self.assertIn('smsDisclosure.load(reason',disclosure)
         self.assertIn('started == generation && foreground && screenGate == ScreenGate.OPEN && hasAccess(Capability.SMS)',disclosure)
@@ -74,7 +77,7 @@ class UiUxContract(unittest.TestCase):
         sources = (
             ('BuriViewModel.kt', self.vm),
             ('NativeListingDownloads.kt', (UI/'NativeListingDownloads.kt').read_text()),
-            ('NativeSmsDisclosure.kt', (UI/'NativeSmsDisclosure.kt').read_text()),
+            ('NativeSmsDisclosure.kt', sms_disclosure),
             ('NativeSmsInboxScan.kt', inbox),
         )
         for name, source in sources:

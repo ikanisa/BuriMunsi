@@ -114,16 +114,21 @@ import rw.ikanisa.burimunsi.core.Role
     imeAction:ImeAction=ImeAction.Next,onDone:(()->Unit)?=null,
     fieldFocus:FocusRequester?=null,nextFocus:FocusRequester?=null,errorText:String?=null,revealPin:Boolean=false,placeholder:String?=null){
     val t=LocalUiText.current;var visible by remember{mutableStateOf(false)}
+    val fieldError = errorText?.let { t(it) }
+    LaunchedEffect(value.isEmpty()) { if (value.isEmpty()) visible = false }
     val keyboard=LocalSoftwareKeyboardController.current;val focus=LocalFocusManager.current
     val action:()->Unit={if(enabled){if(imeAction==ImeAction.Next){if(nextFocus!=null)nextFocus.requestFocus()else focus.moveFocus(FocusDirection.Next)}else{keyboard?.hide();focus.clearFocus();onDone?.invoke()}}}
     Column(Modifier.fillMaxWidth()){
         CompactLabel(label,fontSize=15.sp,lineHeight=21.sp,color=BuriTheme.Muted);Spacer(Modifier.height(9.dp))
-        OutlinedTextField(value,change,Modifier.fillMaxWidth().heightIn(min=60.dp).semantics{contentDescription=label}.then(fieldFocus?.let{Modifier.focusRequester(it)}?:Modifier).onPreviewKeyEvent{
+        OutlinedTextField(value,change,Modifier.fillMaxWidth().heightIn(min=60.dp).semantics{
+            contentDescription=label
+            if (fieldError != null) error(fieldError)
+        }.then(fieldFocus?.let{Modifier.focusRequester(it)}?:Modifier).onPreviewKeyEvent{
             if(it.key==Key.Enter||it.key==Key.NumPadEnter){if(it.type==KeyEventType.KeyUp)action();true}else false
         },singleLine=true,enabled=enabled,isError=errorText!=null,
             textStyle=LocalTextStyle.current.copy(fontSize=19.sp,lineHeight=27.sp),
             placeholder={CompactLabel(placeholder?.let{t(it)}?:if(pin)t("4 digits")else if(phone)t("07… or +250…")else "",color=BuriTheme.Muted)},
-            supportingText=if(errorText!=null){{Text(t(errorText))}}else null,
+            supportingText=if(fieldError!=null){{Text(fieldError)}}else null,
             shape=RoundedCornerShape(17.dp),visualTransformation=if(pin&&!visible)PasswordVisualTransformation()else VisualTransformation.None,
             keyboardOptions=KeyboardOptions(keyboardType=if(pin)KeyboardType.NumberPassword else if(phone)KeyboardType.Phone else KeyboardType.Text,autoCorrectEnabled=false,imeAction=imeAction),
             keyboardActions=KeyboardActions(onNext={action()},onDone={action()}),
@@ -136,6 +141,16 @@ import rw.ikanisa.burimunsi.core.Role
     var phone by remember{mutableStateOf("")};var pin by remember{mutableStateOf("")}
     val pinFocus=remember{FocusRequester()}
     val ready=runCatching{Values.phone(phone);Values.pin(pin)}.isSuccess
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focus = LocalFocusManager.current
+    val submit = {
+        if (ready && !busy) {
+            keyboard?.hide()
+            focus.clearFocus()
+            login(phone, pin)
+            pin = ""
+        }
+    }
     LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(20.dp,21.dp,20.dp,30.dp)){
         item{Brand();Spacer(Modifier.height(35.dp))}
         item{Text(t("Welcome\nback."),fontSize=56.sp,fontWeight=FontWeight.SemiBold,lineHeight=58.sp,letterSpacing=(-2.4).sp);Spacer(Modifier.height(34.dp))}
@@ -143,9 +158,9 @@ import rw.ikanisa.burimunsi.core.Role
         item{
             Entry(t("Phone number"),phone,{phone=it.take(40)},phone=true,enabled=!busy,nextFocus=pinFocus,
                 errorText=if(phone.isNotEmpty()&&runCatching{Values.phone(phone)}.isFailure)"Enter a valid phone number." else null);Spacer(Modifier.height(20.dp))
-            Entry(t("Passcode"),pin,{pin=it.filter{ch->ch in '0'..'9'}.take(4)},pin=true,revealPin=true,enabled=!busy,imeAction=ImeAction.Done,fieldFocus=pinFocus,onDone={if(ready&&!busy){login(phone,pin);pin=""}});Spacer(Modifier.height(29.dp))
+            Entry(t("Passcode"),pin,{pin=it.filter{ch->ch in '0'..'9'}.take(4)},pin=true,revealPin=true,enabled=!busy,imeAction=ImeAction.Done,fieldFocus=pinFocus,onDone=submit);Spacer(Modifier.height(29.dp))
         }
-        item{Primary(t(if(signingIn)"Signing in…" else "Sign in"),{login(phone,pin);pin=""},ready&&!busy,icon=R.drawable.ic_arrow,iconTrailing=true,working=signingIn,
+        item{Primary(t(if(signingIn)"Signing in…" else "Sign in"),submit,ready&&!busy,icon=R.drawable.ic_arrow,iconTrailing=true,working=signingIn,
             modifier=if(signingIn)Modifier.testTag("active-operation:SIGN_IN") else Modifier)}
         item{TextButton(support,Modifier.fillMaxWidth().heightIn(min=48.dp).padding(top=12.dp),enabled=supportAvailable){CompactLabel(t("Contact admin on WhatsApp"),color=if(supportAvailable)BuriTheme.Blue else BuriTheme.Muted,fontSize=15.sp)}}
     }
@@ -154,7 +169,8 @@ import rw.ikanisa.burimunsi.core.Role
 @Composable internal fun PinPanel(busy:Boolean,pending:Boolean,save:(String,String,String)->Unit){
     val t=LocalUiText.current
     var current by remember{mutableStateOf("")};var next by remember{mutableStateOf("")};var confirm by remember{mutableStateOf("")}
-    val ready=runCatching{Values.pin(current);Values.pin(next);require(next==confirm)}.isSuccess
+    val unchanged = next.length == 4 && next == current
+    val ready=runCatching{Values.pin(current);Values.pin(next)}.isSuccess && next == confirm && !unchanged
     val nextFocus=remember{FocusRequester()};val confirmFocus=remember{FocusRequester()}
     Panel(footer={Primary(t("Save"),{save(current,next,confirm);current="";next="";confirm=""},ready&&!busy&&!pending,working=busy)}){
         item {
@@ -167,6 +183,7 @@ import rw.ikanisa.burimunsi.core.Role
                 Entry(
                     t("New passcode"), next, { next = it.filter { ch -> ch in '0'..'9' }.take(4) },
                     pin = true, enabled = !busy, fieldFocus = nextFocus, nextFocus = confirmFocus,
+                    errorText = if (unchanged) "Choose a different passcode." else null,
                 )
                 Entry(
                     t("Confirm passcode"), confirm, { confirm = it.filter { ch -> ch in '0'..'9' }.take(4) },

@@ -13,6 +13,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import kotlinx.coroutines.delay
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -68,9 +69,9 @@ internal fun historyTime(value: String, locale: Locale, includeOffset: Boolean =
     val t=LocalUiText.current
     Icon(painterResource(icon),description?.let{t(it)},Modifier.size(size.dp),tint)
 }
-@Composable internal fun RoundAction(icon:Int,label:String,click:()->Unit,enabled:Boolean=true,size:Int=56,tonal:Boolean=true){
+@Composable internal fun RoundAction(icon:Int,label:String,click:()->Unit,enabled:Boolean=true,size:Int=56,tonal:Boolean=true,containerColor:Color=BuriTheme.Tone){
     val action=focusAction("action:$label",click)
-    IconButton(action.click,action.modifier.size(size.dp).background(if(tonal)BuriTheme.Tone else Color.Transparent,CircleShape),enabled=enabled){Glyph(icon,label,if(enabled)BuriTheme.Text else BuriTheme.Muted,24)}
+    IconButton(action.click,action.modifier.size(size.dp).background(if(tonal)containerColor else Color.Transparent,CircleShape),enabled=enabled){Glyph(icon,label,if(enabled)BuriTheme.Text else BuriTheme.Muted,24)}
 }
 @Composable internal fun Avatar(name:String,size:Int=46,unallocated:Boolean=false,initialsSize:Int=15){
     Box(Modifier.size(size.dp).background(if(unallocated)BuriTheme.Warn.copy(alpha=.10f)else BuriTheme.Tone,CircleShape).clearAndSetSemantics{},contentAlignment=Alignment.Center){Text(initials(name),fontSize=initialsSize.sp,color=if(unallocated)BuriTheme.Warn else BuriTheme.Text,fontWeight=FontWeight.Medium,lineHeight=(initialsSize+8).sp)}
@@ -183,15 +184,24 @@ internal fun stateIcon(name:String)=when(name){"check"->R.drawable.ic_check;"lin
     CompactLabel(t(label),Modifier.padding(top=12.dp,bottom=2.dp).semantics{heading()},fontSize=24.sp,fontWeight=FontWeight.SemiBold,lineHeight=32.sp)}
 @Composable internal fun Search(value:String,change:(String)->Unit,submit:()->Unit,hint:String="Search",busy:Boolean=false){
     var submitted by remember{mutableStateOf(value)}
-    LaunchedEffect(value){if(value!=submitted){kotlinx.coroutines.delay(250);submitted=value;submit()}}
+    val submitLatest by rememberUpdatedState(submit)
+    LaunchedEffect(value,busy){
+        if(busy || value==submitted)return@LaunchedEffect
+        delay(250)
+        if(value!=submitted){
+            submitted=value
+            submitLatest()
+        }
+    }
     SearchField(value,change,{submitted=value;submit()},hint,busy)
 }
 @Composable internal fun SearchField(value:String,change:(String)->Unit,submit:()->Unit,hint:String,busy:Boolean=false){
     val t=LocalUiText.current
+    val keyboard=LocalSoftwareKeyboardController.current
     OutlinedTextField(value,change,Modifier.fillMaxWidth().heightIn(min=56.dp).semantics{contentDescription=t(hint)},singleLine=true,enabled=!busy,
         textStyle=LocalTextStyle.current.copy(fontSize=18.sp),placeholder={CompactLabel(t(hint),color=BuriTheme.Muted,fontSize=18.sp)},leadingIcon={Glyph(R.drawable.ic_search,null,BuriTheme.Muted,22)},
         trailingIcon=if(value.isEmpty())null else {{IconButton({change("")},enabled=!busy){Glyph(R.drawable.ic_close,t("Clear search"),BuriTheme.Muted,20)}}},
-        keyboardOptions=KeyboardOptions(autoCorrectEnabled=false,imeAction=ImeAction.Search),keyboardActions=KeyboardActions(onSearch={submit()}),
+        keyboardOptions=KeyboardOptions(autoCorrectEnabled=false,imeAction=ImeAction.Search),keyboardActions=KeyboardActions(onSearch={keyboard?.hide();submit()}),
         shape=RoundedCornerShape(28.dp),colors=OutlinedTextFieldDefaults.colors(focusedContainerColor=BuriTheme.Tone,unfocusedContainerColor=BuriTheme.Tone,focusedBorderColor=BuriTheme.Blue,unfocusedBorderColor=Color.Transparent))
 }
 /** A scrolling rail can grow; every individual chip still fits its viewport. */
@@ -220,8 +230,15 @@ internal fun rowShape(first:Boolean,last:Boolean)=RoundedCornerShape(topStart=if
     val memory=LocalUiFocusMemory.current;val scope=LocalUiFocusScope.current
     val position=memory.scrollPositions[scope]?:(0 to 0);val scroll=rememberLazyListState(position.first,position.second)
     LaunchedEffect(scope,scroll){snapshotFlow{scroll.firstVisibleItemIndex to scroll.firstVisibleItemScrollOffset}.distinctUntilChanged().collect{memory.scrollPositions[scope]=it}}
-    Column(Modifier.fillMaxWidth()){
-        LazyColumn(Modifier.fillMaxWidth().weight(1f,fill=false),state=scroll,contentPadding=PaddingValues(22.dp,0.dp,22.dp,20.dp),verticalArrangement=Arrangement.spacedBy(itemSpacing),content=content)
-        if(footer!=null){HorizontalDivider(color=Color.White.copy(alpha=.08f));Box(Modifier.fillMaxWidth().padding(start=22.dp,end=22.dp,top=14.dp,bottom=25.dp)){footer()}}
+    BoxWithConstraints(Modifier.fillMaxWidth()){
+        // A short sheet or open keyboard can leave less space than the action buttons themselves.
+        val footerInList = footer != null && maxHeight < 220.dp
+        Column(Modifier.fillMaxWidth()){
+            LazyColumn(Modifier.fillMaxWidth().weight(1f,fill=false),state=scroll,contentPadding=PaddingValues(22.dp,0.dp,22.dp,20.dp),verticalArrangement=Arrangement.spacedBy(itemSpacing)){
+                content()
+                if(footerInList && footer!=null)item { footer() }
+            }
+            if(!footerInList && footer!=null){HorizontalDivider(color=Color.White.copy(alpha=.08f));Box(Modifier.fillMaxWidth().padding(start=22.dp,end=22.dp,top=14.dp,bottom=25.dp)){footer()}}
+        }
     }
 }

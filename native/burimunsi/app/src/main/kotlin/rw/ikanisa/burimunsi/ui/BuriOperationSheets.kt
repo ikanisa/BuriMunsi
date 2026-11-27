@@ -20,16 +20,20 @@ import rw.ikanisa.burimunsi.core.*
 
 @Composable internal fun AllocatePanel(s:UiState,m:BuriController){
     val t=LocalUiText.current;val query=s.draft["query"].orEmpty();val p=s.payment?:return
+    val candidates = s.allocationCandidates
+    val selected = s.allocationBeneficiary
     val canAllocate = PaymentPresentation.canAllocate(p) && m.allows(Capability.ALLOCATE) &&
-        s.selectedMember?.active == true && !s.busy && !s.offline && !s.pending
+        selected != null && !s.busy && !s.offline && !s.pending
     Panel(footer={Primary(t("Allocate"),m::allocate,canAllocate,working=s.busy&&m.operation==UiOperation.COMMAND)}){
         item{CountLine(p.ftId?.let{t("FT Id: %1\$s",it)}?:t("Payment"),p.amountRwf?.let{t("RWF %1\$s",money(it,t.locale))}?:t("Unavailable"),exactAmount=true)}
         item{Search(query,{m.editDraft("query",it)},{m.allocationSearch(query)},t("Find member"),s.busy)}
-        items(s.members?.items.orEmpty().filter{it.active},key={it.id}){member->Row(Modifier.fillMaxWidth().selectable(selected=s.selectedMember?.id==member.id,enabled=!s.busy,role=SemanticRole.RadioButton,onClick={m.selectMember(member)}).padding(vertical=9.dp),verticalAlignment=Alignment.CenterVertically){
-            RadioButton(selected=s.selectedMember?.id==member.id,onClick=null,enabled=!s.busy);Column(Modifier.weight(1f)){SingleLineName(member.name);CompactLabel(member.phone,fontSize=14.sp,color=BuriTheme.Muted)}
+        items(candidates?.items.orEmpty().filter{it.active},key={it.id}){member->Row(Modifier.fillMaxWidth().heightIn(min=48.dp).selectable(selected=selected?.id==member.id,enabled=!s.busy,role=SemanticRole.RadioButton,onClick={m.selectMember(member)}).padding(vertical=9.dp),verticalAlignment=Alignment.CenterVertically){
+            RadioButton(selected=selected?.id==member.id,onClick=null,enabled=!s.busy)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)){SingleLineName(member.name);CompactLabel(member.phone,fontSize=14.sp,color=BuriTheme.Muted)}
         }}
-        if(s.members?.items?.none{it.active}==true)item{Empty(t("No eligible members. Change the search or ask an administrator."))}
-        moreButton(s.members?.nextCursor,s.busy,m::more,autoEnabled=!s.offline&&s.error==null,paging=m.operation==UiOperation.LOAD_MORE)
+        if(candidates?.items?.none{it.active}==true && candidates.nextCursor==null)item{Empty(t("No eligible members. Change the search or ask an administrator."))}
+        moreButton(candidates?.nextCursor,s.busy,m::more,autoEnabled=!s.offline&&s.error==null,paging=m.operation==UiOperation.LOAD_MORE)
     }
 }
 @Composable private fun CheckRow(label:String,checked:Boolean,enabled:Boolean=true,confirmation:Boolean=false,change:(Boolean)->Unit){
@@ -48,16 +52,20 @@ import rw.ikanisa.burimunsi.core.*
     // The server applies the default at creation and enforces any change to an existing credential.
     val ready=Presentation.validName(name)&&normalized!=null&&(pin.isEmpty()||runCatching{Values.pin(pin)}.isSuccess)
     Panel(footer={Primary(t(if(existing==null)"Create staff"else "Save changes"),{m.saveStaff(name,phone,pin,enroll,allocate);pin=""},ready&&!s.busy&&!s.offline&&!s.pending,working=s.busy&&m.operation==UiOperation.COMMAND)}){
-        item{Entry(t("Name"),name,{m.editDraft("name",it)},enabled=!s.busy,nextFocus=phoneFocus,placeholder="Full name")}
-        item{Entry(t("Phone number"),phone,{m.editDraft("phone",it)},phone=true,enabled=!s.busy,fieldFocus=phoneFocus,
-            nextFocus=if(existing!=null)pinFocus else null,imeAction=if(existing!=null)ImeAction.Next else ImeAction.Done)}
-        if(existing!=null)item{Entry(t("New passcode"),pin,{pin=it.filter{ch->ch in '0'..'9'}.take(4)},pin=true,enabled=!s.busy,imeAction=ImeAction.Done,fieldFocus=pinFocus,
-            placeholder="Leave blank to keep current")}
+        item {
+            Column(Modifier.fillMaxWidth(), verticalArrangement=Arrangement.spacedBy(20.dp)) {
+                Entry(t("Name"),name,{m.editDraft("name",it)},enabled=!s.busy,nextFocus=phoneFocus,placeholder="Full name")
+                Entry(t("Phone number"),phone,{m.editDraft("phone",it)},phone=true,enabled=!s.busy,fieldFocus=phoneFocus,
+                    nextFocus=if(existing!=null)pinFocus else null,imeAction=if(existing!=null)ImeAction.Next else ImeAction.Done)
+                if(existing!=null)Entry(t("New passcode"),pin,{pin=it.filter{ch->ch in '0'..'9'}.take(4)},pin=true,enabled=!s.busy,imeAction=ImeAction.Done,fieldFocus=pinFocus,
+                    placeholder="Leave blank to keep current")
+            }
+        }
         item{CheckRow(t("Allocate unmatched payments"),allocate,!s.busy){m.editDraft("allocate",it.toString())}}
         item{CheckRow(t("Enroll members"),enroll,!s.busy){m.editDraft("enroll",it.toString())}}
         if(existing!=null)item{Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(12.dp)){
             OutlinedButton({m.staffAction(if(existing.active)"disable"else "enable")},enabled=!s.busy&&!s.offline&&!s.pending){CompactLabel(t(if(existing.active)"Disable"else "Enable"))}
-            OutlinedButton(m::requestRemoveStaff,enabled=!s.busy&&!s.offline){CompactLabel(t("Remove"))}
+            OutlinedButton(m::requestRemoveStaff,enabled=!s.busy&&!s.offline&&!s.pending){CompactLabel(t("Remove"))}
         }}
     }
 }
@@ -70,7 +78,7 @@ import rw.ikanisa.burimunsi.core.*
             item{FactGroup(listOf(
                 t("SMS permission") to t(if(m.smsAccessGranted)"Granted" else "Required"),
                 t("Sender") to (g.approvedSenders?.joinToString(", ")?:t("Unavailable")),
-                t("Sync") to t(if(health.code in setOf("permissions","waiting","reauthorize"))"Blocked" else if(g.captureEnabled)"Listening" else "Paused"),
+                t("Sync") to t(if(health.code in setOf("permissions","waiting","reauthorize","queue","qualification"))"Blocked" else if(g.captureEnabled)"Listening" else "Paused"),
                 t("Queued") to (if(g.pending>=0)g.pending.toString()else t("Unavailable"))
             ),BuriTheme.Group,compactValueLabels=setOf(t("Sender")))}
             item{Text(t(health.explanation),fontSize=15.sp,color=BuriTheme.Muted)}
@@ -95,10 +103,11 @@ import rw.ikanisa.burimunsi.core.*
             t("SIM") to t(if((g.subscriptionId?:-1)>=0&&health.code !in setOf("source","attention","permissions"))"Verified"else if(health.code=="source")"Changed · sync blocked"else "Unavailable"),
             t("SMS permission") to t(if(m.receivingPermissionsRequired)"Required"else "Granted"),
             t("Sync") to t(if(health.code in setOf("source","permissions","attention","queue","reauthorize"))"Blocked"else if(g.captureEnabled)"Listening"else "Paused"),
-            t("Last receipt") to (g.lastCapture?:t("Not recorded")),
+            t("Last receipt") to (g.lastCapture?.let{historyTime(it,t.locale)}?:t("Not recorded")),
             t("Queued") to (if(g.pending>=0)g.pending.toString()else t("Unavailable")),
-            t("Sync") to t(if(s.offline)"Offline"else if(g.problem=="uploads_on_hold")"Paused"else "Unavailable")
+            t("Last upload acknowledgement") to (g.lastUpload?.let{historyTime(it,t.locale)}?:t("Not recorded"))
         ),BuriTheme.Group,compactValueLabels=setOf(t("Sender")))}
+        if(health.code=="hold")item{Text(t(health.explanation),fontSize=15.sp,color=BuriTheme.Muted)}
         if(health.needsPermission||m.receivingPermissionsRequired)item{OutlinedButton(onPermissions,enabled=!s.busy){CompactLabel(t("SMS permission"))}}
         item{Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(12.dp)){
             if(!g.captureEnabled&&health.canResume&&!m.receivingPermissionsRequired)OutlinedButton({m.setPaused(false)},enabled=!s.busy){CompactLabel(t("Resume"))}

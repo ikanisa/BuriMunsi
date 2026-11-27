@@ -33,6 +33,13 @@ fun main()=runBlocking {
             rendered=table
             file.outputStream().use{when(format){ExportFormat.XLSX->XlsxEncoder.write(table,it,cancelled);ExportFormat.CSV->CsvEncoder.write(table,it,cancelled);ExportFormat.PDF->it.write("synthetic-pdf-boundary".toByteArray())}}
         }
+        m.navigate(Route.MEMBERS);idle()
+        val memberFilter=ListingQuery(q="first name",active="active",sort=ListingSort.NAME_ASC)
+        m.applyListingQuery(memberFilter);idle()
+        m.search("current member");m.searchSubmit();idle();m.openSheet(Sheet.FILTERS)
+        ck("member filters inherit the current directory search alongside its saved selectors",
+            m.listingQuery==memberFilter.copy(q="current member"))
+        m.closeSheet();idle()
         Fixture.paged={target,cursor,_,_->
             val count=if(target=="PAYMENTS")151 else 1
             val ids=if(cursor==null)(1..minOf(count,100)).map{"row-$it"}else(101..count).map{"row-$it"}
@@ -84,6 +91,15 @@ fun main()=runBlocking {
         m.applyListingQuery(staffQuery);idle()
         ck("staff Apply returns to Staff without replacing the parent payment query",m.state.sheet==Sheet.STAFF&&m.listingQuery==staffQuery&&Fixture.listingQueries.last().target==ListingTarget.STAFF)
         m.closeSheet();idle();ck("closing Staff restores the selected transaction context",m.listingQuery==selected)
+        m.search("new reference");m.searchSubmit();idle();m.setFilter("unallocated");idle()
+        m.openSheet(Sheet.FILTERS)
+        val quickFilters=selected.copy(q="new reference",filter="unallocated")
+        ck("global filters inherit the payment search and allocation chip alongside advanced selectors",
+            m.listingQuery==quickFilters)
+        m.applyListingQuery(m.listingQuery.copy(sort=ListingSort.OLDEST));idle()
+        ck("changing the sort through filters keeps the visible search and allocation scope",
+            m.listingQuery==quickFilters.copy(sort=ListingSort.OLDEST)&&Fixture.listingQueries.last().query==m.listingQuery)
+        m.applyListingQuery(selected);idle()
         m.prepareDownload(ExportFormat.XLSX);prepared();take()
         Fixture.refreshedRole=Role.STAFF;Fixture.refreshedCaps=setOf(Capability.READ.key)
         var writes=0

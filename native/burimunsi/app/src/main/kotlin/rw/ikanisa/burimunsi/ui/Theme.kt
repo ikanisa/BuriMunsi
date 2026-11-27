@@ -23,7 +23,9 @@ internal val LocalBuriRouteColors=staticCompositionLocalOf{BuriRouteColors(Color
 object BuriTheme {
     val Canvas=Color(0xFF000000);val Surface=Color(0xFF161618);val Raised=Color(0xFF232326)
     val Text=Color(0xFFF4F4F4)
-    val NavigationSurface=Color(0xEE1F1F23);val NavigationSelected=Color(0xFF363639);val NavigationMuted=Color(0xFFA1A1A3)
+    val NavigationSurface=Color(0xF20C0D17);val NavigationSelected=Color(0xFF24242E);val NavigationMuted=Color(0xFFA1A1A3)
+    val NavigationOutline=Color(0xFF3B3B49)
+    val HeaderActionSurface=Color(0xDD0C0D18)
     val Input:Color @Composable get()=if(LocalBuriRoute.current==Route.LOGIN)Color.Black.copy(alpha=.23f)else Color(0xFF28282B)
     val Muted:Color @Composable get()=LocalBuriRouteColors.current.muted
     val Blue:Color @Composable get()=LocalBuriRouteColors.current.blue
@@ -48,14 +50,28 @@ object BuriTheme {
         titleLarge=type(22,30,FontWeight.Medium),titleMedium=type(19,27,FontWeight.Medium),titleSmall=type(17,25,FontWeight.Medium),
         bodyLarge=type(17,26),bodyMedium=type(16,24),bodySmall=type(14,21),
         labelLarge=type(18,26,FontWeight.SemiBold),labelMedium=type(14,21,FontWeight.Medium),labelSmall=type(14,21))
-    fun wash(route:Route):Brush = when(route){
-        Route.HOME->Brush.verticalGradient(0f to Color(0xFF1C53EC),.18f to Color(0xFF1746CA),.38f to Color(0xFF132F86),.62f to Color(0xFF0B1738),.84f to Color(0xFF05070E),1f to Canvas)
-        Route.PAYMENTS->Brush.verticalGradient(0f to Color(0xFF7338BF),.23f to Color(0xFF512689),.46f to Color(0xFF321D50),.70f to Color(0xFF170F24),1f to Canvas)
-        Route.MEMBERS->Brush.verticalGradient(0f to Color(0xFF078A94),.21f to Color(0xFF086574),.43f to Color(0xFF08414B),.67f to Color(0xFF072127),1f to Canvas)
-        Route.SMS->Brush.verticalGradient(0f to Color(0xFF535D94),.23f to Color(0xFF353D6A),.46f to Color(0xFF202746),.70f to Color(0xFF101323),1f to Canvas)
-        Route.LOGIN->Brush.verticalGradient(0f to Color(0xFF3B4E8A),.24f to Color(0xFF253A71),.53f to Color(0xFF152447),.80f to Color(0xFF080F21),1f to Canvas)
-        else->Brush.verticalGradient(listOf(Canvas,Canvas))
-    }
+    // Vertical approximations of unobstructed, ICC-normalized Dark · Glow phone-canvas samples.
+    // Home LIVE-020, Members LIVE-021, Payments LIVE-051, SMS LIVE-025 and sign-in LIVE-002.
+    private val neutralWash=Brush.verticalGradient(listOf(Canvas,Canvas))
+    private val routeWashes=mapOf(
+        Route.HOME to Brush.verticalGradient(
+            0f to Color(0xFF5B83FC),.10f to Color(0xFF3D5EFB),.23f to Color(0xFF1425D2),
+            .43f to Color(0xFF050B76),.55f to Color(0xFF000447),.70f to Color(0xFF05074D),
+            .85f to Color(0xFF010440),1f to Color(0xFF010337)),
+        Route.MEMBERS to Brush.verticalGradient(
+            0f to Color(0xFF32A1B6),.10f to Color(0xFF22788E),.23f to Color(0xFF0F4254),
+            .43f to Color(0xFF0A2936),.55f to Color(0xFF051C24),1f to Color(0xFF02171D)),
+        Route.PAYMENTS to Brush.verticalGradient(
+            0f to Color(0xFF6C3CDE),.07f to Color(0xFF3D2480),.10f to Color(0xFF2D1C5D),
+            .16f to Color(0xFF1B1239),.32f to Color(0xFF17133B),1f to Color(0xFF16153A)),
+        Route.SMS to Brush.verticalGradient(
+            0f to Color(0xFF6373C2),.10f to Color(0xFF48569B),.23f to Color(0xFF27346E),
+            .43f to Color(0xFF182454),.55f to Color(0xFF121637),1f to Color(0xFF0E142D)),
+        Route.LOGIN to Brush.verticalGradient(
+            0f to Color(0xFF32448F),.16f to Color(0xFF1D2A87),.32f to Color(0xFF121B6D),
+            .55f to Color(0xFF0D164C),.70f to Color(0xFF101240),1f to Color(0xFF11103A)),
+    )
+    fun wash(route:Route):Brush = routeWashes[route] ?: neutralWash
 }
 /** Tests can fix motion without changing the installation preference. */
 @Composable fun BuriContent(reduceMotion:Boolean?=null,content:@Composable ()->Unit) {

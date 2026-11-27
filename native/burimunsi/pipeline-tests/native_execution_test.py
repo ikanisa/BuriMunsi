@@ -25,6 +25,18 @@ import hashlib
 
 # Fixed rosters independently check discovery and the names reported by the runner.
 EXPECTED_STAFF_CASES = {
+    'rw.ikanisa.burimunsi.MemberEnrollmentInputTest#compactEditorValidatesIdentityAndKeepsTheNextFieldAttached',
+    'rw.ikanisa.burimunsi.MemberEnrollmentInputTest#backingOutOfAnEditedMemberFormOffersKeepEditingAndDiscard',
+    'rw.ikanisa.burimunsi.NativeShellRecoveryTest#submittingBeforeDebounceRunsOneSearchAndAllowsAnExplicitRetry',
+    'rw.ikanisa.burimunsi.NativeShellRecoveryTest#pauseHidesTaskFeedbackAndResumeKeepsBothTheRouteAndItsWarningsReachable',
+    'rw.ikanisa.burimunsi.NativeShellRecoveryTest#bothSessionRecoveryActionsAreReachableAtDoubleTypeInAShortWindow',
+    'rw.ikanisa.burimunsi.NativeShellRecoveryTest#shortSheetKeepsItsFieldsAndBothFooterActionsReachable',
+    'rw.ikanisa.burimunsi.OperationUiContractTest#changingBeneficiarySearchDisablesThePreviousSelection',
+    'rw.ikanisa.burimunsi.OperationUiContractTest#staffEditImeReachesFieldsOutsideTheVisibleViewport',
+    'rw.ikanisa.burimunsi.OperationUiContractTest#originalSmsRetryRequiresAnExplicitActionAndCurrentAccess',
+    'rw.ikanisa.burimunsi.OperationUiContractTest#gatewayShowsLastAcknowledgementInKigaliTime',
+    'rw.ikanisa.burimunsi.OperationUiContractTest#shortDiscardPromptKeepsBothChoicesReachable',
+    'rw.ikanisa.burimunsi.NativeUiContractTest#samePasscodeShowsTheCorrectionOnTheFieldBeforeSave',
     'rw.ikanisa.burimunsi.storage.SecureStoreRecordTest#failedAuthenticationAndRejectedWritesKeepTheOriginalFileBytes',
     'rw.ikanisa.burimunsi.storage.SecureStoreRecordTest#validV1RecordsAndCurrentWritesAgreeThroughTheMaximumSize',
     'rw.ikanisa.burimunsi.NativeSandboxContractTest#brokerLocalSetupDoesNotCreateSessionOrReplaceInstallation',
@@ -66,6 +78,7 @@ EXPECTED_STAFF_CASES = {
     'rw.ikanisa.burimunsi.NativeUiContractTest#invalidPhoneNeverEnablesSignIn',
     'rw.ikanisa.burimunsi.NativeUiContractTest#loadingUsesTheRequestedScreenAndRemovesPrivateGeometryOnAnAccessCheck',
     'rw.ikanisa.burimunsi.NativeUiContractTest#longSearchChipFitsItsScrollingToolbarAndKeepsTheCompleteRemovalAction',
+    'rw.ikanisa.burimunsi.NativeUiContractTest#membersToolbarKeepsAllThreeActionsOnOneRowAtNormalAndDoubleType',
     'rw.ikanisa.burimunsi.NativeUiContractTest#narrowStaffAndActionLabelsKeepTheirFullAccessibleNamesAndWarningsWrap',
     'rw.ikanisa.burimunsi.NativeUiContractTest#navigationUsesControllerReadPolicyAndAlwaysHonorsClosedAccessGate',
     'rw.ikanisa.burimunsi.NativeUiContractTest#observationStatusAndRetryReflectAdminProcessingAuthority',

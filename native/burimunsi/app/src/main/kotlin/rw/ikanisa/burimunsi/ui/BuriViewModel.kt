@@ -429,7 +429,18 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
     }
     private fun hasAccess(capability:Capability)=Access.allows(state.operator,capability,clock(),BuildConfig.IS_GATEWAY)
 
-    override var state by mutableStateOf(UiState(pending=true,starting=true), ScreenStatePolicy);private set
+    private var screenState by mutableStateOf(UiState(pending=true, starting=true), ScreenStatePolicy)
+    override var state: UiState
+        get() = screenState
+        private set(value) {
+            val previous = screenState
+            if (BuildConfig.IS_GATEWAY && (previous.route != value.route || previous.routeId != value.routeId ||
+                    previous.sheet != value.sheet || previous.sheetId != value.sheetId)) {
+                // A result requested on an earlier visit is stale even after returning to the same screen.
+                receiverStatus.invalidate()
+            }
+            screenState = value
+        }
     override val presentation:ScreenPresentation get()=state.presentation(screenGate,clock())
     private val views=ViewMemory<UiState>()
     private data class ViewScope(val owner:String,val collection:String,val session:Long)
@@ -553,8 +564,11 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         val next=state.draft+(key to valueInDraft)
         val onboarding=if(state.sheet==Sheet.ENROLL)
             SmartOnboardingPresentation.identityEdited(state.onboarding,key,state.draft[key],valueInDraft) else state.onboarding
+        val dirty=if(state.sheet==Sheet.ENROLL&&onboarding.step in setOf(SmartOnboardingStep.MEMBER,SmartOnboardingStep.IMPORT_MEMBER))
+            onboarding.memberFormChanged(next)||onboarding.rows.any{it.verified}
+        else state.selectedMember!=null||next.any{(k,v)->v!=(initialDraft[k]?:"")}
         state=state.copy(draft=next,onboarding=onboarding,
-            draftDirty=state.selectedMember!=null||next.any{(k,v)->v!=(initialDraft[k]?:"")})
+            draftDirty=dirty)
     }
     override fun discardDraft(){if(!state.busy){val next=afterDiscard;afterDiscard=null;dismissPanel();checkVisibleFreshness();next?.invoke();if(next==null&&state.route==Route.SMS&&state.filter!="queued"){
         if(state.filter=="all"){queueRefreshJob?.cancel();queueRefreshJob=viewModelScope.launch{refreshQueuedNow()}}
@@ -727,44 +741,6 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
             }
         }
         viewModelScope.launch{try{awaitCancellation()}finally{detach()}}
-    }
-    init {
-        work(bypassGate=true,kind=UiOperation.INITIAL_READ){
-            operationLabel="Checking access"
-            val setup=try{
-                io{
-                    val device=DeviceProvisioning(app,GatewayFactory.installationId(app))
-                    val source=try{
-                        Values.apiOrigin(BuildConfig.BURI_API_ORIGIN)
-                        val api=ApiClient.phonePin(BuildConfig.BURI_API_ORIGIN,device.installationId,
-                            installationProfile,BuildConfig.BURI_API_PATH_PREFIX,BuildConfig.COLLECT_PUBLISHABLE_KEY,device::registrationToken)
-                        NativeRepository(app,api,deferDisplayCacheWrites=true)
-                    }catch(cancelled:CancellationException){throw cancelled}
-                    catch(_:Exception){null}
-                    device to source
-                }
-            }catch(cancelled:CancellationException){throw cancelled}
-            catch(_:Exception){null}
-            finally{initialSetupPending=false}
-            install=setup?.first
-            repository=setup?.second
-            if(repository==null){
-                if(BuildConfig.IS_GATEWAY&&lifecycleObserved&&foreground)gateway.foregroundChanged(true)
-                state=UiState(error="Unable to sign in. Contact admin.",configurationRequired=true,busy=true)
-                return@work
-            }
-            observeProcessSession()
-            sessionBootstrap.beginInitialRestore()
-            if(lifecycleObserved&&foreground&&!resumeQueued)sessionBootstrap.shareInitialForeground()
-            var completed=false
-            try{
-                if(recoverReceiverRetirement())return@work
-                restoreSavedSession();completed=true
-            }finally{
-                if(!completed && BuildConfig.IS_GATEWAY && lifecycleObserved && foreground)gateway.foregroundChanged(true)
-                if(sessionBootstrap.finishInitialRestore(completed))resumeQueued=true
-            }
-        }
     }
     private fun startExposureChecks(){
         exposureJob?.cancel()
@@ -1536,7 +1512,7 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
                     "allocate" to (selected?.capabilities?.contains(Capability.ALLOCATE.key)?:false).toString())
                 state=state.copy(selectedStaff=selected,draft=initialDraft)
             }
-            if(sheet==Sheet.RAW)loadRawForCurrentPanel("Review original SMS for the selected payment or receipt")
+            if(sheet==Sheet.RAW)loadRawForCurrentPanel(NativeSmsDisclosure.PANEL_REVIEW_REASON)
             else {
                 val reuseMember=mayReuseStaffMember&&withRememberedViews{sameScope->sameScope&&recentStaffRecords(state)}
                 refreshPanelNow(mayReuseMember=reuseMember)
@@ -1773,7 +1749,8 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         if(state.busy||!allows(Capability.ENROLL)||state.sheet!=Sheet.ENROLL)return
         leaveSuggestionPicker()
         if(state.onboarding.step != SmartOnboardingStep.IMPORT) memberInputs.clear()
-        state=state.copy(onboarding=state.onboarding.copy(step=SmartOnboardingStep.IMPORT,editingRow=null,photoPreviewPending=false),draft=emptyMap(),draftDirty=false,error=null)
+        state=state.copy(onboarding=state.onboarding.copy(step=SmartOnboardingStep.IMPORT,editingRow=null,photoPreviewPending=false),
+            draft=emptyMap(),draftDirty=state.onboarding.rows.any{it.verified},error=null)
     }
     override fun onboardingPhoto(){
         if(state.busy||!allows(Capability.ENROLL)||state.sheet!=Sheet.ENROLL||importReviewStarted())return
@@ -1869,16 +1846,18 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         if(state.busy||state.sheet!=Sheet.ENROLL||state.onboarding.step!=SmartOnboardingStep.IMPORT||!allows(Capability.ENROLL))return
         val selected=state.onboarding.rows.singleOrNull{it.row==row}?:return
         state=state.copy(onboarding=SmartOnboardingPresentation.editRow(state.onboarding,row),
-            draft=mapOf("name" to selected.name,"phone" to selected.phone.orEmpty()),draftDirty=false,error=null)
+            draft=mapOf("name" to selected.name,"phone" to selected.phone.orEmpty()),draftDirty=state.onboarding.rows.any{it.verified},error=null)
     }
     override fun onboardingConsent(field:String,value:Boolean,displayedDraft:Map<String,String>?){
         if(state.busy||state.sheet!=Sheet.ENROLL||!allows(Capability.ENROLL))return
-        state=state.copy(onboarding=SmartOnboardingPresentation.consent(state.onboarding,state.draft,displayedDraft,field,value))
+        val updated=SmartOnboardingPresentation.consent(state.onboarding,state.draft,displayedDraft,field,value)
+        if(updated!=state.onboarding)state=state.copy(onboarding=updated,
+            draftDirty=updated.memberFormChanged(state.draft)||updated.rows.any{it.verified})
     }
     override fun onboardingSaveRow(name:String,phone:String){
         if(state.busy||state.sheet!=Sheet.ENROLL||!allows(Capability.ENROLL))return
         val saved=SmartOnboardingPresentation.saveRow(state.onboarding,state.draft,name,phone)
-        if(saved!==state.onboarding)state=state.copy(onboarding=saved,draft=emptyMap(),draftDirty=false,error=null)
+        if(saved!==state.onboarding)state=state.copy(onboarding=saved,draft=emptyMap(),draftDirty=true,error=null)
     }
     private suspend fun submitOnboarding(rows:JSONArray){
         requireNoUnresolvedCommand()
@@ -2050,5 +2029,45 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         code=="access_denied"->"Access unavailable."
         code=="connection_unavailable"->"Offline. Reconnect and refresh."
         else->"Unable to complete. Refresh and try again."
+    }
+
+    // Start restoration after every controller and lazy delegate has been initialized.
+    init {
+        work(bypassGate=true,kind=UiOperation.INITIAL_READ){
+            operationLabel="Checking access"
+            val setup=try{
+                io{
+                    val device=DeviceProvisioning(app,GatewayFactory.installationId(app))
+                    val source=try{
+                        Values.apiOrigin(BuildConfig.BURI_API_ORIGIN)
+                        val api=ApiClient.phonePin(BuildConfig.BURI_API_ORIGIN,device.installationId,
+                            installationProfile,BuildConfig.BURI_API_PATH_PREFIX,BuildConfig.COLLECT_PUBLISHABLE_KEY,device::registrationToken)
+                        NativeRepository(app,api,deferDisplayCacheWrites=true)
+                    }catch(cancelled:CancellationException){throw cancelled}
+                    catch(_:Exception){null}
+                    device to source
+                }
+            }catch(cancelled:CancellationException){throw cancelled}
+            catch(_:Exception){null}
+            finally{initialSetupPending=false}
+            install=setup?.first
+            repository=setup?.second
+            if(repository==null){
+                if(BuildConfig.IS_GATEWAY&&lifecycleObserved&&foreground)gateway.foregroundChanged(true)
+                state=UiState(error="Unable to sign in. Contact admin.",configurationRequired=true,busy=true)
+                return@work
+            }
+            observeProcessSession()
+            sessionBootstrap.beginInitialRestore()
+            if(lifecycleObserved&&foreground&&!resumeQueued)sessionBootstrap.shareInitialForeground()
+            var completed=false
+            try{
+                if(recoverReceiverRetirement())return@work
+                restoreSavedSession();completed=true
+            }finally{
+                if(!completed && BuildConfig.IS_GATEWAY && lifecycleObserved && foreground)gateway.foregroundChanged(true)
+                if(sessionBootstrap.finishInitialRestore(completed))resumeQueued=true
+            }
+        }
     }
 }

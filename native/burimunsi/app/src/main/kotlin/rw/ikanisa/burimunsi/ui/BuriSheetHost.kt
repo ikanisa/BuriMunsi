@@ -4,7 +4,9 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -18,8 +20,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.*
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -49,32 +50,25 @@ import rw.ikanisa.burimunsi.core.Role
     ModalBottomSheet(onDismissRequest=m::closeSheet,sheetState=sheetState,containerColor=Color(0xFF1C1C1E),contentColor=BuriTheme.Text,shape=RoundedCornerShape(topStart=32.dp,topEnd=32.dp),scrimColor=Color.Black.copy(alpha=.62f),dragHandle={
         Box(Modifier.fillMaxWidth().padding(top=11.dp,bottom=3.dp),contentAlignment=Alignment.Center){Box(Modifier.size(width=34.dp,height=4.dp).background(Color(0xFF505054),RoundedCornerShape(4.dp)))}
     }){
-        BackHandler(enabled=payerPicker && !imeVisible && !s.busy) { m.onboardingOptions() }
+        BackHandler(enabled=payerPicker && !imeVisible && !s.busy && !s.discardRequested) { m.onboardingOptions() }
+        BackHandler(enabled=s.discardRequested && !s.busy) { m.keepDraft() }
         Column(Modifier.fillMaxWidth().heightIn(max=LocalConfiguration.current.screenHeightDp.dp*.94f).imePadding().semantics{paneTitle=title}.onPreviewKeyEvent{
-            if(it.key==Key.Escape){if(it.type==KeyEventType.KeyUp){if(imeVisible)keyboard?.hide()else if(payerPicker)m.onboardingOptions()else m.closeSheet()};true}else false
+            if(it.key==Key.Escape){if(it.type==KeyEventType.KeyUp){if(imeVisible)keyboard?.hide()else if(s.discardRequested)m.keepDraft()else if(payerPicker)m.onboardingOptions()else m.closeSheet()};true}else false
         }){
             Row(Modifier.fillMaxWidth().heightIn(min=65.dp).padding(start=if(payerPicker)8.dp else 22.dp,end=12.dp,top=7.dp,bottom=10.dp),verticalAlignment=Alignment.CenterVertically){
-                if(payerPicker)IconButton({keyboard?.hide();m.onboardingOptions()},enabled=!s.busy){Glyph(R.drawable.ic_back,t("Back"))}
+                if(payerPicker)IconButton({keyboard?.hide();m.onboardingOptions()},enabled=!s.busy&&!s.discardRequested){Glyph(R.drawable.ic_back,t("Back"))}
                 CompactLabel(title,Modifier.weight(1f).semantics{heading()},fontSize=30.sp,fontWeight=FontWeight.SemiBold,lineHeight=38.sp)
-                IconButton(m::closeSheet,enabled=!s.busy,modifier=Modifier.testTag("panel-close")){Glyph(R.drawable.ic_close,t("Close"))}
+                IconButton(m::closeSheet,enabled=!s.busy&&!s.discardRequested,modifier=Modifier.testTag("panel-close")){Glyph(R.drawable.ic_close,t("Close"))}
             }
+            BoxWithConstraints(Modifier.fillMaxWidth().weight(1f,fill=false)){
+            val noticeLimit = maxHeight / 2
+            Column(Modifier.fillMaxWidth()){
             if(s.discardRequested)DiscardPrompt(s,m)
             val showPanelProgress=hasOperationProgress(m.operation,s.busy,m.exportFeedback)
-            if(showPanelProgress){
-                val label=if(sheet==Sheet.RAW && s.rawDisclosure==RawDisclosureState.LOADING)"Loading original SMS" else m.operationLabel
-                BuriOperationFeedback(m.operation,label)
-            }
-            s.commandNotice?.takeIf{s.operator!=null && m.screenGate==ScreenGate.OPEN && m.presentation.showRecords}
-                ?.let{BuriStatusMessage(it,warning=true)}
-            m.exportFeedback?.takeIf{m.screenGate==ScreenGate.OPEN&&m.presentation.showRecords}?.let{BuriExportFeedback(it,m::cancelExport,m::dismissExportFeedback)}
-            s.error?.takeUnless { payerPicker && s.onboarding.suggestionsFailed }?.let{message->
-                BuriStatusMessage(message,error=true)
-                if(sheet in setOf(Sheet.STAFF,Sheet.AUDIT,Sheet.ALLOCATE,Sheet.GATEWAY,Sheet.MEMBER_DETAILS))
-                    TextButton(m::refresh,enabled=!s.busy,modifier=Modifier.padding(horizontal=16.dp)){CompactLabel(t("Retry loading"))}
-            }
-            // Bounded list avoids unbounded nested-scroll measurement on compact phones and IME.
-            val blockedContent=if(s.discardRequested)Modifier.clearAndSetSemantics{}.pointerInput(Unit){
-                awaitPointerEventScope{while(true)awaitPointerEvent(PointerEventPass.Initial).changes.forEach{it.consume()}}
+            if(!s.discardRequested)SheetFeedback(s,m,sheet,payerPicker,showPanelProgress,Modifier.heightIn(max=noticeLimit))
+            // Keep in-memory form inputs while removing the form from layout, focus and hit testing.
+            val blockedContent=if(s.discardRequested)Modifier.clearAndSetSemantics{}.layout { _, constraints ->
+                layout(constraints.minWidth,0) {}
             }else Modifier
             Box(Modifier.fillMaxWidth().weight(1f,fill=false).then(blockedContent)){
                 CompositionLocalProvider(LocalProgressPresented provides showPanelProgress) {
@@ -116,7 +110,7 @@ import rw.ikanisa.burimunsi.core.Role
                     }
                     Sheet.AUDIT->Panel{
                         item{ListingToolbar(m,onExport)}
-                        items(s.audit?.items.orEmpty(),key={it.id}){a->Column(Modifier.fillMaxWidth().padding(vertical=10.dp)){SingleLineName(a.action);Spacer(Modifier.height(5.dp));CompactLabel(a.at,color=BuriTheme.Muted,fontSize=14.sp,lineHeight=22.sp)}}
+                        items(s.audit?.items.orEmpty(),key={it.id}){a->Column(Modifier.fillMaxWidth().padding(vertical=10.dp)){SingleLineName(a.action);Spacer(Modifier.height(5.dp));Text(historyTime(a.at,t.locale),color=BuriTheme.Muted,fontSize=14.sp,lineHeight=22.sp)}}
                         if(s.audit?.items?.isEmpty()==true)item{Empty()}
                         if(s.audit==null&&s.busy)item{BuriSkeletonRows(3,LoadingRows.ACTIVITY)}
                         moreButton(s.audit?.nextCursor,s.busy,m::more,autoEnabled=!s.offline&&s.error==null,paging=m.operation==UiOperation.LOAD_MORE)
@@ -125,6 +119,8 @@ import rw.ikanisa.burimunsi.core.Role
                 }}
                 }
             }
+            }
+            }
         }
     }
     }
@@ -132,11 +128,40 @@ import rw.ikanisa.burimunsi.core.Role
 
 }
 
-@Composable private fun DiscardPrompt(s:UiState,m:BuriController){
+@Composable private fun SheetFeedback(s:UiState,m:BuriController,sheet:Sheet,payerPicker:Boolean,progress:Boolean,modifier:Modifier){
+    val t=LocalUiText.current
+    val signedIn=s.operator!=null && m.screenGate==ScreenGate.OPEN && m.presentation.showRecords
+    val message=s.error?.takeUnless{payerPicker && s.onboarding.suggestionsFailed}
+    if(!progress && message==null && !(signedIn && (s.offline||s.pending||s.commandNotice!=null||m.exportFeedback!=null)))return
+    Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState())){
+        if(progress){
+            val label=if(sheet==Sheet.RAW && s.rawDisclosure==RawDisclosureState.LOADING)"Loading original SMS" else m.operationLabel
+            BuriOperationFeedback(m.operation,label)
+        }
+        if(signedIn){
+            if(s.offline)BuriStatusMessage("Offline · read only",warning=true)
+            if(s.pending){
+                BuriStatusMessage("Previous action needs confirmation",warning=true)
+                if(!s.draftDirty)TextButton(m::retry,enabled=m.presentation.mayCheckOutcome,modifier=Modifier.padding(horizontal=16.dp)){
+                    Text(t("Check previous action"))
+                }
+            }
+            s.commandNotice?.let{BuriStatusMessage(it,warning=true)}
+            m.exportFeedback?.let{BuriExportFeedback(it,m::cancelExport,m::dismissExportFeedback)}
+        }
+        message?.let{
+            BuriStatusMessage(it,error=true)
+            if(sheet in setOf(Sheet.STAFF,Sheet.AUDIT,Sheet.ALLOCATE,Sheet.GATEWAY,Sheet.MEMBER_DETAILS))
+                TextButton(m::refresh,enabled=!s.busy,modifier=Modifier.padding(horizontal=16.dp)){CompactLabel(t("Retry loading"))}
+        }
+    }
+}
+
+@Composable internal fun DiscardPrompt(s:UiState,m:BuriController){
     val t=LocalUiText.current;val keep=remember{FocusRequester()}
     val keyboard=LocalSoftwareKeyboardController.current;val focus=LocalFocusManager.current
     LaunchedEffect(Unit){keyboard?.hide();focus.clearFocus();keep.requestFocus()}
-    Column(Modifier.fillMaxWidth().background(Color(0xFF28282B)).padding(horizontal=24.dp,vertical=16.dp).semantics{liveRegion=LiveRegionMode.Assertive},verticalArrangement=Arrangement.spacedBy(8.dp)){
+    Column(Modifier.fillMaxWidth().background(Color(0xFF28282B)).verticalScroll(rememberScrollState()).padding(horizontal=24.dp,vertical=16.dp).semantics{liveRegion=LiveRegionMode.Assertive},verticalArrangement=Arrangement.spacedBy(8.dp)){
         Text(t("Discard unsaved changes?"),fontSize=18.sp,fontWeight=FontWeight.SemiBold,lineHeight=25.sp)
         Text(if(s.pending)t("An earlier action may have been submitted. Discarding this draft does not cancel it. Check the previous action before retrying.") else t("Nothing has been submitted. Credentials will be cleared."),fontSize=14.sp,color=BuriTheme.Muted,lineHeight=21.sp)
         Primary(t("Keep editing"),m::keepDraft,!s.busy,secondary=true,modifier=Modifier.focusRequester(keep))

@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
@@ -99,7 +100,7 @@ internal val LocalProgressPresented=compositionLocalOf { false }
     }
     val t=LocalUiText.current
     Row(Modifier.fillMaxWidth().feedbackEntrance(operation).padding(horizontal=20.dp,vertical=6.dp)
-        .background(BuriTheme.Tone,RoundedCornerShape(18.dp)).padding(horizontal=14.dp,vertical=10.dp)
+        .background(BuriTheme.Tone.compositeOver(BuriTheme.Surface),RoundedCornerShape(18.dp)).padding(horizontal=14.dp,vertical=10.dp)
         .testTag("active-operation:${operation.name}").semantics(mergeDescendants=true){progressBarRangeInfo=ProgressBarRangeInfo.Indeterminate;liveRegion=LiveRegionMode.Polite},
         verticalAlignment=Alignment.CenterVertically){
         BuriOrbit(size=25);Spacer(Modifier.width(12.dp));CompactLabel(t(text),Modifier.weight(1f),fontSize=15.sp,lineHeight=23.sp,color=BuriTheme.Text)
@@ -118,7 +119,7 @@ internal val LocalProgressPresented=compositionLocalOf { false }
 
 @Composable internal fun BuriStatusMessage(label:String,error:Boolean=false,warning:Boolean=false){
     val t=LocalUiText.current;val tint=if(error)BuriTheme.Bad else if(warning)BuriTheme.Warn else BuriTheme.Blue
-    Row(Modifier.fillMaxWidth().feedbackEntrance(label).padding(horizontal=20.dp,vertical=6.dp).background(tint.copy(alpha=.08f),RoundedCornerShape(18.dp))
+    Row(Modifier.fillMaxWidth().feedbackEntrance(label).padding(horizontal=20.dp,vertical=6.dp).background(tint.copy(alpha=.08f).compositeOver(BuriTheme.Surface),RoundedCornerShape(18.dp))
         .padding(horizontal=14.dp,vertical=12.dp).semantics(mergeDescendants=true){liveRegion=LiveRegionMode.Polite},verticalAlignment=Alignment.Top){
         Icon(painterResource(if(error||warning)R.drawable.ic_alert else R.drawable.ic_info),null,Modifier.size(22.dp),tint)
         Spacer(Modifier.width(12.dp));Text(t(label),Modifier.weight(1f),fontSize=15.sp,lineHeight=23.sp,color=tint)

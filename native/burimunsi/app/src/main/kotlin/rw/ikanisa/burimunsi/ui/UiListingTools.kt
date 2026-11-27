@@ -20,6 +20,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.cool.mobile.R
@@ -31,6 +32,9 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 
 private val ListingZone=ZoneId.of("Africa/Kigali")
+private val actionPadding = 12.dp
+private val actionIconGap = 7.dp
+private const val actionIconSize = 20
 internal fun listingSortLabel(value:ListingSort)=when(value){
     ListingSort.NEWEST->"Newest first";ListingSort.OLDEST->"Oldest first"
     ListingSort.AMOUNT_ASC->"Amount · low to high";ListingSort.AMOUNT_DESC->"Amount · high to low"
@@ -66,13 +70,15 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
         if(query.active!="all")add(t(listingValueLabel(query.active)) to {model.applyListingQuery(query.copy(active="all"))})
         if(query.direction!="all")add(t(listingValueLabel(query.direction)) to {model.applyListingQuery(query.copy(direction="all"))})
     }
-    Column(Modifier.fillMaxWidth().padding(top=10.dp,bottom=10.dp).testTag("listing-tools:${target.name}")){
+    val memberDirectory = target == ListingTarget.MEMBERS
+    val filterLabel = if(chips.isEmpty()) t("Filters") else t("Filters (%1\$d)",chips.size)
+    val openFilters = { model.openSheet(Sheet.FILTERS) }
+    Column(Modifier.fillMaxWidth().padding(vertical=if(memberDirectory) 6.dp else 10.dp).testTag("listing-tools:${target.name}")){
         val filterControl:@Composable (Modifier)->Unit={modifier->
-            val label=if(chips.isEmpty())t("Filters") else t("Filters (%1\$d)",chips.size)
-            ListingAction(R.drawable.ic_filter,label,modifier,enabled){model.openSheet(Sheet.FILTERS)}
+            ListingAction(R.drawable.ic_filter,filterLabel,modifier,enabled,openFilters)
         }
-        val sortControl:@Composable (Modifier)->Unit={modifier->
-            ListingAction(R.drawable.ic_sort,currentSort,modifier.testTag("listing-sort-menu")
+        val sortControl:@Composable (Modifier,String)->Unit={modifier,label->
+            ListingAction(R.drawable.ic_sort,label,modifier.testTag("listing-sort-menu")
                 .semantics{contentDescription=t("Sort by");stateDescription=currentSort},enabled){sortOpen=true}
         }
         val exportControl:@Composable ()->Unit={
@@ -81,14 +87,35 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
             }
         }
         BoxWithConstraints(Modifier.fillMaxWidth()){
-            if(showFilter&&(maxWidth<340.dp||LocalDensity.current.fontScale>=1.4f)){
+            if(memberDirectory && showFilter){
+                val spacing = 6.dp
+                val density = LocalDensity.current
+                val measurer = rememberTextMeasurer()
+                val style = MaterialTheme.typography.labelLarge
+                fun labeledWidth(label: String) = with(density) {
+                    val textWidth = measurer.measure(label, style=style, softWrap=false).size.width.toDp()
+                    textWidth + actionPadding * 2 + actionIconSize.dp + actionIconGap + 2.dp
+                }
+                val exportSpace = if(showExport && model.canExportListing) 48.dp + spacing else 0.dp
+                val available = maxWidth - exportSpace - spacing
+                val filterWidth = labeledWidth(filterLabel)
+                val sortWidth = labeledWidth(currentSort)
+                val showFilterLabel = filterWidth + sortWidth <= available
+                val sortSpace = available - if(showFilterLabel) filterWidth else 48.dp
+                Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(spacing),verticalAlignment=Alignment.CenterVertically){
+                    if(showFilterLabel) filterControl(Modifier.width(filterWidth))
+                    else RoundAction(R.drawable.ic_filter,filterLabel,openFilters,enabled,size=48)
+                    sortControl(Modifier.weight(1f),if(sortWidth <= sortSpace) currentSort else t("Sort"))
+                    exportControl()
+                }
+            }else if(showFilter&&(maxWidth<340.dp||LocalDensity.current.fontScale>=1.4f)){
                 Column(Modifier.fillMaxWidth(),verticalArrangement=Arrangement.spacedBy(8.dp)){
                     Row(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically){filterControl(Modifier.weight(1f));exportControl()}
-                    sortControl(Modifier.fillMaxWidth())
+                    sortControl(Modifier.fillMaxWidth(),currentSort)
                 }
             }else Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically){
                 if(showFilter)filterControl(Modifier.weight(1f))
-                sortControl(Modifier.weight(if(showFilter)1.3f else 1f))
+                sortControl(Modifier.weight(if(showFilter)1.3f else 1f),currentSort)
                 exportControl()
             }
         }
@@ -122,10 +149,10 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
 
 @Composable private fun ListingAction(icon:Int,label:String,modifier:Modifier,enabled:Boolean,open:()->Unit){
     FilledTonalButton(open,modifier.heightIn(min=48.dp),enabled=enabled,shape=RoundedCornerShape(24.dp),
-        contentPadding=PaddingValues(horizontal=12.dp,vertical=8.dp),
+        contentPadding=PaddingValues(horizontal=actionPadding,vertical=8.dp),
         colors=ButtonDefaults.filledTonalButtonColors(containerColor=BuriTheme.Tone,contentColor=BuriTheme.Text)){
-        Glyph(icon,null,BuriTheme.Text,20)
-        Spacer(Modifier.width(7.dp))
+        Glyph(icon,null,BuriTheme.Text,actionIconSize)
+        Spacer(Modifier.width(actionIconGap))
         CompactLabel(label,Modifier.weight(1f,fill=false),style=MaterialTheme.typography.labelLarge)
     }
 }

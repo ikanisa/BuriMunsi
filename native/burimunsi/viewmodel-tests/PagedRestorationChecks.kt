@@ -1,5 +1,6 @@
 package rw.ikanisa.burimunsi.pagedviewmodeltests
 import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.onFixtureMain
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.*
@@ -17,7 +18,8 @@ private class MemoryCheckpoint(initial:String?):NavigationCheckpointStore{
 }
 fun main()=runBlocking{
  var checks=0
- fun ck(label:String,value:Boolean){check(value){label};println("PASS $label");checks++}
+ fun ck(label:String,value:Boolean,detail:()->String={""}){check(value){listOf(label,detail()).filter{it.isNotEmpty()}.joinToString(" · ")};println("PASS $label");checks++}
+ val fixtureHost=AndroidViewModel(Application())
  val realNow=System.currentTimeMillis();var now=realNow+2000
  fun reset(){
   Fixture.paged=null;Fixture.anchoredMembers=null;Fixture.currentOwnerOverride=null;Fixture.receiverGroupOverride=null;Fixture.pendingFlag=true;Fixture.journalFailure=false;Fixture.cached=false
@@ -28,11 +30,13 @@ fun main()=runBlocking{
   Fixture.memberCached=false;Fixture.memberPaymentScopeFailureOnCursor=false;now=realNow+2000
  }
  suspend fun idle(vm:BuriViewModel){withTimeout(10000){while(vm.state.busy)delay(2)};delay(20)}
- fun start(route:Route=Route.PAYMENTS,index:Int=12,anchor:String?=null,listing:ListingQuery?=null,memberId:String?=null):Pair<BuriViewModel,MemoryCheckpoint>{
+ suspend fun start(route:Route=Route.PAYMENTS,index:Int=12,anchor:String?=null,listing:ListingQuery?=null,memberId:String?=null):Pair<BuriViewModel,MemoryCheckpoint>{
   val cp=NavigationCheckpoint("operator",Fixture.managedCollection!!,realNow,route,
    routeId=memberId,query="needle",
    filter=when(route){Route.PAYMENTS->"unallocated";else->"all"},index=index,offset=27,memberAnchorId=anchor,memberListing=listing)
-  val store=MemoryCheckpoint(cp.encode());return BuriViewModel(Application(),store){now} to store
+  val store=MemoryCheckpoint(cp.encode())
+  // Android constructs the controller on Main. Its startup job must not race its field initializers.
+  return fixtureHost.onFixtureMain { BuriViewModel(application,store){now} } to store
  }
  fun page(cursor:String?,total:Int=40,size:Int=4):Page<String>{
   val begin=cursor?.toInt()?:0;val end=minOf(begin+size,total)
@@ -50,7 +54,11 @@ fun main()=runBlocking{
   val firstOnly=route in setOf(Route.SMS,Route.MEMBERS)
   val expectedIndex=when(route){Route.SMS->0;Route.MEMBERS->PagedRestoration.headerItems(route)+3;else->target}
   val expectedStop=if(route==Route.MEMBERS)ListRestoreStop.BUDGET_REACHED else ListRestoreStop.POSITION_READY
-  ck("$route loads the appropriate pages from a fresh cursor",if(firstOnly)requests==listOf(null)&&count(vm)==4 else requests==listOf(null,"4","8")&&count(vm)==12)
+  val expectedRequests=if(firstOnly) listOf(null) else listOf(null,"4","8")
+  val loaded=when(route){Route.PAYMENTS->vm.state.payments?.items?.size;Route.MEMBERS->vm.state.members?.items?.size;else->vm.state.messages?.items?.size}
+  ck("$route loads the appropriate pages from a fresh cursor",requests==expectedRequests&&loaded==if(firstOnly)4 else 12) {
+   "route=${vm.state.route}, requests=$requests, rows=$loaded, stop=${vm.state.listRestoration}, failure=${vm.state.failure}"
+  }
   ck("$route retains safe position",vm.state.listIndex==expectedIndex&&vm.state.listOffset==(if(firstOnly)0 else 27))
   ck("$route preserves permitted query or member scope",contexts.all{it.first==when(route){Route.SMS->"";else->"needle"}})
   ck("$route preserves filter",contexts.all{it.second==when(route){Route.PAYMENTS->"unallocated";else->"all"}})
@@ -202,5 +210,6 @@ fun main()=runBlocking{
  racing.listPosition(Route.PAYMENTS,null,100001,1)
  ck("out of range callback rejected",racing.state.listIndex==12)
  racing.viewModelScope.cancel();reset()
+ fixtureHost.viewModelScope.cancel()
  println("RESULT: $checks actual-ViewModel paged-restoration checks passed; doubles only, not installed-screen acceptance.")
 }

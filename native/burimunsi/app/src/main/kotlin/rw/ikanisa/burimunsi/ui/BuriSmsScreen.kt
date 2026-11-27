@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.text.style.TextOverflow
@@ -22,13 +23,21 @@ import androidx.compose.ui.unit.sp
 import app.cool.mobile.R
 import rw.ikanisa.burimunsi.core.*
 
-@Composable private fun SmsRowHeader(sender:String,timestamp:String){
+@Composable private fun SmsRowHeader(sender:String,at:String){
+    val timestamp = historyTime(at,LocalUiText.current.locale)
     BoxWithConstraints(Modifier.fillMaxWidth()){
-        val dateWidth=maxWidth*.52f
-        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){
-            SingleLineName(sender,Modifier.weight(1f))
-            Spacer(Modifier.width(8.dp))
-            CompactLabel(timestamp,Modifier.widthIn(max=dateWidth),fontSize=12.sp,color=BuriTheme.Muted)
+        if(maxWidth<240.dp || LocalDensity.current.fontScale>=1.4f){
+            Column {
+                SingleLineName(sender)
+                Text(timestamp,fontSize=12.sp,lineHeight=16.sp,color=BuriTheme.Muted)
+            }
+        }else {
+            val dateWidth=maxWidth*.52f
+            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.Top){
+                SingleLineName(sender,Modifier.weight(1f))
+                Spacer(Modifier.width(8.dp))
+                Text(timestamp,Modifier.widthIn(max=dateWidth),fontSize=12.sp,lineHeight=16.sp,color=BuriTheme.Muted)
+            }
         }
     }
 }
@@ -39,7 +48,7 @@ import rw.ikanisa.burimunsi.core.*
         .padding(horizontal=16.dp,vertical=16.dp),verticalAlignment=Alignment.Top){
         Box(Modifier.size(42.dp).background(BuriTheme.Tone,CircleShape),contentAlignment=Alignment.Center){Glyph(R.drawable.ic_sms,null,BuriTheme.Text,23)};Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)){
-            SmsRowHeader(row.sender,historyTime(row.at,t.locale))
+            SmsRowHeader(row.sender,row.at)
             if(row.preview.isNotEmpty()){Spacer(Modifier.height(6.dp));Text(row.preview,fontSize=16.sp,color=BuriTheme.Muted,maxLines=2,overflow=TextOverflow.Ellipsis,lineHeight=24.sp)}
             CompactLabel(t("Queued"),Modifier.padding(top=6.dp),fontSize=13.sp,color=BuriTheme.Warn)
         }
@@ -147,17 +156,32 @@ private fun observationProcessingLabel(value:ObservationProcessing?):String=when
                 CompactLabel(t(observationProcessingLabel(processing)),fontSize=16.sp,color=if(processing?.status in setOf("needs_review","conflict"))BuriTheme.Warn else BuriTheme.Text)
                 Text(t("This status does not confirm a payment."),fontSize=13.sp,color=BuriTheme.Muted)
                 s.observationRetryNotice?.let{Text(t(it),fontSize=14.sp,color=BuriTheme.Muted)}
-                if(processing?.canRetry==true)Primary(t("Retry"),m::retryObservation,!s.busy)
+                if(processing?.canRetry==true && m.smsAccessGranted && m.allows(Capability.GATEWAY) && m.allows(Capability.SMS)){
+                    Primary(t("Retry"),m::retryObservation,!s.busy&&!s.offline)
+                }
             }}
         }
         if(raw!=null&&s.rawDisclosure==RawDisclosureState.REVEALED){
-            item{CountLine(raw.at,raw.simLabel?:t("Unavailable"))}
+            item{Column(verticalArrangement=Arrangement.spacedBy(4.dp)){
+                Text(historyTime(raw.at,t.locale),fontSize=14.sp,lineHeight=20.sp,color=BuriTheme.Muted)
+                raw.simLabel?.takeIf{it.isNotBlank()}?.let{Text(it,fontSize=14.sp,lineHeight=20.sp,color=BuriTheme.Muted)}
+            }}
             if(s.rawSource is SmsSourceRef.Observation&&s.observationHints?.hints?.isNotEmpty()==true){
                 val rows=s.observationHints.hints.map{hint->t(if(hint.kind=="quoted_incoming_amount")"Amount shown in SMS"else "Reference shown in SMS") to hint.text}
                 item{FactGroup(rows,BuriTheme.Group)}
             }
             item{SelectionContainer{Text(raw.body,Modifier.fillMaxWidth().background(Color(0xFF28282B),RoundedCornerShape(24.dp)).padding(22.dp),fontSize=19.sp,lineHeight=33.sp)}}
         }else if(s.busy||s.rawDisclosure==RawDisclosureState.LOADING)item{BuriInlineLoading("Loading original SMS")}
-        else item{Text(t(s.rawError?:"Original SMS unavailable."),color=BuriTheme.Bad)}
+        else item{
+            Column(verticalArrangement=Arrangement.spacedBy(8.dp)){
+                s.rawError?.let{BuriStatusMessage(it,error=true)}
+                val canRequest = s.rawSource?.id == s.sheetId && s.sheetId != null && m.allows(Capability.SMS)
+                if(canRequest && (s.rawDisclosure==RawDisclosureState.AWAITING_REASON || s.rawError==NativeSmsDisclosure.UNAVAILABLE)){
+                    TextButton({m.revealRaw(NativeSmsDisclosure.PANEL_REVIEW_REASON)}){
+                        Text(t(if(s.rawDisclosure==RawDisclosureState.FAILURE)"Retry loading" else "Original SMS"))
+                    }
+                }
+            }
+        }
     }
 }

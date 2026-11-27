@@ -1,11 +1,13 @@
 package rw.ikanisa.burimunsi.receiverstatustests
 
 import android.app.Application
+import androidx.lifecycle.onFixtureMain
 import androidx.lifecycle.viewModelScope
 import app.cool.mobile.BuildConfig
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -97,18 +99,26 @@ fun main() = runBlocking {
         GatewayFixture.permissionsEntered = permissionEntered
         GatewayFixture.permissionsRelease = permissionRelease
         val launched = java.util.concurrent.atomic.AtomicBoolean()
-        model.requestReceivingPermissions { launched.set(true) }
+        val permissionJob = model.onFixtureMain {
+            val parent = checkNotNull(viewModelScope.coroutineContext[Job])
+            val existing = parent.children.toSet()
+            requestReceivingPermissions { launched.set(true) }
+            parent.children.single { it !in existing }
+        }
         withContext(Dispatchers.IO) { check(permissionEntered.await(5, TimeUnit.SECONDS)) }
-        model.navigate(Route.MEMBERS)
-        idle(model)
-        permissionRelease.countDown()
-        withContext(Dispatchers.IO) { check(GatewayFixture.permissionReadFinished.await(5, TimeUnit.SECONDS)) }
-        withContext(model.viewModelScope.coroutineContext.minusKey(kotlinx.coroutines.Job)) { }
-        check(!launched.get())
+        // Only the original lookup stays blocked while the next screen loads.
         GatewayFixture.permissionsEntered = null
         GatewayFixture.permissionsRelease = null
-        model.navigate(Route.SETTINGS)
+        model.onFixtureMain { navigate(Route.MEMBERS) }
         idle(model)
+        check(model.state.route == Route.MEMBERS)
+        model.onFixtureMain { navigate(Route.SETTINGS) }
+        idle(model)
+        check(model.state.route == Route.SETTINGS)
+        permissionRelease.countDown()
+        withTimeout(5_000) { permissionJob.join() }
+        check(!launched.get()) { "A permission result from the previous Settings visit reopened the prompt" }
+        println("PASS returning to Settings cannot reopen an earlier SMS permission prompt")
         model.openSheet(Sheet.GATEWAY)
         idle(model)
         val statusEntered = CountDownLatch(1)
