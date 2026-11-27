@@ -106,8 +106,9 @@ function CanonicalMembershipCreatePage({ id, request, permissions, actorId, prin
       setPending(null); setReview(null); setCompletedGroup(String(checked.group_id)); setState('success'); setMessage('The membership was recorded.');
     } catch {
       if (!active()) return;
-      const saved = retained ?? await readPending(stableIdentity, FAMILY, RESOURCE).catch(() => null);
-      setPending(saved); setReview(null); setState('ready'); setMessage(saved ? 'The result is unconfirmed. Check the original request before another change.' : 'The group, member or verification could not be confirmed. No membership was submitted.');
+      const saved = retained ?? pending ?? await readPending(stableIdentity, FAMILY, RESOURCE).catch(() => null);
+      if (!active()) return;
+      setPending(saved); setRetryAllowed(false); setReview(null); setState('ready'); setMessage(saved ? 'The result is unconfirmed. Check the original request before another change.' : 'The group, member or verification could not be confirmed. No membership was submitted.');
     } finally { busy.current = false; }
   };
   const check = async () => {

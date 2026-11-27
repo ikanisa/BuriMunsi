@@ -67,6 +67,7 @@ describe('Combined receipt access and review panel', () => {
     expect(screen.queryByText('hello world')).not.toBeInTheDocument(); expect(JSON.stringify(sessionStorage)).not.toContain('hello world');
   });
   it('checks the original key with writes off and requires a new reveal and explicit identical retry after opt-in', async () => {
+    const retainedAt = Date.now(), clock = vi.spyOn(Date, 'now').mockReturnValue(retainedAt);
     await retainPending(mock.user, 'member-receipt-review-v2', id, key, 'payments.manage', {model: 'transaction_journals', expected_version: 1, outcome: 'reviewed', transaction_id: null, expected_transaction_version: null, source_sha256: hash, source_user_id: mock.user.id, reason_sha256: await sha256Text(why), transaction_sha256: null});
     let posted = false;
     mock.request.mockImplementation(async (path: string, options?: {idempotencyKey?: string}) => {
@@ -76,7 +77,11 @@ describe('Combined receipt access and review panel', () => {
       return detail(posted);
     });
     const user = userEvent.setup(), view = render(<ReceiptReviewPanel receipt={receipt} canManage onUpdated={() => undefined} />);
-    await user.click(await screen.findByRole('button', {name: 'Check original review'}));
+    const check = await screen.findByRole('button', {name: 'Check original review'});
+    clock.mockReturnValue(retainedAt - 200); await user.click(check);
+    expect(await screen.findByText(/original review could not be verified/i)).toBeVisible();
+    expect(mock.request).not.toHaveBeenCalled();
+    clock.mockReturnValue(retainedAt + 1); await user.click(check);
     expect(await screen.findByText(/No server receipt was found/)).toBeVisible(); expect(screen.queryByRole('button', {name: 'Review receipt access'})).not.toBeInTheDocument();
     view.rerender(<ReceiptReviewPanel receipt={receipt} canManage enabled onUpdated={() => undefined} />);
     await user.click(await screen.findByRole('button', {name: 'Check original review'}));

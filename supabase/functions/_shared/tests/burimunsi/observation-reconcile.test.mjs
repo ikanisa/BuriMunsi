@@ -91,7 +91,8 @@ test('batch HTTP forwards only bounded metadata and rejects oversize and duplica
  assert.equal(calls.length,2);assert.equal(JSON.stringify(calls[0]),JSON.stringify(good));
 });
 
-test('batch HTTP preserves item and authority errors for Android',async()=>{
+test('batch HTTP preserves item and authority errors for Android',async(t)=>{
+ const warnings=t.mock.method(console,'warn',()=>{});
  const noop=async()=>({});let failure;
  const handler=createNativeHandler({auth:{login:noop,authenticate:async()=>({id:actor,groupId:'group-1'}),logout:noop,changePasscode:noop,manageStaff:noop},
   records:{home:noop,page:noop,detail:noop,exportLedger:noop,commandStatus:noop},contributions:{allocate:noop},members:{enroll:noop,setActive:noop},gateway:{status:noop,replace:noop},
@@ -102,6 +103,15 @@ test('batch HTTP preserves item and authority errors for Android',async()=>{
    'x-burimunsi-installation':install,'x-burimunsi-contract':'burimunsi.native.v1','x-burimunsi-request':actor,
    'x-burimunsi-generation':'1',authorization:'Bearer '+'a'.repeat(64),'content-type':'application/json'},body:JSON.stringify({items:[input]})}));
   assert.equal(response.status,status);assert.equal((await response.json()).error.code,code);
+ }
+ const events=warnings.mock.calls.map(call=>JSON.parse(call.arguments[0]));
+ assert.equal(events.length,2);
+ for(const event of events){
+  assert.equal(event.event,'burimunsi_reconcile_503');assert.equal(event.items,1);
+  assert.match(event.request_sha256,/^[0-9a-f]{64}$/);assert.equal(event.run_sha256,null);
+  for(const privateValue of [actor,input.sourceKey,input.bodySha256,input.rawSender]){
+   assert.ok(!JSON.stringify(event).includes(privateValue));
+  }
  }
 });
 

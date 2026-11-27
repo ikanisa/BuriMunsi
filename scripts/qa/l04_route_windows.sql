@@ -5,8 +5,8 @@
 SELECT toStartOfFiveMinutes(timestamp) AS window_start, source,
        count() AS source_records,
        countIf(path = '' OR method = '' OR status = 0) AS malformed,
-       countIf(method = 'POST' AND endsWith(path, '/v1/burimunsi/sms/observations/reconcile-batch')) AS responses,
-       countIf(method = 'POST' AND endsWith(path, '/v1/burimunsi/sms/observations/reconcile-batch')
+       countIf(method = 'POST' AND path = '/functions/v1/collect-api/v1/burimunsi/sms/observations/reconcile-batch') AS responses,
+       countIf(method = 'POST' AND path = '/functions/v1/collect-api/v1/burimunsi/sms/observations/reconcile-batch'
                AND status = 503) AS http_503
 FROM (
   SELECT timestamp, source,

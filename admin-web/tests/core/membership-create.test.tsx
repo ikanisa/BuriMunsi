@@ -41,6 +41,7 @@ describe('canonical group membership creation', () => {
     expect(screen.queryByRole('button', { name: 'Find members' })).not.toBeInTheDocument(); expect(request).not.toHaveBeenCalled();
   });
   it('retains a lost membership request and repeats the original key only after lookup and review', async () => {
+    const retainedAt = Date.now(), clock = vi.spyOn(Date, 'now').mockReturnValue(retainedAt);
     let key = '', writes = 0;
     const request = vi.fn(async (path: string, options?: { method?: string; body?: Record<string, unknown>; idempotencyKey?: string }) => {
       if (path === `operations/groups/${group.id}`) return groupDetail;
@@ -58,6 +59,14 @@ describe('canonical group membership creation', () => {
     render(<MembershipCreatePage {...access} request={request} id={group.id} identity={identity} allowMutations verifyFresh={async () => true} />);
     await fill(); fireEvent.click(screen.getByRole('button', { name: 'Confirm membership' }));
     expect(await screen.findByText(/result is unconfirmed/i)).toBeInTheDocument(); expect(writes).toBe(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Check request' })); fireEvent.click(await screen.findByRole('button', { name: 'Review same request' }));
+    const retry = await screen.findByRole('button', { name: 'Confirm same request' });
+    clock.mockReturnValue(retainedAt - 200);
+    fireEvent.click(retry);
+    expect(await screen.findByText(/result is unconfirmed/i)).toBeVisible();
+    expect(screen.getByText(key)).toBeVisible(); expect(writes).toBe(1);
+    expect(screen.queryByRole('button', { name: 'Confirm same request' })).not.toBeInTheDocument();
+    clock.mockReturnValue(retainedAt + 1);
     fireEvent.click(screen.getByRole('button', { name: 'Check request' })); fireEvent.click(await screen.findByRole('button', { name: 'Review same request' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Confirm same request' }));
     expect(await screen.findByText('The membership was recorded.')).toBeInTheDocument(); expect(writes).toBe(2); expect(sessionStorage.getItem(PENDING_KEY)).toBeNull();

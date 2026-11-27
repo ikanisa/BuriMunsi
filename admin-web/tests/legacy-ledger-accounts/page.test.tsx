@@ -48,9 +48,14 @@ describe('legacy ledger account creation page',()=>{
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();expect(request.mock.calls.some(call=>call[0]==='operations/accounts')).toBe(false);
   });
   it('shows the legacy Flutter checkpoint for lookup only and never submits it',async()=>{
+    const retainedAt=Date.now(),clock=vi.spyOn(Date,'now').mockReturnValue(retainedAt);
     await retainPending(identity(),'operating-createaccount','new',key,'ledger.manage',oldBody);request.mockResolvedValue({status:'not_found'});
     render(<LegacyLedgerAccountCreatePage {...props()} allowMutations/>);const user=userEvent.setup();
-    await user.click(await screen.findByRole('button',{name:'Check original request'}));
+    const check=await screen.findByRole('button',{name:'Check original request'});
+    clock.mockReturnValue(retainedAt-200);await user.click(check);
+    expect(await screen.findByText(/original request or resulting account could not be verified/i)).toBeVisible();
+    expect(request).not.toHaveBeenCalled();
+    clock.mockReturnValue(retainedAt+1);await user.click(check);
     expect(await screen.findByText(/its intent cannot be retried here/)).toBeVisible();expect(screen.queryByRole('button',{name:'Review same request'})).not.toBeInTheDocument();
     expect(request).toHaveBeenCalledOnce();expect(await readPending(identity(),'operating-createaccount','new')).toMatchObject({request_key:key});
   });
