@@ -8,7 +8,7 @@ import {canonicalProfile} from '../../../supabase/functions/_shared/deployment-p
 import {compileManagedLifecycleCandidate} from '../cloud-release/managed-lifecycle-candidate.mjs';
 import {retainedLock,migrationBytes,historyFixture} from '../cloud-release/retained-source.mjs';
 import {includeManagedRetirement} from '../cloud-release/retention-candidate.mjs';
-import {exerciseManagedChainGraph} from './managed-chain-graph-helper.mjs';
+import {exerciseManagedChainGraph,exerciseManagedChainRollback} from './managed-chain-graph-helper.mjs';
 
 const root=resolve(import.meta.dirname,'../../..');
 const sha=x=>createHash('sha256').update(x).digest('hex');
@@ -27,7 +27,7 @@ const variants={
  '20261113130700_storage_iceberg_retention_inspection.sql':['../../../supabase/migrations/20261117071117_storage_iceberg_cloud_catalog.sql','3ef135d93a0272260e8b12d1a2dcb690bb7a650b178fc12f98acd38ac176290d'],
  '20261114110200_storage_iceberg_retention_census.sql':['../../../supabase/migrations/20261117071123_storage_iceberg_cloud_census.sql','043c3eda476542c8f8e9f85ce985f789ef1fd4c0bc9f21fc3f87a76b3fef06e9']};
 let replayFailed=false;
-await withOwnedArchiveFixture(async({owner,admin,database})=>{
+await withOwnedArchiveFixture(async({owner,admin,openObserver})=>{
  const baseline='dfc7a4fafb696f73d207251c9f35cb892528eecd1929552fa575996874adc3e3',source='a'.repeat(64);
  await owner.query("ALTER TABLE auth.users ADD COLUMN email_confirmed_at timestamptz; ALTER TABLE auth.users ADD COLUMN is_anonymous boolean NOT NULL DEFAULT false");
  let storage=await readFile(root+'/scripts/supabase/testing/synthetic-iceberg-storage.sql','utf8');
@@ -137,6 +137,10 @@ await withOwnedArchiveFixture(async({owner,admin,database})=>{
   'private._retention_manifest_catalog_v2()','private._retention_manifest_rows_v2(text)','private._retention_manifest_schema_v2()',
   'private._retention_manifest_managed_rows_v2(text,integer)','private._retention_row_policy_v2(uuid,text,text,text)',
   'private.retention_capture_inventory_v2(uuid,text,bigint,text,integer)','private.retention_inventory_page_v2(uuid,text,integer,boolean)']])).rows;
+ if(managedLifecycle){
+  await exerciseManagedChainRollback(owner,admin,openObserver);
+  negativeChecks.push('managed_graph_verified_precommit_rollback');
+ }
  const graphResult=await exerciseManagedChainGraph(owner);
  if(graphResult.commands!==6 || graphResult.objects!==0 || graphResult.sms!==0)throw Error('synthetic_managed_graph_counts_changed');
  const observations=(await owner.query(`SELECT

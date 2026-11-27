@@ -100,7 +100,8 @@ export async function withOwnedArchiveFixture(run,pg=historicalMacPg){
   for(const row of executed)await owner.query('INSERT INTO supabase_migrations.schema_migrations(version,name,statements) VALUES($1,$2,$3)',[row.version,row.name,[row.sql]]);
   const id=(await owner.query("SELECT current_database() d,session_user s,current_user c,inet_server_addr() IS NULL socket,current_setting('cluster_name') n,current_setting('server_version_num')::int/10000 v,pg_backend_pid() p")).rows[0];
   need(id.d===database&&id.s==='postgres'&&id.c==='postgres'&&id.socket&&id.n==='collect_archive_next_fixture'&&id.v===17,'OWNED_OWNER_CONNECTION_REQUIRED');
-  return await run({owner,admin,watcher,database,backendPid:id.p,executed,fixtureRoot:f.root});
+  return await run({owner,admin,watcher,database,backendPid:id.p,executed,fixtureRoot:f.root,
+   openObserver:()=>connect('collect_test',database)});
  }finally{
   const clientsClosed=await closeClients(clients);
   if(f){const result=await f.close();need(result.removed===true&&clientsClosed,'FIXTURE_STOP_UNCONFIRMED');}
