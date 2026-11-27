@@ -409,8 +409,10 @@ class NativeUiContractTest {
                 ){
                     BuriContent(reduceMotion=true){
                         check(LocalUiText.current.locale.language=="en")
-                        Box(Modifier.width(320.dp).testTag("enrollment-test-viewport")){
-                            SmartEnrollPanel(c.state,c,{},{},{},{})
+                        Box(Modifier.fillMaxSize()){
+                            Box(Modifier.width(320.dp).testTag("enrollment-test-viewport")){
+                                SmartEnrollPanel(c.state,c,{},{},{},{})
+                            }
                         }
                     }
                 }
