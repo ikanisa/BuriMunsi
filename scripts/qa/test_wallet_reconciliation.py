@@ -30,9 +30,9 @@ class WalletTests(unittest.TestCase):
     def w(self, **fields):
         return self.row | {'kind': 'payment', 'fee_rwf': '0', 'original_reference': ''} | fields
 
-    def check(self, close=200):
+    def check(self, close=200, **controls):
         return reconcile(self.payments, self.wallet, self.original, ('group', 'wallet', 'provider'),
-                         instant('2026-11-27T00:00Z'), instant('2026-11-28T00:00Z'), 0, close)
+                         instant('2026-11-27T00:00Z'), instant('2026-11-28T00:00Z'), 0, close, **controls)
 
     def test_exact_refs_allocation_and_embedded_fee(self):
         self.export([self.p(), self.p(provider_reference='002', direction='outgoing', allocation_state='allocated')],
@@ -116,6 +116,24 @@ class WalletTests(unittest.TestCase):
                     self.check()
         self.export([], [])
         self.assertEqual(self.check(0)['result'], 'exceptions')
+
+    def test_witnessed_count_detects_missing_rows_despite_balanced_totals(self):
+        self.export([self.p()], [self.w()])
+        error = self.check(statement_row_count=3)
+        self.assertEqual(error['wallet_rwf']['difference'], 0)
+        self.assertEqual(error['result'], 'exceptions')
+        self.assertEqual(error['exceptions'][0]['reason'], 'statement_row_count_differs')
+        self.assertEqual(error['statement_row_control'], {'expected': 3, 'observed': 1, 'verified': False})
+
+    def test_count_matches_or_stays_explicitly_unverified(self):
+        self.export([self.p()], [self.w()])
+        self.assertEqual(self.check()['statement_row_control'],
+                         {'expected': None, 'observed': 1, 'verified': None})
+        self.assertEqual(self.check(statement_row_count=1)['statement_row_control'],
+                         {'expected': 1, 'observed': 1, 'verified': True})
+        for value in (-1, True, 1.0, '1'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.check(statement_row_count=value)
 
     def test_private_report_cannot_overwrite_or_use_canonical_as_original(self):
         self.export([self.p()], [self.w()])

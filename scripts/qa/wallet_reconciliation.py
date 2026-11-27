@@ -79,9 +79,11 @@ def read_entries(path, columns, scope, start, end):
             yield row
 
 
-def reconcile(canonical, wallet, original, scope, start, end, opening, closing):
+def reconcile(canonical, wallet, original, scope, start, end, opening, closing, *, statement_row_count=None):
     if start >= end or any(not item.strip() for item in scope):
         raise ValueError('provide a nonempty scope and increasing cutoffs')
+    if statement_row_count is not None and (type(statement_row_count) is not int or statement_row_count < 0):
+        raise ValueError('statement row count must be a nonnegative whole number')
     digests = {k: file_hash(p) for k, p in
                [('canonical', canonical), ('wallet_csv', wallet), ('wallet_original', original)]}
     if digests['canonical'] in (digests['wallet_csv'], digests['wallet_original']) or original.stat().st_size == 0:
@@ -105,7 +107,9 @@ def reconcile(canonical, wallet, original, scope, start, end, opening, closing):
             flag('payment_reference_missing', payments=[row])
 
     fee_rows, reversal_rows = [], []
+    observed_statement_rows = 0
     for row in read_entries(wallet, WALLET, scope, start, end):
+        observed_statement_rows += 1
         totals[row['direction']] += row['amount_rwf']
         totals['embedded_fees'] += row['fee_rwf']
         if row['provider_reference'].strip():
@@ -116,6 +120,8 @@ def reconcile(canonical, wallet, original, scope, start, end, opening, closing):
             fee_rows.append(row)
         elif row['kind'] == 'reversal':
             reversal_rows.append(row)
+    if statement_row_count is not None and observed_statement_rows != statement_row_count:
+        flag('statement_row_count_differs')
     if not totals:
         flag('empty_statement_requires_independent_confirmation')
     for row in fee_rows:
@@ -160,6 +166,9 @@ def reconcile(canonical, wallet, original, scope, start, end, opening, closing):
             'scope': dict(zip(SCOPE, scope)), 'currency': 'RWF',
             'start_inclusive': start.isoformat(), 'end_exclusive': end.isoformat(),
             'matched_payments': matched, 'allocation_counts': dict(allocations),
+            'statement_row_control': {'expected': statement_row_count, 'observed': observed_statement_rows,
+                                      'verified': (observed_statement_rows == statement_row_count
+                                                   if statement_row_count is not None else None)},
             'wallet_rwf': {'opening': opening, 'incoming_including_adjustments': totals['incoming'],
                            'outgoing_including_adjustments': totals['outgoing'],
                            'embedded_fees': totals['embedded_fees'], 'calculated_closing': calculated,
@@ -185,11 +194,13 @@ def main():
         p.add_argument('--' + key, type=Path, required=True)
     for key in (*SCOPE, 'start', 'end', 'opening', 'closing'):
         p.add_argument('--' + key.replace('_', '-'), required=True)
+    p.add_argument('--statement-row-count', help='Independently witnessed expected CSV movement count')
     args = p.parse_args()
     try:
         result = reconcile(args.canonical, args.wallet, args.original, tuple(getattr(args, k) for k in SCOPE),
                            instant(args.start), instant(args.end), rwf(args.opening, signed=True),
-                           rwf(args.closing, signed=True))
+                           rwf(args.closing, signed=True), statement_row_count=(
+                               rwf(args.statement_row_count) if args.statement_row_count is not None else None))
         save(args.output, result)
     except (OSError, ValueError, csv.Error, OverflowError) as e:
         print('Reconciliation could not complete. ' + (str(e) if type(e) is ValueError and
