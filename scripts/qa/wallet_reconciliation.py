@@ -10,12 +10,14 @@ import tempfile
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 
 SCOPE = ('collection_id', 'receiving_account_id', 'provider')
 COMMON = set(SCOPE) | {'currency', 'occurred_at', 'provider_reference', 'direction', 'amount_rwf'}
 WALLET = COMMON | {'kind', 'fee_rwf', 'original_reference'}
 CANONICAL = COMMON | {'allocation_state'}
+WALLET_DAY_ZONE = ZoneInfo('Africa/Kigali')
 
 
 def instant(value):
@@ -57,8 +59,10 @@ def read_entries(path, columns, scope, start, end):
             row['amount_rwf'] = rwf(row['amount_rwf'])
             if row['amount_rwf'] == 0:
                 raise ValueError(f'zero movement at line {reader.line_num}')
-            if row['occurred_at']:
-                if not start <= instant(row['occurred_at']) < end:
+            occurred = instant(row['occurred_at']) if row['occurred_at'] else None
+            row['wallet_day'] = occurred.astimezone(WALLET_DAY_ZONE).date() if occurred else None
+            if occurred is not None:
+                if not start <= occurred < end:
                     raise ValueError(f'event outside the stated cutoff at line {reader.line_num}')
             elif columns == WALLET:
                 raise ValueError(f'missing wallet event time at line {reader.line_num}')
@@ -136,6 +140,10 @@ def reconcile(canonical, wallet, original, scope, start, end, opening, closing):
             flag('only_in_wallet_statement', source=source)
         elif any(payments[0][k] != source[0][k] for k in ('direction', 'amount_rwf')):
             flag('direction_or_amount_differs', source=source, payments=payments)
+        elif payments[0]['wallet_day'] is None:
+            continue  # payment_time_unknown was already recorded for this line.
+        elif payments[0]['wallet_day'] != source[0]['wallet_day']:
+            flag('event_business_date_differs', source=source, payments=payments)
         else:
             matched += 1
 

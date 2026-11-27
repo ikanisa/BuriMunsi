@@ -70,6 +70,27 @@ class WalletTests(unittest.TestCase):
         self.assertEqual(self.check()['exceptions'], [{'reason': 'direction_or_amount_differs', 'wallet_lines': [2],
                                                        'canonical_lines': [2]}])
 
+    def test_equal_reference_and_amount_cannot_hide_business_date_disagreement(self):
+        self.export([self.p(occurred_at='2026-11-27T21:59:59Z')],
+                    [self.w(occurred_at='2026-11-28T00:00:00+02:00')])
+        result = self.check()
+        self.assertEqual(result['wallet_rwf']['difference'], 0)
+        self.assertEqual(result['matched_payments'], 0)
+        self.assertEqual(result['exceptions'], [{'reason': 'event_business_date_differs',
+                                               'wallet_lines': [2], 'canonical_lines': [2]}])
+
+    def test_same_business_day_accepts_offsets_and_different_minute_precision(self):
+        self.export([self.p(occurred_at='2026-11-27T22:05:34Z')],
+                    [self.w(occurred_at='2026-11-28T00:05:00+02:00')])
+        result = self.check()
+        self.assertEqual((result['result'], result['matched_payments']), ('matched', 1))
+
+    def test_unknown_canonical_time_is_not_a_matched_payment(self):
+        self.export([self.p(occurred_at='')], [self.w()])
+        result = self.check()
+        self.assertEqual(result['matched_payments'], 0)
+        self.assertEqual([item['reason'] for item in result['exceptions']], ['payment_time_unknown'])
+
     def test_wrong_scope_boundary_empty_and_fraction(self):
         for change in ({'collection_id': 'other'}, {'occurred_at': '2026-11-28T00:00:00Z'},
                        {'occurred_at': '2026-11-27T00:00:00'}, {'amount_rwf': '2.5'}):
