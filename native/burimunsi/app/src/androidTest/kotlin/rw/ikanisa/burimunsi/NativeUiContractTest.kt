@@ -36,6 +36,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.os.Build
+import android.view.Choreographer
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.cool.mobile.BuildConfig
@@ -48,6 +49,8 @@ import rw.ikanisa.burimunsi.ui.*
 import kotlin.math.ceil
 import kotlin.math.floor
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /** Original handoff routes/panels exercised with synthetic records only.
  * These tests prove UI action wiring; server/device authorization is separately tested. */
@@ -96,6 +99,37 @@ class NativeUiContractTest {
     private fun visiblePanelButton(title:String,label:String):SemanticsNodeInteraction{
         panelList(title).performScrollToNode(hasText(label) and hasClickAction())
         return panelButton(title,label).performScrollTo().assertIsDisplayed().assertIsEnabled()
+    }
+    private fun closePanel(title:String,afterClose:()->Boolean){
+        val paneMatcher=SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle,title)
+        val pane=ui.onNode(paneMatcher)
+        val inPane=hasAnyAncestor(paneMatcher)
+        val close=ui.onNode(hasContentDescription("Close") and hasClickAction() and inPane)
+        var previous:List<Rect>?=null
+        var stableFrames=0
+        ui.waitUntil("visible, stable Close in the $title pane",timeoutMillis=10_000){
+            // A Compose-idle dialog can still be moving in its Android window.
+            val frame=CountDownLatch(1)
+            ui.runOnUiThread{Choreographer.getInstance().postFrameCallback{frame.countDown()}}
+            check(frame.await(5,TimeUnit.SECONDS)){"No Android display frame while opening $title"}
+            val bounds=runCatching{
+                val paneNode=pane.assertIsDisplayed().fetchSemanticsNode()
+                val closeNode=close.assertIsDisplayed().assertIsEnabled().fetchSemanticsNode()
+                ui.runOnIdle{
+                    val visible=closeNode.boundsInRoot
+                    if(visible.width+.5f<closeNode.size.width || visible.height+.5f<closeNode.size.height)null
+                    else listOf(paneNode,closeNode).map{it.boundsInRoot.translate(it.positionOnScreen-it.positionInRoot)}
+                }
+            }.getOrNull()
+            stableFrames=when{bounds==null->0;bounds==previous->stableFrames+1;else->1}
+            previous=bounds
+            stableFrames>=3
+        }
+        ui.onNode(hasText(title) and SemanticsMatcher.expectValue(SemanticsProperties.Heading,Unit) and inPane).assertIsDisplayed()
+        close.performTouchInput{click()}
+        ui.waitUntil("the $title pane to close and its destination to appear",timeoutMillis=10_000){
+            ui.onAllNodes(paneMatcher).fetchSemanticsNodes().isEmpty() && afterClose()
+        }
     }
     private fun field(label:String)=ui.onNodeWithContentDescription(label)
     private fun assertReceiverControlsAbsent(c:FakeController){
@@ -545,7 +579,7 @@ class NativeUiContractTest {
         ui.onNodeWithContentDescription("Download statement").assertDoesNotExist()
         headerAction("Payment filters").assertIsDisplayed().assertIsEnabled().performClick()
         ui.runOnIdle{check(c.state.route==Route.PAYMENTS && c.state.sheet==Sheet.FILTERS)}
-        ui.onNodeWithTag("panel-close").performClick()
+        closePanel("Filters"){c.state.sheet==null && c.state.route==Route.PAYMENTS}
         visiblePayment("ST-A-IN").assert(hasContentDescription("Marie Uwase")).performClick()
         ui.onNodeWithText("Member statement").assertIsDisplayed()
         ui.onNodeWithText("Aline Nkurunziza").assertIsDisplayed()
@@ -652,7 +686,7 @@ class NativeUiContractTest {
         ui.onNodeWithContentDescription("Your profile").assertDoesNotExist()
         headerAction("Add member").assertIsDisplayed().assertIsEnabled().performClick()
         ui.runOnIdle{check(c.state.route==Route.MEMBERS && c.state.sheet==Sheet.ENROLL)}
-        ui.onNodeWithTag("panel-close").performClick()
+        closePanel("Add member"){c.state.sheet==null && c.state.route==Route.MEMBERS}
         ui.onNodeWithContentDescription("Home").performClick()
         list.performScrollToNode(hasContentDescription("1 unallocated"))
         val rowBounds=ui.onNodeWithContentDescription("1 unallocated").assertHasClickAction().performScrollTo().fetchSemanticsNode().boundsInRoot
@@ -799,11 +833,7 @@ class NativeUiContractTest {
                 runCatching{ui.onNode(pinPane).assertIsDisplayed();currentPasscode.assertIsDisplayed()}.isSuccess
         }
         ui.onNodeWithContentDescription("Back to previous panel").assertDoesNotExist()
-        ui.onNode(hasTestTag("panel-close") and hasAnyAncestor(pinPane)).assertIsDisplayed().performTouchInput{click()}
-        ui.waitUntil(timeoutMillis=5_000){
-            c.state.sheet==null && ui.onAllNodes(pinPane).fetchSemanticsNodes().isEmpty() &&
-                runCatching{ui.onNode(accountPane).assertIsDisplayed()}.isSuccess
-        }
+        closePanel("Change passcode"){c.state.sheet==null && runCatching{ui.onNode(accountPane).assertIsDisplayed()}.isSuccess}
         ui.runOnIdle{check(c.state.sheet==null&&c.state.route==Route.SETTINGS)}
     }
     @Test fun passcodeConfirmationImeDoesNotChangeCredentialUntilSave(){
@@ -879,7 +909,10 @@ class NativeUiContractTest {
         val receiverPanels=setOf(Sheet.GATEWAY,Sheet.REPLACE_DEVICE,Sheet.RAW)
         val accessible=if(BuildConfig.IS_GATEWAY)titles else titles.filterKeys{it !in receiverPanels}
         check(accessible.size==if(BuildConfig.IS_GATEWAY)14 else 11)
-        for((sheet,title)in accessible){ui.runOnIdle{c.openSheet(sheet,if(sheet==Sheet.RAW)"sms-1"else null)};ui.onNode(hasText(title)and SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.Heading,Unit)).assertExists();ui.onNodeWithTag("panel-close").performClick();ui.runOnIdle{check(c.state.sheet==null)}}
+        for((sheet,title) in accessible){
+            ui.runOnIdle{c.openSheet(sheet,if(sheet==Sheet.RAW)"sms-1"else null);check(c.state.sheet==sheet){"Expected $title to open"}}
+            closePanel(title){c.state.sheet==null}
+        }
         if(!BuildConfig.IS_GATEWAY){ui.runOnIdle{c.state=c.state.copy(route=Route.SETTINGS)};assertReceiverControlsAbsent(c)}
     }
     @Test fun gatewayUsesSmsPermissionWithoutPairingCode(){
@@ -929,7 +962,7 @@ class NativeUiContractTest {
         if(BuildConfig.IS_GATEWAY){
             button("Gateway").performScrollTo().assertIsEnabled().performClick()
             ui.runOnIdle{check(c.state.sheet==Sheet.GATEWAY)}
-            ui.onNodeWithTag("panel-close").performClick()
+            closePanel("Gateway"){c.state.sheet==null && c.state.route==Route.SETTINGS}
         }else assertReceiverControlsAbsent(c)
         // A stale authorized receiver snapshot must not expose SMS controls to staff.
         ui.runOnIdle{c.state=c.state.copy(route=Route.HOME,operator=c.operator.copy(role=Role.STAFF,capabilities=setOf(Capability.READ.key)),gateway=healthy)}
@@ -1704,7 +1737,8 @@ class NativeUiContractTest {
         if(!BuildConfig.IS_GATEWAY){ui.onNodeWithContentDescription("Export results").assertDoesNotExist();return}
         ui.onNodeWithContentDescription("Export results").performScrollTo().performClick()
         ui.onNodeWithText("SMS exports contain authorized metadata only. Message content is excluded.").assertExists()
-        ui.onNodeWithTag("export-format:CSV").assertDoesNotExist();ui.onNodeWithContentDescription("Close").performClick()
+        ui.onNodeWithTag("export-format:CSV").assertDoesNotExist()
+        closePanel("Export results"){c.state.route==Route.SMS && c.state.sheet==null}
         ui.runOnIdle{c.state=c.state.copy(smsListSearch="private search")}
         ui.onNodeWithContentDescription("Export results").assertDoesNotExist()
         ui.onNodeWithText("Clear SMS search to download source metadata. Message text is not included.").assertExists()
