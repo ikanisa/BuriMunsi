@@ -51,7 +51,7 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
     val requestedRoute=model.requestedRoute?.takeIf{state.operator!=null && model.screenGate==ScreenGate.OPEN}
     val displayedRoute=requestedRoute?:state.route
     CompositionLocalProvider(LocalUiFocusMemory provides memory,LocalUiFocusScope provides scope,LocalBuriRouteColors provides BuriTheme.colors(displayedRoute),LocalBuriRoute provides displayedRoute){
-        FocusReturnEffect(scope)
+        FocusReturnEffect(scope,state.sheet!=null)
         BuriAppBody(model,requestedRoute,onSupport,onPermissions,onExport,onPhoneSettings,onPickMemberFile,onPreviewMemberFile,onNotifications,onBatteryOptimization,onTakeMemberPhoto,onPickMemberPhoto)
     }
 }
@@ -246,7 +246,7 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
                     if(m.canExportListing)RoundAction(R.drawable.ic_download,t("Download statement"),onExport,enabled&&!s.offline,size=48)
                 }else{
                     Text(t("Payments"),Modifier.weight(1f).semantics{heading()},style=MaterialTheme.typography.headlineMedium)
-                    RoundAction(R.drawable.ic_filter,t("Payment filters"),{m.openSheet(Sheet.FILTERS)},enabled,size=48,containerColor=BuriTheme.HeaderActionSurface)
+                    RoundAction(R.drawable.ic_filter,t("Payment filters"),{m.openSheet(Sheet.FILTERS)},enabled,size=48,containerColor=BuriTheme.HeaderActionSurface,filterOrigin=remember(s.route,s.routeId){ FilterHandle() })
                 }
             }
             else->{

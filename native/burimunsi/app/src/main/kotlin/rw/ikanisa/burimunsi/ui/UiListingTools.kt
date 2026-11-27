@@ -73,9 +73,14 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
     val memberDirectory = target == ListingTarget.MEMBERS
     val filterLabel = if(chips.isEmpty()) t("Filters") else t("Filters (%1\$d)",chips.size)
     val openFilters = { model.openSheet(Sheet.FILTERS) }
+    val filterOrigin = remember(target,model.state.route,model.state.routeId){ FilterHandle() }
     Column(Modifier.fillMaxWidth().padding(vertical=if(memberDirectory) 6.dp else 10.dp).testTag("listing-tools:${target.name}")){
         val filterControl:@Composable (Modifier)->Unit={modifier->
-            ListingAction(R.drawable.ic_filter,filterLabel,modifier,enabled,openFilters)
+            if (memberDirectory || model.state.isMemberStatement) {
+                FilterReturnButton(filterOrigin,filterLabel,enabled,openFilters,modifier){buttonModifier,activate->
+                    ListingAction(R.drawable.ic_filter,filterLabel,buttonModifier,enabled,activate)
+                }
+            } else ListingAction(R.drawable.ic_filter,filterLabel,modifier,enabled,openFilters)
         }
         val sortControl:@Composable (Modifier,String)->Unit={modifier,label->
             ListingAction(R.drawable.ic_sort,label,modifier.testTag("listing-sort-menu")
@@ -104,7 +109,7 @@ private fun selectedBound(value:String,end:Boolean):String?=value.takeIf{it.isNo
                 val sortSpace = available - if(showFilterLabel) filterWidth else 48.dp
                 Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(spacing),verticalAlignment=Alignment.CenterVertically){
                     if(showFilterLabel) filterControl(Modifier.width(filterWidth))
-                    else RoundAction(R.drawable.ic_filter,filterLabel,openFilters,enabled,size=48)
+                    else RoundAction(R.drawable.ic_filter,filterLabel,openFilters,enabled,size=48,filterOrigin=filterOrigin)
                     sortControl(Modifier.weight(1f),if(sortWidth <= sortSpace) currentSort else t("Sort"))
                     exportControl()
                 }

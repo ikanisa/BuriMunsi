@@ -69,9 +69,18 @@ internal fun historyTime(value: String, locale: Locale, includeOffset: Boolean =
     val t=LocalUiText.current
     Icon(painterResource(icon),description?.let{t(it)},Modifier.size(size.dp),tint)
 }
-@Composable internal fun RoundAction(icon:Int,label:String,click:()->Unit,enabled:Boolean=true,size:Int=56,tonal:Boolean=true,containerColor:Color=BuriTheme.Tone){
-    val action=focusAction("action:$label",click)
-    IconButton(action.click,action.modifier.size(size.dp).background(if(tonal)containerColor else Color.Transparent,CircleShape),enabled=enabled){Glyph(icon,label,if(enabled)BuriTheme.Text else BuriTheme.Muted,24)}
+@Composable internal fun RoundAction(icon:Int,label:String,click:()->Unit,enabled:Boolean=true,size:Int=56,tonal:Boolean=true,containerColor:Color=BuriTheme.Tone,filterOrigin:FilterHandle?=null){
+    val draw: @Composable (Modifier, () -> Unit) -> Unit = { modifier, activate ->
+        IconButton(activate,modifier.background(if(tonal)containerColor else Color.Transparent,CircleShape),enabled=enabled){
+            Glyph(icon,label,if(enabled)BuriTheme.Text else BuriTheme.Muted,24)
+        }
+    }
+    if (filterOrigin != null) {
+        FilterReturnButton(filterOrigin,label,enabled,click,Modifier.size(size.dp),draw)
+    } else {
+        val action=focusAction("action:$label",click)
+        draw(action.modifier.size(size.dp),action.click)
+    }
 }
 @Composable internal fun Avatar(name:String,size:Int=46,unallocated:Boolean=false,initialsSize:Int=15){
     Box(Modifier.size(size.dp).background(if(unallocated)BuriTheme.Warn.copy(alpha=.10f)else BuriTheme.Tone,CircleShape).clearAndSetSemantics{},contentAlignment=Alignment.Center){Text(initials(name),fontSize=initialsSize.sp,color=if(unallocated)BuriTheme.Warn else BuriTheme.Text,fontWeight=FontWeight.Medium,lineHeight=(initialsSize+8).sp)}
