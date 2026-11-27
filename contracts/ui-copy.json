@@ -2990,6 +2990,14 @@
     {
       "key": "ui_payment_date",
       "en": "Date"
+    },
+    {
+      "key": "ui_import_one_row",
+      "en": "1 row · %1$d verified"
+    },
+    {
+      "key": "ui_export_one_row",
+      "en": "%1$d of 1 row"
     }
   ]
 }

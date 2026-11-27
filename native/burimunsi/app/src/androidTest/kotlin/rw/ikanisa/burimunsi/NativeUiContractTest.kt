@@ -513,6 +513,14 @@ class NativeUiContractTest {
                 ui.runOnIdle{c.state=c.state.copy(staff=checkNotNull(c.state.staff).copy(totalCount=count))}
                 ui.onNodeWithText(if(count==1)"1 account" else "$count accounts").assertExists()
             }
+            ui.runOnIdle{c.openSheet(Sheet.STAFF)}
+            val inStaffSheet=hasAnyAncestor(SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle,"Staff access"))
+            for(count in listOf(0,1,2)){
+                val label=if(count==1)"1 account" else "$count accounts"
+                ui.runOnIdle{c.state=c.state.copy(staff=checkNotNull(c.state.staff).copy(totalCount=count))}
+                panelList("Staff access").performScrollToNode(hasText(label))
+                ui.onNode(hasText(label) and inStaffSheet).assertIsDisplayed()
+            }
         }
         for(count in listOf(0,1,2)){
             ui.runOnIdle{c.state=c.state.copy(route=Route.MEMBERS,sheet=Sheet.ENROLL,
@@ -1460,9 +1468,19 @@ class NativeUiContractTest {
             rows=listOf(SmartImportRow(1,name,"+250780000001","ready"))
         ))
         show(c)
-        panelList("Add member").performScrollToNode(hasText(name))
+        val list=panelList("Add member")
+        list.performScrollToNode(hasText("1 row · 0 verified"))
+        ui.onNodeWithText("1 row · 0 verified").assertIsDisplayed()
+        list.performScrollToNode(hasText(name))
         assertTextLayout(name,ellipsized=true)
         ui.onNode(hasText(name) and hasText("Review") and hasClickAction()).assertIsDisplayed()
+        ui.runOnIdle{
+            val review=c.state.onboarding
+            val row=review.rows.single().copy(verifiedOwnership=true,acceptedTerms=true,consentRecorded=true)
+            c.state=c.state.copy(onboarding=review.copy(rows=listOf(row)))
+        }
+        list.performScrollToNode(hasText("1 row · 1 verified"))
+        ui.onNodeWithText("1 row · 1 verified").assertIsDisplayed()
     }
     @Test fun exportFormatsDispatchOnlyAfterAnExplicitContextualChoice(){
         val c=FakeController(Route.PAYMENTS,Role.STAFF);c.seedStatementReview()
@@ -1527,6 +1545,10 @@ class NativeUiContractTest {
         ui.onNodeWithText("File saved").assertDoesNotExist()
         ui.runOnIdle{c.operation=UiOperation.EXPORT;c.exportFeedback=UiExportFeedback(UiExportPhase.PREPARING,ExportFormat.XLSX,completedRows=5,totalRows=10)}
         ui.onNodeWithText("5 of 10 rows").assertExists();ui.mainClock.advanceTimeBy(1500);ui.onNodeWithText("File saved").assertDoesNotExist()
+        for(completed in 0..1){
+            ui.runOnIdle{c.exportFeedback=c.exportFeedback!!.copy(completedRows=completed,totalRows=1)}
+            ui.onNodeWithText("$completed of 1 row").assertIsDisplayed()
+        }
         ui.runOnIdle{c.exportFeedback=c.exportFeedback!!.copy(phase=UiExportPhase.WRITING)}
         ui.onNodeWithText("Saving file").assertExists();ui.onNodeWithText("File saved").assertDoesNotExist()
         ui.runOnIdle{c.state=c.state.copy(busy=false);c.operation=UiOperation.NONE;c.exportFeedback=c.exportFeedback!!.copy(phase=UiExportPhase.COMPLETE)}

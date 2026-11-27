@@ -245,7 +245,11 @@ private fun MoMoPayerPicker(s: UiState, m: BuriController, enabled: Boolean) {
             }else if(o.sourceKind!=null&&o.rows.isEmpty()){
                 item{Empty(t("No members"))}
             }
-            if(o.rows.isNotEmpty())item{CompactLabel(t("%1\$d rows · %2\$d verified",o.rows.size,verified.size),fontSize=16.sp,fontWeight=FontWeight.Medium)}
+            if(o.rows.isNotEmpty())item{
+                val summary=if(o.rows.size==1)t("1 row · %1\$d verified",verified.size)
+                    else t("%1\$d rows · %2\$d verified",o.rows.size,verified.size)
+                CompactLabel(summary,fontSize=16.sp,fontWeight=FontWeight.Medium)
+            }
             items(o.rows,key={it.row}){row->
                 Row(Modifier.fillMaxWidth().heightIn(min=64.dp).clickable(enabled=enabled,role=SemanticRole.Button){m.onboardingEditRow(row.row)}.padding(vertical=8.dp),verticalAlignment=Alignment.CenterVertically){
                     Column(Modifier.weight(1f)){CompactLabel(row.name.ifBlank{t("Unreadable name")},fontSize=17.sp);CompactLabel(row.phone.orEmpty().ifBlank{t("Number missing")},color=BuriTheme.Muted,fontSize=14.sp)}

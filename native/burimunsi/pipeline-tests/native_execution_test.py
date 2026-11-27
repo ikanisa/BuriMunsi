@@ -33,6 +33,7 @@ EXPECTED_STAFF_CASES = {
     'rw.ikanisa.burimunsi.NativeShellRecoveryTest#shortSheetKeepsItsFieldsAndBothFooterActionsReachable',
     'rw.ikanisa.burimunsi.OperationUiContractTest#changingBeneficiarySearchDisablesThePreviousSelection',
     'rw.ikanisa.burimunsi.OperationUiContractTest#staffEditImeReachesFieldsOutsideTheVisibleViewport',
+    'rw.ikanisa.burimunsi.OperationUiContractTest#staffRoleCannotOpenStaffManagement',
     'rw.ikanisa.burimunsi.OperationUiContractTest#originalSmsRetryRequiresAnExplicitActionAndCurrentAccess',
     'rw.ikanisa.burimunsi.OperationUiContractTest#gatewayShowsLastAcknowledgementInKigaliTime',
     'rw.ikanisa.burimunsi.OperationUiContractTest#shortDiscardPromptKeepsBothChoicesReachable',

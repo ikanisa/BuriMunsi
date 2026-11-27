@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.*
@@ -56,28 +57,51 @@ class OperationUiContractTest {
     }
 
     @Test fun staffEditImeReachesFieldsOutsideTheVisibleViewport() {
-        val controller = FakeController(Route.SETTINGS)
+        val controller = FakeController(Route.SETTINGS, Role.ADMIN)
         val staff = StaffAccount("staff-1", "Sample Staff", "+250780000002", true, 1, setOf(Capability.READ.key))
-        controller.state = controller.state.copy(sheet = Sheet.STAFF_EDIT, sheetId = staff.id, selectedStaff = staff)
+        controller.openSheet(Sheet.STAFF_EDIT, staff.id)
+        check(controller.state.sheet == Sheet.STAFF_EDIT && controller.state.sheetId == staff.id)
+        controller.state = controller.state.copy(selectedStaff = staff)
         ui.setContent {
             BuriContent(reduceMotion = true) {
-                CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, 1.6f)) {
+                CompositionLocalProvider(
+                    LocalDensity provides Density(LocalDensity.current.density, 1.6f),
+                    LocalUiFocusMemory provides remember { UiFocusMemory() }
+                ) {
                     Box(Modifier.fillMaxSize()) {
                         Box(Modifier.size(width = 300.dp, height = 260.dp)) { StaffPanel(controller.state, controller) }
                     }
                 }
             }
         }
-        val name = ui.onNodeWithContentDescription("Name")
+        val nameField = hasContentDescription("Name") and hasSetTextAction()
+        ui.onNode(hasScrollToIndexAction()).performScrollToNode(nameField)
+        val name = ui.onNode(nameField)
         val phone = ui.onNodeWithContentDescription("Phone number")
         val pin = ui.onNodeWithContentDescription("New passcode")
-        name.performScrollTo().performClick().performImeAction()
+        name.assertIsDisplayed().performClick().performImeAction()
         phone.assertIsFocused().performImeAction()
         pin.assertIsFocused().performTextInput("2684")
         pin.performImeAction()
         ui.runOnIdle { check(controller.staffSaveCalls == 0) }
         ui.onNode(hasText("Save changes") and hasClickAction()).assertIsDisplayed().performClick()
         ui.runOnIdle { check(controller.staffSaveCalls == 1 && controller.lastStaffPin == "2684") }
+    }
+
+    @Test fun staffRoleCannotOpenStaffManagement() {
+        val controller = FakeController(Route.SETTINGS, Role.STAFF)
+        show(controller)
+        ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Change passcode"))
+        ui.onNodeWithText("Change passcode").assertIsDisplayed()
+        ui.onNodeWithText("Staff access").assertDoesNotExist()
+        ui.runOnIdle {
+            controller.openSheet(Sheet.STAFF)
+            controller.openSheet(Sheet.STAFF_EDIT, "staff-1")
+            controller.openSheet(Sheet.REMOVE_STAFF, "staff-1")
+            check(controller.state.sheet == null && controller.deniedSheetRequests == 3 && controller.staffSaveCalls == 0)
+        }
+        ui.onNodeWithContentDescription("Name").assertDoesNotExist()
+        ui.onNodeWithText("Save changes").assertDoesNotExist()
     }
 
     @Test fun shortDiscardPromptKeepsBothChoicesReachable() {

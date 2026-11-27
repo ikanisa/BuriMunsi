@@ -82,7 +82,11 @@ import rw.ikanisa.burimunsi.core.Role
                     Sheet.ENROLL->SmartEnrollPanel(s,m,onPickMemberFile,onPreviewMemberFile,onTakeMemberPhoto,onPickMemberPhoto)
                     Sheet.STAFF->Panel{
                         item{ListingToolbar(m,onExport)}
-                        item{Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){CompactLabel(s.staff?.totalCount?.let{t("%1\$d staff",it)}?:t("Unavailable"),Modifier.weight(1f),color=BuriTheme.Muted,fontSize=14.sp);RoundAction(R.drawable.ic_plus,t("Add staff"),{m.openSheet(Sheet.STAFF_EDIT)},!s.busy&&!s.offline&&!s.pending,48)}}
+                        item{Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){
+                            val count=s.staff?.totalCount?.let{if(it==1)t("1 account")else t("%1\$d accounts",it)}
+                            CompactLabel(count?:t("Unavailable"),Modifier.weight(1f),color=BuriTheme.Muted,fontSize=14.sp)
+                            RoundAction(R.drawable.ic_plus,t("Add staff"),{m.openSheet(Sheet.STAFF_EDIT)},!s.busy&&!s.offline&&!s.pending,48)
+                        }}
                         val staff=s.staff?.items.orEmpty()
                         if(staff.isNotEmpty())item{Column(Modifier.fillMaxWidth().background(BuriTheme.Group,RoundedCornerShape(24.dp)).padding(horizontal=16.dp,vertical=2.dp)){
                             staff.forEachIndexed{index,person->

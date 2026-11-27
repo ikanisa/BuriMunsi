@@ -607,4 +607,6 @@ internal val UiStringIds:Map<String,Int> = mapOf(
     "No matching payers" to R.string.ui_payer_no_matches,
     "No new payers yet" to R.string.ui_payer_empty,
     "Date" to R.string.ui_payment_date,
+    "1 row · %1\$d verified" to R.string.ui_import_one_row,
+    "%1\$d of 1 row" to R.string.ui_export_one_row,
 )

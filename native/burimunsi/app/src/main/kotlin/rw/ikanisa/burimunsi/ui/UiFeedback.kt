@@ -156,7 +156,8 @@ internal val LocalProgressPresented=compositionLocalOf { false }
         value.fileName?.let{Spacer(Modifier.height(6.dp));CompactLabel(it,fontSize=14.sp,lineHeight=22.sp,color=BuriTheme.Muted)}
         if(value.phase==UiExportPhase.PREPARING){
             if(completed!=null && total!=null && completed in 0..total){
-                Spacer(Modifier.height(10.dp));CompactLabel(t("%1\$d of %2\$d rows",completed,total),fontSize=14.sp,color=BuriTheme.Muted)
+                val rowCount=if(total==1)t("%1\$d of 1 row",completed) else t("%1\$d of %2\$d rows",completed,total)
+                Spacer(Modifier.height(10.dp));CompactLabel(rowCount,fontSize=14.sp,color=BuriTheme.Muted)
                 if(fraction!=null){Spacer(Modifier.height(8.dp));LinearProgressIndicator(progress={fraction},modifier=Modifier.fillMaxWidth().clearAndSetSemantics{},color=BuriTheme.Blue,trackColor=BuriTheme.Tone)}
             }
         }
