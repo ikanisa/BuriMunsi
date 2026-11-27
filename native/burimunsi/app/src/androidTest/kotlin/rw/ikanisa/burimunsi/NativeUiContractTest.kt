@@ -66,6 +66,17 @@ class NativeUiContractTest {
             }
         }
     }
+    private fun assertFullCameraDisclosure(notice:String,expectedScale:Float?=null){
+        val text=ui.onNodeWithText(notice,useUnmergedTree=true).assertIsDisplayed()
+        val layout=mutableListOf<TextLayoutResult>()
+        text.performSemanticsAction(SemanticsActions.GetTextLayoutResult){check(it(layout))}
+        val actual=layout.single()
+        check(!actual.hasVisualOverflow && (0 until actual.lineCount).none(actual::isLineEllipsized) &&
+            actual.getLineEnd(actual.lineCount-1)==notice.length){
+            "Camera disclosure must render all words without overflow or ellipsis."
+        }
+        if(expectedScale!=null)check(actual.layoutInput.density.fontScale==expectedScale)
+    }
     private fun button(label:String)=ui.onNode(hasText(label) and hasClickAction())
     private fun radioOption(label:String)=ui.onNode(hasText(label) and
         SemanticsMatcher.expectValue(SemanticsProperties.Role,androidx.compose.ui.semantics.Role.RadioButton))
@@ -243,7 +254,7 @@ class NativeUiContractTest {
         ui.runOnIdle{c.onboardingOptions()}
         val cameraNotice="Taking a photo sends it to OpenAI for extraction. Review members before saving."
         val camera=visiblePanelButton("Add member","Scan a list").assert(hasText(cameraNotice))
-        ui.onNodeWithText(cameraNotice,useUnmergedTree=true).assertIsDisplayed()
+        assertFullCameraDisclosure(cameraNotice)
         camera.performClick()
         ui.runOnIdle{check(captures==1&&c.state.onboarding.step==SmartOnboardingStep.IMPORT&&c.state.onboarding.photoCaptureFlow)}
         ui.onNodeWithText("Import member list").assertDoesNotExist()
@@ -425,7 +436,7 @@ class NativeUiContractTest {
         }
         val notice="Taking a photo sends it to OpenAI for extraction. Review members before saving."
         method("Scan a list").assert(hasText(notice))
-        ui.onNodeWithText(notice,useUnmergedTree=true).assertIsDisplayed()
+        assertFullCameraDisclosure(notice,2f)
         method("Choose a photo")
         method("Choose a file")
         method("Add manually").performClick()

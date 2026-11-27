@@ -62,7 +62,8 @@ private fun LazyListScope.memberMethods(onboarding:SmartOnboardingState, m:BuriC
         val t = LocalUiText.current
         MemberMethodGroup {
             SettingRow(R.drawable.ic_camera, t(if(importing) "Take a photo of the list" else "Scan a list"),
-                t("Taking a photo sends it to OpenAI for extraction. Review members before saving."), enabled) {
+                t("Taking a photo sends it to OpenAI for extraction. Review members before saving."),
+                enabled=enabled,wrapSubtitle=true) {
                 m.onboardingPhoto()
                 onTakePhoto()
             }
