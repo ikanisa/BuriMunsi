@@ -282,5 +282,11 @@
       "transport-request.js": "d3cf581a1d9c6a710ad3347620e432e6323a5594d56bc9439494814a40c2e2ff"
     },
     "change": "Forward the Home projection opt-in for the exact same-origin BuriMunsi browser session GET with its managed cookie."
+  },
+  "burimunsi_public_privacy_successor": {
+    "source_sha256s": {
+      "index.js": "0240b704f270e5ae44a19c89bcf4f05accb53e72691a55608d6054a51f48486f"
+    },
+    "change": "Serve the public BuriMunsi privacy notice and its account deletion support page at the Admin origin."
   }
 }

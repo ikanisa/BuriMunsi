@@ -181,7 +181,8 @@ test('integrated transport bytes retain the recorded current source identity', a
     ...provenance.burimunsi_session_read_successor.source_sha256s,
     ...provenance.burimunsi_passcode_session_successor.source_sha256s,
     ...provenance.burimunsi_online_workspace.source_sha256s,
-    ...provenance.burimunsi_admin_home_bootstrap_successor.source_sha256s};
+    ...provenance.burimunsi_admin_home_bootstrap_successor.source_sha256s,
+    ...provenance.burimunsi_public_privacy_successor.source_sha256s};
   const expected = (await readdir(source))
     .filter(name => /^(?:index|admin-session-realm|supabase-transport|transport-[\w-]+)\.js$/.test(name)).sort();
   assert.deepEqual(Object.keys(files).sort(), expected);
