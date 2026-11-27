@@ -93,7 +93,7 @@ internal fun historyTime(value: String, locale: Locale, includeOffset: Boolean =
 @Composable private fun Fact(label:String,value:String,compactValue:Boolean){
     val t=LocalUiText.current
     Row(Modifier.fillMaxWidth().padding(vertical=15.dp),horizontalArrangement=Arrangement.spacedBy(16.dp),verticalAlignment=Alignment.Top){
-        CompactLabel(t(label),Modifier.weight(.44f),fontSize=14.sp,color=BuriTheme.Muted,lineHeight=21.sp)
+        Text(t(label),Modifier.weight(.44f),fontSize=14.sp,color=BuriTheme.Muted,lineHeight=21.sp)
         Text(value,Modifier.weight(.64f),fontSize=17.sp,fontWeight=FontWeight.Medium,lineHeight=25.sp,textAlign=TextAlign.End,
             maxLines=if(compactValue)1 else Int.MAX_VALUE,softWrap=!compactValue,
             overflow=if(compactValue)TextOverflow.Ellipsis else TextOverflow.Clip)

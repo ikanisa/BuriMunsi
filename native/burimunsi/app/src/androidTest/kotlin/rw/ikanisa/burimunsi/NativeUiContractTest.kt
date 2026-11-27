@@ -1174,7 +1174,8 @@ class NativeUiContractTest {
     }
     @Test fun paymentReferenceAndProviderIdDisplayIndependently(){
         val c=FakeController(Route.PAYMENT)
-        c.state=c.state.copy(payment=c.state.payment!!.copy(paymentReference="100000000017",ftId="FT-EXAMPLE"))
+        c.state=c.state.copy(payment=c.state.payment!!.copy(paymentReference="100000000017",ftId="FT-EXAMPLE",
+            atRaw="2026-11-25T10:30:00Z"))
         show(c)
         val list=ui.onNodeWithTag("payment-details-scroll")
         list.performScrollToNode(hasText("Payment reference"))
@@ -1185,6 +1186,10 @@ class NativeUiContractTest {
         ui.runOnIdle{c.state=c.state.copy(payment=c.state.payment!!.copy(paymentReference=null))}
         ui.onNodeWithText("Payment reference").assertDoesNotExist()
         ui.onNodeWithText("FT-EXAMPLE").assertIsDisplayed()
+        list.performScrollToNode(hasText("Provider time"))
+        ui.onNodeWithText("25 Nov 2026 12:30:00 UTC+02:00").assertExists()
+        ui.runOnIdle { c.state=c.state.copy(payment=c.state.payment!!.copy(atRaw="2026-11-25 10:30:00")) }
+        ui.onNodeWithText("2026-11-25 10:30:00").assertExists()
     }
     @Test fun allocationActionStaysAboveNavigationAndHonorsAccessAndOfflineState(){
         val c=FakeController(Route.PAYMENT);c.state=c.state.copy(payment=c.state.payment!!.copy(state="unallocated",direction="outgoing",memberId=null,memberPhone=null));show(c)

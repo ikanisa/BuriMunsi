@@ -207,7 +207,7 @@ internal val UiState.isMemberStatement:Boolean get() = route==Route.PAYMENTS && 
                 add(t("Direction") to t(PaymentPresentation.directionLabel(p.direction)))
                 p.paymentReference?.let{add(t("Payment reference") to it)}
                 p.ftId?.let{add(t("FT Id") to it)}
-                add(t("at") to p.atRaw.ifBlank{t("Unavailable")})
+                add(t("Provider time") to historyTime(p.atRaw,t.locale).ifBlank{t("Unavailable")})
                 add((if(p.memberPhone!=null&&p.memberPhone!=p.payerPhoneRaw)t("Member MoMo")else t("MoMo")) to (p.memberPhone?:p.payerPhoneRaw.ifBlank{t("Unavailable")}))
                 if(p.memberPhone!=null&&p.memberPhone!=p.payerPhoneRaw)add(t(if(p.direction=="outgoing")"Recipient" else "from") to "${p.payerNameRaw} (${p.payerPhoneRaw})")
                 p.feeRwf?.let{add(t("Fee") to t("RWF %1\$s",money(it,t.locale)))}
@@ -231,7 +231,10 @@ internal val UiState.isMemberStatement:Boolean get() = route==Route.PAYMENTS && 
         item{CompactLabel(s.members?.totalCount?.let{if(it==1)t("1 member")else t("%1\$d members",it)}?:t("Unavailable"),color=BuriTheme.Muted)}
         val members=s.members?.items.orEmpty()
         itemsIndexed(members,key={_,member->member.id}){index,member->MemberRow(member,index==0,index==members.lastIndex){m.openMember(member)}}
-        if(s.members?.items?.isEmpty()==true)item{Empty(t("No members"));Text(t("Try a name or MoMo number."),color=BuriTheme.Muted)}
+        if(s.members?.items?.isEmpty()==true)item{
+            Empty(t("No members"))
+            if(s.search.isNotBlank())Text(t("Try a name or MoMo number."),color=BuriTheme.Muted)
+        }
         moreButton(s.members?.nextCursor,s.busy,m::more,autoEnabled=!s.offline&&s.error==null,paging=m.operation==UiOperation.LOAD_MORE)
     }
 }
