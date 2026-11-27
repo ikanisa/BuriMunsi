@@ -1,4 +1,4 @@
-import { BuriError, requireThat } from './errors.js';
+import { BuriError, ObservationLockTimeout, requireThat } from './errors.js';
 import { pgInteger } from './postgres-values.js';
 import { canonicalJson, exactKeys, requireRequestId, sha256 } from './values.js';
 
@@ -60,6 +60,7 @@ export function sameObservationInstant(left,right) {
 
 export function mapObservationError(error) {
   if (error instanceof BuriError) return error;
+  if (error?.code === '55P03') return new ObservationLockTimeout();
   if (error?.code === '23505' || error?.code === '40001') return new BuriError('observation_changed', 409);
   if (error?.code === '42501') return new BuriError('access_denied', 403);
   if (error?.code === '22023') return new BuriError('invalid_request', 400);

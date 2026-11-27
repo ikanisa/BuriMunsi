@@ -2,6 +2,9 @@
 export class BuriError extends Error {
   constructor(code, status = 400) { super(code); this.name = 'BuriError'; this.code = code; this.status = status; }
 }
+export class ObservationLockTimeout extends BuriError {
+  constructor() { super('observation_unavailable', 503); }
+}
 /** A request-specific storage uncertainty, never an acknowledgement. */
 export class ObservationUploadUnresolved extends BuriError {
   constructor(requestId) {

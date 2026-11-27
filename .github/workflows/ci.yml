@@ -62,6 +62,8 @@ jobs:
       - name: Verify offline incident checkpoint and alert rules
         run: |
           python3 -m unittest discover -s scripts/qa -p 'test_l04_alert_*.py'
+          python3 -m unittest discover -s scripts/qa -p 'test_wallet_reconciliation.py'
+          python3 -m unittest discover -s scripts/supabase/current-pg-transfer/recovery-rehearsal -p 'test_*.py'
           python3 -m unittest discover -s scripts/qa -p 'test_r05_local_source_receipt.py'
       - name: Install frozen Supabase tooling
         run: npm ci --prefix scripts/supabase --ignore-scripts --no-audit --no-fund
