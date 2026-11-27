@@ -47,6 +47,12 @@ afterEach(() => {
 });
 
 describe('Admin session recovery through the router', () => {
+  it.each(['/unavailable-bookmark', '/admin/unavailable-bookmark'])('offers a single main landmark on %s', async path => {
+    openAdmin(path);
+    const main = screen.getByRole('main');
+    expect(await within(main).findByRole('heading', {level:1, name:'Page unavailable'})).toBeVisible();
+    expect(within(main).getByRole('button', {name:'Go to overview'})).toBeVisible();
+  });
   it('keeps a waiting PWA update out of the signed-in workspace', async () => {
     const scriptURL = new URL('/custom-sw.js', location.origin).href;
     const active = Object.assign(new EventTarget(), {scriptURL, state: 'activated'});
@@ -75,7 +81,7 @@ describe('Admin session recovery through the router', () => {
     expect(new URLSearchParams(router.state.location.search).get('returnTo')).toBe('/admin/burimunsi');
 
     fireEvent.click(screen.getByRole('button', {name: 'Back'}));
-    await screen.findByRole('heading', {name: 'Access unavailable'});
+    await within(screen.getByRole('main')).findByRole('heading', {level: 1, name: 'Access unavailable'});
     expect(router.state.location.pathname).toBe('/admin/burimunsi');
     expect(router.state.location.search).toBe('');
     expect(requests.filter(path => !path.includes('/auth/'))).toEqual([]);

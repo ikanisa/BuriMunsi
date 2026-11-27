@@ -13,6 +13,9 @@ export const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 export const REQUEST_KEY = /^[A-Za-z0-9_.-]{8,200}$/;
 const MAX_CREDENTIAL_BYTES = 4096;
 export const isUuid = value => typeof value === 'string' && UUID.test(value);
+export const isAccountIdentity = value => typeof value === 'string' && value.length > 0 && value.length <= 200 &&
+  value === value.trim() && !/[\u0000-\u001f\u007f-\u009f\ud800-\udfff]/u.test(value);
+export const isCollectionId = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value);
 export const isRequestKey = value => typeof value === 'string' && REQUEST_KEY.test(value);
 export class SafeError extends Error {
   constructor(code, message) { super(message); this.code = code; }
@@ -65,9 +68,13 @@ async function privateDirectory(path, create = false) {
   if (!privateStat(await physicalDirectory(path, create), true)) throw unsafeDirectory();
 }
 function validateCredential(value, config) {
-  if (!object(value) || Object.keys(value).sort().join(',') !== 'accountId,cookie,expiresAt,origin,principalId,sessionId,version' ||
-      value.version !== 1 || value.origin !== config.origin || !isUuid(value.accountId) ||
-      !isUuid(value.principalId) || !isUuid(value.sessionId) ||
+  const fields = object(value) ? Object.keys(value).sort().join(',') : '';
+  const legacy = value?.version === 1 && fields === 'accountId,cookie,expiresAt,origin,principalId,sessionId,version' &&
+    isUuid(value.accountId) && isUuid(value.principalId);
+  const phone = value?.version === 2 && fields === 'accountId,collectionId,cookie,expiresAt,origin,phoneAccountId,principalId,sessionId,version' &&
+    isAccountIdentity(value.accountId) && isAccountIdentity(value.principalId) && isUuid(value.phoneAccountId) &&
+    (value.collectionId === null || isCollectionId(value.collectionId));
+  if ((!legacy && !phone) || value.origin !== config.origin || !isUuid(value.sessionId) ||
       !adminCookieTokenForOrigin(value.origin, value.cookie) ||
       typeof value.expiresAt !== 'string' || !Number.isFinite(Date.parse(value.expiresAt)) || Date.parse(value.expiresAt) <= Date.now()) {
     throw new SafeError('session_unavailable', 'Sign in with the local Admin login command. No browser session is imported.');

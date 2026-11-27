@@ -84,9 +84,28 @@ async function readRollbackState(db){
  }finally{await db.query('ROLLBACK');}
 }
 
-export async function exerciseManagedChainRollback(owner,baselineObserver,openObserver){
- const {identity:beforeObserver,state:before}=await readRollbackState(baselineObserver);
+async function assertStateRestored(owner,baseline,openObserver){
+ const {identity:beforeObserver,state:before}=baseline;
  const {rows:[{pid:writerPid}]}=await owner.query('SELECT pg_backend_pid() pid');
+ const {identity:afterObserver,state:after}=await readRollbackState(await openObserver());
+ if(afterObserver.name!==beforeObserver.name||[beforeObserver.pid,writerPid].includes(afterObserver.pid))
+  throw Error('rollback_independent_observer_required');
+ for(const name of checkedRelations){
+  if(JSON.stringify(before.relations[name])!==JSON.stringify(after.relations[name]))
+   throw Error('rollback_relation_postimage_changed:'+name);
+ }
+ if(JSON.stringify(before.functions)!==JSON.stringify(after.functions))throw Error('rollback_functions_postimage_changed');
+}
+
+export async function exercisePartialChainRefusal(owner,baselineObserver,openObserver){
+ const baseline=await readRollbackState(baselineObserver);
+ await assert.rejects(exerciseManagedChainGraph(owner),e=>e.code==='55000'&&
+  e.message==='import_retention_preimage_changed'&&e.outcome==='rolled_back');
+ await assertStateRestored(owner,baseline,openObserver);
+}
+
+export async function exerciseManagedChainRollback(owner,baselineObserver,openObserver){
+ const baseline=await readRollbackState(baselineObserver);
  let writesVerified=false;
  await assert.rejects(rehearseGraph(owner,async(db,expected)=>{
   if(expected.inserted.counts.commands!==6||await verifyGraph(db,expected)!==true)throw Error('rollback_positive_postimage_missing');
@@ -102,12 +121,5 @@ export async function exerciseManagedChainRollback(owner,baselineObserver,openOb
  }),e=>e.message==='import_receipt_postimage_mismatch'&&e.outcome==='rolled_back',
  'Late receipt verification failure must confirm pre-commit rollback');
  if(!writesVerified)throw Error('rollback_positive_postimage_not_exercised');
- const {identity:afterObserver,state:after}=await readRollbackState(await openObserver());
- if(afterObserver.name!==beforeObserver.name||[beforeObserver.pid,writerPid].includes(afterObserver.pid))
-  throw Error('rollback_independent_observer_required');
- for(const name of checkedRelations){
-  if(JSON.stringify(before.relations[name])!==JSON.stringify(after.relations[name]))
-   throw Error('rollback_relation_postimage_changed:'+name);
- }
- if(JSON.stringify(before.functions)!==JSON.stringify(after.functions))throw Error('rollback_functions_postimage_changed');
+ await assertStateRestored(owner,baseline,openObserver);
 }

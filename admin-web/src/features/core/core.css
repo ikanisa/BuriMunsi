@@ -11,8 +11,13 @@
   text-align: end;
   font-variant-numeric: tabular-nums;
 }
+.statement-local-time,
 .statement-source-time {
   display: block;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.statement-source-time {
   margin-top: .2rem;
   color: var(--admin-muted);
 }

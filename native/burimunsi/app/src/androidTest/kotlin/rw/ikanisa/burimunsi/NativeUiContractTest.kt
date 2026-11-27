@@ -12,6 +12,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.runtime.remember
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -455,6 +456,64 @@ class NativeUiContractTest {
         ui.onNodeWithContentDescription("10,000 RWF").assertDoesNotExist()
         ui.onNodeWithContentDescription("Payments").assertIsSelected()
     }
+    @Test fun bottomTabLabelsFitAtDoubleTypeOnA320dpPhone(){
+        val c=FakeController(Route.HOME,Role.STAFF)
+        var scale by mutableStateOf(1f)
+        ui.setContent{
+            BuriContent(reduceMotion=true){
+                CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density,scale)){
+                    Box(Modifier.fillMaxSize()){
+                        Box(Modifier.width(320.dp).fillMaxHeight().testTag("navigation-test-viewport")){
+                            BuriApp(c,{},{},{},{})
+                        }
+                    }
+                }
+            }
+        }
+        val names=listOf("Home","Members","Payments","Account")
+        for (size in listOf(1f,2f)){
+            ui.runOnIdle{scale=size}
+            ui.onNodeWithTag("navigation-test-viewport").assertWidthIsEqualTo(320.dp)
+            val bounds=names.map{ui.onNodeWithContentDescription(it).assertIsDisplayed().getUnclippedBoundsInRoot()}
+            if(size==1f)check(bounds.all{it.top==bounds.first().top})
+            else check(bounds[2].top>=bounds[0].bottom && bounds[3].top==bounds[2].top)
+            for(name in names){
+                val tab=ui.onNodeWithContentDescription(name).assertIsEnabled()
+                tab.assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
+                val text=ui.onNode(hasText(name) and hasAnyAncestor(hasContentDescription(name)),useUnmergedTree=true)
+                text.performSemanticsAction(SemanticsActions.GetTextLayoutResult){read->
+                    val layouts=mutableListOf<TextLayoutResult>()
+                    check(read(layouts))
+                    val layout=layouts.single()
+                    check(layout.layoutInput.density.fontScale==size)
+                    check(!layout.hasVisualOverflow && (0 until layout.lineCount).none(layout::isLineEllipsized)){
+                        "$name at ${size}x: text=${layout.size}, limits=${layout.layoutInput.constraints}, " +
+                            "paragraph=${layout.multiParagraph.width}x${layout.multiParagraph.height}, " +
+                            "overflow width=${layout.didOverflowWidth}, height=${layout.didOverflowHeight}, tabs=$bounds"
+                    }
+                    check(layout.getLineEnd(layout.lineCount-1)==name.length){"$name has missing characters at ${size}x"}
+                }
+            }
+        }
+        ui.onNodeWithContentDescription("Payments").performClick().assertIsSelected()
+    }
+
+    @Test fun accountAndEnrollmentCountsUseTheCorrectEnglishForm(){
+        val c=FakeController(Route.SETTINGS,Role.ADMIN)
+        show(c)
+        if(c.allows(Capability.STAFF)){
+            for(count in listOf(0,1,2)){
+                ui.runOnIdle{c.state=c.state.copy(staff=checkNotNull(c.state.staff).copy(totalCount=count))}
+                ui.onNodeWithText(if(count==1)"1 account" else "$count accounts").assertExists()
+            }
+        }
+        for(count in listOf(0,1,2)){
+            ui.runOnIdle{c.state=c.state.copy(route=Route.MEMBERS,sheet=Sheet.ENROLL,
+                onboarding=SmartOnboardingState(step=SmartOnboardingStep.RESULTS,created=count))}
+            ui.onNodeWithText(if(count==1)"1 member registered" else "$count members registered").assertIsDisplayed()
+        }
+    }
+
     @Test fun bottomNavigationCoversEverySignedInRouteAndMapsDetailSelection(){
         val c=FakeController(Route.HOME);show(c)
         val expected=mapOf(Route.HOME to "Home",Route.PAYMENTS to "Payments",Route.PAYMENT to "Payments",Route.MEMBERS to "Members",Route.MEMBER to "Members",Route.SMS to "Home",Route.SETTINGS to "Account")

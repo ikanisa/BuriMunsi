@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile,readdir,mkdtemp,realpath,rm} from 'node:fs/promises';
+import {readFile,mkdtemp,realpath,rm} from 'node:fs/promises';
 import {resolve,join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash,randomUUID} from 'node:crypto';
@@ -34,14 +34,16 @@ async function withFixture(run){
  let schema;
  try{
   await db.connect();
-  await db.query('DROP SCHEMA IF EXISTS app CASCADE; DROP SCHEMA IF EXISTS private CASCADE; DROP SCHEMA IF EXISTS api CASCADE; DROP SCHEMA IF EXISTS auth CASCADE');
+  // First import targets the reviewed 97-table baseline, before runtime writers or their fences exist.
+  const manifest=JSON.parse(await readFile(join(root,'supabase/schema-src/source_manifest.json'),'utf8'));
+  const baselinePath=join(root,'supabase/migrations/20261020134444_collect_curated_platform_baseline.sql');
+  const baseline=await readFile(baselinePath);
+  assert.equal(sha(baseline),manifest.baseline_sha256);
+  await db.query('DROP SCHEMA IF EXISTS app,private,api,auth CASCADE');
   await db.query(await readFile(join(root,'supabase/tests/sql/00_local_auth_fixture.sql'),'utf8'));
-  const migrationNames=(await readdir(join(root,'supabase/migrations'))).filter(n=>/^\d{14}_[a-z0-9_]+\.sql$/.test(n)).sort();
-  const migrations=await Promise.all(migrationNames.map(async name=>({name,bytes:await readFile(join(root,'supabase/migrations',name))})));
-  for(const m of migrations)await db.query(m.bytes.toString('utf8'));
+  await db.query(baseline.toString('utf8'));
   const source=new DatabaseSync(path);
   try{
-   const manifest=JSON.parse(await readFile(join(root,'supabase/schema-src/source_manifest.json'),'utf8'));
    for(const m of manifest.source_migrations){const bytes=await readFile(join(root,m.path));assert.equal(sha(bytes),m.sha256);source.exec(bytes.toString('utf8'));}
    // Fixture preparation only: source represents an already accepted history,
    // not a new write admission test. PostgreSQL target triggers stay enabled.
@@ -63,9 +65,9 @@ async function withFixture(run){
   const staged=await stageSnapshot(db,snapshot,{runId});schema=staged.schema;
   const options={schema,approvedTables:snapshot.tables.map(t=>t.name),catalogSha256:await catalogIdentity(db),migrationEpoch:epoch};
   await run({db,snapshot,options,Client,url});
-  for(const m of migrations)assert.equal(sha(await readFile(join(root,'supabase/migrations',m.name))),sha(m.bytes),'Migration changed during test; rerun on frozen source');
+  assert.equal(sha(await readFile(baselinePath)),manifest.baseline_sha256);
  }finally{
-  try{await db.query('RESET ROLE');if(schema)await db.query('DROP SCHEMA IF EXISTS "'+schema+'" CASCADE');}finally{await db.end();await rm(dir,{recursive:true,force:true});}
+  try{await db.query('ROLLBACK');await db.query('RESET ROLE');if(schema)await db.query('DROP SCHEMA IF EXISTS "'+schema+'" CASCADE');}finally{await db.end();await rm(dir,{recursive:true,force:true});}
  }
 }
 

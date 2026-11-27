@@ -1,5 +1,21 @@
 # Dependency evidence
 
+For the BuriMunsi checkout, generate and verify the source dependency inventory
+and CycloneDX file from the repository root. Use a fresh directory for each build.
+
+```sh
+output=$(mktemp -d)
+python3 scripts/supply_chain/inventory.py --output "$output/inventory.json"
+python3 scripts/supply_chain/inventory.py --output "$output/inventory.json" --check
+python3 scripts/supply_chain/source_sbom.py --inventory "$output/inventory.json" --output "$output/bom.json"
+python3 scripts/supply_chain/validate_source_sbom.py "$output/bom.json"
+```
+
+The inventory records Android declarations, the pinned Gradle distribution,
+Web Admin and Worker locks, Supabase tooling and Edge locks, and the roster
+decoder pins. A versionless Android declaration retains its dependency on the
+Compose BOM. Use the native build receipts to identify the signed APKs and bundles.
+
 The observed Gradle exporter has an optional cached publisher-metadata mode.
 Pass all of `--license-witnesses`, `--license-coordinate-join` and
 `--artifact-graph-binding`, each with its corresponding `-sha256` argument,

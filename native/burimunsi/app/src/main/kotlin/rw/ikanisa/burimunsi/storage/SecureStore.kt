@@ -21,6 +21,8 @@ class SecureStore(context: Context, private val name: String) {
         private val fileLocks = Array(64) { Any() }
         private val keyLock = Any()
         private val keyHandles = mutableMapOf<String, SecretKey>()
+        private const val GCM_TAG_BYTES = 16
+        private const val CIPHER_CHUNK_BYTES = 32 * 1024
     }
     private val file = AtomicFile(File(context.noBackupFilesDir, "buri-$name.v1"))
     private val fileLock = fileLocks[(file.baseFile.absolutePath.hashCode() and Int.MAX_VALUE) % fileLocks.size]
@@ -64,8 +66,27 @@ class SecureStore(context: Context, private val name: String) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, key(createKey), GCMParameterSpec(128, bytes.copyOfRange(1, 13)))
         cipher.updateAAD(aad)
-        val body = cipher.doFinal(bytes, 13, bytes.size - 13)
-        return try { body.toString(Charsets.UTF_8) } finally { body.fill(0) }
+        val body = ByteArray(bytes.size - 13 - GCM_TAG_BYTES)
+        return try {
+            cipher.processRecord(bytes, 13, bytes.size - 13, body)
+            body.toString(Charsets.UTF_8)
+        } finally {
+            body.fill(0)
+        }
+    }
+
+    // The Android 8.0 Keystore provider can drop intermediate output when a single
+    // call spans several of its 64 KiB chunks. Keep one authenticated GCM message.
+    private fun Cipher.processRecord(input: ByteArray, offset: Int, length: Int, output: ByteArray) {
+        val end = offset + length
+        var position = offset
+        var written = 0
+        while (end - position > CIPHER_CHUNK_BYTES) {
+            written += update(input, position, CIPHER_CHUNK_BYTES, output, written)
+            position += CIPHER_CHUNK_BYTES
+        }
+        written += doFinal(input, position, end - position, output, written)
+        check(written == output.size) { "Incomplete protected record" }
     }
     fun write(value: String) = synchronized(fileLock) {
         val body = value.toByteArray(Charsets.UTF_8)
@@ -76,7 +97,8 @@ class SecureStore(context: Context, private val name: String) {
             cipher.updateAAD(aad)
             check(cipher.iv.size == 12)
             val iv = cipher.iv
-            val encrypted = cipher.doFinal(body)
+            val encrypted = ByteArray(body.size + GCM_TAG_BYTES)
+            cipher.processRecord(body, 0, body.size, encrypted)
             val output = file.startWrite()
             try {
                 output.write(1)

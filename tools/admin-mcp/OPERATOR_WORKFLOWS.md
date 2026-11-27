@@ -55,10 +55,14 @@ Node 24.22.1). The durable journal reuses the repository's hardened SQLite
 implementation. The normal session file and its directory must already pass the
 existing owner-only and no-symlink checks.
 
-Run the following from this package directory:
+Standalone BuriMunsi Admin and Staff use `npm run login` in this package.
+The terminal prompts for the existing mobile number and four-digit passcode.
+BuriMunsi’s standalone phone session grants the scoped roster reads described
+in the [adapter reference](README.md). The following privacy operations belong
+to a compatible shared deployment with an existing email-verifiable operator
+session.
 
 ```sh
-npm run login
 npm run verify-email
 npm run retention -- context
 ```

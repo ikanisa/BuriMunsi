@@ -104,8 +104,9 @@ const no=()=>{throw Error('financial or external port must not be called')};
 const cursor={create:no,read:no};
 async function run(pool,role,callback,{claimedGroup=group}={}){
  const r=roles[role],backend=sqlFenceBackend(pool,pool),work=await openApplicationWork({backend,sourceSha256:source,kind:'http_collect'});
- const db=new PostgresDatabase(pool,{},work),gate=createPhonePinRequestGate({secrets:{},networkBucket:async()=> '1'.repeat(64)});
- const request=new Request('https://synthetic.invalid/v1/burimunsi/members',{method:'POST',headers:{
+ const origin='https://synthetic.invalid';
+ const db=new PostgresDatabase(pool,{},work),gate=createPhonePinRequestGate({origin,secrets:{},networkBucket:async()=> '1'.repeat(64)});
+ const request=new Request(new URL('/v1/burimunsi/members',origin),{method:'POST',headers:{
   Authorization:'Bearer '+r.token.repeat(64),'X-BuriMunsi-Auth':'phone_pin','X-BuriMunsi-Installation':r.installation,
   'X-BuriMunsi-Device':r.device.repeat(64),'X-BuriMunsi-Profile':'staff','X-BuriMunsi-Group':claimedGroup}});
  let failed=true;
@@ -119,7 +120,7 @@ async function run(pool,role,callback,{claimedGroup=group}={}){
     setMembershipActive:(...v)=>member.setMembershipActive(...v),enqueueEligibleRematch:(...v)=>rematch.enqueueInTransaction(...v)};
   const canonical=new PostgresCanonicalStore({authority:auth,commands,identities:{policy:no,members:no,verified:no},jobs:{assertPostingLease:no}});
   const records=new PostgresRecordsStore({authority:auth,sourceReader:{revision:no,page:no,detail:no}});
-  const actor={id:principal.nativeAccountId,sessionId:principal.principalSessionId};
+  const actor={id:principal.nativeAccountId,sessionId:principal.principalSessionId,groupId:principal.groupId};
   const result=await callback({actor,canonical,rematch,members:new MemberService({store:canonical,groupId:group}),
    records:new RecordsService({store:records,groupId:group,cursor})});failed=false;return result;
  });}finally{const finish=await work.finish({failed});assert.equal(finish.state,'settled');}

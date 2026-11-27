@@ -584,6 +584,8 @@
     <string name="ui_payment_search_hint">Name or payment reference</string>
     <string name="ui_clear_search">Clear search</string>
     <string name="ui_one_member">1 member</string>
+    <string name="ui_one_account">1 account</string>
+    <string name="ui_one_member_registered">1 member registered</string>
     <string name="ui_one_transaction">1 transaction</string>
     <string name="ui_transaction_count">%1$d transactions</string>
     <string name="ui_no_transactions">No transactions</string>

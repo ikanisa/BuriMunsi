@@ -25,6 +25,8 @@ import hashlib
 
 # Fixed rosters independently check discovery and the names reported by the runner.
 EXPECTED_STAFF_CASES = {
+    'rw.ikanisa.burimunsi.storage.SecureStoreRecordTest#failedAuthenticationAndRejectedWritesKeepTheOriginalFileBytes',
+    'rw.ikanisa.burimunsi.storage.SecureStoreRecordTest#validV1RecordsAndCurrentWritesAgreeThroughTheMaximumSize',
     'rw.ikanisa.burimunsi.NativeSandboxContractTest#brokerLocalSetupDoesNotCreateSessionOrReplaceInstallation',
     'rw.ikanisa.burimunsi.NativeSandboxContractTest#compiledConfigurationContainsNoLiveEndpointOrBinding',
     'rw.ikanisa.burimunsi.NativeSandboxContractTest#concurrentSecureStoreInstancesShareOneAtomicFileSafely',
@@ -38,10 +40,12 @@ EXPECTED_STAFF_CASES = {
     'rw.ikanisa.burimunsi.NativeSandboxContractTest#memberPhotoPreparationResizesRotatesAndWipesInput',
     'rw.ikanisa.burimunsi.NativeSandboxContractTest#savedSessionCanBeReopenedAndExplicitlyCleared',
     'rw.ikanisa.burimunsi.NativeSandboxContractTest#setupUsesTheExistingPersistedInstallationIdentity',
+    'rw.ikanisa.burimunsi.NativeUiContractTest#accountAndEnrollmentCountsUseTheCorrectEnglishForm',
     'rw.ikanisa.burimunsi.NativeUiContractTest#allCurrentPanelTitlesRemainReachable',
     'rw.ikanisa.burimunsi.NativeUiContractTest#allSmsDoesNotClaimEmptyWhileTheLocalQueueIsUnknown',
     'rw.ikanisa.burimunsi.NativeUiContractTest#allSmsIncludesOwnQueuedRowsWithoutMergingUncertainSources',
     'rw.ikanisa.burimunsi.NativeUiContractTest#allocationActionStaysAboveNavigationAndHonorsAccessAndOfflineState',
+    'rw.ikanisa.burimunsi.NativeUiContractTest#bottomTabLabelsFitAtDoubleTypeOnA320dpPhone',
     'rw.ikanisa.burimunsi.NativeUiContractTest#paymentReferenceAndProviderIdDisplayIndependently',
     'rw.ikanisa.burimunsi.NativeUiContractTest#auditedSmsPreviewsSearchBothTypedStreamsAndMarkPartial',
     'rw.ikanisa.burimunsi.NativeUiContractTest#incompleteOutgoingPaymentKeepsActualFieldsAndBlocksAllocation',

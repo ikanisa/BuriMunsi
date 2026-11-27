@@ -93,6 +93,58 @@ async function harness(t, handler = () => ({ ...MARKER, rows: [], total: 0 }), t
 function authOr(incoming, response) { return incoming.url.pathname.endsWith('/auth/session') ? undefined : response; }
 function safeCode(value) { return value.result?.structuredContent?.error?.code; }
 
+test('phone operator reads the authorized roster through Members and People, using the scoped member resource for detail', async t => {
+  const phoneAccountId = '88888888-8888-4888-8888-888888888888', phone = '+250780000001';
+  const phoneCredential = {...credential, version:2, phoneAccountId, collectionId:'group-a'};
+  const current = session();
+  delete current.user.email;
+  Object.assign(current.user, {authMethod:'phone_passcode', accountId:phoneAccountId, phone, passcodeVerifiedAt:new Date().toISOString()});
+  current.adminIdentity = {schemaVersion:1, role:'admin', accountId:phoneAccountId, adminId:ACCOUNT, principalId:PRINCIPAL, collectionId:'group-a'};
+  current.csrfToken = 'c'.repeat(64);
+  const member = {id:RESOURCE, member_type:'direct', membership_status:'inactive'};
+  const f = await harness(t, request => {
+    if (request.url.pathname.endsWith('/auth/session')) return current;
+    if (request.url.pathname === '/api/admin/core/members' && request.url.searchParams.get('directory') === 'roster')
+      return {...MARKER, rows:[member], total:1};
+    if (request.url.pathname === '/api/admin/operations/members/' + RESOURCE)
+      return {...MARKER,resource_type:'members',resource:member,related:{},related_pages:{}};
+    return {status:404,data:{}};
+  }, phoneCredential);
+  await f.initialize();
+  for (const area of ['roster','members','users']) {
+    const args = {area, search:'status:inactive "Synthetic member"', status:'inactive', sort:'status_asc', limit:1};
+    const r = await f.tool('collect_admin_list_records',args);
+    assert.equal(r.result.structuredContent.data.rows[0].id,RESOURCE);
+    assert.deepEqual(Object.fromEntries(f.requests.at(-2).url.searchParams), {
+      country:'RW',search:args.search,status:'inactive',sort:'status_asc',limit:'1',offset:'0',directory:'roster'});
+  }
+  assert.equal((await f.tool('collect_admin_get_record',{area:'users',id:RESOURCE})).result.structuredContent.data.resource_type,'members');
+  const privateAccount = (await f.tool('collect_admin_session',{})).result.structuredContent.data.account;
+  assert.equal(privateAccount.phone,undefined);
+  delete member.membership_status;
+  assert.equal(safeCode(await f.tool('collect_admin_list_records',{area:'roster'})),'service_unavailable');
+  assert(f.requests.filter(r=>r.url.pathname.startsWith('/api/admin/core')).every(r=>r.url.searchParams.get('directory')==='roster'));
+  const readCount = () => f.requests.filter(r=>!r.url.pathname.endsWith('/auth/session')).length;
+  const before = readCount();
+  for (const area of ['groups','payees','transactions','ledgers']) {
+    assert.equal(safeCode(await f.tool('collect_admin_list_records',{area})),'permission_denied');
+  }
+  assert.equal((await f.tool('collect_admin_get_record',{area:'roster',id:RESOURCE})).error.code,-32602);
+  assert.equal((await f.tool('collect_admin_list_records',{area:'members',status:'suspended'})).error.code,-32602);
+  current.user.permissions = [];
+  assert.equal(safeCode(await f.tool('collect_admin_list_records',{area:'roster'})),'permission_denied');
+  current.user.permissions = ['users.read']; current.adminIdentity.collectionId = 'changed-group';
+  assert.equal(safeCode(await f.tool('collect_admin_list_records',{area:'roster'})),'session_unavailable');
+  assert.equal(readCount(),before);
+});
+
+test('a legacy session cannot query the phone roster or broaden its directory after a refusal', async t => {
+  const f = await harness(t, request=>authOr(request,{status:403,data:{}}));
+  await f.initialize();
+  assert.equal(safeCode(await f.tool('collect_admin_list_records',{area:'roster'})),'permission_denied');
+  assert(f.requests.every(r=>r.url.pathname.endsWith('/auth/session')));
+});
+
 test('actual stdio lifecycle negotiates versions and advertises exactly fifteen read-only tools without signing in', async t => {
   const f = await harness(t);
   assert.equal((await f.call('tools/list')).error.code, -32002);

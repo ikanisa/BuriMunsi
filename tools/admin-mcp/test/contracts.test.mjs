@@ -9,14 +9,14 @@ import { READ_CONTRACT, canonicalRequestId } from '../src/tools.mjs';
 import { ADMIN_ORIGIN } from '../src/config.mjs';
 
 test('MCP search, status and ordering allowlists match the current canonical Supabase read contract', () => {
-  assert.deepEqual([...READ_CONTRACT.areas].sort(), Object.keys(coreSorts).sort());
+  assert.deepEqual([...READ_CONTRACT.searchAreas].sort(), Object.keys(coreSorts).sort());
   assert.deepEqual([...READ_CONTRACT.areas].sort(), Object.keys(permission).sort());
   assert.deepEqual(marker, { contract_version: 2, model: 'canonical_evidence_ledger' });
-  for (const area of READ_CONTRACT.areas) {
+  for (const area of READ_CONTRACT.searchAreas) {
     assert.deepEqual(READ_CONTRACT.sorts[area], Object.keys(coreSorts[area]));
     assert.deepEqual(READ_CONTRACT.statuses[area], coreStatuses[area]);
-    assert.equal(READ_CONTRACT.permissions[area], `${permission[area]}.read`);
   }
+  for (const area of READ_CONTRACT.areas) assert.equal(READ_CONTRACT.permissions[area], `${permission[area]}.read`);
 });
 
 test('MCP pagination defaults omitted fields and rejects explicit null values', () => {

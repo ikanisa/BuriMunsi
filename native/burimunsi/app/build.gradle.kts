@@ -68,8 +68,8 @@ android {
         applicationId = "rw.ikanisa.burimunsi"
         minSdk = 26
         targetSdk = 36
-        versionCode = 69
-        versionName = "0.23.0-collect.47"
+        versionCode = 70
+        versionName = "0.23.0-collect.48"
         resValue("string", "app_name", "BuriMunsi")
         buildConfigField("boolean", "IS_QUALIFICATION", "false")
         // The new Cloud identity snapshots the existing inbox before catch-up.

@@ -52,10 +52,11 @@ export function AdminAccountMenu({identity, destinations = [], showHelp = true, 
 
   const advanced = links('advanced');
   return <div className="admin-profile" ref={container}>
-    <button className="admin-profile-button" type="button" ref={trigger} aria-controls={open ? 'admin-account-options' : undefined} aria-label={'Account: ' + identity.name}
+    <button className="admin-profile-button" type="button" ref={trigger} aria-controls={open ? 'admin-account-options' : undefined}
+      aria-label={`Account: ${identity.role ? identity.role + ', ' : ''}${identity.name}`}
       aria-expanded={open} onClick={() => setOpen(value => !value)}>
       <span className="admin-operator-role">{identity.role}</span>
-      <span className="admin-avatar" aria-hidden="true">{identity.name.slice(0, 1).toLocaleUpperCase()}</span>
+      <span className="admin-avatar" aria-hidden="true"><Icon name="user" /></span>
     </button>
     {open && <div className="admin-profile-menu" id="admin-account-options">
       <strong className="admin-compact-text" title={identity.name}>{identity.name}</strong>

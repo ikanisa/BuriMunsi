@@ -13,7 +13,7 @@ export function makeAdminRouter() {
     {path: '/', element: <Navigate to="/admin" replace />},
     ...publicSessionRoutes(),
     {path: '/admin', caseSensitive: true, element: <ProtectedShell navigation={primaryAdminNavigation} accountNavigation={adminAccountNavigation} />, children: workspaceRoutes},
-    {path: '*', element: <UnavailablePage title="Page unavailable" />},
+    {path: '*', element: <main className="admin-content"><UnavailablePage title="Page unavailable" /></main>},
   ]);
 }
 

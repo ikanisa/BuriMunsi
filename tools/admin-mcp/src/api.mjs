@@ -1,4 +1,4 @@
-import { SafeError, isUuid, object, unavailable, loadCredential } from './config.mjs';
+import { SafeError, isAccountIdentity, isCollectionId, isUuid, object, unavailable, loadCredential } from './config.mjs';
 import { sendAdminJson, UnconfirmedAdminResponse } from './admin_http.mjs';
 import { adminCookieTokenForOrigin, parseAdminCookie } from './admin_cookie.mjs';
 
@@ -31,22 +31,43 @@ export async function requestJson(config, path, options) {
 export function parseSession(value) {
   const user = value.user;
   if (user === null) authError();
-  if (!object(user) || !isUuid(user.id) || !isUuid(user.sessionId) || !isUuid(user.principalId) ||
-      typeof user.email !== 'string' || user.email.length > 254 || !['owner', 'admin', 'staff'].includes(user.role) ||
+  if (!object(user)) unavailable();
+  const phone = user.authMethod === 'phone_passcode';
+  const validIdentity = phone ? isAccountIdentity : isUuid;
+  if (!validIdentity(user.id) || !isUuid(user.sessionId) || !validIdentity(user.principalId) ||
+      (!phone && typeof user.email !== 'string') || (user.email != null && (typeof user.email !== 'string' || user.email.length > 254)) ||
+      !['owner', 'admin', 'staff'].includes(user.role) ||
       user.financialModel !== 'canonical_evidence_ledger' || !Array.isArray(user.permissions) || user.permissions.length > 256 ||
       user.permissions.some(p => !capabilityName(p))) unavailable();
   const now = Date.now();
+  let phoneIdentity;
+  if (phone) {
+    const proof = value.adminIdentity;
+    const verifiedAt = Date.parse(user.passcodeVerifiedAt);
+    if (!['admin', 'staff'].includes(user.role) || !isUuid(user.accountId) ||
+        typeof user.phone !== 'string' || !/^\+2507[2389]\d{7}$/.test(user.phone) ||
+        typeof user.passcodeVerifiedAt !== 'string' || !/(?:Z|\+00:00)$/.test(user.passcodeVerifiedAt) ||
+        !Number.isFinite(verifiedAt) || verifiedAt > now + 60_000 ||
+        typeof value.csrfToken !== 'string' || !/^[a-f0-9]{64}$/.test(value.csrfToken)) unavailable();
+    if (user.role === 'admin' ? !object(proof) || Object.keys(proof).sort().join(',') !== 'accountId,adminId,collectionId,principalId,role,schemaVersion' ||
+        proof.schemaVersion !== 1 || proof.role !== 'admin' ||
+        proof.accountId !== user.accountId || proof.adminId !== user.id || proof.principalId !== user.principalId ||
+        !isCollectionId(proof.collectionId) : proof != null) unavailable();
+    phoneIdentity = { authMethod: user.authMethod, phone: user.phone, phoneAccountId: user.accountId,
+      collectionId: proof?.collectionId ?? null, passcodeVerifiedAt: user.passcodeVerifiedAt };
+  }
   const expiresAt = typeof value.expiresAt === 'string' ? Date.parse(value.expiresAt) : NaN;
   const mfaAt = user.mfaAt ?? null;
   const proofTime = typeof mfaAt === 'string' ? Date.parse(mfaAt) : NaN;
-  const validAssurance = user.assuranceLevel === 1 ? mfaAt === null :
-    user.assuranceLevel === 2 && Number.isFinite(proofTime) && proofTime <= now + 60_000;
+  const assuranceLevel = user.assuranceLevel ?? (phone ? 1 : undefined);
+  const validAssurance = assuranceLevel === 1 ? mfaAt === null :
+    assuranceLevel === 2 && Number.isFinite(proofTime) && proofTime <= now + 60_000;
   const supportedPolicy = (user.mfaRequired === undefined || user.mfaRequired === false) &&
     (user.mfaAvailable === undefined || typeof user.mfaAvailable === 'boolean');
   if (!supportedPolicy || !validAssurance || !Number.isFinite(expiresAt) || expiresAt <= now) unavailable();
   return { id: user.id, email: user.email, role: user.role, sessionId: user.sessionId, principalId: user.principalId,
-    permissions: [...new Set(user.permissions)].sort(), assuranceLevel: user.assuranceLevel,
-    mfaAt, financialModel: user.financialModel, expiresAt: value.expiresAt };
+    permissions: [...new Set(user.permissions)].sort(), assuranceLevel,
+    mfaAt, financialModel: user.financialModel, expiresAt: value.expiresAt, ...phoneIdentity };
 }
 export async function readAdminSessionResponse(config, cookie, signal) {
   const {value, headers} = await requestJson(config, '/api/admin/auth/session', { cookie, signal });
@@ -64,7 +85,9 @@ export async function readAdminSession(config, cookie, signal) {
 export const sameAdminSession = (before, after) => JSON.stringify(before) === JSON.stringify(after);
 
 export function credentialMatchesSession(credential, user) {
-  return credential.accountId === user.id && credential.sessionId === user.sessionId && credential.principalId === user.principalId;
+  return credential.accountId === user.id && credential.sessionId === user.sessionId && credential.principalId === user.principalId &&
+    (credential.version === 2 ? user.authMethod === 'phone_passcode' && credential.phoneAccountId === user.phoneAccountId &&
+      credential.collectionId === user.collectionId : !user.authMethod);
 }
 
 export async function credentialIsCurrent(config, credential) {

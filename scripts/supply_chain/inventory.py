@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a deterministic source-level supply-chain inventory for Collect.
+"""Build a deterministic source-level supply-chain inventory for BuriMunsi or Collect.
 
 This is a candidate inventory, not an installed or signed-artifact SBOM. It
 does not contact registries, install packages, or mutate dependency inputs.
@@ -363,9 +363,9 @@ def ios_packages(sources: dict[str, str]) -> tuple[list[dict], dict]:
     }
 
 
-def node_packages(sources: dict[str, str]) -> tuple[list[dict], dict]:
+def node_packages(sources: dict[str, str], directories=("tools/public-photography", "deploy/admin-api", "deploy/platform-api")) -> tuple[list[dict], dict]:
     packages, projects = [], {}
-    for directory in ("tools/public-photography", "deploy/admin-api", "deploy/platform-api"):
+    for directory in directories:
         manifest = read_json(directory + "/package.json", sources)
         lock_path = directory + "/package-lock.json"
         lock = read_json(lock_path, sources)
@@ -375,10 +375,12 @@ def node_packages(sources: dict[str, str]) -> tuple[list[dict], dict]:
             if not path:
                 continue
             name = path.rsplit("node_modules/", 1)[-1]
-            observed.add(name)
+            top_level = path == "node_modules/" + name
+            if top_level:
+                observed.add(name)
             assertion = entry.get("license")
             packages.append(row("npm", name, entry.get("version"),
-                "direct" if name in direct else "transitive or optional", lock_path,
+                "direct" if top_level and name in direct else "transitive or optional", lock_path,
                 integrity=entry.get("integrity"), license_assertion=assertion,
                 license_evidence="lock_metadata_only" if assertion else "unknown",
                 origin=entry.get("resolved"), qualifier="optional" if entry.get("optional") else None))
@@ -400,9 +402,11 @@ def lock_name_version(key: str) -> tuple[str, str]:
     return name, version
 
 
-def deno_lock_packages(sources: dict[str, str]) -> tuple[list[dict], dict]:
-    path = 'supabase/functions/deno.lock'
+def deno_lock_packages(sources: dict[str, str], path: str = 'supabase/functions/deno.lock') -> tuple[list[dict], dict]:
     lock = locked_json(path, sources)
+    # Deno omits the JSR map for a workspace with only npm dependencies.
+    if isinstance(lock.get('specifiers'), dict) and all(not spec.startswith('jsr:') for spec in lock['specifiers']):
+        lock.setdefault('jsr', {})
     if lock.get('version') != '5' or not all(isinstance(lock.get(k), dict) for k in ('specifiers', 'npm', 'jsr')):
         raise ValueError('Unsupported Deno lock format')
     packages = []
@@ -641,9 +645,65 @@ def assets(sources: dict[str, str], pubspec: dict) -> tuple[list[dict], dict]:
     }
 
 
+def burimunsi_inventory(sources: dict[str, str]) -> dict:
+    native = "native/burimunsi"
+    settings = f"{native}/settings.gradle.kts"
+    app = f"{native}/app/build.gradle.kts"
+    declarations = {p: _read_text(p, sources) for p in (
+        settings, f"{native}/build.gradle.kts", app, f"{native}/core/build.gradle.kts"
+    )}
+    if not re.search(r'rootProject\.name\s*=\s*"BuriMunsi"', declarations[settings]):
+        raise ValueError("Expected the BuriMunsi Android project")
+    version = re.search(r'^\s*versionName\s*=\s*"([^"]+)"', declarations[app], re.M)
+    if not version:
+        raise ValueError("Missing Android version name")
+    packages = []
+    # Include direct dependencies and versionless Compose BOM declarations.
+    coordinate = re.compile(
+        r'\b(?:(classpath|\w*[Ii]mplementation)\(\s*|add\("([^"]+)",\s*)'
+        r'(?:platform\()?"([\w.-]+:[\w.-]+(?::[\w.+-]+)?)"\)'
+    )
+    for path, script in declarations.items():
+        for plugin, pin in re.findall(r'id\("([^"]+)"\)\s+version\s+"([^"]+)"', script):
+            packages.append(row("gradle-plugin", plugin, pin, "direct plugin declaration", path))
+        for scope, custom, dependency in coordinate.findall(script):
+            group, artifact, *pin = dependency.split(":")
+            packages.append(row("maven", f"{group}:{artifact}", pin[0] if pin else None,
+                                "direct " + (scope or custom), path))
+    wrapper_path = f"{native}/gradle/wrapper/gradle-wrapper.properties"
+    wrapper = dict(line.split("=", 1) for line in _read_text(wrapper_path, sources).splitlines() if "=" in line)
+    distribution = re.search(r'/gradle-([\d.]+)-bin\.zip$', wrapper['distributionUrl'])
+    if not distribution or not re.fullmatch(r'[\da-f]{64}', wrapper['distributionSha256Sum']):
+        raise ValueError("Expected a pinned Gradle binary distribution")
+    packages.append(row("gradle", "gradle", distribution[1], "build distribution", wrapper_path,
+                        integrity=wrapper['distributionSha256Sum']))
+
+    npm, npm_checks = node_packages(sources, ("admin-web", "deploy/platform-admin", "deploy/managed-sms"))
+    packages.extend(npm)
+    tooling, tooling_checks = supabase_tool_packages(sources)
+    packages.extend(tooling)
+    deno_checks = {}
+    for path in ("supabase/functions/deno.lock", "deploy/managed-sms/deno.lock", "scripts/supabase/deno.lock"):
+        locked, deno_checks[path] = deno_lock_packages(sources, path)
+        packages.extend(locked)
+    decoder, decoder_checks = decoder_packages(sources)
+    packages.extend(decoder)
+    checks = {"node": npm_checks, "supabase_tooling": tooling_checks, "deno": deno_checks,
+              "decoder": decoder_checks, "android": {"version_name": version[1]}}
+    coverage = {
+        "included": ["Native Android Gradle plugin, classpath, BOM, dependency and distribution declarations",
+                     "Web Admin, Workers, Supabase tooling and Edge package locks", "Roster decoder wheel and OCI base pins"],
+        "excluded": ["Resolved Android transitive versions and signed artifact contents", "Runtime reachability and assets",
+                     "Registry advisories and license approval"],
+    }
+    return inventory_document(sources, packages, [], checks, coverage)
+
+
 def build() -> dict:
     sources: dict[str, str] = {}
     source(rel(Path(__file__).resolve()), sources)
+    if not (ROOT / "pubspec.yaml").exists() and (ROOT / "native/burimunsi/settings.gradle.kts").is_file():
+        return burimunsi_inventory(sources)
     pubspec = read_yaml("pubspec.yaml", sources)
     package_rows, dart_check = _dart_packages(pubspec, sources)
     checks = {"dart": dart_check}
@@ -658,12 +718,7 @@ def build() -> dict:
         checks[label] = check
     asset_rows, asset_checks = assets(sources, pubspec)
     checks["assets"] = asset_checks
-    package_rows.sort(key=lambda p: (p["ecosystem"], p["name"], p["version"] or "", p["evidence"]))
-    counts = Counter(p["ecosystem"] for p in package_rows)
-    return {
-        "schema_version": 1,
-        "kind": "source-level candidate dependency and declared-asset inventory",
-        "coverage": {
+    return inventory_document(sources, package_rows, asset_rows, checks, {
             "included": [
                 "pubspec.lock and declared local Dart forks, regular-source tree hashes, license texts and provenance", "Gradle declarations and wrapper versions",
                 "Podfile.lock", "two Swift Package.resolved files",
@@ -680,7 +735,16 @@ def build() -> dict:
                 "decoder image platform attestation and installed wheel contents",
                 "Supabase Deno range satisfaction and runtime/test reachability, installed tooling membership",
             ],
-        },
+    })
+
+
+def inventory_document(sources, package_rows, asset_rows, checks, coverage):
+    package_rows.sort(key=lambda p: (p["ecosystem"], p["name"], p["version"] or "", p["evidence"]))
+    counts = Counter(p["ecosystem"] for p in package_rows)
+    return {
+        "schema_version": 1,
+        "kind": "source-level candidate dependency and declared-asset inventory",
+        "coverage": coverage,
         "source_sha256": dict(sorted(sources.items())),
         "packages": package_rows,
         "assets": asset_rows,
@@ -697,7 +761,8 @@ def build() -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    default_output = DEFAULT_OUTPUT if (ROOT / "pubspec.yaml").exists() else ROOT / "build/supply-chain/candidate-inventory.json"
+    parser.add_argument("--output", type=Path, default=default_output)
     parser.add_argument("--check", action="store_true", help="Compare output with the saved JSON without writing")
     args = parser.parse_args()
     output = args.output.resolve()

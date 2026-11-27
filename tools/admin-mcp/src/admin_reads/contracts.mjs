@@ -2,7 +2,7 @@ import { invalid, isUuid, object, unavailable } from '../config.mjs';
 
 export const AREAS = ['groups', 'users', 'members', 'payees', 'transactions', 'ledgers'];
 export const PERMISSIONS = { groups: 'collections.read', users: 'users.read', members: 'users.read', payees: 'receivers.read', transactions: 'payments.read', ledgers: 'ledger.read' };
-const STATUSES = { groups: ['active', 'suspended', 'archived'], users: ['active', 'suspended', 'deleted'], members: ['active', 'suspended', 'deleted'], payees: ['active', 'inactive'], transactions: ['recorded', 'reconciled', 'confirmed', 'ambiguous', 'corrected', 'reversed'], ledgers: ['contribution', 'reversal', 'correction'] };
+const STATUSES = { groups: ['active', 'suspended', 'archived'], users: ['active', 'suspended', 'deleted'], members: ['active', 'suspended', 'deleted'], roster: ['active', 'inactive'], payees: ['active', 'inactive'], transactions: ['recorded', 'reconciled', 'confirmed', 'ambiguous', 'corrected', 'reversed'], ledgers: ['contribution', 'reversal', 'correction'] };
 const SORTS = {
   groups: ['created_at', 'status', 'title', 'slug', 'collection_type', 'visibility_status', 'active_members'],
   users: ['created_at', 'status', 'public_id', 'full_name', 'email', 'member_type', 'phone', 'momo_number', 'momo_pay_code', 'active_groups', 'net_contributed_rwf'],
@@ -11,8 +11,9 @@ const SORTS = {
   ledgers: ['created_at', 'status', 'amount_minor', 'group_title', 'payment_id', 'evidence_id'],
 };
 SORTS.members = SORTS.users;
-export const RELATIONS = { groups: ['memberships', 'payees'], users: ['memberships'], transactions: ['evidence', 'ledger_entries'], members: [], payees: [], ledgers: [] };
-export const READ_CONTRACT = Object.freeze({ areas: AREAS, permissions: PERMISSIONS, statuses: STATUSES, sorts: SORTS });
+SORTS.roster = SORTS.members;
+export const RELATIONS = { groups: ['memberships', 'payees'], users: ['memberships'], transactions: ['evidence', 'ledger_entries'], members: ['memberships'], payees: [], ledgers: [] };
+export const READ_CONTRACT = Object.freeze({ areas: AREAS, searchAreas: [...AREAS, 'roster'], permissions: PERMISSIONS, statuses: STATUSES, sorts: SORTS });
 export const schema = (properties = {}, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 export const page = { limit: { type: 'integer', minimum: 1, maximum: 50, default: 25 }, offset: { type: 'integer', minimum: 0, maximum: 2_000_000, default: 0 } };
 export const areaProperty = { type: 'string', enum: AREAS };

@@ -114,9 +114,14 @@ def build(inventory_path: Path) -> dict:
                            "hashes": [{"alg": "SHA-256", "content": asset["sha256"]}],
                            "properties": [prop("declaration", asset["declared_in"]),
                                           prop("bytes", asset["bytes"]), prop("license_evidence", asset["license_evidence"])]})
+    if "android" in inventory["checks"] and "dart" not in inventory["checks"]:
+        product = {"type": "application", "bom-ref": "application:burimunsi-source", "name": "BuriMunsi",
+                   "version": inventory["checks"]["android"]["version_name"]}
+    else:
+        product = {"type": "application", "bom-ref": "application:collect-source", "name": "Collect",
+                   "version": inventory["checks"]["dart"]["pubspec_version"]}
     return {"$schema": "https://cyclonedx.org/schema/bom-1.6.schema.json", "bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
-            "metadata": {"component": {"type": "application", "bom-ref": "application:collect-source", "name": "Collect",
-                                       "version": inventory["checks"]["dart"]["pubspec_version"]},
+            "metadata": {"component": product,
                          "properties": [prop("scope", "Source declarations and local lock inventory; signed-artifact SBOM not verified."),
                                         prop("inventory_sha256", hashlib.sha256(inventory_raw).hexdigest()),
                                         prop("generator_sha256", digest(Path(__file__))),

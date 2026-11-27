@@ -116,7 +116,7 @@ function StatementTransactions({page, showSourceTime, readHistory, changePage, r
     {key: 'date', label: 'Date (Kigali)', kind: 'date', value: payment => paymentInstant(payment.atRaw),
       render: payment => {
         const formatted = paymentTime(payment.atRaw);
-        return <><CompactText cell>{formatted}</CompactText>
+        return <><span className="statement-local-time" title={formatted}>{formatted}</span>
           {showSourceTime && payment.atRaw.trim() && formatted !== payment.atRaw && <small className="statement-source-time">{payment.atRaw}</small>}</>;
       }},
     {key: 'reference', label: 'Reference', kind: 'text', value: payment => payment.ftId,

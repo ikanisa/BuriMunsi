@@ -34,7 +34,6 @@ fencedTest({name:'private retention on real isolated PostgreSQL: actual scoped m
  const sql=connection(database!);await initializeSqlFixture(sql);const setup=await sql.reserve();
  const actor='d1000000-0000-4000-8000-000000000001',subject='d1000000-0000-4000-8000-000000000002',other='d1000000-0000-4000-8000-000000000003';
  const authActor='d2000000-0000-4000-8000-000000000001',authSubject='d2000000-0000-4000-8000-000000000002',authOther='d2000000-0000-4000-8000-000000000003',session='d3000000-0000-4000-8000-000000000001',factor='d4000000-0000-4000-8000-000000000001';
- const claims={sub:authActor,session_id:session,role:'authenticated',aal:'aal2',amr:[{method:'totp',timestamp:Math.floor(Date.now()/1000)}]};
  const key='synthetic/private-retention/source',body=new TextEncoder().encode('Synthetic retained source'),sha=await digest(body),scope={ownerId:subject,entityId:'synthetic-upload',purpose:'generic_upload'};
  try{
   // This test owns only its explicitly named synthetic database; no other
@@ -72,8 +71,10 @@ fencedTest({name:'private retention on real isolated PostgreSQL: actual scoped m
  }
  await sql`INSERT INTO auth.sessions(id,user_id,aal,factor_id)VALUES(${session},${authActor},'aal2',${factor}),('d3000000-0000-4000-8000-000000000002',${authSubject},'aal1',NULL),('d3000000-0000-4000-8000-000000000003',${authOther},'aal1',NULL)`;
  await sql`INSERT INTO auth.mfa_factors(id,user_id,status,secret)VALUES(${factor},${authActor},'verified','SYNTHETIC_TOTP_SECRET'),('d4000000-0000-4000-8000-000000000002',${authSubject},'verified','SYNTHETIC_SUBJECT_TOTP_SECRET')`;
- await sql`INSERT INTO auth.mfa_amr_claims(session_id,authentication_method)VALUES(${session},'totp')`;
- await sql`INSERT INTO app.auth_sessions(id,user_id,surface,auth_at,created_at,expires_at)VALUES(${session},${actor},'admin',app.unixepoch(),app.unixepoch(),app.unixepoch()+3600)`;
+ const [amr]=await sql`INSERT INTO auth.mfa_amr_claims(session_id,authentication_method)VALUES(${session},'totp')
+  RETURNING floor(extract(epoch FROM updated_at))::int AS verified_at`;
+ const claims={sub:authActor,session_id:session,role:'authenticated',aal:'aal2',amr:[{method:'totp',timestamp:amr.verified_at}]};
+ await sql`INSERT INTO app.auth_sessions(id,user_id,surface,auth_at,created_at,expires_at)VALUES(${session},${actor},'admin',${amr.verified_at},${amr.verified_at},${amr.verified_at+3600})`;
  await sql`INSERT INTO app.auth_mfa_factors(id,user_id,friendly_name,secret_ciphertext,status,created_at,enrollment_session_id,verified_at,last_totp_counter)VALUES(${factor},${actor},'Synthetic','{"managed_by":"supabase"}','verified',app.unixepoch(),${session},app.unixepoch(),0)`;
  await sql.begin(async(tx:any)=>{await tx`SELECT set_config('request.jwt.claims',${JSON.stringify(claims)},true)`;const proof=await tx`SELECT private.record_mfa_projection(${factor}::uuid) AS at`;await tx`UPDATE app.auth_sessions SET assurance_level=2,mfa_factor_id=${factor},mfa_at=${proof[0].at} WHERE id=${session}`;});
  await sql`INSERT INTO app.admin_users(id,email,role,status,password_hash,display_name,created_at,updated_at)VALUES('d5000000-0000-4000-8000-000000000001','info@ikanisa.com','owner','active','!managed-supabase!','Synthetic Owner',app.unixepoch(),app.unixepoch())`;

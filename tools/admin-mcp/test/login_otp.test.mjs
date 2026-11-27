@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ADMIN_ORIGIN, configuration, loadCredential, saveCredential } from '../src/config.mjs';
 import { requestEmailCode, verifyEmailCode } from '../src/login_otp.mjs';
-import { loginWithCredentials } from '../src/login.mjs';
+import { loginWithCredentials, loginWithPhonePasscode } from '../src/login.mjs';
 import { readAdminSession, requestJson } from '../src/api.mjs';
 import { createAdminWorker } from '../../../deploy/platform-admin/src/index.js';
 
@@ -24,33 +24,41 @@ const response = (value, status = 200, cookie) => new Response(JSON.stringify(va
   headers: { 'content-type': 'application/json', ...(cookie ? { 'set-cookie': cookie } : {}) } });
 const secure = `${COOKIE}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=3600`;
 
-test('email sign-in uses the production BFF cookie realm for exact session readback', async t => {
+const PHONE = '+250780000001', PIN = '0123';
+const PHONE_ACCOUNT = '55555555-5555-4555-8555-555555555555';
+function phoneSession(role = 'staff') {
+  const user = {id:'fixture-admin-binding', sessionId:SESSION, principalId:'fixture-principal-binding',
+    accountId:PHONE_ACCOUNT, role, authMethod:'phone_passcode', phone:PHONE,
+    passcodeVerifiedAt:new Date().toISOString(), permissions:['users.read'], financialModel:'canonical_evidence_ledger'};
+  return {user, expiresAt:expiry(), csrfToken:'d'.repeat(64), ownerEmail:null, ...(role === 'admin' ? {adminIdentity:{
+    accountId:PHONE_ACCOUNT, adminId:user.id, principalId:user.principalId, schemaVersion:1, role, collectionId:'synthetic-group'}} : {})};
+}
+
+test('standalone phone sign-in uses the production BFF cookie realm for exact session readback', async t => {
   const directory = await mkdtemp(join(await realpath(tmpdir()), 'collect-mcp-managed-cookie-'));
   t.after(() => rm(directory, {recursive: true, force: true}));
   const config = configuration({BURIMUNSI_ADMIN_MCP_SESSION_FILE: join(directory, 'session.json')});
-  const retained = session();
+  const retained = phoneSession();
   const upstreamCookie = `__Host-collect_admin=${'b'.repeat(64)}`;
   const issued = `${upstreamCookie}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=3600`;
   const calls = [];
   const worker = createAdminWorker({fetchImpl: async inbound => {
-    const path = new URL(inbound.url).pathname;
-    calls.push(path.slice(path.lastIndexOf('/') + 1));
-    if (path.endsWith('/otp')) {
-      return response({challenge_id: CHALLENGE, retry_after: 60, expires_in: 1800,
-        channel: 'email', delivery_status: 'accepted'});
-    }
-    if (path.endsWith('/verify')) return response(retained, 200, issued);
-    assert.equal(inbound.headers.get('Cookie'), upstreamCookie);
+    const method = new URL(inbound.url).pathname.split('/').at(-1);
+    calls.push(method);
+    if (method === 'phone-passcode') assert.deepEqual(await inbound.json(), {phone:PHONE, pin:PIN});
+    else assert.equal(inbound.headers.get('Cookie'), upstreamCookie);
     return response(retained, 200, issued);
   }});
   const workerVars = JSON.parse(await readFile(new URL(
     '../../../deploy/platform-admin/wrangler.burimunsi.jsonc', import.meta.url), 'utf8')).vars;
   t.mock.method(globalThis, 'fetch', async (input, init) => worker.fetch(new Request(input, init), workerVars));
-  const receipt = await requestEmailCode(config, EMAIL);
-  assert.equal((await verifyEmailCode(config, receipt, CODE)).role, 'staff');
+  assert.equal((await loginWithPhonePasscode(config, '0780 000 001', PIN)).role, 'staff');
   const credential = await loadCredential(config);
-  assert.equal(credential.cookie, `__Host-burimunsi_admin_rrlduytparvsjfmegalh=${'b'.repeat(64)}`);
-  assert.deepEqual(calls, ['otp', 'verify', 'session']);
+  assert.equal(credential.cookie, COOKIE);
+  assert.equal(credential.phoneAccountId, PHONE_ACCOUNT);
+  assert.deepEqual(calls, ['phone-passcode', 'session']);
+  assert.equal((await stat(config.credentialFile)).mode & 0o777, 0o600);
+  assert.doesNotMatch(await readFile(config.credentialFile,'utf8'), /250780000001|passcode|0123|csrfToken/i);
 });
 
 test('production refuses a predecessor cookie and any session readback with a replacement token', async t => {
@@ -86,6 +94,62 @@ async function unchangedCredential(f) {
     accountId: ACCOUNT, principalId: PRINCIPAL, sessionId: SESSION, expiresAt: expiry() });
   return readFile(f.config.credentialFile);
 }
+
+test('standalone Admin sign-in binds scoped identity and verifies both projections without an email', async t => {
+  const payload = phoneSession('admin');
+  const f = await harness(t, r => r.method === 'POST' ? response(payload, 200, secure) : response(payload));
+  assert.equal((await loginWithPhonePasscode(f.config, PHONE, PIN)).role,'admin');
+  const saved = await loadCredential(f.config);
+  assert.equal(saved.collectionId, 'synthetic-group');
+  assert.deepEqual(f.requests.map(r => r.method), ['POST','GET']);
+});
+
+test('malformed phone or passcode does not send a request', async t => {
+  const f = await harness(t, () => assert.fail('Network request for invalid input'));
+  for (const [phone,pin] of [['0780000001','12345'], ['0780000001',1234], ['07800000x1',PIN]]) {
+    await assert.rejects(loginWithPhonePasscode(f.config, phone, pin), {code:'invalid_login'});
+  }
+  assert.equal(f.requests.length,0);
+});
+
+test('a rejected phone passcode preserves the original credential and gets one attempt', async t => {
+  const f = await harness(t, () => response({error:{code:'invalid_credentials'}},401));
+  const before = await unchangedCredential(f);
+  await assert.rejects(loginWithPhonePasscode(f.config,PHONE,PIN), {code:'invalid_login'});
+  assert.deepEqual(await readFile(f.config.credentialFile),before);
+  assert.deepEqual(f.requests.map(r=>r.path),['/api/admin/auth/phone-passcode']);
+});
+
+for (const field of ['phone','phone account','principal','session','collection','csrf','auth method']) {
+  test('standalone login preserves the current credential when readback changes ' + field, async t => {
+    const initial = phoneSession('admin'), second = structuredClone(initial);
+    if (field === 'phone') second.user.phone = '+250780000002';
+    if (field === 'phone account') second.adminIdentity.accountId = second.user.accountId = PRINCIPAL;
+    if (field === 'principal') second.adminIdentity.principalId = second.user.principalId = 'another-principal';
+    if (field === 'session') second.user.sessionId = PRINCIPAL;
+    if (field === 'collection') second.adminIdentity.collectionId = 'other-group';
+    if (field === 'csrf') second.csrfToken = 'e'.repeat(64);
+    if (field === 'auth method') delete second.user.authMethod;
+    const f = await harness(t, r => r.method === 'POST' ? response(initial,200,secure) : response(second));
+    const previous = await unchangedCredential(f);
+    await assert.rejects(loginWithPhonePasscode(f.config, PHONE, PIN));
+    assert.deepEqual(await readFile(f.config.credentialFile),previous);
+    assert.equal(f.requests.filter(r=>r.method==='POST').length,1);
+  });
+}
+
+test('standalone phone login rejects an unbound Admin and does not replay a lost sign-in', async t => {
+  const payload = phoneSession('admin');
+  delete payload.adminIdentity;
+  let lost = false;
+  const f = await harness(t, () => { if (lost) throw new Error('lost'); return response(payload,200,secure); });
+  const previous = await unchangedCredential(f);
+  await assert.rejects(loginWithPhonePasscode(f.config, PHONE, PIN));
+  lost = true;
+  await assert.rejects(loginWithPhonePasscode(f.config, PHONE, PIN));
+  assert.deepEqual(await readFile(f.config.credentialFile),previous);
+  assert.deepEqual(f.requests.map(r=>r.method),['POST','POST']);
+});
 
 for (const mode of ['legacy', 'managed']) for (const seconds of [1, 59, 300, 1800]) {
   test(`${mode} email challenge uses its validated ${seconds}-second remaining lifetime`, async t => {

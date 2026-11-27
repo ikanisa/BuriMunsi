@@ -109,13 +109,16 @@ try{
 
  // Call the actual native drain functions with empty selectors: neither the
  // OpenAI adapter nor a financial posting can be reached without a candidate.
- let aiCalls=0,queries=0;const work={kind:'jobs',assert:async()=>{}};
- const emptyDb={applicationWork:work,context:async()=>{},transaction:async fn=>fn({unsafe:async sql=>{
-  queries++;if(sql.includes('pg_advisory_xact_lock'))return [];
-  assert.match(sql,/burimunsi_auto_collections|burimunsi_native_sms_post_candidates/);return [{result:[]}];}})};
+ let aiCalls=0;const candidateReads=[];const work={kind:'jobs',assert:async()=>{}};
+ const emptyDb={applicationWork:work,context:async()=>{},transaction:async fn=>fn({unsafe:async (sql,args)=>{
+  candidateReads.push({sql,args});return [{result:[]}];}})};
  const env={DB:emptyDb,BURIMUNSI_NATIVE_AUTO_TRANSACTIONS_ENABLED:'true',MOMO_AI_ENABLED:'true',MOMO_AI_MODEL:'fixture-model',OPENAI_API_KEY:'fixture',AI:{run:async()=>{aiCalls++;throw Error('unexpected AI call');}}};
  assert.deepEqual(await drainNativeAutoTransactions(env,{limit:1}),{status:'complete',processed:0,results:[]});
  assert.deepEqual(await drainNativeSmsLedger(env,{limit:1}),{status:'complete',processed:0,results:[]});
- assert.equal(aiCalls,0);assert.equal(queries,3);checks++;
+ assert.deepEqual(candidateReads,[
+  {sql:"SELECT private.burimunsi_native_job_candidates('parse',$1) AS result",args:[1]},
+  {sql:"SELECT private.burimunsi_native_job_candidates('post',$1) AS result",args:[1]},
+ ]);
+ assert.equal(aiCalls,0);checks++;
  console.log(JSON.stringify({suite:'managed-jobs-schedule-one-minute',checks,fixture:'owned socket-only PostgreSQL 17',provider_calls:0,cloud_calls:0}));
 }finally{for(const c of clients)await c.end().catch(()=>{});await f.close();}

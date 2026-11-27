@@ -124,9 +124,13 @@ async function qualifyBrowserReads(pool,source,originalCookie,enrollmentFixture,
     assert.equal(groups.status,200,JSON.stringify(groups.data));
     assert.ok(groups.data.rows.some(row=>row.id===group));
     if(!phoneOnboarding){
-      const payments=await call('core/transactions?limit=5',view);
+      const retired=await call('core/transactions?limit=5',view);
+      assert.equal(retired.status,404);
+      assert.equal(retired.data.error.code,'not_found');
+      const payments=await call('burimunsi/payments?limit=5',view);
       assert.equal(payments.status,200,JSON.stringify(payments.data));
-      assert.ok(Array.isArray(payments.data.rows));
+      assert.ok(Array.isArray(payments.data.items));
+      assert.equal(payments.data.limit,5);
     }
     const team=await call('team',view);
     assert.equal(team.status,role==='admin'?200:403,JSON.stringify(team.data));
@@ -185,6 +189,8 @@ export async function verifyPhoneOperatorAccounts({owner,database,fixtureRoot,ph
   const seed=historical.split('\nDO $exercise$\n');
   assert.equal(seed.length,2);
   await owner.query(seed[0]+'\nCOMMIT;');
+  // This phone-account fixture predates the standalone Payments table and its group policy.
+  if(!phoneOnboarding)await owner.query(await migration('20261124114500_burimunsi_payments.sql'));
   const receiverState=async()=>{
     await owner.query('BEGIN');
     try {

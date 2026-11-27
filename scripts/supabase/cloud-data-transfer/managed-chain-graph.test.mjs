@@ -8,7 +8,7 @@ import {canonicalProfile} from '../../../supabase/functions/_shared/deployment-p
 import {compileManagedLifecycleCandidate} from '../cloud-release/managed-lifecycle-candidate.mjs';
 import {retainedLock,migrationBytes,historyFixture} from '../cloud-release/retained-source.mjs';
 import {includeManagedRetirement} from '../cloud-release/retention-candidate.mjs';
-import {exerciseManagedChainGraph,exerciseManagedChainRollback} from './managed-chain-graph-helper.mjs';
+import {exerciseManagedChainGraph,exerciseManagedChainRollback,exercisePartialChainRefusal} from './managed-chain-graph-helper.mjs';
 
 const root=resolve(import.meta.dirname,'../../..');
 const sha=x=>createHash('sha256').update(x).digest('hex');
@@ -140,9 +140,12 @@ await withOwnedArchiveFixture(async({owner,admin,openObserver})=>{
  if(managedLifecycle){
   await exerciseManagedChainRollback(owner,admin,openObserver);
   negativeChecks.push('managed_graph_verified_precommit_rollback');
+  const graphResult=await exerciseManagedChainGraph(owner);
+  if(graphResult.commands!==6 || graphResult.objects!==0 || graphResult.sms!==0)throw Error('synthetic_managed_graph_counts_changed');
+ }else{
+  await exercisePartialChainRefusal(owner,admin,openObserver);
+  negativeChecks.push('partial_chain_import_refused_and_rolled_back');
  }
- const graphResult=await exerciseManagedChainGraph(owner);
- if(graphResult.commands!==6 || graphResult.objects!==0 || graphResult.sms!==0)throw Error('synthetic_managed_graph_counts_changed');
  const observations=(await owner.query(`SELECT
   to_regclass('private.burimunsi_accounts') IS NOT NULL AS accounts,
   to_regprocedure('private._burimunsi_retention_evidence_v2(text,text)') IS NOT NULL AS retention_evidence,

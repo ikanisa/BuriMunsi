@@ -49,7 +49,7 @@ export function ProtectedShell({navigation, accountNavigation = []}: {navigation
       <AdminShell navigation={permitted} accountNavigation={permittedAccount} showAccountHelp={user.authMethod !== 'phone_passcode'} currentPath={`${location.pathname}${location.search}`}
         identity={{name: session.verificationMode === 'passcode' ? user.displayName ?? user.phone ?? 'BuriMunsi account' : user.email,
           role: user.role === 'staff' ? 'Staff' : user.role === 'admin' || session.verificationMode === 'passcode' ? 'Admin' : 'Owner'}} onSignOut={signOut}>
-        {canOpenAdminPath(location.pathname, user) ? <ScreenBoundary key={location.pathname}><Suspense fallback={<LoadingState label="Opening workspace" layout="workspace" />}><Outlet /></Suspense></ScreenBoundary> : <ErrorState title="Access unavailable"
+        {canOpenAdminPath(location.pathname, user) ? <ScreenBoundary key={location.pathname}><Suspense fallback={<LoadingState label="Opening workspace" layout="workspace" />}><Outlet /></Suspense></ScreenBoundary> : <ErrorState title="Access unavailable" headingLevel={1}
           message="Your account cannot open this page." />}
       </AdminShell>
     </div></InteractionSuspendedContext.Provider>

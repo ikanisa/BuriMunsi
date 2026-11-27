@@ -15,11 +15,11 @@ import {jobDispatchFixture} from '../../../supabase/functions/_shared/tests/help
 const state={events:[],nonces:new Set(),mode:'normal',bucket:null,signal:null};
 globalThis.__nativeHandlerIntegration=state;
 const mock={
- './deployment-database.js':`export const assertRuntimeDeployment=async()=>{globalThis.__nativeHandlerIntegration.events.push('schema')};`,
+ './deployment-database.js':`export const assertRuntimeDeployment=async()=>{globalThis.__nativeHandlerIntegration.events.push('schema')};export const prepareDeploymentCheck=async()=>assertRuntimeDeployment;`,
  './auth-cleanup.js':`export const cleanupExpiredGoogleFlows=()=>{};`,
  './member-realtime-publisher.js':`export const publishMemberRealtime=()=>{};`,
  './postgres.js':`const s=()=>globalThis.__nativeHandlerIntegration;export const connection=()=>{s().events.push('connection');return {}};export const fenceConnection=()=>({});export class PostgresDatabase{constructor(){s().events.push('database');this.sql={}}setApplicationWork(work){this.work=work;s().events.push('bind')}prepare(text){s().events.push('prepare');if(text!=='SELECT private.collect_native_ingress_consume(?::uuid,?::text,?::text,?::bigint) AS claimed')throw Error('unexpected SQL');return {bind:(nonce)=>({first:async column=>{if(column!=='claimed')throw Error('unexpected column');const h=s();h.events.push('claim');if(h.mode==='error')throw Error('synthetic private error');if(h.mode==='invalid')return 1;if(h.nonces.has(nonce))return false;h.nonces.add(nonce);if(h.mode==='hang')return new Promise(()=>{});if(h.mode==='lost')throw Error('synthetic lost commit acknowledgement');return true}})}}}`,
- './application-fence.js':`const s=()=>globalThis.__nativeHandlerIntegration;export const sqlFenceBackend=()=>({});export const openApplicationWork=async options=>{const h=s();h.events.push('fence');h.signal=options.signal;if(h.abortOnFence)h.abortOnFence();return {abandon(){h.events.push('abandon')},finish:async()=>{h.events.push('finish')},waitUntil:p=>p}};`,
+ './application-fence.js':`const s=()=>globalThis.__nativeHandlerIntegration;export const sqlFenceBackend=(_sql,_control,beforeRegister)=>({beforeRegister});export const openApplicationWork=async options=>{const h=s();await options.backend.beforeRegister?.();h.events.push('fence');h.signal=options.signal;if(h.abortOnFence)h.abortOnFence();return {abandon(){h.events.push('abandon')},finish:async()=>{h.events.push('finish')},waitUntil:p=>p}};`,
  './adapters.js':`export class SupabaseObjectBucket{constructor(){globalThis.__nativeHandlerIntegration.events.push('storage')}}export const providerAdapters=()=>{globalThis.__nativeHandlerIntegration.events.push('provider');return {}};`,
  './domain/index.js':`export default {fetch:async(request,env)=>{const h=globalThis.__nativeHandlerIntegration;h.events.push('dispatch');if(new URL(request.url).pathname.startsWith('/v1/burimunsi')){if(!env.BURIMUNSI_NATIVE_ROUTE)return Response.json({code:'native_service_unconfigured'},{status:503});h.bucket=await env.__testNetwork(request);h.bodyBytes=(await request.arrayBuffer()).byteLength;h.idempotency=request.headers.get('idempotency-key');h.ingressPresent=request.headers.has('x-collect-native-ingress')}return Response.json({ok:true})}};`,
  './domain/momo_pipeline.js':`export const drainMomoJobs=()=>{};`,
@@ -32,7 +32,6 @@ const mock={
  './domain/burimunsi/collect-runtime.js':`export const createCollectNativeRuntime=async(env,options)=>{const h=globalThis.__nativeHandlerIntegration;h.events.push('native');if(env.BURIMUNSI_NATIVE_ENABLED!=='true')return null;env.__testNetwork=options.trustedNetworkBucket;return ()=>{}};export const runCollectNativeScheduledCycle=()=>{};`,
  './domain/burimunsi/postgres-native-auto-worker.js':`export const drainNativeAutoTransactions=()=>{};`,
  './domain/burimunsi/postgres-native-sms-ledger.js':`export const drainNativeSmsLedger=()=>{};`,
- './scheduled-native-auto.js':`export const nativeAutoProcessingResult=()=>{};`,
  './scheduled-canonical.js':`export const scheduledCanonicalDrain=()=>{};`,
 };
 const shared=new URL('../../../supabase/functions/_shared/',import.meta.url);
@@ -79,14 +78,16 @@ const indexOf=event=>state.events.indexOf(event);
 const noneAfterFence=()=>{for(const event of ['storage','provider','native','dispatch'])assert.equal(state.events.includes(event),false,event);};
 
 test('the reviewed input manifest matches the synthetic integration source and fixtures',async()=>{
- const manifest=JSON.parse(await readFile(new URL('./current-inputs.json',import.meta.url),'utf8'));
+ const previous=await readFile(new URL('./current-inputs.json',import.meta.url));
+ const predecessor=JSON.parse(previous);
+ const manifest=JSON.parse(await readFile(new URL('./qualification-inputs.json',import.meta.url),'utf8'));
  assert.equal(manifest.format,'collect.managed-native-handler-integration.successor.v1');
- assert.match(manifest.predecessor_manifest_sha256,/^[a-f0-9]{64}$/);
+ assert.equal(manifest.predecessor_manifest_sha256,hash(previous));
  const root=new URL('../../../',import.meta.url);
- for(const [name,expected] of Object.entries(manifest.source_inputs)){
+ for(const [name,expected] of Object.entries({...predecessor.source_inputs,...manifest.source_inputs})){
   assert.equal(hash(await readFile(new URL(name,root))),expected,name);
  }
- for(const [name,expected] of Object.entries(manifest.fixture_inputs)){
+ for(const [name,expected] of Object.entries({...predecessor.fixture_inputs,...manifest.fixture_inputs})){
   assert.equal(hash(await readFile(new URL(name,import.meta.url))),expected,name);
  }
 });
@@ -96,7 +97,7 @@ test('the integrated scheduler preserves native ledger admission and reports unk
  const request=()=>new Request(profile.supabase_origin+'/functions/v1/collect-jobs',{method:'POST',headers:{Authorization:'Bearer synthetic'}});
  const options={reportHealth:()=>{},jobDispatch:jobDispatchFixture,cleanupDiagnostics:async()=>({status:'complete',removed:0}),processNativeAuto:async()=>({status:'complete',processed:0,results:[]})};
  let calls=0;const make=processNativeSmsLedger=>createScheduledHandler(()=>env,async()=>({status:'complete'}),async()=>({status:'complete'}),{...options,processNativeSmsLedger});
- reset();let response=await make(async(e,options)=>{calls++;assert.ok(e.COLLECT_FENCE_WORK);assert.deepEqual(options,{limit:1});return {status:'complete',processed:1,results:[{state:'unmatched',private:'excluded'}]};})(request());
+ reset();let response=await make(async(e,options)=>{calls++;assert.ok(e.COLLECT_FENCE_WORK);assert.deepEqual(options,{limit:4});return {status:'complete',processed:1,results:[{state:'unmatched',private:'excluded'}]};})(request());
  assert.equal(response.status,200);assert.deepEqual((await response.json()).native_sms_ledger,{status:'complete',processed:1,results:[{state:'unmatched'}]});assert.equal(calls,1);
  reset();state.admissionAllowed=false;response=await make(async()=>{calls++;})(request());assert.equal(response.status,503);assert.equal(calls,1);
  assert.deepEqual((await response.json()).native_sms_ledger,{status:'unconfirmed',code:'native_sms_ledger_admission_unavailable'});
@@ -193,11 +194,19 @@ test('disabled managed native requests fail before DB and provider setup',async(
  assert.equal((await createHandler('collect-api',()=>managed,opts())(await managedSigned(managed))).status,503);
  assert.equal(state.events.length,0);
 });
-test('the Collect API entrypoint supplies the real verifier, claim and store to its handler',async()=>{
+test('the shipped Collect API entrypoint admits direct native requests only under its standalone deployment profile',async()=>{
  reset();const env=managedEnvironment(),saved=globalThis.Deno;let handler;
  globalThis.Deno={env:{toObject:()=>env},serve:value=>{handler=value;}};
- try{await import(runtimeIndex+'?fixture=1');assert.equal(typeof handler,'function');const input=await managedSigned(env),retry=input.clone();
-  assert.equal((await handler(input)).status,200);assert.equal(state.events.filter(x=>x==='claim').length,1);
-  state.events=[];assert.equal((await handler(retry)).status,503);noneAfterFence();
+ try{await import(runtimeIndex+'?fixture=1');assert.equal(typeof handler,'function');
+  assert.equal((await handler(await managedSigned(env))).status,503);assert.deepEqual(state.events,[]);
+  const project=MANAGED_SUPABASE_ORIGIN;
+  const standaloneProfile=canonicalProfile({format:'collect.deployment.v1',id:'collect-managed-production-cloud',mode:'managed',environment:'production',
+   supabase_origin:project,member_api_origin:project,admin_origin:project,public_origin:project,google_callback_origin:project});
+  Object.assign(env,{COLLECT_DEPLOYMENT_PROFILE:standaloneProfile,COLLECT_DEPLOYMENT_PROFILE_SHA256:hash(standaloneProfile),
+   APP_ENVIRONMENT:'production',BURIMUNSI_PRODUCT_MODE:'standalone',BURIMUNSI_COLLECTION_ID:'fixture-group',COLLECT_NATIVE_INGRESS_MODE:'supabase_direct_v1'});
+  const input=new Request(project+'/functions/v1/collect-api/v1/burimunsi/session/login',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  assert.equal((await handler(input)).status,200);
+  assert.ok(indexOf('schema')>=0&&indexOf('schema')<indexOf('fence')&&indexOf('fence')<indexOf('dispatch'));
+  assert.equal(state.events.includes('claim'),false);
  }finally{if(saved===undefined)delete globalThis.Deno;else globalThis.Deno=saved;}
 });

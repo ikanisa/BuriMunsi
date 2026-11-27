@@ -7,12 +7,15 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.ui.semantics.Role as SemanticRole
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.platform.LocalDensity
@@ -21,16 +24,16 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.cool.mobile.R
 import rw.ikanisa.burimunsi.core.*
 import rw.ikanisa.burimunsi.core.export.ExportFormat
 
-// Keep the scrollable route viewport above the floating navigation bar.
 private val BottomNavBottomGap=18.dp
 private val BottomNavVerticalPadding=6.dp
+private val bottomRoutes=listOf(Route.HOME,Route.MEMBERS,Route.PAYMENTS,Route.SETTINGS)
 
 private fun iconFor(route:Route)=when(route){Route.HOME->R.drawable.ic_home;Route.PAYMENTS->R.drawable.ic_activity;Route.MEMBERS->R.drawable.ic_members;else->R.drawable.ic_settings}
 private fun titleFor(route:Route)=when(route){Route.LOGIN->"Sign in";Route.HOME->"Home";Route.PAYMENTS->"Payments";Route.PAYMENT->"Payment";Route.MEMBERS->"Members";Route.MEMBER->"Member";Route.SMS->"SMS";Route.SETTINGS->"Account"}
@@ -75,8 +78,6 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
     LaunchedEffect(read,gate,model.canExportListing){if(!read||gate!=ScreenGate.OPEN||!model.canExportListing)exportVisible=false}
     val focus=LocalFocusManager.current
     val imeVisible=WindowInsets.ime.getBottom(LocalDensity.current)>0
-    val navItemHeight=if(LocalDensity.current.fontScale>=1.5f)72.dp else 54.dp
-    val navClearance=navItemHeight+BottomNavVerticalPadding*2+BottomNavBottomGap
     val canBack=read&&(s.route!=Route.HOME||s.sheet!=null)
     val back:()->Unit={if(imeVisible){keyboard?.hide();focus.clearFocus()}else if(canBack)model.back()}
     BackHandler(enabled=imeVisible||canBack,onBack=back)
@@ -115,7 +116,7 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
                         if(read)RoundAction(R.drawable.ic_sync,t("Check previous action"),model::retry,enabled=presentation.mayCheckOutcome,size=48)
                     }
                 }
-                Box(Modifier.weight(1f).fillMaxWidth().padding(bottom=if(read)navClearance else 0.dp).semantics{
+                Box(Modifier.weight(1f).fillMaxWidth().semantics{
                     stateDescription=t(if(requestedRoute!=null&&requestedRoute!=s.route)"Loading records"else PresentationState.label(presentation.state))
                 }){
                     CompositionLocalProvider(LocalProgressPresented provides (showRouteProgress || sheetOpen)) {
@@ -161,9 +162,9 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
                     }}}
                     }
                 }
+            if(read)BottomNav(displayedRoute,model::navigate,model.navigationBlocked||gate!=ScreenGate.OPEN,
+                Modifier.align(Alignment.CenterHorizontally).padding(bottom=BottomNavBottomGap))
         }
-        if(read)BottomNav(displayedRoute,model::navigate,model.navigationBlocked||gate!=ScreenGate.OPEN,navItemHeight,
-            Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom=BottomNavBottomGap))
     }
     if(sheetOpen)Sheets(s,model,onSupport,onPermissions,onPickMemberFile,onPreviewMemberFile,onTakeMemberPhoto,onPickMemberPhoto,onExport=openExport)
     if(exportVisible&&read&&gate==ScreenGate.OPEN&&presentation.showRecords&&model.canExportListing){
@@ -227,22 +228,38 @@ fun BuriApp(model:BuriController,onSupport:()->Unit,onPermissions:()->Unit,onExp
         }
     }
 }
-@Composable private fun BottomNav(current:Route,onNavigate:(Route,String?)->Unit,busy:Boolean,itemHeight:Dp,modifier:Modifier=Modifier){
+@Composable private fun BottomNav(current:Route,onNavigate:(Route,String?)->Unit,busy:Boolean,modifier:Modifier=Modifier){
     val t=LocalUiText.current
     val active=when(current){Route.PAYMENT->Route.PAYMENTS;Route.MEMBER->Route.MEMBERS;Route.SMS->Route.HOME;else->current}
-    Row(modifier.widthIn(max=520.dp).fillMaxWidth().padding(horizontal=16.dp)
-        .background(BuriTheme.NavigationSurface,RoundedCornerShape(34.dp)).padding(BottomNavVerticalPadding),horizontalArrangement=Arrangement.spacedBy(4.dp)){
-        for(route in listOf(Route.HOME,Route.MEMBERS,Route.PAYMENTS,Route.SETTINGS)){
-            val chosen=active==route
-            val label=t(titleFor(route))
-            val color=if(chosen)BuriTheme.Text else BuriTheme.NavigationMuted
-            val action=focusAction("navigation:${route.name}"){onNavigate(route,null)}
-            IconButton(onClick=action.click,enabled=!busy,modifier=action.modifier.weight(1f).height(itemHeight)
-                .background(if(chosen)BuriTheme.NavigationSelected else Color.Transparent,RoundedCornerShape(28.dp))
-                .semantics{selected=chosen;role=SemanticRole.Tab;contentDescription=label}){
-                Column(horizontalAlignment=Alignment.CenterHorizontally){
-                    Glyph(iconFor(route),null,color,24)
-                    CompactLabel(label,Modifier.clearAndSetSemantics{},fontSize=11.sp,lineHeight=14.sp,color=color)
+    val labels=bottomRoutes.map{t(titleFor(it))}
+    val labelStyle=LocalTextStyle.current.copy(fontSize=11.sp,lineHeight=14.sp)
+    val measurer=rememberTextMeasurer()
+    val density=LocalDensity.current
+    val gap=4.dp
+    BoxWithConstraints(modifier.widthIn(max=520.dp).fillMaxWidth().padding(horizontal=16.dp)
+        .background(BuriTheme.NavigationSurface,RoundedCornerShape(34.dp)).padding(BottomNavVerticalPadding)){
+        val singleRowCell=(constraints.maxWidth-with(density){gap.roundToPx()}*(bottomRoutes.size-1))/bottomRoutes.size
+        val twoRows=labels.any{measurer.measure(it,style=labelStyle,softWrap=false).size.width>singleRowCell}
+        val columns=if(twoRows)2 else bottomRoutes.size
+        Column(Modifier.selectableGroup(),verticalArrangement=Arrangement.spacedBy(gap)){
+            for(row in bottomRoutes.indices.chunked(columns)){
+                Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(gap)){
+                    for(index in row){
+                        val route=bottomRoutes[index]
+                        val chosen=active==route
+                        val label=labels[index]
+                        val color=if(chosen)BuriTheme.Text else BuriTheme.NavigationMuted
+                        val action=focusAction("navigation:${route.name}"){onNavigate(route,null)}
+                        Box(action.modifier.weight(1f).heightIn(min=54.dp)
+                            .clip(RoundedCornerShape(28.dp)).background(if(chosen)BuriTheme.NavigationSelected else Color.Transparent)
+                            .selectable(selected=chosen,enabled=!busy,role=SemanticRole.Tab,onClick=action.click)
+                            .semantics{contentDescription=label},contentAlignment=Alignment.Center){
+                            Column(Modifier.fillMaxWidth().clearAndSetSemantics{},horizontalAlignment=Alignment.CenterHorizontally){
+                                Glyph(iconFor(route),null,color,24)
+                                Text(label,Modifier.fillMaxWidth(),style=labelStyle,color=color,textAlign=TextAlign.Center)
+                            }
+                        }
+                    }
                 }
             }
         }

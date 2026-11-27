@@ -448,6 +448,16 @@ try {
   await page.getByRole('link', {name:/Open member statement/}).click();
   await page.getByRole('heading',{name:'Member statement',exact:true}).waitFor();
   await statement.getByRole('row').filter({hasText:'STATEMENT-01'}).waitFor();
+  for (const width of [320, 360, 1440]) {
+    await page.setViewportSize({width, height: 800});
+    const datesFit = await statement.locator('.statement-local-time, .statement-source-time').evaluateAll(times => times.length > 0 && times.every(time => {
+      const range = document.createRange();
+      range.selectNodeContents(time);
+      const cell = time.closest('td').getBoundingClientRect();
+      return [...range.getClientRects()].every(rect => rect.right <= cell.right + 1 && rect.left >= cell.left - 1);
+    }));
+    assert(datesFit, `Dates overlap adjacent statement cells at ${width}px`);
+  }
   await page.getByRole('button',{name:'Back to member',exact:true}).click();
   await page.getByRole('heading',{name:'Record details',exact:true}).waitFor();
   await page.setViewportSize({width:1440,height:900});

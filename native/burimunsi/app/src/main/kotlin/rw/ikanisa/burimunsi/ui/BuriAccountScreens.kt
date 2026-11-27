@@ -70,7 +70,7 @@ import rw.ikanisa.burimunsi.core.Role
             CompactLabel(t("Operations"),Modifier.padding(top=4.dp,bottom=6.dp).semantics{heading()},style=MaterialTheme.typography.titleMedium)
             AccountGroup{
                 if(canManageStaff){
-                    SettingRow(R.drawable.ic_members,t("Staff access"),s.staff?.totalCount?.let{t("%1\$d accounts",it)},enabled=!s.busy,click={m.openSheet(Sheet.STAFF)})
+                    SettingRow(R.drawable.ic_members,t("Staff access"),s.staff?.totalCount?.let{if(it==1)t("1 account")else t("%1\$d accounts",it)},enabled=!s.busy,click={m.openSheet(Sheet.STAFF)})
                     HorizontalDivider(color=Color.White.copy(alpha=.08f))
                     SettingRow(R.drawable.ic_history,t("Activity"),enabled=!s.busy,click={m.openSheet(Sheet.AUDIT)})
                     if(canManageSms||canHandoffToReceiver)HorizontalDivider(color=Color.White.copy(alpha=.08f))

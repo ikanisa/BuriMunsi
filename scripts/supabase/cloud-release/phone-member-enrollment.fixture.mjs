@@ -36,7 +36,7 @@ export async function verifyBrowserMemberEnrollment({call,group,admin,otherAdmin
   const {member}=first.data;
   assert.equal(first.data.requestId,command.requestId);
   assert.equal(first.data.outcome,'applied');
-  assert.deepEqual(member,{id:member.id,groupId:group,name:command.name,phone:command.phone,active:true,version:1,balanceRwf:0});
+  assert.deepEqual(member,{id:member.id,groupId:group,name:command.name,phone:command.phone,active:true,version:1});
   const roster=await call('core/members?directory=roster&status=active&search='+encodeURIComponent(command.name),admin);
   verify(roster,200);
   assert.equal(roster.data.total,1);
@@ -61,6 +61,6 @@ export async function verifyBrowserMemberEnrollment({call,group,admin,otherAdmin
   verify(existing,200);
   assert.deepEqual(existing.data.member,member);
   const after=await inspect();
-  assert.deepEqual(after,{members:before.members+1,rematches:before.rematches+1,receipts:before.receipts+2,
+  assert.deepEqual(after,{members:before.members+1,rematches:before.rematches,receipts:before.receipts+2,
     attestations:before.attestations+2,financial:before.financial});
 }

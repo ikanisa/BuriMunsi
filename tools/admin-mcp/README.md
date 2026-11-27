@@ -54,7 +54,7 @@ the three current-source contract tests passed on 20 October, with independent
 source review and no provider calls. This is local source/mocked-transport proof;
 the affected PostgreSQL integration and authenticated hosted read remain separate.
 
-The helper also recognizes the managed email challenge's `200` response with
+The retained shared email helper recognizes the managed email challenge's `200` response with
 `channel: email` and `delivery_status: accepted|unknown`, and sends the required
 `X-Collect-Requested-With` header. Twenty-two focused local auth tests passed,
 including code validation, uncertain delivery, lost verification responses and
@@ -62,7 +62,7 @@ credential preservation. A challenge still permits one verification attempt;
 no code is resent automatically. Those 22 results precede the new challenge
 handoff implementation described below; the expanded cohort now passes 80 tests.
 
-The new human-only helper acquires a challenge candidate through the fixed Admin
+The shared email-verification helper acquires a challenge candidate through the fixed Admin
 parent `/admin/auth/local-challenge` and a short-lived `127.0.0.1` listener. The
 operator pastes a public pairing descriptor into that page and explicitly connects
 it to the terminal. The signed offer, one-use nonce and exact-origin CORS bind the
@@ -76,9 +76,8 @@ tests** with no skips. The host owner separately reports 52 host/controller
 tests passing. Managed CAPTCHA enforcement rejected four hosted missing/invalid
 token attempts. These results do not establish a deployed parent, actual browser
 permission/CORS behavior, fresh-token acceptance or a completed operator login.
-The normal CLI acquires one
-fresh token for OTP sending, or for the separately selected password lane; it
-does not reuse that token for code verification or add a mandatory second widget.
+The standalone terminal login uses the phone/passcode route. The legacy email
+helpers retain their own challenge handling for compatible deployments.
 Provider delivery, actual deployed enforcement and session validation remain
 separate hosted checks.
 
@@ -102,31 +101,17 @@ npm run login
 `npm run check` checks every JavaScript module under `src/`. The test suite
 uses local protocol, transport, and desktop fixtures.
 
-`npm run login` must run directly in a terminal. Email-code sign-in is the
-normal setup for an approved Admin or Staff account, including an OTP-only
-invited account. Enter the existing approved email, then the original code in
-the hidden local prompt. This requires the deployed Admin email-code contract;
-no user account is created by this client. Existing password accounts may
-explicitly choose the legacy password method.
+`npm run login` prompts in a terminal for the mobile number and four-digit
+passcode of an existing BuriMunsi Admin or Staff account. The passcode prompt
+is hidden. Formatted Rwanda mobile numbers are accepted, including local
+numbers beginning with zero. Enter credentials only at the prompts.
 
-Do not put passwords or email codes in chat, MCP arguments, shell arguments,
-environment variables or redirected input. There is no automatic resend or
-verification replay. An unconfirmed delivery retains its original challenge,
-reported expiry and 60-second cooldown. Enter that original code if it
-arrives. The helper prints a non-secret sign-in reference for reconciliation.
-A lost verification acknowledgement performs one session lookup. It saves a
-credential only if an origin-bound returned cookie and matching live account can
-be verified; without the returned cookie it reports the attempt as unresolved.
-This lookup does not import browser cookies, invent an authenticated session or
-retry verification.
-
-The helper verifies the session and saves an independent local cookie with the
-private-file controls. Email-code sign-in establishes an AAL1 session. The Admin
-backend requires recent verification of the current Admin email on the same
-session for protected operations. The separate human-only `npm run verify-email`
-command can renew that proof. Native discovery and hosted provider acceptance
-remain separate from local mock tests.
-
+The helper sends one phone/passcode request and uses the returned origin-bound
+cookie to read the current session. It saves the private local credential after
+the account, principal, role, grants, session, proof and Admin group agree in
+both responses. A failed or unconfirmed exchange preserves the prior local
+credential. The file stores the origin-bound session cookie and binding IDs.
+The mobile number, passcode and CSRF value stay out of the file.
 The default credential file is:
 
 ```text
@@ -191,7 +176,7 @@ only the implemented tools capability.
 |---|---|---|
 | `collect_admin_session` | Current account, role and granted capabilities; no cookie | Active Admin account session |
 | `collect_admin_overview` | Current canonical workspace measurements | `overview.read` |
-| `collect_admin_list_records` | One page of Groups, Users, Members, Payees, Transactions or Ledgers | Area read capability below |
+| `collect_admin_list_records` | One page of the signed-in group roster using `roster`, `members` or `users` for phone operators. Shared sessions retain their existing record areas | Area read capability below |
 | `collect_admin_get_record` | Exact record UUID and authorized related metadata | Area read capability below |
 | `collect_admin_list_requests` | The signed-in operator's own retained request history | `account.manage` |
 | `collect_admin_get_request_status` | The exact original idempotency key's retained outcome | `account.manage` |
@@ -202,7 +187,12 @@ only the implemented tools capability.
 | `collect_admin_list_sms_receipts` | One typed, bounded page of canonical SMS capture metadata | `sms.read` |
 | `collect_admin_get_sms_receipt` | Exact capture UUID and bounded duplicate-reference metadata | `sms.read` |
 
-Area permissions are `collections.read`, `users.read` (Users and Members),
+The standalone roster uses `users.read`. The backend binds the group to the
+current operator. Membership status accepts `active` and `inactive`. Use
+`members` or `users` and an exact member UUID for scoped detail. The `roster`
+area is available for list and search.
+
+Shared record-area permissions are `collections.read`, `users.read` (Users and Members),
 `receivers.read`, `payments.read`, and `ledger.read`. A role name alone grants
 nothing. The backend rechecks authorization as well as this local adapter's
 preflight/postflight checks. Staff cannot use an ungranted read by supplying a

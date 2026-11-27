@@ -227,7 +227,7 @@ private fun MoMoPayerPicker(s: UiState, m: BuriController, enabled: Boolean) {
             item{TextButton(m::onboardingOptions,enabled=!s.busy){CompactLabel(t("Back"),color=BuriTheme.Blue)}}
         }
         SmartOnboardingStep.RESULTS->Panel(footer={Primary(t("Done"),m::closeSheet,!s.busy)}){
-            item{CompactLabel(t("%1\$d members registered",o.created),fontSize=22.sp,fontWeight=FontWeight.SemiBold)}
+            item{CompactLabel(if(o.created==1)t("1 member registered")else t("%1\$d members registered",o.created),fontSize=22.sp,fontWeight=FontWeight.SemiBold)}
             items(o.results,key={it.row}){result->CompactLabel(t("Row %1\$d: %2\$s",result.row,t(result.status.replace('_',' '))),fontSize=15.sp,lineHeight=22.sp)}
         }
     }

@@ -1,0 +1,35 @@
+{
+  "format": "collect.managed-native-handler-integration.successor.v1",
+  "predecessor_manifest_sha256": "3f53f39e511d6f4abd14c152c70a0a2f15f87a36880e32ad4c2e650d605c9e08",
+  "source_inputs": {
+    "supabase/functions/collect-api/index.ts": "a02d18f26875813cc37e2b024c24ff165a8b229ca018eee4de1aeb02a8e7b621",
+    "supabase/functions/_shared/postgres.js": "983d8960dfab463cf587e78595b6ae84eed17b81f67a4948474f4bd44d4a19db",
+    "supabase/functions/_shared/postgres-connections.js": "1a921522ea11ef7b7f586df3bd7f420c48e5edd36ab3c3120381b0d19a9f4540",
+    "supabase/functions/_shared/postgres-transactions.js": "17a086b40409b312ba7a7a0c0a5a3f60274f90907c962d54f8b7058c834adcc8",
+    "supabase/functions/_shared/application-fence.js": "debf8af55334ab1f602bc1b1c4b87dce93e597ea33c9022d616611daf47b30ee",
+    "supabase/functions/_shared/domain/burimunsi/collect-route.js": "7d4ccc2f31d9676bf7700646053fd8996b990c599c2f23d3300a93e6a4495e07",
+    "supabase/functions/_shared/domain/burimunsi/collect-runtime.js": "2ca068240b3f26842bacda62374ad461450d6e5211bc9a6c27523a3ebc64ed19",
+    "supabase/functions/_shared/domain/burimunsi/wire/native-http.mjs": "f788f63bb392a74e6c79b31ac4bab5c3bc7665efe90f719e2722417c87193247",
+    "supabase/functions/_shared/domain/burimunsi/wire/runtime.mjs": "bf857a95c823bc66060e06089baf348ed34c96a1b0b05ca79d115082c4541425",
+    "supabase/functions/_shared/domain/burimunsi/wire/native-contract.mjs": "961e9c5247c86c9bc9ae6649d4b2e4ef54293202dd5e42be78e106e683c4f737",
+    "supabase/functions/_shared/domain/burimunsi/wire/burimunsi.generated.mjs": "36bb8da6ab6646a1687f8dcdc30a61265f881544fc6c0c833e722ea9d1d17dc1",
+    "supabase/functions/_shared/domain/burimunsi/phone-pin-request.js": "a11c04c0762a35b86892e38fed90b58bd0dd07ceada01cf2a1b8794e27b34fb8",
+    "supabase/functions/_shared/domain/burimunsi/postgres-authority.js": "17656b8351a2d5f1a177d7042153892eb2679bf305fa6ee854ddd51632191ed4",
+    "supabase/functions/_shared/domain/burimunsi/payment-sms-delivery.mjs": "141db7a124281d7680584507def7dbdb7216af02a38c61f7d3603ceeeaf49dbd",
+    "supabase/functions/_shared/admin-security.js": "2f82b0d16d9136a3e5d018bc1f3a2446009692c32979c4e7508d093aa19d2a57",
+    "supabase/functions/_shared/scheduled-native-auto.js": "9e6c77a63de26a3d23414e15324fed546fcc834d9f9f30e33cee6b1351d4a922",
+    "supabase/functions/collect-jobs/index.ts": "2cd26c52a0cb5ecac601880a3981c4020d3a0193f4742703fef9a8157b82a75d",
+    "supabase/functions/_shared/edge-runtime.js": "6fc90a3f89e5dc36c838576a818b07067dacfee6fa8b0b321e279363da00c0bc",
+    "supabase/functions/_shared/edge-http-handler.js": "7244307ad2ee19e7a26645898b4425e6219340d215edb3c532085951563bc874",
+    "supabase/functions/_shared/edge-http-transport.js": "a1a139845ab438a52e8962ad6b98d9258d2e8aaf39903ad3c2f8d48ae7d35aab",
+    "supabase/functions/_shared/edge-jobs-handler.js": "c3f141631bbbc0937853807789a7c48a9c41988f915ef3b54cf34272db56a373",
+    "supabase/functions/_shared/edge-job-cycle.js": "1c202ad0e41b555281d9de2fdbed4355a9bd90b6fcd9f6510aa1212852384224",
+    "supabase/functions/_shared/burimunsi-standalone.js": "f439a27185d777195b7b7a0174f7de84ec130db84877fa99a1b8a1e784bf22f8",
+    "supabase/functions/_shared/deployment-database.js": "229d924c0f009e2a0eecfbb84deaba4a2ca8871713e242a5d2837da5b5e96840",
+    "supabase/functions/_shared/scheduled-native-sms-ledger.js": "ed1ab702b9dd8682d1cb05a558baa52067b7bc0c57da01881e5f142d92806aec"
+  },
+  "fixture_inputs": {
+    "README.md": "c0015c3085046896358bd7f0b619ff402ff1a3aa1c485112ee8a5c593795c9f9",
+    "handler-integration.test.mjs": "c412b407965b19eac705a03453327b6261cf55be9d8b51656eef736eaf2338c1"
+  }
+}

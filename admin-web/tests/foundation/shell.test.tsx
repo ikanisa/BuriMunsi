@@ -76,13 +76,15 @@ describe('Admin shell', () => {
       accountNavigation={[{label:'Account security',path:'/admin/security'},{label:'Open-source notices',path:'/admin/licenses',group:'help'}]}
       identity={{name:'Member reader', role:'Staff'}}>
       <p>Overview</p></AdminShell>);
-    await user.click(screen.getByRole('button', {name:'Account: Member reader'}));
+    const account = screen.getByRole('button', {name:'Account: Staff, Member reader'});
+    expect(account).toHaveTextContent(/^Staff$/);
+    await user.click(account);
     expect(screen.queryByText('Help', {selector:'summary'})).not.toBeInTheDocument();
     expect(screen.queryByText(/registered Android receiver/)).not.toBeInTheDocument();
     expect(screen.queryByRole('link', {name:/WhatsApp support|Open-source notices|Review payments/})).not.toBeInTheDocument();
     expect(screen.getByRole('button',{name:'Sign out'})).toBeVisible();
     await user.click(screen.getByRole('link', {name:'Account security'}));
-    expect(screen.getByRole('button', {name:'Account: Member reader'})).toHaveAttribute('aria-expanded','false');
+    expect(screen.getByRole('button', {name:'Account: Staff, Member reader'})).toHaveAttribute('aria-expanded','false');
   });
 
 });

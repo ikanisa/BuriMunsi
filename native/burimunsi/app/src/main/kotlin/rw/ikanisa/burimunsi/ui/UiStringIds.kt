@@ -588,6 +588,8 @@ internal val UiStringIds:Map<String,Int> = mapOf(
     "Name or payment reference" to R.string.ui_payment_search_hint,
     "Clear search" to R.string.ui_clear_search,
     "1 member" to R.string.ui_one_member,
+    "1 account" to R.string.ui_one_account,
+    "1 member registered" to R.string.ui_one_member_registered,
     "1 transaction" to R.string.ui_one_transaction,
     "%1\$d transactions" to R.string.ui_transaction_count,
     "No transactions" to R.string.ui_no_transactions,

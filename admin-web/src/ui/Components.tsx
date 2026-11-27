@@ -46,8 +46,11 @@ export function StatusBadge({ children, tone = 'neutral' }: StatusBadgeProps) {
   return <span className={`admin-badge admin-badge--${tone}`}><span className="admin-badge-dot" aria-hidden="true" />{typeof children === 'string' ? <CompactText>{children}</CompactText> : children}</span>;
 }
 
-export function ErrorState({ title = 'Unable to load this page', message, onRetry }: { title?: string; message: string; onRetry?: () => void }) {
-  return <div className="admin-state admin-state--error" role="alert"><Icon name="alert" /><h2>{title}</h2><p>{message}</p>{onRetry && <Button onClick={onRetry} icon="refresh">Try again</Button>}</div>;
+export function ErrorState({ title = 'Unable to load this page', headingLevel = 2, message, onRetry }: {
+  title?: string; headingLevel?: 1 | 2; message: string; onRetry?: () => void;
+}) {
+  const Heading = headingLevel === 1 ? 'h1' : 'h2';
+  return <div className="admin-state admin-state--error" role="alert"><Icon name="alert" /><Heading>{title}</Heading><p>{message}</p>{onRetry && <Button onClick={onRetry} icon="refresh">Try again</Button>}</div>;
 }
 
 export function EmptyState({ title, description, action }: { title: string; description?: string; action?: ReactNode }) {

@@ -86,3 +86,19 @@ directory. Password-backed procedures use an operator-provided private
 Frozen archive source manifests and recovery recipes preserve historical
 evidence. Current builds, tests and commissioning use the BuriMunsi source,
 current release records, and separately controlled provider credentials.
+
+### Replay the historical release safeguards
+
+The repository retains 31 source files from the November 2026 R4 toolkit. Its
+integration tests also use both product overlays and the original verification
+tools. Use the full `Release_Evidence_Packaging_Safeguards_r4_Source.zip` from
+the engineering delivery archive to run them. On case-sensitive Linux with
+Python 3.11+ and OpenSSL 3+, run these commands from the archive directory.
+
+```sh
+archive=Release_Evidence_Packaging_Safeguards_r4_Source.zip
+printf '%s  %s\n' d6b2e0318510d4511c5356822564061d1482e44d9a3a2c42539348a08aab0553 "$archive" | sha256sum --check --status - &&
+  replay=$(mktemp -d) &&
+  unzip -q "$archive" 'source/*' -d "$replay" &&
+  python3 -B "$replay/source/run_checks.py" --output "$replay/evidence"
+```

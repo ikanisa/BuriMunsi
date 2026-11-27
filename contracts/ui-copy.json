@@ -2916,6 +2916,14 @@
       "en": "1 member"
     },
     {
+      "key": "ui_one_account",
+      "en": "1 account"
+    },
+    {
+      "key": "ui_one_member_registered",
+      "en": "1 member registered"
+    },
+    {
       "key": "ui_one_transaction",
       "en": "1 transaction"
     },
