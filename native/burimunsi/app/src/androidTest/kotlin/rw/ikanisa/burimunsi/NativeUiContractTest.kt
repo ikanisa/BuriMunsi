@@ -35,9 +35,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.test.platform.app.InstrumentationRegistry
+import android.app.Activity
+import android.app.Instrumentation
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.os.Build
+import android.os.PatternMatcher
 import android.view.Choreographer
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -1304,21 +1309,36 @@ class NativeUiContractTest {
         val c=FakeController(Route.SETTINGS);var calls=0
         var browserAvailable=true
         val opened=mutableListOf<String>()
+        lateinit var platform:UriHandler
         val external=object:UriHandler{
             override fun openUri(uri:String){
                 if(!browserAvailable)throw IllegalArgumentException("No browser")
                 opened+=uri
+                platform.openUri(uri)
             }
         }
-        ui.setContent{CompositionLocalProvider(LocalUriHandler provides external){
-            BuriContent(reduceMotion=true){BuriApp(c,onSupport={calls++},onPermissions={},onExport={},onPhoneSettings={})}
-        }}
+        ui.setContent{
+            platform=LocalUriHandler.current
+            CompositionLocalProvider(LocalUriHandler provides external){
+                BuriContent(reduceMotion=true){BuriApp(c,onSupport={calls++},onPermissions={},onExport={},onPhoneSettings={})}
+            }
+        }
         ui.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Help") and hasClickAction())
         ui.onNodeWithText("Help").performClick()
         ui.onNodeWithText("+250 788 767 816").assertIsDisplayed()
         val notice="https://burimunsi-admin.ikanisa.com/privacy"
-        panelButton("Help","Privacy notice").assertIsDisplayed().assertIsEnabled().performClick()
-        ui.runOnIdle{check(opened==listOf(notice));browserAvailable=false}
+        val instrumentation=InstrumentationRegistry.getInstrumentation()
+        val filter=IntentFilter(Intent.ACTION_VIEW).apply{
+            addDataScheme("https")
+            addDataAuthority("burimunsi-admin.ikanisa.com",null)
+            addDataPath("/privacy",PatternMatcher.PATTERN_LITERAL)
+        }
+        val monitor=instrumentation.addMonitor(filter,Instrumentation.ActivityResult(Activity.RESULT_CANCELED,null),true)
+        try{
+            panelButton("Help","Privacy notice").assertIsDisplayed().assertIsEnabled().performClick()
+            ui.runOnIdle{check(opened==listOf(notice)&&monitor.hits==1){"Expected one Android privacy intent, received $opened (${monitor.hits} matches)"}}
+        }finally{instrumentation.removeMonitor(monitor)}
+        ui.runOnIdle{browserAvailable=false}
         panelButton("Help","Privacy notice").performClick()
         ui.onNodeWithText(notice).assertIsDisplayed()
         ui.runOnIdle{check(opened==listOf(notice)&&calls==0)}

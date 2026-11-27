@@ -19,6 +19,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.*
@@ -36,6 +37,7 @@ import rw.ikanisa.burimunsi.core.Role
     onPickMemberFile:()->Unit,onPreviewMemberFile:(requestId:String)->Unit,onTakeMemberPhoto:()->Unit,onPickMemberPhoto:()->Unit,onExport:()->Unit){
     val t=LocalUiText.current
     val sheet=s.sheet?:return
+    val external=LocalUriHandler.current
     val payerPicker=sheet==Sheet.ENROLL && s.onboarding.step==SmartOnboardingStep.SUGGESTIONS
     val title=when(sheet){Sheet.PROFILE->t("Profile");Sheet.PIN->t("Change passcode");Sheet.HELP->t("Help");Sheet.ALLOCATE->t("Allocate");Sheet.ENROLL->t(if(payerPicker) "Add from MoMo" else "Add member");Sheet.STAFF->t("Staff access");Sheet.STAFF_EDIT->if(s.selectedStaff==null)t("Add staff")else t("Edit staff");Sheet.REMOVE_STAFF->t("Remove access?");Sheet.GATEWAY->t("Gateway");Sheet.REPLACE_DEVICE->t("Replace receiver");Sheet.RAW->s.raw?.sender?.takeIf{it.isNotBlank()}?:t("SMS receipt");Sheet.MEMBER_DETAILS->t("Member details");Sheet.AUDIT->t("Activity log");Sheet.FILTERS->t("Filters")}
     key(sheet,s.sheetId){
@@ -79,7 +81,7 @@ import rw.ikanisa.burimunsi.core.Role
                         item{FactGroup(listOf(t("Name") to s.operator?.name.orEmpty(),t("Phone number") to s.operator?.phone.orEmpty()),BuriTheme.Group,compactValueLabels=setOf(t("Name")))}
                     }
                     Sheet.PIN->PinPanel(s.busy,s.pending,m::changePin)
-                    Sheet.HELP->HelpPanel(!s.busy,onSupport)
+                    Sheet.HELP->HelpPanel(!s.busy,onSupport,external)
                     Sheet.ALLOCATE->AllocatePanel(s,m)
                     Sheet.ENROLL->SmartEnrollPanel(s,m,onPickMemberFile,onPreviewMemberFile,onTakeMemberPhoto,onPickMemberPhoto)
                     Sheet.STAFF->Panel{
@@ -134,9 +136,8 @@ import rw.ikanisa.burimunsi.core.Role
 
 }
 
-@Composable private fun HelpPanel(enabled:Boolean,onSupport:()->Unit){
+@Composable private fun HelpPanel(enabled:Boolean,onSupport:()->Unit,external:UriHandler){
     val t=LocalUiText.current
-    val external=LocalUriHandler.current
     var showAddress by remember{mutableStateOf(false)}
     Panel(footer={Primary(t("WhatsApp"),onSupport,enabled)}){
         item{Text(BuriMunsiSupport.phone,fontSize=26.sp,lineHeight=34.sp)}
