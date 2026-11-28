@@ -19,6 +19,7 @@ const groups = {
     'scripts/supabase/storage-inventory-verify/readback.test.mjs',
   ],
   'owned-pg': [
+    'scripts/qa/fresh_receipt_witness.test.mjs',
     'scripts/supabase/current-pg-transfer/recovery-rehearsal/prepare-service-data.test.mjs',
     'scripts/supabase/cloud-release/burimunsi-automatic-receipt-e2e.test.mjs',
     'scripts/supabase/cloud-release/burimunsi-event-driven-jobs.test.mjs',
