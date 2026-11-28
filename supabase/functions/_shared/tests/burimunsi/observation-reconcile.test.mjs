@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import {createNativeHandler} from '../../domain/burimunsi/http.js';
 import {BuriError} from '../../domain/burimunsi/errors.js';
 import {bindNativeResponse,validateNativeRequest} from '../../domain/burimunsi/wire/native-contract.mjs';
+import {fenceFailure} from '../../application-fence.js';
+import {caughtReconcileFence} from '../../domain/burimunsi/reconcile-fence-health.js';
+import {PostgresObservationReconciliation} from '../../domain/burimunsi/postgres-observation-reconciliation.js';
 
 const actor='11111111-1111-4111-8111-111111111111',install='22222222-2222-4222-8222-222222222222',source='33333333-3333-5333-8333-333333333333';
 const input={sourceKey:'a'.repeat(64),bodySha256:'b'.repeat(64),rawSender:'Example Money',serviceCentreAt:null,
@@ -97,12 +100,23 @@ test('batch HTTP preserves item and authority errors for Android',async(t)=>{
  const handler=createNativeHandler({auth:{login:noop,authenticate:async()=>({id:actor,groupId:'group-1'}),logout:noop,changePasscode:noop,manageStaff:noop},
   records:{home:noop,page:noop,detail:noop,exportLedger:noop,commandStatus:noop},contributions:{allocate:noop},members:{enroll:noop,setActive:noop},gateway:{status:noop,replace:noop},
   observations:{reconcileBatch:async()=>{throw failure;}},origin:'https://example.invalid',groupId:'group-1',strictContract:true,networkBucket:noop});
- for(const [code,status] of [['observation_item_conflict',409],['observation_item_unavailable',503],['access_denied',403],['observation_unavailable',503]]){
-  failure=new BuriError(code,status);
+ const firstRead=new PostgresObservationReconciliation({authority:{groupId:'group-1',read:async()=>{throw fenceFailure(null);}}});
+ const publicFailure=await firstRead.reconcileBatch({id:actor},{items:[input]}).catch(error=>error);
+ assert.equal(publicFailure.code,'observation_unavailable');
+ const cases=[
+  ...[['observation_item_conflict',409],['observation_item_unavailable',503],['access_denied',403],['observation_unavailable',503]]
+    .map(([code,status])=>[new BuriError(code,status),code,status,false]),
+  [fenceFailure(null),'service_unavailable',503,true],
+  [publicFailure,'observation_unavailable',503,true],
+ ];
+ for(const [exception,code,status,fenced] of cases){
+  failure=exception;
   const response=await handler(new Request('https://example.invalid/v1/burimunsi/sms/observations/reconcile-batch',{method:'POST',headers:{
    'x-burimunsi-installation':install,'x-burimunsi-contract':'burimunsi.native.v1','x-burimunsi-request':actor,
    'x-burimunsi-generation':'1',authorization:'Bearer '+'a'.repeat(64),'content-type':'application/json'},body:JSON.stringify({items:[input]})}));
   assert.equal(response.status,status);assert.equal((await response.json()).error.code,code);
+  assert.deepEqual(caughtReconcileFence(response),fenced?
+    {stage:'native_handler',cause:'application_fence_unavailable'}:undefined);
  }
  const events=warnings.mock.calls.map(call=>JSON.parse(call.arguments[0]));
  assert.equal(events.length,2);

@@ -13,6 +13,7 @@ import {BuriError,requireThat} from './errors.js';
 import {requireId} from './values.js';
 import {CONTRACT_VERSION,ContractViolation,heldObservationOperation} from './wire/native-contract.mjs';
 import {discardNativeBody,requireActiveNativeRequest,nativeRequestErrorStatus} from './wire/request-boundary.mjs';
+import {markReconcileFenceResponse} from './reconcile-fence-health.js';
 
 const compositions=new WeakSet();
 const HEADERS={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store',
@@ -127,6 +128,6 @@ export async function collectNativeRoute(request,env){
     const handler=env?.BURIMUNSI_NATIVE_ROUTE;
     requireThat(compositions.has(handler),'native_service_unconfigured',503);
     return await handler(request,env);
-  }catch(error){return failure(error);}
+  }catch(error){return markReconcileFenceResponse(request,failure(error),error,'native_authority');}
   finally{discardNativeBody(request);}
 }

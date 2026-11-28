@@ -1,6 +1,7 @@
 import { verifyRetainedObject } from '../../storage-identity.js';
 import { digest } from '../core.js';
 import { BuriError } from './errors.js';
+import { mappedReconcileFence } from './reconcile-fence-health.js';
 import {
   decodeObservationPayload,
   decodeObservationRecord as row,
@@ -261,7 +262,7 @@ export class PostgresObservationReconcileEvidence {
     } catch (error) {
       const failure = mapped(error);
       if (failure.status === 403 || failure.status === 409) throw failure;
-      throw new BuriError('observation_item_unavailable', 503);
+      throw mappedReconcileFence(error, new BuriError('observation_item_unavailable', 503));
     } finally {
       if (binding && release) this.releaseWitness(binding);
     }

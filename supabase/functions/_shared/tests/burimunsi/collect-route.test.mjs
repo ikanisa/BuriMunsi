@@ -5,7 +5,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {collectNativeRoute,createCollectNativeRoute} from '../../domain/burimunsi/collect-route.js';
-import {applicationWorkTuple,openApplicationWork} from '../../application-fence.js';
+import {applicationWorkTuple,fenceFailure,openApplicationWork} from '../../application-fence.js';
+import {reconcileFenceObservation} from '../../domain/burimunsi/reconcile-fence-health.js';
+import {createPlatformHealthReporter} from '../../domain/observability.js';
 import {canonicalProfile} from '../../deployment-profile.js';
 import {CONTRACT_VERSION} from '../../domain/burimunsi/wire/native-contract.mjs';
 import {sha256} from '../../domain/burimunsi/values.js';
@@ -119,6 +121,36 @@ test('existing Collect dispatcher mounts native namespace before ordinary member
   const response=await collectWorker.fetch(new Request(PROFILE.supabase_origin+'/v1/burimunsi/home'),env,{});
   assert.equal(response.status,503);assert.equal((await response.json()).error.code,'native_service_unconfigured');
   assert.equal(touched,0);
+});
+test('the native authority catch and Collect dispatcher report a single admitted reconcile fence failure',async t=>{
+  const f=await fixture();
+  const ordinaryErrors=t.mock.method(console,'error',()=>{});
+  try{
+    let bridgeCalls=0;
+    f.options.bridgeFactory=async()=>{bridgeCalls++;throw fenceFailure(null);};
+    f.mount();
+    const original=f.request('/sms/observations/reconcile-batch');
+    const request=new Request(original,{method:'POST',body:'{}'});
+    const events=[];
+    const report=createPlatformHealthReporter({emit:(_level,text)=>events.push(JSON.parse(text))});
+    let observed;
+    const response=await collectWorker.fetch(request,f.env,{reportReconcileFence:({stage,cause})=>{observed=report({
+      component:'platform',status:503,elapsedMs:1,requestId:null,sourceId:SOURCE,
+      reconcileFence:reconcileFenceObservation(request,f.work,cause,stage),
+    });}});
+    assert.equal(response.status,503);
+    assert.deepEqual(await response.json(),{contractVersion:CONTRACT_VERSION,ok:false,error:{code:'application_fence_unavailable'}});
+    await observed;
+    assert.equal(events.length,1);
+    assert.equal(ordinaryErrors.mock.callCount(),0);
+    assert.equal(bridgeCalls,1);
+    assert.equal(f.state.writes,0);
+    assert.equal(events[0].stage,'native_authority');
+    assert.equal(events[0].cause,'application_fence_unavailable');
+    assert.equal(events[0].admission_sha256,await sha256(I.request));
+    assert.equal(events[0].epoch,1);
+    assert.equal(events[0].request_sha256,await sha256(I.request));
+  }finally{await f.close();}
 });
 test('namespace hook leaves existing routes and the held ingest route untouched',async()=>{
   for(const path of ['/health','/api/admin/session','/v1/gateway/sms','/v1/burimunsix/home'])

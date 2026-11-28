@@ -1,5 +1,6 @@
 // Fixed application-health fields only. Requests, errors, credentials, bodies,
 // query strings and actor/provider identities never enter this boundary.
+import {reconcileFenceFields} from './burimunsi/reconcile-fence-health.js';
 const components=new Set(['platform','health','auth','privacy','challenge','admin',
  'reconciliation','native_integrity','operations','receipt','evidence','sync',
  'notifications','public_collections']);
@@ -54,11 +55,17 @@ export function createPlatformHealthReporter({emit=(level,text)=>console[level](
     if(component==='operations'&&hasDispatch&&typeof dispatchId==='string'&&DISPATCH_UUID.test(dispatchId))dispatchCorrelation=dispatchId.toLowerCase();
     elapsedMs=Number.isFinite(elapsedMs)?Math.min(3600000,Math.max(0,Math.round(elapsedMs))):0;
    }
-   emit(level,JSON.stringify({service:'collect_platform_api',schema_version:1,event,
+   const fields={service:'collect_platform_api',schema_version:1,event,
     component,status,request_id:requestId,source_id:source,elapsed_ms:elapsedMs,
     ...(component==='operations'&&hasDispatch?{dispatch_id:dispatchCorrelation}:{}),
     ...(diagnostic?{stage:diagnostic.stage,reason:diagnostic.reason,configured:diagnostic.configured,
-     ...(diagnostic.database_profile?{database_profile:diagnostic.database_profile}:{})}:{})}));
+     ...(diagnostic.database_profile?{database_profile:diagnostic.database_profile}:{})}:{})};
+   if(event==='service_degraded'&&status===503&&component==='platform'&&value.reconcileFence){
+    return reconcileFenceFields(value.reconcileFence).catch(()=>({})).then(detail=>{
+     try{emit(level,JSON.stringify({...fields,...detail}));return true;}catch{return false;}
+    });
+   }
+   emit(level,JSON.stringify(fields));
    return true;
   }catch{return false;}
  };

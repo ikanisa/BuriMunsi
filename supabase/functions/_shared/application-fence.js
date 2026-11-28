@@ -9,6 +9,20 @@ const reservedDispatches=new WeakMap();
 // Keep the original registration COMMIT acknowledgement available after the
 // bounded caller observation times out. This is not a second registration.
 const registrationCompletions=new WeakMap();
+// A failed open can still have an acknowledged registration. Keep this on
+// the original error, outside its public response and the work lifecycle.
+const openingFailures=new WeakMap();
+export function fenceOpeningObservation(error) {
+  return openingFailures.get(error);
+}
+function openingFailure(error, row) {
+  const failure = fenceFailure(error);
+  const observation = row
+    ? {stage: 'registered_before_work', id: row.admissionId, epoch: row.epoch}
+    : {stage: 'registration_unconfirmed'};
+  openingFailures.set(failure, observation);
+  return failure;
+}
 const unavailable=()=>new ApiError(503,'application_fence_unavailable','The service is temporarily unavailable. Keep the original request pending.');
 const closed=()=>new ApiError(503,'application_fenced','The service is temporarily paused. Keep the original request pending.');
 const need=(value)=>{if(!value)throw unavailable();};
@@ -181,9 +195,9 @@ export async function openApplicationWork({backend,sourceSha256,kind,id=crypto.r
  catch(error){
   const original=observation&&registrationCompletions.get(observation);
   if(original)retainLateRegistration(backend,original,id,sourceSha256,kind);
-  throw fenceFailure(error); // Unknown registration outcomes stay with their original observation.
+  throw openingFailure(error); // Unknown registration outcomes stay with their original observation.
  }
- if(signal?.aborted){try{await closeBeforeWork(backend,row,id,sourceSha256);}catch{}throw unavailable();}
+ if(signal?.aborted){try{await closeBeforeWork(backend,row,id,sourceSha256);}catch{}throw openingFailure(null,row);}
  try{const pending=Promise.resolve().then(()=>backend.lease(id,row.epoch,sourceSha256));
   try{lease=await bounded(pending);}catch(error){void pending.then(late=>late?.release().catch(()=>{}),()=>{});throw error;}
   const proof=active(lease.row,id,sourceSha256,row.epoch);if(proof.mode!=='open')throw closed();if(signal?.aborted)throw unavailable();}
@@ -191,7 +205,7 @@ export async function openApplicationWork({backend,sourceSha256,kind,id=crypto.r
   // No handler/provider/business work has begun. This exact registration can
   // close as cancelled even if owner begin_quiesce won the race after register.
   try{await closeBeforeWork(backend,row,id,sourceSha256);}catch{}
-  await lease?.release().catch(()=>{});throw fenceFailure(error);
+  await lease?.release().catch(()=>{});throw openingFailure(error,row);
  }
  const work=new ApplicationWork(backend,lease,id,row.epoch,sourceSha256,kind);contexts.add(work);return work;
 }

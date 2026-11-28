@@ -6,6 +6,7 @@ import {exactKeys,requireId,requireRequestId,sha256} from './values.js';
 import {LISTING_QUERY_KEYS} from './listing-query.js';
 import {previewOnboardingFile} from './smart-onboarding-request.js';
 import {reconciliationDiagnostic} from './reconciliation-diagnostic.js';
+import {caughtReconcileFence,markReconcileFenceResponse} from './reconcile-fence-health.js';
 
 const recordSnapshotReads = new Set(['home','homeSavings','homeWallet','payments','members','ledger','payment','member','history','staff','audit','onboardingSuggestions']);
 
@@ -247,19 +248,22 @@ export function createNativeHandler({auth,records,contributions,members,gateway,
       const known=error instanceof BuriError;const contract=error instanceof ContractViolation;
       const code=contract?error.code.toLowerCase():known?error.code:'service_unavailable';
       const status=contract?nativeRequestErrorStatus(error):known?error.status:503;
-      if(status===503&&wireRoute?.operation==='observationReconcileBatch'&&requestBody){
-        try{
-          const event=await reconciliationDiagnostic(wireBinding.requestId,requestBody,performance.now()-started,error);
-          console.warn(JSON.stringify(event));
-        }catch{ /* Diagnostic failure must preserve the original HTTP outcome. */ }
-      }
       // Only the verified observation-specific exception carries this proof.
       // It binds to this request without returning SMS content or a body hash.
       const proof=strictContract&&wireRoute?.operation==='observation'&&error instanceof ObservationUploadUnresolved&&
        requestBody?.requestId===error.requestId&&wireBinding?.requestId?
        {'X-BuriMunsi-Observation-Unresolved':'v1','X-BuriMunsi-Observation-Request-Id':error.requestId,
         'X-BuriMunsi-Correlation-Id':wireBinding.requestId}:{};
-      return new Response(JSON.stringify({...(strictContract?{contractVersion:CONTRACT_VERSION}:{}),ok:false,error:{code}}),{status,headers:{...headers,...proof}});
+      const response=new Response(JSON.stringify({...(strictContract?{contractVersion:CONTRACT_VERSION}:{}),ok:false,error:{code}}),
+        {status,headers:{...headers,...proof}});
+      markReconcileFenceResponse(req,response,error,'native_handler');
+      if(status===503&&wireRoute?.operation==='observationReconcileBatch'&&requestBody&&!caughtReconcileFence(response)){
+        try{
+          const event=await reconciliationDiagnostic(wireBinding.requestId,requestBody,performance.now()-started,error);
+          console.warn(JSON.stringify(event));
+        }catch{ /* Diagnostic failure must preserve the original HTTP outcome. */ }
+      }
+      return response;
     }finally{discardNativeBody(req);}
   };
 }

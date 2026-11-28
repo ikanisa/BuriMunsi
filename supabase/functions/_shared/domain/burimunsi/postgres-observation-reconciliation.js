@@ -1,4 +1,5 @@
 import { BuriError } from './errors.js';
+import { mappedReconcileFence } from './reconcile-fence-health.js';
 import { exactKeys, requireRequestId } from './values.js';
 import { readLatestRetainedObservationId } from './postgres-observation-listing.js';
 import { PostgresObservationReconcileEvidence } from './postgres-observation-reconcile-evidence.js';
@@ -212,10 +213,10 @@ export class PostgresObservationReconciliation {
           if (initial) check(same(current.ctx, initial.ctx), 'observation_changed', 409);
           await this.authority.assertOwned();
         } catch (recheckError) {
-          throw mapped(recheckError);
+          throw mappedReconcileFence(recheckError, mapped(recheckError));
         }
       }
-      throw mapped(error);
+      throw mappedReconcileFence(error, mapped(error));
     } finally {
       for (const proof of legacy.values()) if (proof.binding) this.#evidence.releaseWitness(proof.binding);
     }

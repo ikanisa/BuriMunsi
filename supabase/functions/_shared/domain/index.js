@@ -17,6 +17,7 @@ import { recordPlatformHealth, platformHealthComponent } from './observability.j
 import { momoGatewayRoute } from './momo_gateway.js';
 import { clientDiagnosticsRoute } from './client_diagnostics.js';
 import { collectNativeRoute } from './burimunsi/collect-route.js';
+import { caughtReconcileFence } from './burimunsi/reconcile-fence-health.js';
 
 const publicOperations = new Set(publicRpcNames);
 const rosterUploads = new Set([
@@ -138,7 +139,14 @@ export default {
         ...(id ? { unexpected } : {}),
       });
     }
-    function observe(response) {
+    function observe(response, original = response) {
+      if (response.status === 503 && ctx?.reportReconcileFence) {
+        const failure = caughtReconcileFence(original);
+        if (failure) {
+          ctx.reportReconcileFence(failure);
+          return response;
+        }
+      }
       if (response.status === 429 || response.status >= 500) recordOutcome(response.status, null);
       return response;
     }
@@ -152,7 +160,7 @@ export default {
 
       const rpcName = request.method === 'POST' ? /^\/v1\/rpc\/([a-z][a-z0-9_]{0,100})$/.exec(url.pathname)?.[1] : undefined;
       const response = await publicRoute(request, env, url, rpcName) ?? await memberRoute(request, env, url, rpcName);
-      return observe(withHeaders(response, headers));
+      return observe(withHeaders(response, headers), response);
     } catch (error) {
       const known = error instanceof ApiError;
       const status = known ? error.status : 500;

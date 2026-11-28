@@ -10,6 +10,7 @@ import {browserCors, edgeHttpResponse, logicalRequest, mergeCollectOrigins} from
 import {gatewayUploadHeld, isGatewayIngest, nativeGatewayUploadsEnabled} from './gateway-upload-hold.js';
 import {createCollectNativeRuntime} from './domain/burimunsi/collect-runtime.js';
 import {isCollectNativeRoute, unavailableHeldObservation} from './domain/burimunsi/collect-route.js';
+import {isReconcileBatch, reconcileFenceObservation} from './domain/burimunsi/reconcile-fence-health.js';
 import {isPhonePinRecordRead} from './domain/burimunsi/wire/native-http.mjs';
 import {json} from './domain/core.js';
 import worker from './domain/index.js';
@@ -44,6 +45,23 @@ export function createHandler(functionName, envReader = () => Deno.env.toObject(
     const runtime = new EdgeRuntimeWork();
     let env;
     let cors = {};
+    let reconcileRequest;
+    function reportReconcileFence({cause, stage = undefined}, error = undefined) {
+      try {
+        const result = reportHealth({
+          status: 503, component: 'platform', requestId: null, sourceId: env?.BUILD_SOURCE_ID,
+          elapsedMs: performance.now() - started,
+          reconcileFence: reconcileFenceObservation(reconcileRequest, runtime.work, cause,
+            stage ?? (runtime.stage === 'dispatch' ? 'admitted_dispatch' : undefined), error),
+        });
+        if (result && typeof result.then === 'function') {
+          // Let the isolate finish the log independently of the client and the
+          // application lease. runtime.waitUntil() would retain business work.
+          const done = Promise.resolve(result).catch(() => {});
+          if (typeof EdgeRuntime !== 'undefined') EdgeRuntime.waitUntil(done);
+        }
+      } catch { /* Observability must preserve the original response and admission outcome. */ }
+    }
     try {
       env = configurePublicRuntimeEnv(envReader());
       await verifyDeploymentProfile(env);
@@ -80,6 +98,7 @@ export function createHandler(functionName, envReader = () => Deno.env.toObject(
       let pendingNativeIngress;
       if (isCollectNativeRoute(logical)) {
         if (!collect) return json({code: 'not_found'}, 404, cors);
+        if (isReconcileBatch(logical.method, path)) reconcileRequest = logical;
         const unavailable = unavailableHeldObservation(logical, env);
         if (unavailable) return unavailable;
 
@@ -131,7 +150,8 @@ export function createHandler(functionName, envReader = () => Deno.env.toObject(
       runtime.stage = 'dispatch';
       assertNotCancelled(request.signal);
       const routeEnv = approvedBrowserOrigin ? {...env, ALLOWED_ORIGINS: approvedBrowserOrigin} : env;
-      const response = await worker.fetch(logical, routeEnv, {waitUntil: promise => runtime.waitUntil(promise)});
+      const response = await worker.fetch(logical, routeEnv, {waitUntil: promise => runtime.waitUntil(promise),
+        ...(reconcileRequest ? {reportReconcileFence} : {})});
       const output = await edgeHttpResponse(response, logical, {functionName, path, admin, cors});
       if (nativeSnapshotRead && output.ok) {
         const finished = performance.now();
@@ -146,7 +166,8 @@ export function createHandler(functionName, envReader = () => Deno.env.toObject(
         elapsedMs: performance.now() - started,
       };
       if (isFenceFailure(error)) {
-        observeFailure(reportHealth, {...health, requestId: null});
+        if (reconcileRequest) reportReconcileFence({cause: error.code}, error);
+        else observeFailure(reportHealth, {...health, requestId: null});
         return json({code: error.code, message: error.message}, 503, cors);
       }
       const requestId = crypto.randomUUID();
