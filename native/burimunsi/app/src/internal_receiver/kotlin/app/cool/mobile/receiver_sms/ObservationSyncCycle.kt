@@ -274,7 +274,7 @@ internal object ObservationSyncCycle {
                     if(!audited){
                         if(stopped())return continueAfterBudget(recovery,scope,advanced)
                         diagnostic.phase(Phase.AUDIT_REMOTE)
-                        when(recovery.auditPage(repo,stopped,budgetExpired)){
+                        when(recovery.auditPage(repo,stopped,budgetExpired,diagnostic::terminalAuditPending)){
                             ObservationRecovery.Audit.COMPLETE->audited=true
                             ObservationRecovery.Audit.MORE->advanced=true
                             ObservationRecovery.Audit.YIELD->return continueAfterBudget(recovery,scope,advanced)

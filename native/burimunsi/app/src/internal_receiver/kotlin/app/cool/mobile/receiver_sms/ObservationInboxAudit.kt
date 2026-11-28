@@ -47,6 +47,7 @@ internal class ObservationInboxAudit(
         val sourceIds:Set<String> = emptySet(),val phoneComplete:Boolean=false,
         val runId:String,val incompleteResult:Audit?=null,val handledRepairs:Set<String> = emptySet(),val pageSize:Int=OBSERVATION_RECONCILE_MAX_ITEMS,val repairTail:Boolean=false,val candidates:Int=0,val missing:Int=0,val pending:Int=0,
         val phoneHead:Head?=null,val parsedHead:Head?=null,val queuedRepair:Boolean=false,val parserPending:Boolean=false,
+        val pendingReasons:ObservationSyncDiagnostics.AuditPending=ObservationSyncDiagnostics.AuditPending(),
         val awaiting:Pair<List<ObservationReconcileRequest>,List<ObservationReconcileReply?>>?=null)
     private data class Head(val received:Long,val rowId:Long,val key:String) {
         override fun toString()="Head(redacted)"
@@ -128,7 +129,8 @@ internal class ObservationInboxAudit(
 
     /** Verify a bounded page, enqueue positively identified gaps, and certify only a full
      * stable sweep. The encrypted repair cursor is independent of any successful proof. */
-    fun auditPage(repo:NativeRepository,stopped:()->Boolean={false},budgetExpired:()->Boolean={false}):Audit = synchronized(lock){
+    fun auditPage(repo:NativeRepository,stopped:()->Boolean={false},budgetExpired:()->Boolean={false},
+        terminalPending:(ObservationSyncDiagnostics.AuditPending)->Unit={}):Audit = synchronized(lock){
         // Budget expiry carries acknowledged steps into the next cycle, which
         // revalidates the complete scope before it resumes. Cancellation clears them.
         fun interrupted():Audit {
@@ -157,6 +159,8 @@ internal class ObservationInboxAudit(
             report(page.check("incomplete"))
             if(!sameAuthority()){resetAudit();return Audit.BLOCKED}
             auditProgress=null
+            // Only the acknowledged terminal snapshot under the same authority is diagnostic evidence.
+            terminalPending(page.pendingReasons)
             return result
         }
         val previous=auditProgress?.takeIf{current(it.scope,it.startedAt)}
@@ -227,7 +231,7 @@ internal class ObservationInboxAudit(
         var uncertain=progress.unconfirmed
         var candidates=progress.candidates
         var missing=progress.missing
-        var pending=progress.pending
+        var reasons=progress.pendingReasons
         var phoneHead=progress.phoneHead
         var parsedHead=progress.parsedHead
         var queuedRepair=progress.queuedRepair
@@ -241,7 +245,7 @@ internal class ObservationInboxAudit(
             // Leave a local uncertainty result, not a reconciliation fingerprint,
             // even when other verified receipt rows share this transport page.
             if(!ObservedReceiptEvidence.isNewCandidate(row.sender,row.body,authority.profile.receipt)){
-                uncertain=true;pending++;candidates++;continue
+                uncertain=true;reasons=reasons.copy(unfamiliar=reasons.unfamiliar+1);candidates++;continue
             }
             val decision=ObservationLegacyOwnership.classify(app,owner,row.id,row.received,row.sender,row.body,row.sub)
             if(decision==ObservationLegacyOwnership.Decision.OTHER_SIM)continue
@@ -250,11 +254,13 @@ internal class ObservationInboxAudit(
             phoneHead=newest(phoneHead,Head(row.received,row.id,key))
             decisions[row.id]=decision
             if(decision==ObservationLegacyOwnership.Decision.HOLD){
-                uncertain=true;pending++;continue
+                uncertain=true;reasons=reasons.copy(custody=reasons.custody+1);continue
             }
             val gateway=if(decision==ObservationLegacyOwnership.Decision.OWNED)
                 ObservationLegacyOwnership.gatewayEnvelopeId(app,owner,row.id,row.received,row.sender,row.body,row.sent,row.sub) else null
-            if(decision==ObservationLegacyOwnership.Decision.OWNED&&gateway==null){uncertain=true;pending++;continue}
+            if(decision==ObservationLegacyOwnership.Decision.OWNED&&gateway==null){
+                uncertain=true;reasons=reasons.copy(custody=reasons.custody+1);continue
+            }
             candidatesByKey[key]=row
             requests.add(ObservationReconcileRequest(key,Values.sha256(row.body),row.sender,
                 row.sent?.let{Instant.ofEpochMilli(it).toString()},Instant.ofEpochMilli(row.received).toString(),row.sub,gateway))
@@ -346,7 +352,7 @@ internal class ObservationInboxAudit(
         for((index,reply) in states.withIndex()){
             val key=requests[index].sourceKey
             val row=candidatesByKey.getValue(key)
-            if(reply==null){uncertain=true;pending++;continue}
+            if(reply==null){uncertain=true;reasons=reasons.copy(unavailable=reasons.unavailable+1);continue}
             if(reply.state=="missing"){
                 uncertain=true;missing++
                 if(key in handledRepairs)continue
@@ -381,17 +387,19 @@ internal class ObservationInboxAudit(
                 continue
             }
             val source=reply.sourceId
-            if(source==null||!sourceIds.add(source)){uncertain=true;pending++;continue}
+            if(source==null||!sourceIds.add(source)){
+                uncertain=true;reasons=reasons.copy(repeatedSource=reasons.repeatedSource+1);continue
+            }
             if(sourceIds.size>100_000){auditProgress=null;return@synchronized Audit.UNCONFIRMED}
             val parser=reply.processingStatus ?: outcomes[SmsSourceRef.Observation(source)]?.status
             if(parser in setOf("pending","retrying"))parserPending=true
             if(parser in setOf("parsed","duplicate")){
                 parsedHead=newest(parsedHead,Head(row.received,row.id,key))
-            }else {uncertain=true;pending++}
+            }else {uncertain=true;reasons=reasons.copy(nonfinal=reasons.nonfinal+1)}
         }
         if(try{auditAuthority(localStop)?.scope!=scope}catch(_:Exception){true})return@synchronized interrupted()
         val page=progress.copy(last=rows.lastOrNull()?.id?:progress.last,unconfirmed=uncertain,sourceIds=sourceIds,
-            awaiting=null,handledRepairs=emptySet(),parserPending=parserPending,candidates=candidates,missing=missing,pending=pending,phoneHead=phoneHead,parsedHead=parsedHead,queuedRepair=queuedRepair)
+            awaiting=null,handledRepairs=emptySet(),parserPending=parserPending,candidates=candidates,missing=missing,pending=reasons.total,pendingReasons=reasons,phoneHead=phoneHead,parsedHead=parsedHead,queuedRepair=queuedRepair)
         savePosition(scope,if(rows.size<progress.pageSize)0 else page.last,progress.repairTail && rows.size==progress.pageSize)
         if(rows.size<progress.pageSize && (progress.repairTail || uncertain)){
             val outcome=when {

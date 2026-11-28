@@ -1091,9 +1091,16 @@ fun main(args:Array<String>) {
    check(!cycle().completed)
    val report=e.repository.reports.last()
    check(report.state=="incomplete"&&report.pendingCount==1&&report.phoneLatestKey==report.parsedLatestKey)
+   val diagnostics=ObservationSyncDiagnostics.snapshot()!!
+   check(diagnostics.auditPending==ObservationSyncDiagnostics.AuditPending(nonfinal=1))
+   val trace=java.io.StringWriter()
+   ObservationSyncDiagnostics.dump(java.io.PrintWriter(trace))
+   check(trace.toString().contains("audit_pending_nonfinal=1")&&!trace.toString().contains(older))
+   check(!trace.toString().contains(report.runId))
   }
   e.repository.parserStates[older]="duplicate"
   check(cycle().completed&&e.repository.requests.size==2)
+  check(ObservationSyncDiagnostics.snapshot()!!.auditPending==null)
  }
  test("an Admin phone accepts both actual active receiving SIMs and holds an unidentified subscription") {
   val e=setup();e.context.contentResolver.rows=listOf(row(31));ObservationRecovery(e.context).scan()
@@ -1104,6 +1111,7 @@ fun main(args:Array<String>) {
   e.context.contentResolver.rows=e.context.contentResolver.rows+listOf(row(33)+("sub_id" to null));ObservationInboxRevision.changed()
   cycle=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
   check(!cycle.completed&&e.repository.requests.size==2&&e.repository.reports.last().pendingCount==1)
+  check(ObservationSyncDiagnostics.snapshot()!!.auditPending==ObservationSyncDiagnostics.AuditPending(custody=1))
  }
  test("receiving SIM holds survive restart without exposing a different Admin or reading the inbox from status") {
   val e=setup()
@@ -1725,6 +1733,11 @@ fun main(args:Array<String>) {
    e.context.contentResolver.rows=listOf(row(1297,unknown)+("date" to received),row(1298))
    val result=ObservationSyncCycle.run(e.context,true,restore={e.repository},stopped={false})
    check(!result.completed&&e.repository.requests.size==1&&e.repository.requests.single().rawBody==body)
+   check(ObservationSyncDiagnostics.snapshot()!!.auditPending==ObservationSyncDiagnostics.AuditPending(unfamiliar=1))
+   val trace=java.io.StringWriter()
+   ObservationSyncDiagnostics.dump(java.io.PrintWriter(trace))
+   check(trace.toString().contains("audit_pending_unfamiliar=1"))
+   check(!trace.toString().contains(unknown)&&!trace.toString().contains(Values.sha256(unknown)))
    check(e.repository.reconciliationBatches.flatten().any{it.sourceKey==cloudKey(adminA,1298)})
    check(e.repository.reconciliationBatches.flatten().none{
       it.sourceKey==cloudKey(adminA,1297,received)||it.bodySha256==Values.sha256(unknown)

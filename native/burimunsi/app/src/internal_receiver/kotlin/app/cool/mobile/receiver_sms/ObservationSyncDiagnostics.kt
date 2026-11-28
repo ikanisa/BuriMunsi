@@ -38,6 +38,13 @@ internal object ObservationSyncDiagnostics {
         EXECUTION_FAILED, DISPATCH_REJECTED, STOPPED, DESTROYED }
     enum class NotificationState { STARTING, ACTIVE, WAITING, UNCONFIRMED }
 
+    /** Coarse pending-census partitions. No locators or content-derived values. */
+    data class AuditPending(val unfamiliar:Int=0,val custody:Int=0,val unavailable:Int=0,
+        val repeatedSource:Int=0,val nonfinal:Int=0) {
+        val total get()=unfamiliar+custody+unavailable+repeatedSource+nonfinal
+        fun bounded()=AuditPending(count(unfamiliar),count(custody),count(unavailable),count(repeatedSource),count(nonfinal))
+    }
+
     data class Snapshot(
         val phase:Phase=Phase.IDLE,
         val coordinator:Outcome=Outcome.NOT_RUN,
@@ -59,6 +66,7 @@ internal object ObservationSyncDiagnostics {
         val unresolved:Int=0,
         val more:Boolean=false,
         val elapsedMs:Long=0,
+        val auditPending:AuditPending?=null,
     )
     private data class Totals(val started:Int=0,val completed:Int=0,val unconfirmed:Int=0,val busy:Int=0)
     private data class ServiceState(val phase:ServicePhase=ServicePhase.NOT_ATTACHED,val problem:Problem=Problem.NONE,
@@ -122,6 +130,9 @@ internal object ObservationSyncDiagnostics {
         fun attempted(){state.updateAndGet{it.copy(attempts=count(it.attempts+1))}}
         fun acknowledged(){state.updateAndGet{it.copy(acknowledged=count(it.acknowledged+1))}}
         fun unresolved(){state.updateAndGet{it.copy(unresolved=count(it.unresolved+1))}}
+        fun terminalAuditPending(value:AuditPending){state.updateAndGet{
+            if(it.outcome!=Outcome.RUNNING)it else it.copy(auditPending=value.bounded())
+        }}
         fun finish(result:ObservationCycleResult){
             while(true){
                 val before=state.get()
@@ -145,5 +156,10 @@ internal object ObservationSyncDiagnostics {
         writer.println("coordinator=${cycle.coordinator} coordinator_phase=${cycle.coordinatorPhase} fence=${cycle.fence} fence_phase=${cycle.fencePhase}")
         writer.println("stop=${cycle.stop} stop_phase=${cycle.stopPhase} error=${cycle.error} error_phase=${cycle.errorPhase} errors=${cycle.errors}")
         writer.println("queue_read=${cycle.queueRead} queued=${cycle.queued} attempts=${cycle.attempts} acknowledged=${cycle.acknowledged} unresolved=${cycle.unresolved} more=${cycle.more}")
+        cycle.auditPending?.let { p ->
+            writer.println("audit_pending_unfamiliar=${p.unfamiliar} audit_pending_custody=${p.custody}" +
+                " audit_pending_unavailable=${p.unavailable} audit_pending_repeated_source=${p.repeatedSource}" +
+                " audit_pending_nonfinal=${p.nonfinal}")
+        }
     }
 }

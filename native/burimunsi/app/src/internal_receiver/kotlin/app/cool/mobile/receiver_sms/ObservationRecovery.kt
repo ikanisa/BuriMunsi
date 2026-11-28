@@ -257,7 +257,8 @@ internal class ObservationRecovery(context:Context) {
         repo: NativeRepository,
         stopped: () -> Boolean = { false },
         budgetExpired: () -> Boolean = { false },
-    ): Audit = audit.auditPage(repo, stopped, budgetExpired)
+        terminalPending: (ObservationSyncDiagnostics.AuditPending) -> Unit = {},
+    ): Audit = audit.auditPage(repo, stopped, budgetExpired, terminalPending)
 
     /**
      * The phone's latest provider SMS is ordered by received time, then inbox
