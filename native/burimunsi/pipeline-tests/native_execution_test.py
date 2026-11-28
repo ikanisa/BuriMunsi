@@ -25,6 +25,8 @@ import hashlib
 
 # Fixed rosters independently check discovery and the names reported by the runner.
 EXPECTED_STAFF_CASES = {
+    'rw.ikanisa.burimunsi.RolePackageTrustTest#releaseTrustIsBoundToTheExactPackageAndCertificateLineage',
+    'rw.ikanisa.burimunsi.RolePackageTrustTest#crossFlavorAndMissingPackagesNeverQualify',
     'rw.ikanisa.burimunsi.MemberEnrollmentInputTest#compactEditorValidatesIdentityAndKeepsTheNextFieldAttached',
     'rw.ikanisa.burimunsi.MemberEnrollmentInputTest#backingOutOfAnEditedMemberFormOffersKeepEditingAndDiscard',
     'rw.ikanisa.burimunsi.NativeShellRecoveryTest#submittingBeforeDebounceRunsOneSearchAndAllowsAnExplicitRetry',
