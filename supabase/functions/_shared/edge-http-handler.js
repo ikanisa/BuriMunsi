@@ -3,7 +3,7 @@ import {BURIMUNSI_ADMIN_ORIGIN, requireStandaloneDeployment, standaloneHttpRoute
 import {standalonePrivacySupport} from './burimunsi-privacy-support.js';
 import {managedAdminChallengeParent} from './admin-security.js';
 import {configurePublicRuntimeEnv, normalizeRuntimeEnv} from './runtime-env.js';
-import {openApplicationWork} from './application-fence.js';
+import {fenceOpeningObservation, openApplicationWork} from './application-fence.js';
 import {prepareNativeIngress, requireNativeAdmission} from './edge-native-admission.js';
 import {EdgeRuntimeWork, isFenceFailure, observeFailure} from './edge-runtime.js';
 import {browserCors, edgeHttpResponse, logicalRequest, mergeCollectOrigins} from './edge-http-transport.js';
@@ -12,6 +12,7 @@ import {createCollectNativeRuntime} from './domain/burimunsi/collect-runtime.js'
 import {isCollectNativeRoute, unavailableHeldObservation} from './domain/burimunsi/collect-route.js';
 import {isReconcileBatch, reconcileFenceObservation} from './domain/burimunsi/reconcile-fence-health.js';
 import {isPhonePinRecordRead} from './domain/burimunsi/wire/native-http.mjs';
+import {CONTRACT_VERSION} from './domain/burimunsi/wire/native-contract.mjs';
 import {json} from './domain/core.js';
 import worker from './domain/index.js';
 import {recordPlatformHealth} from './domain/observability.js';
@@ -46,6 +47,7 @@ export function createHandler(functionName, envReader = () => Deno.env.toObject(
     let env;
     let cors = {};
     let reconcileRequest;
+    let nativePinLogin = false;
     function reportReconcileFence({cause, stage = undefined}, error = undefined) {
       try {
         const result = reportHealth({
@@ -109,6 +111,12 @@ export function createHandler(functionName, envReader = () => Deno.env.toObject(
         logical = ingress.request;
         nativeNetworkBucket = ingress.networkBucket;
         pendingNativeIngress = ingress.pendingClaim;
+        if (logical.method === 'POST' && path === '/v1/burimunsi/session/login' &&
+            logical.headers.get('X-BuriMunsi-Auth') === 'phone_pin' &&
+            logical.headers.get('X-BuriMunsi-Contract') === CONTRACT_VERSION) {
+          const target = new URL(logical.url);
+          nativePinLogin = target.pathname === path && (target.search === '' || target.search === '?include=home');
+        }
       }
 
       runtime.stage = 'normalization';
@@ -125,7 +133,7 @@ export function createHandler(functionName, envReader = () => Deno.env.toObject(
         isPhonePinRecordRead(path,new URL(logical.url).search);
       await runtime.initializeDatabase(env, collectionId, standalone && openWork === openApplicationWork);
       const work = await runtime.admit(env, openWork, admin ? 'http_admin' : 'http_collect', request.signal,
-        standalone && logical.method === 'GET', nativeSnapshotRead && openWork === openApplicationWork);
+        standalone && logical.method === 'GET', nativeSnapshotRead && openWork === openApplicationWork, nativePinLogin);
       const admittedAt = nativeSnapshotRead ? performance.now() : 0;
       assertNotCancelled(request.signal);
 
@@ -167,7 +175,11 @@ export function createHandler(functionName, envReader = () => Deno.env.toObject(
       };
       if (isFenceFailure(error)) {
         if (reconcileRequest) reportReconcileFence({cause: error.code}, error);
-        else observeFailure(reportHealth, {...health, requestId: null});
+        else {
+          const proof = nativePinLogin && !request.signal.aborted ? fenceOpeningObservation(error) : undefined;
+          observeFailure(reportHealth, {...health, requestId: null,
+            ...(proof?.stage === 'registration_rejected' ? {nativePinLoginRegistration: proof} : {})});
+        }
         return json({code: error.code, message: error.message}, 503, cors);
       }
       const requestId = crypto.randomUUID();

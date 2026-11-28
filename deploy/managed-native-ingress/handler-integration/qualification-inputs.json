@@ -6,7 +6,7 @@
     "supabase/functions/_shared/postgres.js": "983d8960dfab463cf587e78595b6ae84eed17b81f67a4948474f4bd44d4a19db",
     "supabase/functions/_shared/postgres-connections.js": "1a921522ea11ef7b7f586df3bd7f420c48e5edd36ab3c3120381b0d19a9f4540",
     "supabase/functions/_shared/postgres-transactions.js": "17a086b40409b312ba7a7a0c0a5a3f60274f90907c962d54f8b7058c834adcc8",
-    "supabase/functions/_shared/application-fence.js": "ee2e2b3bdce5bdf0f7b8d39602de0d6a56623fcad7b100c7a84885ed2612615b",
+    "supabase/functions/_shared/application-fence.js": "620aac32e6ce06c40e876a431c20855c880044d6dd97364c337cf1bc62f3f091",
     "supabase/functions/_shared/domain/burimunsi/collect-route.js": "78a648d683b5429b7ccf51b8cc5453f1daf4e01f42f7cd87e9665512bf74970a",
     "supabase/functions/_shared/domain/burimunsi/http.js": "890858725b27ac5eb4a7a24f12e179a27dc25fc8412311ba327ff8d9dbef00f7",
     "supabase/functions/_shared/domain/burimunsi/postgres-observation-reconciliation.js": "b49e98ba3068cd34c58b719e4afb201dd0b4ec75194397426ac74c62ea6b221e",
@@ -23,8 +23,8 @@
     "supabase/functions/_shared/admin-security.js": "2f82b0d16d9136a3e5d018bc1f3a2446009692c32979c4e7508d093aa19d2a57",
     "supabase/functions/_shared/scheduled-native-auto.js": "9e6c77a63de26a3d23414e15324fed546fcc834d9f9f30e33cee6b1351d4a922",
     "supabase/functions/collect-jobs/index.ts": "2cd26c52a0cb5ecac601880a3981c4020d3a0193f4742703fef9a8157b82a75d",
-    "supabase/functions/_shared/edge-runtime.js": "6fc90a3f89e5dc36c838576a818b07067dacfee6fa8b0b321e279363da00c0bc",
-    "supabase/functions/_shared/edge-http-handler.js": "e201ca7b609f0b290300cc334d1c897e2c6908c2e0f9245fa1afeb57ad48962a",
+    "supabase/functions/_shared/edge-runtime.js": "94353fb3700b3d8690d1258b8060b1aa08b10015704cdd135573a089deda3f3e",
+    "supabase/functions/_shared/edge-http-handler.js": "ac0320977269f6bfad83c7527be90d95a76cdb5a153e19fd7cf77e69c21aec08",
     "supabase/functions/_shared/edge-http-transport.js": "a1a139845ab438a52e8962ad6b98d9258d2e8aaf39903ad3c2f8d48ae7d35aab",
     "supabase/functions/_shared/edge-jobs-handler.js": "c3f141631bbbc0937853807789a7c48a9c41988f915ef3b54cf34272db56a373",
     "supabase/functions/_shared/edge-job-cycle.js": "1c202ad0e41b555281d9de2fdbed4355a9bd90b6fcd9f6510aa1212852384224",
@@ -34,6 +34,6 @@
   },
   "fixture_inputs": {
     "README.md": "c0015c3085046896358bd7f0b619ff402ff1a3aa1c485112ee8a5c593795c9f9",
-    "handler-integration.test.mjs": "c412b407965b19eac705a03453327b6261cf55be9d8b51656eef736eaf2338c1"
+    "handler-integration.test.mjs": "f015b69382e72ecbe2da4c206cb5332d528d0bd2bfdbcefb970a748aa146ee17"
   }
 }

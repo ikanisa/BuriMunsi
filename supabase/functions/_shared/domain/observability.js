@@ -1,6 +1,7 @@
 // Fixed application-health fields only. Requests, errors, credentials, bodies,
 // query strings and actor/provider identities never enter this boundary.
 import {reconcileFenceFields} from './burimunsi/reconcile-fence-health.js';
+import {isRegistrationCapacityRejection} from '../application-fence.js';
 const components=new Set(['platform','health','auth','privacy','challenge','admin',
  'reconciliation','native_integrity','operations','receipt','evidence','sync',
  'notifications','public_collections']);
@@ -64,6 +65,11 @@ export function createPlatformHealthReporter({emit=(level,text)=>console[level](
     return reconcileFenceFields(value.reconcileFence).catch(()=>({})).then(detail=>{
      try{emit(level,JSON.stringify({...fields,...detail}));return true;}catch{return false;}
     });
+   }
+   if(event==='service_degraded'&&status===503&&component==='platform'&&isRegistrationCapacityRejection(value.nativePinLoginRegistration)){
+    fields.operation='native_pin_login';
+    fields.stage='registration_rejected';
+    fields.cause='collect_fence_capacity';
    }
    emit(level,JSON.stringify(fields));
    return true;

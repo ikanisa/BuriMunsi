@@ -12,15 +12,22 @@ const registrationCompletions=new WeakMap();
 // A failed open can still have an acknowledged registration. Keep this on
 // the original error, outside its public response and the work lifecycle.
 const openingFailures=new WeakMap();
+// A proof belongs to one original registration observation. A commit error,
+// timeout or identical error from another database statement cannot acquire it.
+const registrationCapacityErrors = new WeakMap();
+const rejectedForCapacity = Object.freeze({stage: 'registration_rejected', cause: 'collect_fence_capacity'});
+export function isRegistrationCapacityRejection(proof) {
+  return proof === rejectedForCapacity;
+}
 export function fenceOpeningObservation(error) {
   return openingFailures.get(error);
 }
-function openingFailure(error, row) {
+function openingFailure(error, row, registration) {
   const failure = fenceFailure(error);
   const observation = row
     ? {stage: 'registered_before_work', id: row.admissionId, epoch: row.epoch}
     : {stage: 'registration_unconfirmed'};
-  openingFailures.set(failure, observation);
+  openingFailures.set(failure, registrationCapacityErrors.get(registration)?.has(error) ? rejectedForCapacity : observation);
   return failure;
 }
 const unavailable=()=>new ApiError(503,'application_fence_unavailable','The service is temporarily unavailable. Keep the original request pending.');
@@ -68,7 +75,19 @@ const readRegistrationSql = runtimeRoleSql + "; SET LOCAL burimunsi.read_admissi
 const leaseSetupSql = "SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout='5s'; " +
  runtimeRoleSql + '; SELECT pg_catalog.pg_advisory_xact_lock_shared(7346371,1)';
 async function runtimeRole(tx,settings=runtimeRoleSql){await tx.unsafe(settings);}
-async function result(tx,name,values){const rows=await tx.unsafe('SELECT '+signatures[name]+' AS result',values);need(rows.length===1&&rows[0].result&&typeof rows[0].result==='object');return rows[0].result;}
+async function result(tx, name, values, capacityErrors = undefined) {
+ let rows;
+ try {
+  rows = await tx.unsafe('SELECT '+signatures[name]+' AS result', values);
+ } catch (error) {
+  if (capacityErrors && name === 'register' && error?.code === '55000' && error.message === 'collect_fence_capacity') {
+   capacityErrors.add(error);
+  }
+  throw error;
+ }
+ need(rows.length===1 && rows[0].result && typeof rows[0].result==='object');
+ return rows[0].result;
+}
 // An explicit PostgreSQL capacity rejection rolls the registration transaction
 // back before there is any application work. A lost acknowledgement is ambiguous.
 const readCapacityDelaysMs = [180, 600, 1500, 1500];
@@ -99,11 +118,11 @@ async function registerWhenAvailable(register, signal) {
  * @param {(tx: import('npm:postgres@3.4.7').TransactionSql, registration?: {id:string,source:string,kind:string}) => unknown} [verifyAdmission]
  * @param {AbortSignal} [readCapacitySignal]
  */
-export function sqlFenceBackend(businessSql,controlSql,verifyAdmission=undefined,readCapacitySignal=undefined,standaloneRead=false){
+export function sqlFenceBackend(businessSql,controlSql,verifyAdmission=undefined,readCapacitySignal=undefined,standaloneRead=false,observePinLoginCapacity=false){
  need(typeof businessSql?.begin==='function'&&typeof controlSql?.reserve==='function');
  need(verifyAdmission===undefined||typeof verifyAdmission==='function');
  need(!standaloneRead||(typeof verifyAdmission==='function'&&readCapacitySignal));
- const rawCall=(name,values)=>businessSql.begin('ISOLATION LEVEL READ COMMITTED',async tx=>{
+ const rawCall=(name,values,capacityErrors=undefined)=>businessSql.begin('ISOLATION LEVEL READ COMMITTED',async tx=>{
   if(name==='register'&&standaloneRead){
    const [id,source,kind]=values;
    need(kind==='http_collect');
@@ -116,12 +135,15 @@ export function sqlFenceBackend(businessSql,controlSql,verifyAdmission=undefined
   if(name==='register'&&readCapacitySignal)await tx.unsafe(readRegistrationSql);
   else await runtimeRole(tx);
   if(name==='register'&&verifyAdmission)await verifyAdmission(tx);
-  return result(tx,name,values);
+  return result(tx,name,values,capacityErrors);
  });
  const call=(name,values)=>bounded(rawCall(name,values));
  const register=(id,source,kind)=>{
-  const attempt=()=>rawCall('register',[id,source,kind]);
-  return observeFenceRegistration(readCapacitySignal ? registerWhenAvailable(attempt,readCapacitySignal) : attempt());
+  const capacityErrors=observePinLoginCapacity&&kind==='http_collect'&&!readCapacitySignal?new WeakSet():undefined;
+  const attempt=()=>rawCall('register',[id,source,kind],capacityErrors);
+  const observation=observeFenceRegistration(readCapacitySignal ? registerWhenAvailable(attempt,readCapacitySignal) : attempt());
+  if(capacityErrors)registrationCapacityErrors.set(observation,capacityErrors);
+  return observation;
  };
  return Object.freeze({register,close:(id,epoch,source,outcome,reason,dispatches,uncertain)=>call('close',[id,epoch,source,outcome,reason,dispatches,uncertain]),status:id=>call('status',[id]),
   async lease(id,epoch,source){
@@ -195,7 +217,7 @@ export async function openApplicationWork({backend,sourceSha256,kind,id=crypto.r
  catch(error){
   const original=observation&&registrationCompletions.get(observation);
   if(original)retainLateRegistration(backend,original,id,sourceSha256,kind);
-  throw openingFailure(error); // Unknown registration outcomes stay with their original observation.
+  throw openingFailure(error, undefined, observation); // Unknown registration outcomes stay with their original observation.
  }
  if(signal?.aborted){try{await closeBeforeWork(backend,row,id,sourceSha256);}catch{}throw openingFailure(null,row);}
  try{const pending=Promise.resolve().then(()=>backend.lease(id,row.epoch,sourceSha256));
