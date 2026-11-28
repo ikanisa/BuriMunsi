@@ -21,6 +21,7 @@ check-source: supabase-source-test
 	@python3 scripts/generate_burimunsi_wire.py --check
 	@python3 supabase/schema-src/generate_baseline.py --check
 	@python3 -m unittest scripts.supabase.test_admin_build_config
+	@python3 -m unittest discover -s scripts/qa -p test_managed_play_device_readback.py
 
 supabase-source-test:
 	@python3 supabase/templates/build_templates.py --check
