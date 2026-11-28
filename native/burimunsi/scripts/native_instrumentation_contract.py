@@ -12,7 +12,7 @@ from native_pipeline_io import PipelineError
 
 TEST_CLASSES = ('NativeUiContractTest', 'MemberEnrollmentInputTest', 'NativeShellRecoveryTest',
                 'OperationUiContractTest', 'StaffPackageIsolationTest', 'NativeSandboxContractTest',
-                'export.ExportRenderingTest', 'storage.SecureStoreRecordTest')
+                'export.ExportRenderingTest', 'storage.SecureStoreRecordTest', 'RolePackageTrustTest')
 RECEIVER_TEST_CLASSES = ('app.cool.mobile.receiver_sms.GatewayDurabilityTest',)
 # CarrierFixtureReplayTest requires an approved private corpus and a disposable
 # .debug package. It cannot run in the offline nativeTest sandbox or contribute
