@@ -1,5 +1,6 @@
 import {useEffect, useRef, useState} from 'react';
 import {Icon} from '../ui/Icon';
+import {InstallApp} from '../ui/InstallApp';
 import {PrivacyLink, SupportLink} from '../ui/SupportLink';
 import {hasActiveFocusScope} from '../ui/useFocusScope';
 
@@ -63,6 +64,7 @@ export function AdminAccountMenu({identity, destinations = [], showHelp = true, 
       {identity.role && <span>{identity.role}</span>}
       {links(undefined)}
       <PrivacyLink className="admin-profile-destination"><Icon name="shield" /></PrivacyLink>
+      <InstallApp />
       {showHelp && <details className="admin-profile-more"><summary>Help</summary>
         <SupportLink />{links('help')}
       </details>}

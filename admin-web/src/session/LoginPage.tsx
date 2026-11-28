@@ -1,5 +1,6 @@
 import {useEffect, useState, type FormEvent} from 'react';
 import {AdminRequestError} from '../api/client';
+import {useBrowserOnline} from '../app/WorkspaceConnectivity';
 import {adminBrand} from '../branding';
 import {Button, Field} from '../ui';
 import {AuthFrame, authFailureMessage} from './AuthFrame';
@@ -8,6 +9,7 @@ import {useSession} from './SessionProvider';
 
 export function LoginPage({onSignedIn}: {onSignedIn: () => void}) {
   const session = useSession();
+  const online = useBrowserOnline();
   const [phone, setPhone] = useState('');
   const [pin, setPin] = useState('');
   const [busy, setBusy] = useState(false);
@@ -18,7 +20,7 @@ export function LoginPage({onSignedIn}: {onSignedIn: () => void}) {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy || needsSessionCheck || !session.signInWithPhonePasscode) return;
+    if (!online || busy || needsSessionCheck || !session.signInWithPhonePasscode) return;
     setBusy(true);
     setFeedback('');
     setPin('');
@@ -39,7 +41,7 @@ export function LoginPage({onSignedIn}: {onSignedIn: () => void}) {
     finally {setBusy(false);}
   }
 
-  return <AuthFrame title={`Welcome to ${adminBrand.product}`}>
+  return <AuthFrame title={`Welcome to ${adminBrand.product}`} showInstall>
     <form className="admin-auth-form" onSubmit={submit}>
       <Field label="Mobile number" htmlFor="admin-phone"><input className="admin-input" id="admin-phone" type="tel"
         maxLength={40} autoComplete="username" required value={phone} onChange={event => setPhone(event.target.value)}
@@ -48,8 +50,8 @@ export function LoginPage({onSignedIn}: {onSignedIn: () => void}) {
         inputMode="numeric" autoComplete="current-password" pattern="[0-9]{4}" maxLength={4} required
         value={pin} onChange={event => setPin(event.target.value.replace(/[^0-9]/g, ''))} disabled={busy || needsSessionCheck} /></Field>
       {(feedback || (session.status === 'error' && session.error)) && <p className="admin-auth-feedback" role="status">{feedback || session.error}</p>}
-      {needsSessionCheck ? <Button variant="primary" loading={busy} onClick={() => void checkSession()}>Check session</Button> :
-        <Button type="submit" variant="primary" loading={busy} disabled={!phone.trim() || !PASSCODE.test(pin)}>Sign in</Button>}
+      {needsSessionCheck ? <Button variant="primary" loading={busy} disabled={!online} onClick={() => void checkSession()}>Check session</Button> :
+        <Button type="submit" variant="primary" loading={busy} disabled={!online || !phone.trim() || !PASSCODE.test(pin)}>Sign in</Button>}
     </form>
   </AuthFrame>;
 }

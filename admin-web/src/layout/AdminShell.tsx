@@ -1,4 +1,5 @@
 import {useEffect, useRef, useState, type ReactNode} from 'react';
+import {adminBrand} from '../branding';
 import {Icon} from '../ui/Icon';
 import {useFocusScope} from '../ui/useFocusScope';
 import {AdminAccountMenu, type AdminAccountDestination, type AdminShellIdentity} from './AdminAccountMenu';
@@ -34,6 +35,12 @@ export function AdminShell({navigation, accountNavigation, showAccountHelp, curr
   const menuOpen = useFocusScope(menuRequested, sidebarRef, closeMenu, menuTrigger);
   const pathname = currentPath.split('?')[0];
   const selected = findCurrentSection(navigation, pathname);
+  const sectionLabel = selected?.label ?? findCurrentSection(accountNavigation ?? [], pathname)?.label;
+
+  useEffect(() => {
+    document.title = sectionLabel ? `${sectionLabel} · ${adminBrand.name}` : adminBrand.name;
+    return () => { document.title = adminBrand.name; };
+  }, [sectionLabel]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -53,7 +60,7 @@ export function AdminShell({navigation, accountNavigation, showAccountHelp, curr
     <div className="admin-main-column" inert={menuOpen}>
       <header className="admin-topbar">
         <button type="button" className="admin-icon-button admin-menu-button" aria-label="Open navigation" aria-controls="admin-navigation" aria-expanded={menuOpen} onClick={event => openMenu(event.currentTarget)}><Icon name="menu" /></button>
-        <span className="admin-topbar-location">{selected?.label ?? 'Workspace'}</span>
+        <span className="admin-topbar-location">{sectionLabel ?? 'Workspace'}</span>
         <div className="admin-top-spacer" />
         {toolbar}
         {identity && <AdminAccountMenu key={JSON.stringify([identity.name, identity.role, currentPath])} identity={identity}

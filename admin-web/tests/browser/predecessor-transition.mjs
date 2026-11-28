@@ -151,6 +151,7 @@ const types = {
   '.wasm': 'application/wasm',
   '.css': 'text/css',
   '.png': 'image/png',
+  '.webp': 'image/webp',
   '.woff2': 'font/woff2',
   '.ttf': 'font/ttf',
   '.webp': 'image/webp',

@@ -1,4 +1,5 @@
 /* eslint-disable no-control-regex -- Reject ASCII control characters in untrusted input. */
+import {readWorkspaceBookmark} from './operatorBookmarks';
 const INTERNAL_BASE = 'https://admin.invalid';
 
 export const publicSessionPaths = {
@@ -12,7 +13,10 @@ const publicEntries = new Set<string>(Object.values(publicSessionPaths));
 
 /** Protect against redirecting outside the Admin after authentication. */
 export function safeAdminReturnLocation(location: string | null | undefined): string | null {
-  if (!location || location.length > 2000 || /[\x00-\x20\\#]/.test(location) || !location.startsWith('/') || location.startsWith('//')) return null;
+  // A real roster filter and its encoded return link can exceed the ordinary
+  // return limit. Only the bounded read-route contract receives that exception.
+  if (!location || location.length > 2000 && !readWorkspaceBookmark(location)) return null;
+  if (/[\x00-\x20\\#]/.test(location) || !location.startsWith('/') || location.startsWith('//')) return null;
   const rawPath = location.split('?')[0];
   if (!(rawPath === '/admin' || rawPath.startsWith('/admin/'))) return null;
   try {

@@ -3,6 +3,8 @@ import {createHashRouter, Navigate, RouterProvider} from 'react-router';
 import {ProtectedShell, publicSessionRoutes} from './SessionRoutes';
 import {UnavailablePage} from './UnavailablePage';
 import {workspaceRoutes} from './WorkspaceRoutes';
+import {DesktopLaunch} from './DesktopLaunch';
+import {WorkspaceConnectivity} from './WorkspaceConnectivity';
 import {adminAccountNavigation, primaryAdminNavigation} from './navigation';
 import type {AdminClientConfig} from '../api/client';
 import {SessionProvider} from '../session/SessionProvider';
@@ -23,5 +25,7 @@ export function AdminApp({config}: {config: AdminClientConfig}) {
     const initial = router.state.location;
     return initial.pathname === '/admin' && !initial.search && !initial.hash ? () => router.state.location === initial : undefined;
   }, [router]);
-  return <SessionProvider config={config} resolveHomeStart={resolveHomeStart}><RouterProvider router={router} /></SessionProvider>;
+  return <SessionProvider config={config} resolveHomeStart={resolveHomeStart}>
+    <WorkspaceConnectivity /><DesktopLaunch router={router} /><RouterProvider router={router} />
+  </SessionProvider>;
 }

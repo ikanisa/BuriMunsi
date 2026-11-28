@@ -76,3 +76,12 @@ a { color: inherit; text-decoration: none; }
 }
 .admin-startup h1 { margin: 0; font-size: clamp(1.5rem, 5vw, 2rem); }
 .admin-startup p { margin-block: .5rem 0; color: var(--admin-muted); }
+
+.admin-offline-notice {
+  display: flex;
+  align-items: center;
+  gap: .625rem;
+  padding: .625rem clamp(1rem, 3vw, 2rem);
+  background: var(--admin-warning-surface);
+  color: var(--admin-warning);
+}

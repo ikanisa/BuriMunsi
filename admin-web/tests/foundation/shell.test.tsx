@@ -24,8 +24,11 @@ describe('Admin shell', () => {
   });
 
   it.each(['/admin/transactions/123', '/admin/sms-receipts/capture/456'])('marks Payments active on %s', path => {
-    render(<AdminShell navigation={navigation} currentPath={path}><p>Records</p></AdminShell>);
+    const view = render(<AdminShell navigation={navigation} currentPath={path}><p>Records</p></AdminShell>);
     expect(screen.getByRole('link', {name: 'Payments'})).toHaveAttribute('aria-current', 'location');
+    expect(document.title).toBe('Payments · BuriMunsi Admin');
+    view.unmount();
+    expect(document.title).toBe('BuriMunsi Admin');
   });
 
   it('does not treat alias lookalikes as primary sections', () => {

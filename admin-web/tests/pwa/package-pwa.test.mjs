@@ -6,10 +6,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { packagePwa, verifyPwaPackage } from '../../scripts/package-pwa.mjs';
+import { renderWorker, sha256, templatePath } from '../../scripts/pwa-assets.mjs';
 import {sourceIdentity} from '../../scripts/build-identity.mjs';
 import {burimunsiAdminBrand as brand} from '../../src/product-brand.mjs';
 
-const icon = fileURLToPath(new URL('../../public/icons/burimunsi-432.png', import.meta.url));
+const iconDirectory = fileURLToPath(new URL('../../public/icons/', import.meta.url));
+const desktopPreview = fileURLToPath(new URL('../../public/screenshots/admin-desktop.webp', import.meta.url));
 
 async function fixture(t) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'collect-admin-pwa-'));
@@ -17,14 +19,16 @@ async function fixture(t) {
   const input = path.join(base, 'vite');
   const output = path.join(base, 'candidate');
   await fs.mkdir(path.join(input, 'assets'), { recursive: true });
-  await fs.mkdir(path.join(input, 'icons'));
-  await fs.copyFile(icon, path.join(input, 'icons/burimunsi-432.png'));
+  await fs.cp(iconDirectory, path.join(input, 'icons'), {recursive: true});
+  await fs.mkdir(path.join(input, 'screenshots'));
+  await fs.copyFile(desktopPreview, path.join(input, 'screenshots/admin-desktop.webp'));
   await fs.writeFile(path.join(input, 'assets/admin-entry.js'), 'import "./chunk-xyz.js";');
   await fs.writeFile(path.join(input, 'assets/chunk-xyz.js'), 'console.log("synthetic chunk")');
   await fs.writeFile(path.join(input, 'assets/app-def.css'), 'body { color: black; }');
   await fs.writeFile(path.join(input, 'index.html'), `<!doctype html><html><head>
     <title>BuriMunsi Admin</title><meta name="description" content="BuriMunsi group savings administration.">
     <link rel="icon" href="./icons/burimunsi-432.png">
+    <link rel="apple-touch-icon" sizes="192x192" href="./icons/burimunsi-192.png">
     <link rel="manifest" href="./manifest.json"><link rel="stylesheet" href="./assets/app-def.css">
     <script type="module" src="./assets/admin-entry.js"></script></head><body><div id="root"></div></body></html>`);
   return { base, input, output };
@@ -46,18 +50,25 @@ test('packages exact versioned assets with a static-only, unqualified worker', a
   assert.equal(manifest.scope, '.');
   assert.equal(manifest.start_url, '.');
   const manifestEntry = 'https://admin.example.test/manifest.json';
+  assert.equal(new URL(manifest.id, manifestEntry).href, new URL(manifest.start_url, manifestEntry).href);
+  assert.deepEqual(manifest.launch_handler, {client_mode: 'focus-existing'});
+  assert.equal(manifest.lang, 'en');
+  assert.deepEqual(manifest.categories, ['finance', 'business']);
   assert.deepEqual(manifest.shortcuts.map(shortcut => shortcut.name), ['Home', 'Members', 'Payments']);
   assert.deepEqual(manifest.shortcuts.map(shortcut => new URL(shortcut.url, manifestEntry).href), [
     'https://admin.example.test/#/admin',
     'https://admin.example.test/#/admin/members',
     'https://admin.example.test/#/admin/payments',
   ]);
-  assert.equal(manifest.icons[0].src, `./_build/${result.assetId}/icons/burimunsi-432.png`);
+  assert.ok(manifest.shortcuts.every(shortcut => shortcut.description && shortcut.icons[0].src === manifest.icons[0].src));
+  const touchIcon = html.match(/rel="apple-touch-icon" sizes="192x192" href="([^"]+)"/)?.[1];
+  assert.equal(new URL(touchIcon, 'https://admin.example.test/admin/members').href,
+    new URL(manifest.icons[0].src, manifestEntry).href);
   const worker = await fs.readFile(path.join(output, 'custom-sw.js'), 'utf8');
   assert.match(worker, /credentials: 'omit'/);
   assert.match(worker, /crypto\.subtle\.digest\('SHA-256'/);
   assert.doesNotMatch(worker, /\bskipWaiting\s*\(|\bclients\.claim\s*\(/);
-  assert.deepEqual(await verifyPwaPackage(output), { cacheEntries: 7 });
+  assert.deepEqual(await verifyPwaPackage(output), { cacheEntries: 11 });
   await assert.rejects(packagePwa(input, output), { code: 'EEXIST' });
 });
 
@@ -73,9 +84,28 @@ test('the BuriMunsi PWA binds its own identity and excludes Collect app associat
   }});
   const manifest = JSON.parse(await fs.readFile(path.join(output, 'manifest.json'), 'utf8'));
   assert.equal(manifest.name, brand.name);
-  assert.equal(manifest.icons[0].src, `./_build/${assetId}/${brand.icon}`);
-  assert.equal(manifest.icons[0].sizes, '432x432');
-  assert.equal(manifest.icons[0].purpose, 'any');
+  const expectedIcons = [
+    ['burimunsi-192.png', 192, 'any'],
+    ['burimunsi-512.png', 512, 'any'],
+    ['burimunsi-maskable-512.png', 512, 'maskable'],
+  ];
+  assert.equal(manifest.icons.length, expectedIcons.length);
+  for (const [index, [filename, size, purpose]] of expectedIcons.entries()) {
+    const src = `./_build/${assetId}/icons/${filename}`;
+    assert.deepEqual(manifest.icons[index], {src, sizes: `${size}x${size}`, type: 'image/png', purpose});
+    const bytes = await fs.readFile(path.join(output, src));
+    assert.equal(bytes.toString('ascii', 12, 16), 'IHDR');
+    assert.equal(bytes.readUInt32BE(16), size);
+    assert.equal(bytes.readUInt32BE(20), size);
+    assert.equal(bytes[25], 2, 'The launcher image must be opaque RGB');
+  }
+  assert.deepEqual(manifest.screenshots, [{
+    src: `./_build/${assetId}/screenshots/admin-desktop.webp`, sizes: '1440x900', type: 'image/webp',
+    form_factor: 'wide', label: 'BuriMunsi Admin Home showing group totals and recent incoming and outgoing payments.',
+  }]);
+  const preview = await fs.readFile(path.join(output, manifest.screenshots[0].src));
+  assert.equal(preview.toString('ascii', 0, 4), 'RIFF');
+  assert.equal(preview.toString('ascii', 8, 12), 'WEBP');
   assert.doesNotMatch(await fs.readFile(path.join(output, '_headers'), 'utf8'), /api\.collect\.ikanisa\.com/);
   const associations = path.join(output, '.well-known');
   await fs.mkdir(associations);
@@ -91,6 +121,33 @@ test('rejects a changed packaged asset and reserved API files', async (t) => {
   await fs.mkdir(path.join(input, 'api'));
   await fs.writeFile(path.join(input, 'api/private.json'), '{}');
   await assert.rejects(packagePwa(input, `${output}-other`), /reserved or sensitive/);
+});
+
+test('rejects even correctly rehashed changes to installed identity, launch and shortcut routing', async (t) => {
+  const { input, output } = await fixture(t);
+  await packagePwa(input, output);
+  const manifestPath = path.join(output, 'manifest.json');
+  const workerPath = path.join(output, 'custom-sw.js');
+  const originalManifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+  const worker = await fs.readFile(workerPath, 'utf8');
+  const template = await fs.readFile(templatePath, 'utf8');
+  const urls = JSON.parse(worker.match(/const CACHE_URLS = (\[[^\n]*\]);/)[1]);
+  const hashes = JSON.parse(worker.match(/const CACHE_HASHES = (\{[^\n]*\});/)[1]);
+  const changes = [
+    manifest => { manifest.id = '/second-app'; },
+    manifest => { manifest.launch_handler.client_mode = 'navigate-new'; },
+    manifest => { manifest.shortcuts[1].url = './#/admin/payments'; },
+    manifest => { manifest.screenshots[0].src = 'https://example.test/admin.webp'; },
+  ];
+  for (const change of changes) {
+    const manifest = structuredClone(originalManifest);
+    change(manifest);
+    const contents = JSON.stringify(manifest, null, 2) + '\n';
+    await fs.writeFile(manifestPath, contents);
+    hashes['./manifest.json'] = sha256(contents);
+    await fs.writeFile(workerPath, renderWorker(template, urls, hashes).worker);
+    await assert.rejects(verifyPwaPackage(output), /Admin entry and cache differ/);
+  }
 });
 
 test('a failed asset copy removes only the newly reserved package', async (t) => {
@@ -130,8 +187,19 @@ test('rejects an absolute Vite asset base and an unapproved icon', async (t) => 
   await fs.writeFile(htmlPath, html.replace('./assets/admin-entry.js', '/assets/admin-entry.js'));
   await assert.rejects(packagePwa(input, output), /relative Vite asset base/);
   await fs.writeFile(htmlPath, html);
+  const desktopIcon = path.join(input, 'icons/burimunsi-512.png');
+  const opaque = await fs.readFile(desktopIcon);
+  await fs.writeFile(desktopIcon, 'incorrect launcher art');
+  await assert.rejects(packagePwa(input, output), /approved asset/);
+  await fs.writeFile(desktopIcon, opaque);
   await fs.writeFile(path.join(input, 'icons/burimunsi-432.png'), 'not the approved icon');
   await assert.rejects(packagePwa(input, output), /approved asset/);
+});
+
+test('refuses to package a substituted desktop preview', async (t) => {
+  const {input, output} = await fixture(t);
+  await fs.writeFile(path.join(input, 'screenshots/admin-desktop.webp'), 'different preview');
+  await assert.rejects(packagePwa(input, output), /approved screenshot/);
 });
 
 test('binds a local refactor with unstaged removals and requires explicit build inputs', async (t) => {

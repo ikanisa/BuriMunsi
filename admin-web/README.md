@@ -46,6 +46,21 @@ location under `build/` for a subsequent build. Run
 `bash scripts/admin_pwa_hosting_gate.sh` to verify the hosting package before
 using the [BuriMunsi Admin Worker](../deploy/platform-admin/README.md).
 
+## Desktop installation
+
+On the sign-in screen or in the signed-in Account menu, choose **Install
+BuriMunsi Admin** and confirm in the browser. If the browser handles installation
+through its own menu, choose **How to install BuriMunsi Admin** for its steps.
+Safari on macOS Sonoma 14 or later offers **File → Add to Dock**.
+
+Desktop browsers that support app shortcuts offer Home, Members and Payments
+from the installed app’s icon. In browsers that support reusing the app window,
+opening the icon keeps the current task. A saved member, statement or payment
+link opens through the usual sign-in and access checks. If it would interrupt
+work, choose **Open** or **Dismiss**. Use Tab and Enter to move from the sidebar
+to a section. The app shows when it is offline and needs a connection for
+sign-in and current account records.
+
 ## Installed updates
 
 Opening or reloading Admin online loads the hosted workspace. Offline, a

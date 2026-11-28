@@ -1,3 +1,4 @@
+import './pwa-install';
 import {createRoot} from 'react-dom/client';
 import {AdminApp} from './app/App';
 import {readAdminConfig} from './config';

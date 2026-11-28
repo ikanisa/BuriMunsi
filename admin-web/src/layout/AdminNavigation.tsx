@@ -1,4 +1,4 @@
-import type {ReactNode, RefObject} from 'react';
+import {useEffect, useRef, type MouseEvent, type ReactNode, type RefObject} from 'react';
 import {Icon} from '../ui/Icon';
 import burimunsiWordmark from '../ui/assets/burimunsi-wordmark.png';
 import {adminBrand} from '../branding';
@@ -35,6 +35,29 @@ interface AdminNavigationProps {
 }
 
 export function AdminNavigation({sidebar, navigation, pathname, selected, status, onClose}: AdminNavigationProps) {
+  const keyboardDestination = useRef<string | null>(null);
+  useEffect(() => {
+    const destination = keyboardDestination.current;
+    keyboardDestination.current = null;
+    if (destination === pathname) sidebar.current?.ownerDocument.getElementById('main-content')?.focus();
+  }, [pathname, sidebar]);
+
+  function select(event: MouseEvent<HTMLAnchorElement>, path: string) {
+    if (event.defaultPrevented || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    // Unmodified Enter and assistive-technology activation open this window.
+    keyboardDestination.current = event.detail === 0 && pathname !== path ? path : null;
+    onClose();
+    if (event.detail === 0 && pathname === path) {
+      const link = event.currentTarget;
+      // The compact drawer must first release its focus trap and the main column.
+      requestAnimationFrame(() => {
+        if (link.isConnected && link.getAttribute('aria-current') === 'page') {
+          link.ownerDocument.getElementById('main-content')?.focus();
+        }
+      });
+    }
+  }
+
   return <aside ref={sidebar} className="admin-sidebar" id="admin-navigation" aria-label="Primary admin navigation" tabIndex={-1}>
     <div className="admin-brand">
       <img className="admin-brand-wordmark" src={burimunsiWordmark} alt={adminBrand.product} />
@@ -46,7 +69,7 @@ export function AdminNavigation({sidebar, navigation, pathname, selected, status
       {navigation.map(item => {
         const active = selected?.path === item.path;
         return <a key={item.path} className={active ? 'admin-nav-link admin-nav-link--active' : 'admin-nav-link'}
-          href={`#${item.path}`} aria-current={active ? (pathname === item.path ? 'page' : 'location') : undefined} onClick={onClose}>
+          href={`#${item.path}`} aria-current={active ? (pathname === item.path ? 'page' : 'location') : undefined} onClick={event => select(event, item.path)}>
           <Icon name={item.icon ?? 'file'} /><span className="admin-compact-text" title={item.label}>{item.label}</span>
         </a>;
       })}

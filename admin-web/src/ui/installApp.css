@@ -1,0 +1,9 @@
+.admin-install-button {
+  display: inline-flex; align-items: center; gap: .5rem; min-height: 44px; padding: .25rem .5rem;
+  border: 0; border-radius: .5rem; background: transparent; color: inherit; text-align: start;
+}
+.admin-install-button:hover { background: var(--admin-surface-soft); color: var(--admin-ink); }
+.admin-install-instructions {
+  margin: 0; padding: .5rem; color: var(--admin-muted); line-height: 1.5;
+}
+.admin-auth-help > .admin-install-instructions { flex-basis: 100%; }

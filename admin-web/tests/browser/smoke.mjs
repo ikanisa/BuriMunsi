@@ -7,7 +7,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { installLocalNetworkFence } from './local-network-fence.cjs';
 import {verifyContinuedAllocation,verifyRosterImages,verifyTwoEmptyStatements,verifyVisibleFinancialLabels} from './member-financial-workflows.mjs';
 import { qualifyPhoneTeam } from './phone-team.mjs';
+import { qualifyDesktopShortcuts } from './desktop-shortcuts.mjs';
 import { qualifyPaymentAuthority } from './payment-authority.mjs';
+import {verifyDesktopInstallation} from './desktop-install.mjs';
 import { fixtureInactiveMember, fixtureMember, fixtureOriginalSms, fixtureOutgoingPayment, fixturePayment, fixtureSmsEvidenceId } from './operator-read-fixture.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
@@ -69,6 +71,7 @@ try {
     proxy: { server: origin, bypass: '127.0.0.1' },
     ...(executablePath ? { executablePath } : { channel: 'chrome' }),
   });
+  if (!legacySessions) await verifyDesktopInstallation(chromium, executablePath, origin);
   async function open(viewport, serviceWorkers) {
     const context = await browser.newContext({ viewport, serviceWorkers });
     context.setDefaultTimeout(10_000);
@@ -615,6 +618,7 @@ try {
   await overview.waitFor();
 
   const phoneTeamChecks = await qualifyPhoneTeam({admin: page, origin, open, legacySessions});
+  const desktopShortcutChecks = await qualifyDesktopShortcuts({origin, open, staffPin: '7391'});
   const authorityChecks = [
     ...await qualifyPaymentAuthority({origin, open, staffPin:'7391'}),
     ...await qualifyPaymentAuthority({origin, open, staffPin:'7391', installed:true}),
@@ -730,7 +734,7 @@ try {
   await page.getByRole('heading', { name: 'Welcome to BuriMunsi' }).waitFor();
   assert(!(await desktop.context.cookies(origin)).some(cookie => cookie.name === 'collect_fixture_session'));
 
-  // Exercise an actual install with a separate browser context.
+  // Exercise the installed worker in a separate browser context.
   const pwa = await open({ width: 1280, height: 800 }, 'allow');
   await pwa.page.goto(origin + '/');
   await pwa.page.waitForFunction(async () => (await navigator.serviceWorker.getRegistration())?.active?.state === 'activated');
@@ -761,6 +765,11 @@ try {
   });
   assert(cachedPaths.some(path => /^\/_build\/[0-9a-f]{64}\/assets\/admin-entry\.js$/.test(path)));
   assert(cachedPaths.every(path => path.startsWith('/_build/') || ['/', '/manifest.json', '/version.json'].includes(path)));
+  await reopened.getByText('You’re offline.', {exact: true}).waitFor();
+  const restored = reopened.waitForResponse(response => sessionApi(new URL(response.url())) && response.status() === 200);
+  await pwa.context.setOffline(false);
+  await restored;
+  await reopened.getByRole('heading', {name: 'Welcome to BuriMunsi'}).waitFor();
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(denied, []);
   assert.deepEqual(unexpectedAuth, []);
@@ -769,7 +778,9 @@ try {
       'signed_out_privacy_and_deletion_link_preserves_form', 'signed_in_account_opens_privacy_and_deletion',
       'payer_sms_empty_and_reported_delivered', 'compact_receipt_cards', 'browser_back_restores_overview', 'fresh_mobile_deep_link_requires_sign_in',
       'retired_authenticator_bookmark_preserves_safe_destination', 'missing_scoped_admin_identity_removes_controls', 'session_failure_and_recovery_require_server_authority', 'expired_request_and_history_return_require_sign_in',
-      'mobile_drawer_traps_and_restores_focus_and_reflows', 'tablet_core_routes_fit_viewport_and_collect_reconciliation_stays_closed', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, ...authorityChecks, 'no_unexpected_auth_request', 'identity_version_only_on_session_exchanges'];
+      'mobile_drawer_traps_and_restores_focus_and_reflows', 'tablet_core_routes_fit_viewport_and_collect_reconciliation_stays_closed', 'sign_out_clears_fixture_cookie', 'installed_worker_caches_static_files_only', ...phoneTeamChecks, ...desktopShortcutChecks, ...authorityChecks, 'no_unexpected_auth_request', 'identity_version_only_on_session_exchanges'];
+  checks.push('offline_reopen_and_session_recovery');
+  if (!legacySessions) checks.push('desktop_install_standalone_shortcuts_draft_and_window_title');
   console.log(JSON.stringify({status: 'pass', environment: 'synthetic_loopback', origin, count: checks.length, checks,
     sessionExchange: {mode: legacySessions ? 'legacy' : 'negotiated', signInRequests: loginRequests.length, verificationRequests: verificationRequests.length}}, null, 2));
 } finally {

@@ -1,6 +1,7 @@
 import {fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {describe, expect, it, vi} from 'vitest';
 import {LoginPage} from '../../src/session/LoginPage';
+import {WorkspaceConnectivity} from '../../src/app/WorkspaceConnectivity';
 import {AdminSessionController, SessionProvider} from '../../src/session/SessionProvider';
 
 const publishableKey = 'sb_publishable_' + 'a'.repeat(32);
@@ -23,7 +24,7 @@ function openLogin(fetchImpl: typeof fetch, challenge = vi.fn()) {
   const onSignedIn = vi.fn();
   render(<SessionProvider config={{backend: 'supabase', phonePasscodeOnly: true, publishableKey,
     captchaEnabled: true, googleEnabled: true, acquireCaptcha: challenge, fetchImpl}}>
-    <LoginPage onSignedIn={onSignedIn} />
+    <WorkspaceConnectivity /><LoginPage onSignedIn={onSignedIn} />
   </SessionProvider>);
   return onSignedIn;
 }
@@ -35,6 +36,44 @@ function submit() {
 }
 
 describe('BuriMunsi phone and passcode sign-in', () => {
+  it('recovers an offline launch with one session read and never resubmits sign-in', async () => {
+    const network = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe('/api/admin/auth/session');
+      expect(init?.method ?? 'GET').toBe('GET');
+      if (!navigator.onLine) throw new TypeError('Offline');
+      return anonymous();
+    });
+    openLogin(fetchImpl);
+    expect(await screen.findByRole('button', {name: 'Check session'})).toBeDisabled();
+    expect(screen.getByText('You’re offline.')).toBeVisible();
+    network.mockReturnValue(true);
+    fireEvent(window, new Event('online'));
+    await screen.findByRole('button', {name: 'Sign in'});
+    expect(screen.queryByText('You’re offline.')).toBeNull();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the typed sign-in in the open window while disconnected', async () => {
+    const network = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    const fetchImpl = vi.fn(async () => anonymous());
+    openLogin(fetchImpl);
+    const phone = screen.getByLabelText('Mobile number'), pin = screen.getByLabelText('Four-digit passcode');
+    fireEvent.change(phone, {target: {value: '0780 000 001'}});
+    fireEvent.change(pin, {target: {value: '0123'}});
+    await waitFor(() => expect(screen.getByRole('button', {name: 'Sign in'})).toBeEnabled());
+    network.mockReturnValue(false);
+    fireEvent(window, new Event('offline'));
+    expect(screen.getByRole('button', {name: 'Sign in'})).toBeDisabled();
+    fireEvent.submit(pin.closest('form')!);
+    network.mockReturnValue(true);
+    fireEvent(window, new Event('online'));
+    expect(screen.getByRole('button', {name: 'Sign in'})).toBeEnabled();
+    expect(phone).toHaveValue('0780 000 001');
+    expect(pin).toHaveValue('0123');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('requires session readback after an initial connection failure', async () => {
     let calls = 0;
     const fetchImpl = vi.fn(async () => {

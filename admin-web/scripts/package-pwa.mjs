@@ -1,9 +1,65 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { cacheAsset, filesUnder, renderWorker, sha256, templatePath, versionedAssetHash } from './pwa-assets.mjs';
 import { faviconRedirect, hostingHeaders, robotsRules } from './pwa-hosting.mjs';
 import { burimunsiAdminBrand as brand } from '../src/product-brand.mjs';
 import { BURIMUNSI_ADMIN_PROFILE_ID } from '../../deploy/platform-admin/src/admin-session-realm.js';
+
+// Opaque renditions of the approved orange-swoosh-square owner master on its
+// white background. The maskable rendition keeps the wordmark inside the safe circle.
+const desktopIcons = [
+  {file: 'icons/burimunsi-192.png', size: 192, purpose: 'any', hash: 'f91c614d1912f9aa99960a4a19b3e6a70de652a0f431560a985bdf5de57c2d6f'},
+  {file: 'icons/burimunsi-512.png', size: 512, purpose: 'any', hash: 'b7dbbe1323584c4c51b6b4919d2a19cfc56be84f548ae0b619bbca517739c7ab'},
+  {file: 'icons/burimunsi-maskable-512.png', size: 512, purpose: 'maskable', hash: '12da92335356728aff82272cbf7b7a9116230f1cb80952dc98dbf7fa58a7337a'},
+];
+const desktopShortcuts = [
+  {name: 'Home', url: './#/admin', description: 'Open the group savings overview.'},
+  {name: 'Members', url: './#/admin/members', description: 'Find a member and open their statement.'},
+  {name: 'Payments', url: './#/admin/payments', description: 'Review incoming and outgoing payments.'},
+];
+const desktopScreenshot = {
+  file: 'screenshots/admin-desktop.webp',
+  hash: 'a03758ddca6b3cada5843f8671d7e00f13972d82bec9aaa9a2f1d502d3600b7b',
+};
+
+function desktopManifest(prefix) {
+  const icons = desktopIcons.map(({file, size, purpose}) => ({
+    src: `./${prefix}${file}`, sizes: `${size}x${size}`, type: 'image/png', purpose,
+  }));
+  return {
+    // The root start URL was also the effective ID before an explicit ID was published.
+    id: '/', start_url: '.', scope: '.', name: brand.name, short_name: brand.name,
+    description: brand.description, lang: 'en', dir: 'ltr', categories: ['finance', 'business'],
+    display: 'standalone', background_color: '#ffffff', theme_color: '#171b20',
+    launch_handler: {client_mode: 'focus-existing'},
+    shortcuts: desktopShortcuts.map(shortcut => ({...shortcut, icons: [icons[0]]})),
+    icons,
+    screenshots: [{
+      src: `./${prefix}${desktopScreenshot.file}`, sizes: '1440x900', type: 'image/webp', form_factor: 'wide',
+      label: 'BuriMunsi Admin Home showing group totals and recent incoming and outgoing payments.',
+    }],
+  };
+}
+
+function verifyManifest(manifest, version, prefix, hashes, html) {
+  if (version.pwa_manifest_version === 2) {
+    return isDeepStrictEqual(manifest, desktopManifest(prefix)) &&
+      desktopIcons.every(({file, hash}) => hashes[`./${prefix}${file}`] === hash) &&
+      hashes[`./${prefix}${desktopScreenshot.file}`] === desktopScreenshot.hash &&
+      html.includes(`rel="apple-touch-icon" sizes="192x192" href="/${prefix}${desktopIcons[0].file}"`);
+  }
+  // Original BuriMunsi packages have one transparent icon and no explicit ID.
+  // Their original shortcut labels/targets are covered by the pinned build receipt.
+  return version.pwa_manifest_version === undefined &&
+    manifest.screenshots === undefined && !Object.hasOwn(hashes, `./${prefix}${desktopScreenshot.file}`) &&
+    !desktopIcons.some(({file}) => Object.hasOwn(hashes, `./${prefix}${file}`)) &&
+    manifest.id === undefined && manifest.name === brand.name && manifest.short_name === brand.name &&
+    manifest.description === brand.description && manifest.start_url === '.' && manifest.scope === '.' &&
+    manifest.display === 'standalone' && isDeepStrictEqual(manifest.icons, [{
+      src: `./${prefix}${brand.icon}`, sizes: brand.iconSize, type: 'image/png', purpose: brand.iconPurpose,
+    }]);
+}
 
 /**
  * Package a Vite build created with ADMIN_ASSET_BASE=./ as an unqualified
@@ -22,9 +78,6 @@ export async function packagePwa(inputDirectory, outputDirectory, { publicBuild 
       !all.includes('assets/admin-entry.js')) {
     throw new Error('Vite build must contain the Admin shell, JavaScript and product icon');
   }
-  if (sha256(await fs.readFile(path.join(input, brand.icon))) !== brand.iconSha256) {
-    throw new Error('Admin icon does not match the approved asset');
-  }
   const runtime = all.filter((name) => name !== 'index.html');
   if (runtime.some((name) =>
     /^(?:api|v1|functions|privacy|account-deletion)(?:\/|$)/.test(name) ||
@@ -35,6 +88,12 @@ export async function packagePwa(inputDirectory, outputDirectory, { publicBuild 
   const fileHashes = Object.fromEntries(await Promise.all(runtime.map(async (name) => [
     name, sha256(await fs.readFile(path.join(input, name))),
   ])));
+  if (fileHashes[brand.icon] !== brand.iconSha256 || desktopIcons.some(({file, hash}) => fileHashes[file] !== hash)) {
+    throw new Error('Admin icon does not match the approved asset');
+  }
+  if (fileHashes[desktopScreenshot.file] !== desktopScreenshot.hash) {
+    throw new Error('Admin desktop preview does not match the approved screenshot');
+  }
   const assetId = versionedAssetHash(runtime.map(name => [name, fileHashes[name]]));
   const assetPrefix = `_build/${assetId}/`;
   let index = await fs.readFile(path.join(input, 'index.html'), 'utf8');
@@ -62,23 +121,13 @@ export async function packagePwa(inputDirectory, outputDirectory, { publicBuild 
     ...publicBuild,
     app_name: brand.id,
     frontend: 'react-vite',
+    pwa_manifest_version: 2,
     asset_manifest_sha256: assetId,
     backend: publicBuild?.backend ?? 'unconfigured',
     qualification_complete: false,
     shipping_candidate: false,
   };
-  const manifest = {
-    name: brand.name, short_name: brand.name,
-    description: brand.description, display: 'standalone',
-    start_url: '.', scope: '.', background_color: '#ffffff', theme_color: '#171b20',
-    shortcuts: [
-      { name: 'Home', url: './#/admin' },
-      { name: 'Members', url: './#/admin/members' },
-      { name: 'Payments', url: './#/admin/payments' },
-    ],
-    icons: [{ src: `./${assetPrefix}${brand.icon}`, sizes: brand.iconSize,
-      type: 'image/png', purpose: brand.iconPurpose }],
-  };
+  const manifest = desktopManifest(assetPrefix);
   const template = await fs.readFile(templatePath, 'utf8');
   await fs.mkdir(output); // Fails rather than overwriting any earlier candidate.
   try {
@@ -151,10 +200,7 @@ export async function verifyPwaPackage(directory) {
       !['"', "'"].some(quote => index.includes(`src=${quote}/${prefix}assets/admin-entry.js${quote}`)) ||
       hashes['./' + icon] !== brand.iconSha256 || version.app_name !== brand.id ||
       !index.includes(`<title>${brand.name}</title>`) || !index.includes(`/${icon}`) ||
-      manifest.name !== brand.name || manifest.short_name !== brand.name || manifest.description !== brand.description ||
-      manifest.start_url !== '.' || manifest.scope !== '.' || manifest.display !== 'standalone' ||
-      manifest.icons?.length !== 1 || manifest.icons[0]?.src !== './' + icon ||
-      manifest.icons[0]?.sizes !== brand.iconSize || manifest.icons[0]?.purpose !== brand.iconPurpose) {
+      !verifyManifest(manifest, version, prefix, hashes, index)) {
     throw new Error('Admin entry and cache differ from the asset version');
   }
   const text = (name) => fs.readFile(path.join(root, name), 'utf8');

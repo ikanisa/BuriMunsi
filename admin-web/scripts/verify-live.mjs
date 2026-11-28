@@ -69,6 +69,12 @@ try {
       }
     }
     if (pathname.startsWith('/_build/') && !cache.includes('immutable')) throw new Error('Versioned assets lack immutable caching.');
+    if (pathname.startsWith('/_build/') && (pathname.includes('/icons/') || pathname.includes('/screenshots/'))) {
+      const mime = pathname.endsWith('.png') ? 'image/png' : pathname.endsWith('.webp') ? 'image/webp' : null;
+      if (mime && contentType.split(';')[0].trim().toLowerCase() !== mime) {
+        throw new Error(`Hosted install artwork has the wrong content type at ${pathname}.`);
+      }
+    }
     if (['/custom-sw.js', '/version.json', '/manifest.json'].includes(pathname) &&
         (!/\b(?:no-cache|no-store)\b/.test(cache) || cache.includes('immutable'))) {
       throw new Error('Mutable PWA metadata must revalidate.');
