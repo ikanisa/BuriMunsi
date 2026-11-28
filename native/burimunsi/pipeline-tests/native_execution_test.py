@@ -153,6 +153,12 @@ EXPECTED_RECEIVER_ONLY_CASES = {
         'continuousExecutionLeaseSurvivesAnInterruptedCallerUntilItsActualExit',
         'continuousCycleBudgetAndFailureRetryRemainBounded',
     )
+} | {
+    'rw.ikanisa.burimunsi.SmsPermissionDisclosureTest#declineNeverContinues',
+    'rw.ikanisa.burimunsi.SmsPermissionDisclosureTest#continueOnlyOnExplicitTapAtDoubleTextSize',
+    'rw.ikanisa.burimunsi.SmsPermissionOfferTest#currentOfferCanOnlyDispatchOnce',
+    'rw.ikanisa.burimunsi.SmsPermissionOfferTest#staleOriginalOfferCannotBeReusedEvenIfSessionBecomesValidAgain',
+    'rw.ikanisa.burimunsi.SmsPermissionOfferTest#disclosureContinuesToTheRealAndroidPromptAndDenialStaysDenied',
 }
 EXPECTED_CASE_COUNTS = {
     'staff': len(EXPECTED_STAFF_CASES),
@@ -505,15 +511,16 @@ class StartupUiReadiness(unittest.TestCase):
 
 
 class FlavorInstrumentation(unittest.TestCase):
-    def test_receiver_requires_its_durability_methods_and_staff_does_not(self):
+    def test_receiver_requires_its_durability_and_sms_consent_methods_and_staff_does_not(self):
         contracts = n.test_contracts()
         staff = set(contracts['staff'])
         receiver = set(contracts['internal_receiver'])
         self.assertEqual(staff, EXPECTED_STAFF_CASES)
         self.assertTrue(staff < receiver)
         self.assertEqual(receiver - staff, EXPECTED_RECEIVER_ONLY_CASES)
-        self.assertNotIn('app.cool.mobile.receiver_sms.GatewayDurabilityTest', n.instrumentation_classes('staff'))
-        self.assertIn('app.cool.mobile.receiver_sms.GatewayDurabilityTest', n.instrumentation_classes('internal_receiver'))
+        receiver_only_classes = {case.split('#', 1)[0] for case in EXPECTED_RECEIVER_ONLY_CASES}
+        self.assertTrue(receiver_only_classes.isdisjoint(n.instrumentation_classes('staff')))
+        self.assertTrue(receiver_only_classes.issubset(n.instrumentation_classes('internal_receiver')))
         # Private carrier replay targets a .debug package and an explicitly
         # supplied corpus, so it cannot be an assumed/skipped sandbox pass.
         self.assertFalse(any('CarrierFixtureReplayTest' in value for values in contracts.values() for value in values))
@@ -626,8 +633,13 @@ class FlavorInstrumentation(unittest.TestCase):
                          EXPECTED_CASE_COUNTS)
         selectors = [call[call.index('class') + 1] for call in calls if 'class' in call]
         self.assertEqual(len(selectors), 2)
-        self.assertNotIn('GatewayDurabilityTest', selectors[0])
-        self.assertIn('app.cool.mobile.receiver_sms.GatewayDurabilityTest', selectors[1])
+        for case_class in (
+            'app.cool.mobile.receiver_sms.GatewayDurabilityTest',
+            'rw.ikanisa.burimunsi.SmsPermissionDisclosureTest',
+            'rw.ikanisa.burimunsi.SmsPermissionOfferTest',
+        ):
+            self.assertNotIn(case_class, selectors[0].split(','))
+            self.assertIn(case_class, selectors[1].split(','))
         self.assertEqual(len(report['cleanup']), 4)
         self.assertTrue(all(value['removed'] for value in report['cleanup']))
         self.assertEqual({item['flavor'] for item in report['ui_artifacts']}, {'staff', 'internal_receiver'})

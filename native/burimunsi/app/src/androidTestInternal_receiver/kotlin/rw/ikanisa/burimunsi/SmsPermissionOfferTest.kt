@@ -2,6 +2,7 @@ package rw.ikanisa.burimunsi
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -89,14 +90,18 @@ class SmsPermissionOfferTest {
         }
         var deniedScreens = 0
         val observed = linkedSetOf<String>()
+        val controllerPackages = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            setOf("com.android.packageinstaller", "com.google.android.packageinstaller")
+        } else {
+            setOf("com.android.permissioncontroller", "com.google.android.permissioncontroller")
+        }
         val deadline = SystemClock.uptimeMillis() + 20_000
         while (SystemClock.uptimeMillis() < deadline && result.value == null) {
             val roots = listOfNotNull(automation.rootInActiveWindow) + automation.windows.mapNotNull { it.root }
             for (root in roots) {
                 val controller = root.packageName?.toString() ?: continue
                 observed.add(controller)
-                if (controller != "com.google.android.permissioncontroller" &&
-                    controller != "com.android.permissioncontroller") continue
+                if (controller !in controllerPackages) continue
                 // Android versions and permission groups can use different view IDs.
                 val candidates = root.findAccessibilityNodeInfosByText("Don’t allow") +
                     root.findAccessibilityNodeInfosByText("Don't allow") +

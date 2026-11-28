@@ -41,7 +41,7 @@ class SmsPermissionDisclosure(unittest.TestCase):
     def test_disclosure_covers_data_destination_purpose_and_decline(self):
         translations = {s.attrib["name"]: s.text for s in ET.parse(RES).getroot()}
         body = translations["buri_sms_notice_body"]
-        for term in ("not open", "receipt text", "phone numbers", "Supabase",
+        for term in ("not open", "Phone permission", "active SIM", "receipt text", "phone numbers", "Supabase",
                      "record and reconcile payments", "security codes", "Not now"):
             self.assertIn(term, body)
         self.assertEqual(translations["buri_sms_notice_cancel"], "Not now")

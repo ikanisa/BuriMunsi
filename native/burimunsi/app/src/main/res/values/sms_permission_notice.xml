@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="buri_sms_notice_title">Use SMS to record M-Money payments?</string>
-    <string name="buri_sms_notice_body">Admin Sync reads incoming and recent SMS to find eligible M-Money receipts, even when the app is not open. It sends eligible receipt text, including payment references, amounts and phone numbers, to BuriMunsi via Supabase to record and reconcile payments. Unrelated messages and security codes are not kept or sent. Continue opens Android permissions. If you choose Not now, you can still use the app, but SMS sync will be unavailable.</string>
+    <string name="buri_sms_notice_body">Admin Sync reads incoming and recent SMS to find eligible M-Money receipts, even when the app is not open. It sends eligible receipt text, including payment references, amounts and phone numbers, to BuriMunsi via Supabase to record and reconcile payments. Phone permission helps Admin Sync identify the active SIM that received a receipt. Unrelated messages and security codes are not kept or sent. Continue opens Android permissions. If you choose Not now, you can still use the app, but SMS sync will be unavailable.</string>
     <string name="buri_sms_notice_continue">Continue</string>
     <string name="buri_sms_notice_cancel">Not now</string>
 </resources>
