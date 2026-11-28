@@ -16,6 +16,10 @@ function fenceCause(error) {
   return causes.has(error?.code) ? error.code : mappedCauses.get(error);
 }
 
+function validUuid(value, pattern) {
+  return typeof value === 'string' && value.length === 36 && pattern.test(value);
+}
+
 // The native observation contract intentionally maps several failures to
 // one public error. Keep a recognized original fence cause off the wire.
 export function mappedReconcileFence(error, publicError) {
@@ -55,11 +59,15 @@ export function reconcileFenceObservation(request, work, cause, stage, error) {
     id = opening?.id;
     epoch = opening?.epoch;
   }
-  const clientId = request.headers.get('X-BuriMunsi-Contract') === CONTRACT_VERSION
-    ? request.headers.get('X-BuriMunsi-Request') : null;
   // A disabled or replaced reporter receives no request or admission identity.
   const observation = {};
-  observations.set(observation, {stage, cause, id, epoch, clientId});
+  if ((!openingStages.has(stage) && !admittedStages.has(stage)) || !causes.has(cause)) return observation;
+  const registered = stage === 'registered_before_work' || admittedStages.has(stage);
+  const validAdmission = registered && validUuid(id, admissionUuid) && Number.isSafeInteger(epoch) && epoch > 0;
+  const header = request.headers.get('X-BuriMunsi-Contract') === CONTRACT_VERSION
+    ? request.headers.get('X-BuriMunsi-Request') : null;
+  observations.set(observation, {stage, cause, id: validAdmission ? id : null, epoch: validAdmission ? epoch : null,
+    clientId: validUuid(header, clientUuid) ? header : null});
   return observation;
 }
 
@@ -69,14 +77,9 @@ export async function reconcileFenceFields(observation) {
   const value = observations.get(observation);
   if (!value) return {};
   const {stage, cause, id, epoch, clientId} = value;
-  if ((!openingStages.has(stage) && !admittedStages.has(stage)) || !causes.has(cause)) return {};
-  const registered = stage === 'registered_before_work' || admittedStages.has(stage);
-  const validAdmission = registered && typeof id === 'string' && id.length === 36 && admissionUuid.test(id) &&
-    Number.isSafeInteger(epoch) && epoch > 0;
-  const validClient = typeof clientId === 'string' && clientId.length === 36 && clientUuid.test(clientId);
   const [admissionHash, clientHash] = await Promise.all([
-    validAdmission ? sha256(id).catch(() => null) : null,
-    validClient ? sha256(clientId).catch(() => null) : null,
+    id ? sha256(id).catch(() => null) : null,
+    clientId ? sha256(clientId).catch(() => null) : null,
   ]);
   return {operation: 'native_reconcile_batch', stage, cause, admission_sha256: admissionHash,
     epoch: admissionHash ? epoch : null, request_sha256: clientHash};
