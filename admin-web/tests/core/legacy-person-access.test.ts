@@ -9,6 +9,7 @@ const person: LegacyPersonSnapshot = {id: userId, publicId: '123456', displayNam
 const detail = {resource_type: 'users', current_actor_id: actor, can_manage: true, resource: {id: userId, collect_user_id: userId, public_id: '123456', display_name: 'Recorded Person', display_name_recorded: true, member_type: 'app', momo_provider: 'mtn_momo', momo_number: '0788123456', momo_pay_code: '0009', email: 'person@example.test', phone_e164: '+250788123456', status: 'active', operator_admin_id: null, version: 1}};
 const contact = {phone_e164: '+250788123457', expected_version: 1, reason: 'Review contact changes'};
 const receipt = {request_id: requestId, resource_type: 'users', resource_id: userId, version: 2, status: 'succeeded'}, found = {status: 'succeeded', request_id: requestId, receipt};
+const receiptTime = Date.UTC(2026, 0, 20, 12);
 function identity(role: PendingIdentity['role'] = 'admin'): PendingIdentity {return {id: actor, sessionId: 'session-1', email: 'operator@example.test', role, permissions: ['users.read', 'users.manage', 'overview.read', ...(role === 'owner' ? ['admin_users.manage'] : [])], expiresAt: new Date(Date.now() + 3600000).toISOString()};}
 function context(request: LegacyPersonAccessContext['request'], role: PendingIdentity['role'] = 'admin'): LegacyPersonAccessContext {const user = identity(role); return {request, identity: user, actorId: actor, userId, permissions: user.permissions, financialModel: 'transaction_journals', enabled: false, contactsEnabled: true, loginTypeEnabled: true, operatorLinkEnabled: true, verifyFresh: async () => true, isCurrent: () => true, storage: sessionStorage, sharedStorage: localStorage, lock: async (_name, work) => work(), createKey: () => key};}
 async function revision(ctx: LegacyPersonAccessContext) {const state = await restoreLegacyPersonAccess(ctx); if (state.kind !== 'ready') throw new Error('Expected ready'); return state.revision;}
@@ -35,6 +36,7 @@ describe('legacy person access candidate', () => {
     expect(request).not.toHaveBeenCalled();
   });
   it('rechecks authority and person after fresh verification and verifies actor-scoped receipt', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(receiptTime);
     const verify = vi.fn().mockResolvedValue(true);
     const request = vi.fn(async (path: string, options?: {method?: string; body?: unknown; idempotencyKey?: string}) => {
       if (options?.method === 'PATCH') {expect(options.body).toEqual(contact); expect(options.idempotencyKey).toBe(key); expect(await readPending(identity(), 'operating-updateuser', userId)).toMatchObject({request_key: key, intent: contact}); return receipt;}
@@ -43,6 +45,26 @@ describe('legacy person access candidate', () => {
     const ctx = {...context(request), verifyFresh: verify};
     expect(await submitLegacyPersonAccess(ctx, contact, person, await revision(ctx))).toEqual({status: 'succeeded', receipt: {requestId, userId, version: 2}});
     expect(verify).toHaveBeenCalledOnce(); expect(await readPending(identity(), 'operating-updateuser', userId)).toBeNull();
+  });
+  it('recovers the original receipt after the clock moves backwards during the change', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(receiptTime);
+    const request = vi.fn(async (path: string, options?: {method?: string}) => {
+      if (options?.method === 'PATCH') {
+        clock.mockReturnValue(receiptTime - 1);
+        return receipt;
+      }
+      return path === 'operations/requests/' + key ? found : detail;
+    });
+    const ctx = context(request);
+    expect(await submitLegacyPersonAccess(ctx, contact, person, await revision(ctx)))
+      .toEqual({status: 'unknown', requestKey: key});
+
+    clock.mockReturnValue(receiptTime);
+    const pending = await restoreLegacyPersonAccess(ctx);
+    expect(pending).toMatchObject({kind: 'owned', requestKey: key});
+    expect(await lookupLegacyPersonAccess(ctx, pending)).toEqual({status: 'succeeded', receipt: {requestId, userId, version: 2}});
+    expect(await readPending(ctx.identity, 'operating-updateuser', userId)).toBeNull();
+    expect(request.mock.calls.filter(([, options]) => options?.method === 'PATCH')).toHaveLength(1);
   });
   it('dispatches nothing if verification fails, the gate closes, or a person changes during verification', async () => {
     for (const scenario of ['failed', 'gate', 'changed'] as const) {
