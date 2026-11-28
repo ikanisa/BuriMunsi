@@ -636,8 +636,8 @@ class BuriViewModel(private val app:Application,private val checkpoints:Navigati
         permissionRevision // Compose observes changes after an Android permission result.
         return receiverStatus.permissionsRequired { app.checkSelfPermission(it)==android.content.pm.PackageManager.PERMISSION_GRANTED }
     }
-    fun requestReceivingPermissions(automatic: Boolean = false, show: (Array<String>) -> Unit) {
-        if (screenGate == ScreenGate.OPEN) receiverStatus.launchPermissions(automatic, show)
+    internal fun prepareReceivingPermissions(automatic: Boolean, show: (NativeReceiverStatus.PermissionOffer) -> Unit) {
+        if (screenGate == ScreenGate.OPEN) receiverStatus.preparePermissions(automatic, show)
     }
     private fun retryableSessionFailure(e:ApiFailure)=e.status==0||e.status in listOf(408,425,429)||e.status>=500
     private suspend fun restoreSavedSession(){

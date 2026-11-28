@@ -40,21 +40,53 @@ class MainActivity:ComponentActivity(){
     }
     private val receivingPrompt by lazy { getSharedPreferences("receiver-permission-prompt", MODE_PRIVATE) }
 
+    // Do not persist this UI approval: it applies to the current foreground
+    // Admin only, and cannot itself grant Android access or enable capture.
+    private data class SmsPermissionNotice(
+        val actorId: String, val foreground: Long, val automatic: Boolean,
+        val offer: NativeReceiverStatus.PermissionOffer,
+    )
+    private var smsPermissionNotice by mutableStateOf<SmsPermissionNotice?>(null)
+    private var smsNoticeShownFor: String? = null
+    private var smsForeground = 0L
+    private var smsVisible = false
+
+    private fun currentSmsOwner(actorId: String, foreground: Long): Boolean =
+        BuildConfig.IS_GATEWAY && smsVisible && smsForeground == foreground &&
+            model.screenGate == ScreenGate.OPEN && model.state.operator?.let {
+                it.id == actorId && it.role == Role.ADMIN
+            } == true
+
     private fun offerReceivingPermissions(automatic: Boolean) {
-        if (!BuildConfig.IS_GATEWAY) return
-        model.requestReceivingPermissions(automatic) { required ->
-            val missing = required.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        val id = model.state.operator?.id ?: return
+        val foreground = smsForeground
+        if (!currentSmsOwner(id, foreground) || smsPermissionNotice != null) return
+        model.prepareReceivingPermissions(automatic) { offer ->
+            if (!currentSmsOwner(id, foreground) || !offer.isCurrent() || smsPermissionNotice != null)
+                return@prepareReceivingPermissions
+            val missing = offer.names.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
             if (missing.isEmpty()) {
                 if (automatic) offerSyncNotificationPermission()
-                return@requestReceivingPermissions
+                return@prepareReceivingPermissions
             }
+            if (automatic && (smsNoticeShownFor == id || receivingPrompt.getBoolean("asked", false) ||
+                    missing.any(::shouldShowRequestPermissionRationale))) return@prepareReceivingPermissions
+            smsNoticeShownFor = id
+            smsPermissionNotice = SmsPermissionNotice(id, foreground, automatic, offer)
+        }
+    }
+
+    private fun continueReceivingPermissions(notice: SmsPermissionNotice) {
+        if (smsPermissionNotice !== notice) return
+        smsPermissionNotice = null
+        if (!currentSmsOwner(notice.actorId, notice.foreground)) return
+        notice.offer.confirm { required ->
+            if (!currentSmsOwner(notice.actorId, notice.foreground)) return@confirm
+            val missing = required.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+            if (missing.isEmpty()) return@confirm
             val previouslyAsked = receivingPrompt.getBoolean("asked", false)
             val previouslyDenied = missing.any(::shouldShowRequestPermissionRationale)
-            if (automatic && (previouslyAsked || previouslyDenied)) {
-                if (previouslyDenied) receivingPrompt.edit().putBoolean("asked",true).apply()
-                return@requestReceivingPermissions
-            }
-            if (!automatic && previouslyAsked && !previouslyDenied) {
+            if (!notice.automatic && previouslyAsked && !previouslyDenied) {
                 startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
             } else {
                 receivingPrompt.edit().putBoolean("asked", true).apply()
@@ -108,6 +140,11 @@ class MainActivity:ComponentActivity(){
                     model.state.onboarding.documentRequestId?.let(memberInputs::previewCapturedPhoto)
             }
             val actor = model.state.operator
+            LaunchedEffect(actor, model.screenGate, model.state.route, model.state.routeId, model.state.sheet, model.state.sheetId) {
+                val notice = smsPermissionNotice
+                if (notice != null && (!currentSmsOwner(notice.actorId, notice.foreground) || !notice.offer.isCurrent()))
+                    smsPermissionNotice = null
+            }
             LaunchedEffect(visible, actor?.id, actor?.role, model.state.busy, model.screenGate, model.smsAccessGranted) {
                 if (actor?.role != Role.ADMIN) {
                     adminEntryOffered = false
@@ -128,13 +165,22 @@ class MainActivity:ComponentActivity(){
             // Repository authentication owns installation and collection bootstrap.
             LifecycleResumeEffect(model){
                 visible=true
+                smsVisible=true
                 refreshSystemPolicy()
                 model.onForeground()
                 val stopNetworkObservation=SessionNetworkObserver.observe(getSystemService(ConnectivityManager::class.java)){
                     lifecycleScope.launch{model.onNetworkAvailable()}
                 }
                 val stopRecordObservation = BuriRecordChanges.observe(this@MainActivity, model::onRecordsChanged)
-                onPauseOrDispose{visible=false;model.onBackground();stopRecordObservation();stopNetworkObservation()}
+                onPauseOrDispose {
+                    visible=false
+                    smsVisible=false
+                    smsForeground++
+                    smsPermissionNotice=null
+                    model.onBackground()
+                    stopRecordObservation()
+                    stopNetworkObservation()
+                }
             }
             BuriContent {
                 if(visible)BuriApp(model,onSupport=::support,
@@ -146,6 +192,13 @@ class MainActivity:ComponentActivity(){
                     onNotifications=::notificationAccess,onBatteryOptimization=::batteryOptimization,
                     onTakeMemberPhoto=memberInputs::takePhoto,onPickMemberPhoto=memberInputs::pickPhoto)
                 else BuriSplash()
+                val notice = smsPermissionNotice
+                if (visible && notice != null && currentSmsOwner(notice.actorId, notice.foreground)) {
+                    SmsPermissionDisclosure(
+                        onContinue = { continueReceivingPermissions(notice) },
+                        onDismiss = { smsPermissionNotice = null },
+                    )
+                }
             }
         }
     }

@@ -18,6 +18,7 @@ import rw.ikanisa.burimunsi.core.Route
 import rw.ikanisa.burimunsi.data.Fixture
 import rw.ikanisa.burimunsi.gateway.GatewayFixture
 import rw.ikanisa.burimunsi.ui.BuriViewModel
+import rw.ikanisa.burimunsi.ui.NativeReceiverStatus
 import rw.ikanisa.burimunsi.ui.Sheet
 
 fun main() = runBlocking {
@@ -86,13 +87,13 @@ fun main() = runBlocking {
         idle(model)
         GatewayFixture.mayOfferPermissions=false
         val pausedOffer=java.util.concurrent.atomic.AtomicBoolean(false)
-        model.requestReceivingPermissions(automatic=true) { pausedOffer.set(true) }
+        model.prepareReceivingPermissions(automatic=true) { pausedOffer.set(true) }
         withContext(model.viewModelScope.coroutineContext.minusKey(kotlinx.coroutines.Job)) { }
         check(!pausedOffer.get())
         GatewayFixture.mayOfferPermissions=true
-        val newAdmin=kotlinx.coroutines.CompletableDeferred<Array<String>>()
-        model.requestReceivingPermissions(automatic=true) { newAdmin.complete(it) }
-        check(withTimeout(5_000){newAdmin.await()}.contains(android.Manifest.permission.RECEIVE_SMS))
+        val newAdmin=kotlinx.coroutines.CompletableDeferred<NativeReceiverStatus.PermissionOffer>()
+        model.prepareReceivingPermissions(automatic=true) { newAdmin.complete(it) }
+        check(withTimeout(5_000){newAdmin.await()}.names.contains(android.Manifest.permission.RECEIVE_SMS))
         println("PASS a new authenticated Admin can receive automatically and local pause suppresses the Android prompt")
         val permissionEntered = CountDownLatch(1)
         val permissionRelease = CountDownLatch(1)
@@ -102,7 +103,7 @@ fun main() = runBlocking {
         val permissionJob = model.onFixtureMain {
             val parent = checkNotNull(viewModelScope.coroutineContext[Job])
             val existing = parent.children.toSet()
-            requestReceivingPermissions { launched.set(true) }
+            prepareReceivingPermissions(automatic=false) { launched.set(true) }
             parent.children.single { it !in existing }
         }
         withContext(Dispatchers.IO) { check(permissionEntered.await(5, TimeUnit.SECONDS)) }
@@ -136,10 +137,44 @@ fun main() = runBlocking {
         GatewayFixture.statusRelease = null
         model.closeSheet()
         idle(model)
-        val opened = kotlinx.coroutines.CompletableDeferred<Array<String>>()
-        model.requestReceivingPermissions { opened.complete(it) }
-        check(withTimeout(5_000){ opened.await() }.contains(android.Manifest.permission.RECEIVE_SMS))
+        val opened = kotlinx.coroutines.CompletableDeferred<NativeReceiverStatus.PermissionOffer>()
+        model.prepareReceivingPermissions(automatic=false) { opened.complete(it) }
+        check(withTimeout(5_000){ opened.await() }.names.contains(android.Manifest.permission.RECEIVE_SMS))
         check(!launched.get())
+        // A real ViewModel fixture with the same human ID but a new repository revision
+        // must not borrow consent from the previous authenticated session.
+        val stale = withTimeout(5_000) { opened.await() }
+        model.onFixtureMain {
+            check(stale.isCurrent())
+            Fixture.processSessionEpoch.incrementAndGet()
+            check(!stale.isCurrent())
+            stale.confirm { error("A replacement session inherited SMS consent") }
+        }
+        val operation = kotlinx.coroutines.CompletableDeferred<NativeReceiverStatus.PermissionOffer>()
+        model.onFixtureMain { prepareReceivingPermissions(automatic=false) { operation.complete(it) } }
+        val fresh = withTimeout(5_000) { operation.await() }
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        try {
+            GatewayFixture.permissionsEntered = entered
+            GatewayFixture.permissionsRelease = release
+            val running = model.onFixtureMain {
+                val parent = checkNotNull(viewModelScope.coroutineContext[Job])
+                val existing = parent.children.toSet()
+                fresh.confirm { error("SMS consent dispatched after its session changed") }
+                parent.children.single { it !in existing }
+            }
+            withContext(Dispatchers.IO) { check(entered.await(5, TimeUnit.SECONDS)) }
+            model.onFixtureMain { Fixture.processSessionEpoch.incrementAndGet() }
+            release.countDown()
+            withTimeout(5_000) { running.join() }
+            check(!running.isCancelled) { "The consent callback threw unexpectedly" }
+        } finally {
+            release.countDown()
+            GatewayFixture.permissionsEntered = null
+            GatewayFixture.permissionsRelease = null
+        }
+        println("PASS displayed SMS consent stays bound to the original session before and during dispatch")
         val healthEntered = CountDownLatch(1)
         val healthRelease = CountDownLatch(1)
         GatewayFixture.healthEntered = healthEntered

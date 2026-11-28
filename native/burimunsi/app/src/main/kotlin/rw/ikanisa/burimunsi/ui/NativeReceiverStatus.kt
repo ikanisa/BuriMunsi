@@ -115,17 +115,49 @@ internal class NativeReceiverStatus(
         return !current(snapshot.first) || snapshot.second.any { !granted(it) }
     }
 
-    fun launchPermissions(automatic: Boolean, show: (Array<String>) -> Unit) {
-        val ticket = request() ?: return
-        scope.launch {
-            val names = try { withContext(Dispatchers.IO) {
-                if (automatic && !gateway.canOfferReceivingPermissions()) emptyArray() else gateway.requiredPermissions()
-            } }
-                catch (e: CancellationException) { throw e }
-                catch (_: Exception) { return@launch }
-            if (names.isNotEmpty()) current(ticket) { show(names) }
+    /** Consent remains bound to the exact repository session, route and foreground request. */
+    internal class PermissionOffer(
+        val names: List<String>,
+        private val stillCurrent: () -> Boolean,
+        private val onConfirm: ((List<String>) -> Unit) -> Unit,
+    ) {
+        private var consumed = false
+
+        fun isCurrent(): Boolean = !consumed && stillCurrent()
+
+        fun confirm(show: (List<String>) -> Unit) {
+            if (consumed) return
+            consumed = true
+            if (stillCurrent()) onConfirm(show)
         }
     }
+
+    fun preparePermissions(automatic: Boolean, show: (PermissionOffer) -> Unit) {
+        val ticket = request() ?: return
+        scope.launch {
+            val names = receivingPermissions(automatic)
+            if (!names.isNullOrEmpty()) current(ticket) {
+                show(PermissionOffer(names, { current(ticket) }) { dispatch ->
+                    scope.launch {
+                        // Required permissions may change while the notice is open. Recheck before
+                        // dispatch and never swap in a newer session for the original ticket.
+                        val latest = receivingPermissions(automatic)
+                        if (!latest.isNullOrEmpty() && names.containsAll(latest))
+                            current(ticket) { dispatch(latest) }
+                    }
+                })
+            }
+        }
+    }
+
+    private suspend fun receivingPermissions(automatic: Boolean): List<String>? =
+        try {
+            withContext(Dispatchers.IO) {
+                if (automatic && !gateway.canOfferReceivingPermissions()) emptyList()
+                else gateway.requiredPermissions().toList()
+            }
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { null }
 
     private fun requireControlTicket(): Request =
         request()?.takeIf { Access.allows(it.operator, Capability.GATEWAY, clock(), receiver) }
