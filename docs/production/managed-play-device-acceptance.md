@@ -16,3 +16,22 @@ Use a separate, approved physical Android 11+ device/profile enrolled in the int
 5. Recheck launch and continuity for both apps. Verify role enforcement and SMS consent without moving the production receiver or altering any real payment data. Record operator, versions, observed channel and result in the private acceptance record. Live receipt-to-ledger verification and designated operator sign-off are separate gates.
 
 [Android Developers: installer of record and initiating package](https://developer.android.com/reference/android/content/pm/InstallSourceInfo).
+
+## Compare the two private readbacks
+
+From the repository root, set `PRIVATE` to a new private directory and make a fresh key for **one** pair. Set `ADB_SERIAL`, `ANDROID_PROFILE` and `TARGET_VERSION` for the approved test profile. Keep the key and both files private; run the first command before the normal Play update and the second afterwards. Do not change Android OS or Android profile during the exercise.
+
+```sh
+umask 077
+python3 -c 'import secrets,sys; sys.stdout.buffer.write(secrets.token_bytes(32))' > "$PRIVATE/pair.key"
+python3 scripts/qa/managed_play_device_readback.py --serial "$ADB_SERIAL" \
+  --profile "$ANDROID_PROFILE" --expected-version "$TARGET_VERSION" \
+  --pair-key-file "$PRIVATE/pair.key" --phase before > "$PRIVATE/before.json"
+# Perform and independently witness the normal managed Play update here.
+python3 scripts/qa/managed_play_device_readback.py --serial "$ADB_SERIAL" \
+  --profile "$ANDROID_PROFILE" --expected-version "$TARGET_VERSION" \
+  --pair-key-file "$PRIVATE/pair.key" --phase after > "$PRIVATE/after.json"
+python3 scripts/qa/managed_play_device_compare.py "$PRIVATE/before.json" "$PRIVATE/after.json"
+```
+
+Stop if either readback exits nonzero. The comparator checks that both reads are tied to the same selected device/profile and release target using a private, per-pair pseudonym; it does not print this pseudonym or the serial. Exit 0 means both apps show a lower Play-installed version before and the target Play-installed version after. Exit 3 is a valid non-upgrade result, such as a first install, sideload baseline, or no version change. Exit 2 means an incomplete or mismatched pair. This check does not attest to the installed signature, management enrollment, Play action, continuity or the operator's acceptance. Preserve those separately before marking this gate complete.

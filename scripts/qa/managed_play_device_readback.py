@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Read the exact two release packages in one explicitly selected Android profile."""
 import argparse
+import hmac
 import json
+import os
 import re
+import stat
 import subprocess
 import sys
 
@@ -96,15 +99,47 @@ def adb_shell(adb, serial):
     return shell
 
 
+def read_private(path, limit):
+    """Read one owned regular file without following links."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as source:
+        metadata = os.fstat(source.fileno())
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.getuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o600 or metadata.st_size > limit):
+            raise ReadbackError("use an owned private regular evidence file (mode 0600)")
+        raw = source.read(limit + 1)
+        if len(raw) > limit:
+            raise ReadbackError("private evidence exceeded bound")
+        return raw
+
+
+def bind_profile(result, key, serial, profile, phase):
+    if len(key) != 32:
+        raise ReadbackError("comparison key must contain exactly 32 random bytes")
+    subject = f"burimunsi-play-v2\x00{serial}\x00{profile}".encode("ascii")
+    return {**result, "schema_version": 2, "phase": phase,
+            "profile_binding": hmac.digest(key, subject, "sha256").hex()}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--adb", default="adb")
     parser.add_argument("--serial", required=True)
     parser.add_argument("--profile", required=True, type=int, help="explicit Android user ID")
     parser.add_argument("--expected-version", required=True, type=int)
+    parser.add_argument("--pair-key-file", help="private 32-byte key reused for one before/after pair")
+    parser.add_argument("--phase", choices=["before", "after"])
     args = parser.parse_args()
+    if bool(args.pair_key_file) != bool(args.phase):
+        parser.error("--pair-key-file and --phase must be supplied together")
     try:
+        key = read_private(args.pair_key_file, 32) if args.pair_key_file else None
         result = read_device(adb_shell(args.adb, args.serial), args.profile, args.expected_version)
+        if key is not None:
+            result = bind_profile(result, key, args.serial, args.profile, args.phase)
+    except OSError:
+        print(json.dumps({"status": "blocked", "reason": "cannot read private comparison key"}))
+        return 2
     except ReadbackError as e:
         print(json.dumps({"status": "blocked", "reason": str(e)}))
         return 2
