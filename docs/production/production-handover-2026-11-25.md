@@ -198,3 +198,26 @@ The ordinary package validator intentionally rejects these extended inventories.
 Test the two directions with `node --test scripts/qa/r06_*test.mjs`.
 The rehearsal does not qualify previously deployed Flutter assets, a real
 browser session, a Worker traffic change, or compatible database/API rollback.
+
+### H01/H03: Native PIN capacity diagnostic readback
+
+For an incident, use a bounded UTC window from the authenticated provider log
+view. Pin the expected deployed `BUILD_SOURCE_ID` independently; it is a
+64-character source digest, not a Git SHA or deployment version. Keep any
+temporary export in private custody. Pipe only decoded `collect_platform_api`
+JSON objects (one per line), not request logs or CSV wrappers, into:
+
+```sh
+python3 scripts/qa/native_pin_capacity_readback.py --source VERIFIED_SOURCE_DIGEST < scoped-events.ndjson
+```
+
+The output contains only the pinned source digest and aggregate row
+counts. A row with the exact native PIN, registration rejection and capacity
+labels proves that particular failure was classified before PIN verification
+or session creation. Other degraded 503 rows may be unrelated to sign-in.
+Neither counts nor a zero count establish a login failure rate or recovery:
+records may be suppressed, missing, duplicated or from a different deployed
+source. Record the UTC window separately and compare gateway and function
+coverage before drawing conclusions. A classified refusal does not identify
+which work held capacity, nor change the requirement to reconcile the original
+operation rather than send a retry with a new ID.
